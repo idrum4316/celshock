@@ -1,5 +1,27 @@
-import { MeshBuilder } from "@babylonjs/core";
+import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
+import { propAssets } from "../systems/AssetLibrary";
+import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { RoomTheme } from "./types";
+
+/** Procedural fallback tree, used until the glTF tree finishes loading. */
+function proceduralTree(scene: Scene, mats: CelMaterialFactory): Mesh {
+  const trunk = MeshBuilder.CreateCylinder(
+    "tree-trunk",
+    { height: 2.4, diameter: 0.55, tessellation: 8 },
+    scene,
+  );
+  trunk.position.y = 1.2;
+  trunk.material = mats.get("#6b4a2f");
+  const canopy = MeshBuilder.CreateSphere(
+    "tree-canopy",
+    { diameter: 2.6, segments: 8 },
+    scene,
+  );
+  canopy.parent = trunk;
+  canopy.position.y = 1.9;
+  canopy.material = mats.get("#3f9142");
+  return trunk;
+}
 
 /**
  * Forest: sunlit grove with trees, mossy rocks, and old ruins.
@@ -29,24 +51,8 @@ export const ForestTheme: RoomTheme = {
         blocking: true,
         radius: 0.6,
         scaleRange: [0.9, 1.5],
-        build: (scene, mats) => {
-          const trunk = MeshBuilder.CreateCylinder(
-            "tree-trunk",
-            { height: 2.4, diameter: 0.55, tessellation: 8 },
-            scene,
-          );
-          trunk.position.y = 1.2;
-          trunk.material = mats.get("#6b4a2f");
-          const canopy = MeshBuilder.CreateSphere(
-            "tree-canopy",
-            { diameter: 2.6, segments: 8 },
-            scene,
-          );
-          canopy.parent = trunk;
-          canopy.position.y = 1.9;
-          canopy.material = mats.get("#3f9142");
-          return trunk;
-        },
+        build: (scene, mats) =>
+          propAssets.instantiate("tree", scene) ?? proceduralTree(scene, mats),
       },
       {
         name: "rock",

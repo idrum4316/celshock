@@ -12,6 +12,7 @@ import { CelMaterialFactory } from "../shaders/CelShader";
 import { Player } from "../entities/Player";
 import { Viewmodel } from "../entities/Viewmodel";
 import type { AICtx } from "../entities/Enemy";
+import { propAssets } from "../systems/AssetLibrary";
 import { CombatSystem } from "../systems/CombatSystem";
 import { EnemySystem } from "../systems/EnemySystem";
 import { LootSystem, PickupKind } from "../systems/LootSystem";
@@ -64,6 +65,8 @@ export class Game {
     new HemisphericLight("ambient", new Vector3(0, 1, 0), this.scene);
 
     this.mats = new CelMaterialFactory(this.scene);
+    // Fire-and-forget: rooms fall back to procedural props until loaded.
+    void propAssets.load(this.scene, this.mats);
     this.input = new InputManager(canvas);
     this.cameraSys = new CameraSystem(this.scene);
 
