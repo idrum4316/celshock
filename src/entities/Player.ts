@@ -1,4 +1,10 @@
-import { Mesh, MeshBuilder, Scene, Vector3 } from "@babylonjs/core";
+import {
+  Mesh,
+  MeshBuilder,
+  Scene,
+  TransformNode,
+  Vector3,
+} from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { addOutline, CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
@@ -12,14 +18,44 @@ export interface PlayerMods {
   magBonus: number;
 }
 
+/** Palette for the player character model. */
+const ARMOR = "#3a6ea5"; // helmet, chest, thighs
+const SUIT = "#26303d"; // under-suit: arms, shins, pelvis
+const TRIM = "#2b2b33"; // gloves, boots, gun
+const VISOR = "#ffd23f";
+
 /**
  * Player pawn: movement (walk/jump/gravity) with Babylon collision sliding,
- * weapon state (ammo/reload/fire cooldown), and the placeholder body mesh.
+ * weapon state (ammo/reload/fire cooldown), and a cel-shaded humanoid body
+ * animated procedurally (walk cycle, jump tuck, aim pitch, reload tilt).
+ *
+ * The invisible root capsule stays the physics collider; all visible meshes
+ * hang off `body`, a child TransformNode whose joints are posed every frame.
  */
 export class Player {
   root: Mesh;
   private gun: Mesh;
-  private bodyParts: Mesh[] = [];
+  private meshes: Mesh[] = [];
+
+  // Visual rig (all joints are pivots; limb meshes hang below them).
+  private body!: TransformNode;
+  private torso!: TransformNode;
+  private head!: TransformNode;
+  private shoulderL!: TransformNode;
+  private shoulderR!: TransformNode;
+  private elbowL!: TransformNode;
+  private elbowR!: TransformNode;
+  private hipL!: TransformNode;
+  private hipR!: TransformNode;
+  private kneeL!: TransformNode;
+  private kneeR!: TransformNode;
+
+  // Animation state.
+  private walkPhase = 0;
+  private moveBlend = 0;
+  private airBlend = 0;
+  private reloadBlend = 0;
+  private idleT = 0;
 
   health: number = CONFIG.player.maxHealth;
   alive = true;
@@ -38,35 +74,113 @@ export class Player {
   constructor(scene: Scene, mats: CelMaterialFactory) {
     const p = CONFIG.player;
 
+    // Invisible collider capsule — physics only, never rendered.
     this.root = MeshBuilder.CreateCapsule(
       "player",
       { height: p.height, radius: p.radius },
       scene,
     );
     this.root.position = new Vector3(0, this.groundY, 0);
-    this.root.material = mats.get("#3a6ea5");
+    this.root.isVisible = false;
     this.root.ellipsoid = new Vector3(p.radius, p.height / 2 - 0.05, p.radius);
 
-    const visor = MeshBuilder.CreateBox(
-      "playerVisor",
-      { width: 0.42, height: 0.14, depth: 0.2 },
-      scene,
-    );
-    visor.parent = this.root;
-    visor.position = new Vector3(0, 0.62, 0.32);
-    visor.material = mats.get("#ffd23f");
+    this.gun = this.buildBody(scene, mats);
+    addOutline(this.root, 0.025);
+  }
 
-    this.gun = MeshBuilder.CreateBox(
-      "playerGun",
-      { width: 0.12, height: 0.16, depth: 0.85 },
-      scene,
-    );
-    this.gun.parent = this.root;
-    this.gun.position = new Vector3(0.34, 0.28, 0.5);
-    this.gun.material = mats.get("#2b2b33");
+  /**
+   * Builds the humanoid. Local Y is relative to the root center (0.9 above
+   * the ground), so the ground plane is at local y = -0.9 and the top of the
+   * helmet at +0.9. Returns the gun mesh.
+   */
+  private buildBody(scene: Scene, mats: CelMaterialFactory): Mesh {
+    const box = (
+      name: string,
+      w: number,
+      h: number,
+      d: number,
+      color: string,
+      parent: TransformNode,
+      x = 0,
+      y = 0,
+      z = 0,
+    ): Mesh => {
+      const m = MeshBuilder.CreateBox(
+        `player_${name}`,
+        { width: w, height: h, depth: d },
+        scene,
+      );
+      m.parent = parent;
+      m.position.set(x, y, z);
+      m.material = mats.get(color);
+      this.meshes.push(m);
+      return m;
+    };
+    const joint = (
+      name: string,
+      parent: TransformNode,
+      x: number,
+      y: number,
+      z = 0,
+    ): TransformNode => {
+      const n = new TransformNode(`player_${name}`, scene);
+      n.parent = parent;
+      n.position.set(x, y, z);
+      return n;
+    };
 
-    this.bodyParts = [this.root, visor, this.gun];
-    addOutline(this.root, 0.05);
+    this.body = new TransformNode("player_body", scene);
+    this.body.parent = this.root;
+
+    // Pelvis + torso (torso pivots at the lower spine for aim pitch).
+    box("pelvis", 0.4, 0.18, 0.26, SUIT, this.body, 0, 0.02, 0);
+    this.torso = joint("spine", this.body, 0, 0.12);
+    box("chest", 0.46, 0.5, 0.28, ARMOR, this.torso, 0, 0.24, 0);
+
+    // Head: helmet + visor.
+    this.head = joint("neck", this.torso, 0, 0.52);
+    box("helmet", 0.26, 0.26, 0.26, ARMOR, this.head, 0, 0.13, 0);
+    box("visor", 0.2, 0.09, 0.03, VISOR, this.head, 0, 0.15, 0.135);
+
+    // Arms: shoulder and elbow joints, limb meshes hanging below each pivot.
+    for (const side of [-1, 1] as const) {
+      const tag = side < 0 ? "L" : "R";
+      const shoulder = joint(`shoulder${tag}`, this.torso, side * 0.3, 0.43);
+      box(`upperArm${tag}`, 0.13, 0.3, 0.13, SUIT, shoulder, 0, -0.15, 0);
+      const elbow = joint(`elbow${tag}`, shoulder, 0, -0.3);
+      box(`forearm${tag}`, 0.11, 0.26, 0.11, SUIT, elbow, 0, -0.13, 0);
+      box(`hand${tag}`, 0.11, 0.1, 0.12, TRIM, elbow, 0, -0.3, 0);
+      if (side < 0) {
+        this.shoulderL = shoulder;
+        this.elbowL = elbow;
+      } else {
+        this.shoulderR = shoulder;
+        this.elbowR = elbow;
+      }
+    }
+
+    // Legs: hip and knee joints; boots reach the ground at local -0.9.
+    for (const side of [-1, 1] as const) {
+      const tag = side < 0 ? "L" : "R";
+      const hip = joint(`hip${tag}`, this.body, side * 0.12, -0.02);
+      box(`thigh${tag}`, 0.17, 0.42, 0.19, ARMOR, hip, 0, -0.21, 0);
+      const knee = joint(`knee${tag}`, hip, 0, -0.42);
+      box(`shin${tag}`, 0.14, 0.38, 0.16, SUIT, knee, 0, -0.19, 0);
+      box(`boot${tag}`, 0.15, 0.1, 0.27, TRIM, knee, 0, -0.41, 0.04);
+      if (side < 0) {
+        this.hipL = hip;
+        this.kneeL = knee;
+      } else {
+        this.hipR = hip;
+        this.kneeR = knee;
+      }
+    }
+
+    // Gun rides the torso so it pitches with the aim; +z stays the barrel
+    // axis so muzzleWorld() keeps working.
+    const gun = box("gun", 0.12, 0.16, 0.85, TRIM, this.torso, 0.3, 0.2, 0.42);
+    gun.name = "playerGun";
+    return gun;
   }
 
   get position(): Vector3 {
@@ -115,6 +229,7 @@ export class Player {
     const move = cam.flatForward
       .scale(input.moveY)
       .add(cam.flatRight.scale(input.moveX));
+    const moveInput = Math.min(1, move.length());
     if (move.lengthSquared() > 1) move.normalize();
     if (move.lengthSquared() > 0.0001) {
       this.root.moveWithCollisions(move.scale(speed * dt));
@@ -147,7 +262,67 @@ export class Player {
       }
     }
 
+    this.animate(dt, moveInput, speed, cam);
     return jumped;
+  }
+
+  /** Procedural pose: walk cycle, jump tuck, aim pitch, reload, idle sway. */
+  private animate(
+    dt: number,
+    moveInput: number,
+    speed: number,
+    cam: CameraSystem,
+  ): void {
+    this.idleT += dt;
+
+    // Smoothed blend weights so poses ease in/out instead of snapping.
+    const ease = (current: number, target: number, rate: number) =>
+      current + (target - current) * Math.min(1, dt * rate);
+    this.moveBlend = ease(this.moveBlend, moveInput, 10);
+    this.airBlend = ease(this.airBlend, this.grounded ? 0 : 1, 9);
+    this.reloadBlend = ease(this.reloadBlend, this.reloading ? 1 : 0, 12);
+
+    // Stride phase advances with actual ground speed (~2.4 Hz at full run).
+    this.walkPhase += speed * this.moveBlend * 2.2 * dt;
+    const walk = this.moveBlend * (1 - this.airBlend);
+    const swing = Math.sin(this.walkPhase);
+
+    // Legs: hips counter-swing; the knee bends mid-swing and straightens
+    // for the plant (max(0, cos) is the swing-through window).
+    const jumpTuck = this.airBlend;
+    this.hipL.rotation.x = -0.62 * swing * walk - 0.55 * jumpTuck;
+    this.hipR.rotation.x = 0.62 * swing * walk + 0.25 * jumpTuck;
+    this.kneeL.rotation.x =
+      0.95 * Math.max(0, Math.cos(this.walkPhase)) * walk + 1.05 * jumpTuck;
+    this.kneeR.rotation.x =
+      0.95 * Math.max(0, -Math.cos(this.walkPhase)) * walk + 0.5 * jumpTuck;
+
+    // Body bob (two per stride), a slight crouch while running, idle breath.
+    const idle = (1 - this.moveBlend) * (1 - this.airBlend);
+    this.body.position.y =
+      0.05 * Math.abs(Math.cos(this.walkPhase)) * walk -
+      0.04 * walk +
+      0.012 * Math.sin(this.idleT * 2.1) * idle;
+
+    // Torso: pitch with the camera aim, lean into the run, subtle sway.
+    this.torso.rotation.x = -cam.pitch * 0.45 + 0.1 * walk;
+    this.torso.rotation.y = 0.06 * swing * walk;
+    this.torso.rotation.z = 0.04 * swing * walk;
+    this.head.rotation.x = -cam.pitch * 0.3;
+
+    // Arms: two-handed gun-ready pose. The right hand grips near the stock;
+    // the left supports across the chest and drops during reloads.
+    this.shoulderR.rotation.set(-0.95, 0, -0.06);
+    this.elbowR.rotation.x = -0.55;
+    this.shoulderL.rotation.set(
+      -0.75 + 0.55 * this.reloadBlend,
+      0.35,
+      0.75 - 0.4 * this.reloadBlend,
+    );
+    this.elbowL.rotation.x = -1.0 + 0.45 * this.reloadBlend;
+
+    // Reload: tip the gun down while the magazine swaps.
+    this.gun.rotation.x = 0.5 * this.reloadBlend;
   }
 
   /**
@@ -201,6 +376,6 @@ export class Player {
 
   /** Hides the body while in first-person ADS. */
   setFirstPerson(fp: boolean): void {
-    for (const part of this.bodyParts) part.isVisible = !fp;
+    for (const part of this.meshes) part.isVisible = !fp;
   }
 }
