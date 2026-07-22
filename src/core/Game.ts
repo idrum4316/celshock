@@ -7,6 +7,7 @@ import {
 import { CONFIG } from "../config";
 import { CelMaterialFactory } from "../shaders/CelShader";
 import { Player } from "../entities/Player";
+import { Viewmodel } from "../entities/Viewmodel";
 import type { AICtx } from "../entities/Enemy";
 import { CombatSystem } from "../systems/CombatSystem";
 import { EnemySystem } from "../systems/EnemySystem";
@@ -40,6 +41,7 @@ export class Game {
   private enemySys: EnemySystem;
   private loot: LootSystem;
   private player: Player;
+  private viewmodel: Viewmodel;
 
   private state: GameState = "menu";
   private room: Room | null = null;
@@ -70,6 +72,7 @@ export class Game {
     this.loot = new LootSystem(this.scene, this.mats);
     this.player = new Player(this.scene, this.mats);
     this.player.setFirstPerson(true); // hidden until a run starts
+    this.viewmodel = new Viewmodel(this.scene, this.mats, this.cameraSys.camera);
 
     // --- system wiring ---
     this.combat.onPlayerHit = (dmg) => this.damagePlayer(dmg);
@@ -202,14 +205,20 @@ export class Game {
       const w = CONFIG.weapon;
       const blend = this.cameraSys.adsBlend;
       const spread = w.spreadHip + (w.spreadAds - w.spreadHip) * blend;
+      // Tracers start at whichever rifle is on screen: the first-person
+      // viewmodel while sighted in, the character's rifle otherwise.
+      const muzzle = this.cameraSys.isFirstPerson
+        ? this.viewmodel.muzzleWorld()
+        : this.player.muzzleWorld();
       const result = this.combat.playerFire(
         this.cameraSys.camera.position,
         this.cameraSys.forward,
         spread,
         this.player.damage,
-        this.player.muzzleWorld(),
+        muzzle,
         this.enemySys.getHittables(),
       );
+      this.viewmodel.kick();
       this.sfx.shoot();
       if (result === "enemy") {
         this.hud.flashHitmarker();
@@ -236,6 +245,7 @@ export class Game {
           this.state = "victory";
           this.overlayT = 0;
           this.hud.setBoss(null, 0);
+          this.viewmodel.setVisible(false);
           this.hud.showVictory();
           document.exitPointerLock();
         } else {
@@ -264,11 +274,13 @@ export class Game {
     this.cameraSys.update(dt, this.input, this.player.position);
     this.mats.updateCamera(this.cameraSys.camera.position);
     this.player.setFirstPerson(this.cameraSys.isFirstPerson);
+    this.viewmodel.update(dt, this.cameraSys, this.input, this.player);
 
     // --- HUD ---
     this.hud.setHealth(this.player.health, this.player.maxHealth);
     this.hud.setAmmo(this.player.ammo, this.player.magSize, this.player.reloading);
-    this.hud.setAds(this.cameraSys.adsBlend > 0.5);
+    // The holo reticle replaces the DOM crosshair once first-person.
+    this.hud.setAds(this.cameraSys.isFirstPerson);
     this.hud.setLockHint(!this.input.pointerLocked && !this.input.gamepadConnected);
   }
 
@@ -282,6 +294,7 @@ export class Game {
       this.state = "gameover";
       this.overlayT = 0;
       this.hud.setBoss(null, 0);
+      this.viewmodel.setVisible(false);
       this.hud.showGameOver(this.roomIndex, CONFIG.run.roomsPerRun);
       document.exitPointerLock();
     }

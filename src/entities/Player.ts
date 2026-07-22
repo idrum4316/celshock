@@ -9,6 +9,7 @@ import { CONFIG } from "../config";
 import { addOutline, CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
+import { buildRifle, RifleParts } from "./RifleModel";
 
 /** Run-scoped stat modifiers granted by loot. */
 export interface PlayerMods {
@@ -34,7 +35,7 @@ const VISOR = "#ffd23f";
  */
 export class Player {
   root: Mesh;
-  private gun: Mesh;
+  private rifle!: RifleParts;
   private meshes: Mesh[] = [];
 
   // Visual rig (all joints are pivots; limb meshes hang below them).
@@ -84,16 +85,16 @@ export class Player {
     this.root.isVisible = false;
     this.root.ellipsoid = new Vector3(p.radius, p.height / 2 - 0.05, p.radius);
 
-    this.gun = this.buildBody(scene, mats);
+    this.buildBody(scene, mats);
     addOutline(this.root, 0.025);
   }
 
   /**
    * Builds the humanoid. Local Y is relative to the root center (0.9 above
    * the ground), so the ground plane is at local y = -0.9 and the top of the
-   * helmet at +0.9. Returns the gun mesh.
+   * helmet at +0.9.
    */
-  private buildBody(scene: Scene, mats: CelMaterialFactory): Mesh {
+  private buildBody(scene: Scene, mats: CelMaterialFactory): void {
     const box = (
       name: string,
       w: number,
@@ -176,11 +177,13 @@ export class Player {
       }
     }
 
-    // Gun rides the torso so it pitches with the aim; +z stays the barrel
-    // axis so muzzleWorld() keeps working.
-    const gun = box("gun", 0.12, 0.16, 0.85, TRIM, this.torso, 0.3, 0.2, 0.42);
-    gun.name = "playerGun";
-    return gun;
+    // Rifle rides the torso so it pitches with the aim; +z stays the barrel
+    // axis. Slightly scaled down to fit the character's proportions.
+    this.rifle = buildRifle(scene, mats, "player");
+    this.rifle.root.parent = this.torso;
+    this.rifle.root.position.set(0.3, 0.14, 0.28);
+    this.rifle.root.scaling.setAll(0.85);
+    this.meshes.push(...this.rifle.meshes);
   }
 
   get position(): Vector3 {
@@ -321,8 +324,8 @@ export class Player {
     );
     this.elbowL.rotation.x = -1.0 + 0.45 * this.reloadBlend;
 
-    // Reload: tip the gun down while the magazine swaps.
-    this.gun.rotation.x = 0.5 * this.reloadBlend;
+    // Reload: tip the rifle down while the magazine swaps.
+    this.rifle.root.rotation.x = 0.5 * this.reloadBlend;
   }
 
   /**
@@ -350,13 +353,9 @@ export class Player {
     return this.reloading ? 1 - this.reloadT / CONFIG.weapon.reloadTime : 1;
   }
 
-  /** World position of the gun muzzle (tracer origin). */
+  /** World position of the rifle muzzle (tracer origin). */
   muzzleWorld(): Vector3 {
-    this.gun.computeWorldMatrix(true);
-    return Vector3.TransformCoordinates(
-      new Vector3(0, 0, 0.45),
-      this.gun.getWorldMatrix(),
-    );
+    return this.rifle.muzzle.getAbsolutePosition().clone();
   }
 
   /** Returns true if this damage killed the player. */

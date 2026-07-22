@@ -55,6 +55,19 @@ export const CONFIG = {
     pitchMax: 1.25,
   },
 
+  /** First-person rifle shown while aiming down sights (camera-local units). */
+  viewmodel: {
+    /** Distance from the eye to the holo sight window when fully aimed. */
+    adsSightDistance: 0.52,
+    /** Lowered ready pose the rifle raises from during the ADS transition. */
+    hipPos: [0.18, -0.3, 0.5],
+    hipRot: [0.12, -0.14, 0.08],
+    /** Recoil kick: recovery time (s), rearward slide (m), pitch (rad). */
+    kickTime: 0.09,
+    kickBack: 0.035,
+    kickPitch: 0.05,
+  },
+
   input: {
     deadzone: 0.18,
     triggerThreshold: 0.35,

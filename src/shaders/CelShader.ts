@@ -159,9 +159,13 @@ export class CelMaterialFactory {
   }
 }
 
-/** Enables bold black outlines on a mesh and all of its children. */
+/**
+ * Enables bold black outlines on a mesh and all of its children.
+ * Meshes tagged `metadata.noOutline` (glows, holo reticles) are skipped.
+ */
 export function addOutline(mesh: Mesh, width = 0.045): void {
   const apply = (m: Mesh) => {
+    if (m.metadata && m.metadata.noOutline === true) return;
     m.renderOutline = true;
     m.outlineColor = Color3.Black();
     m.outlineWidth = width;
