@@ -107,4 +107,10 @@ export const CONFIG = {
     projectilePoolSize: 48,
     sparkPoolSize: 24,
   },
+
+  graphics: {
+    /** Emissive glow (neon, reticle, tracers) — GlowLayer settings. */
+    glowIntensity: 0.7,
+    glowKernel: 48,
+  },
 } as const;

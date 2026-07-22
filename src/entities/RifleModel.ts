@@ -135,7 +135,9 @@ export function buildRifle(
   glass.parent = root;
   glass.position.set(0, winY, winZ + 0.012);
   glass.material = glassMat;
-  glass.metadata = { noOutline: true };
+  // noGlow: the GlowLayer would turn the faint tint into a cyan haze that
+  // obscures the sight picture.
+  glass.metadata = { noOutline: true, noGlow: true };
   meshes.push(glass);
 
   const muzzle = new TransformNode(`${prefix}_muzzle`, scene);

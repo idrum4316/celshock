@@ -51,9 +51,11 @@ uniform vec3 camPos;
 void main() {
   vec3 n = normalize(vNormalW);
 
-  // Quantize diffuse into 3 hard bands for the toon look.
+  // Quantize diffuse into 4 bands; smoothstep across each band edge keeps
+  // the toon look but softens the transitions so they don't alias.
   float ndl = max(dot(n, -lightDir), 0.0);
-  float shade = ceil(ndl * 3.0) / 3.0;
+  float x = ndl * 4.0;
+  float shade = min((floor(x) + smoothstep(0.35, 0.65, fract(x))) / 4.0, 1.0);
   vec3 col = baseColor * lightColor * (0.45 + 0.55 * shade);
 
   // Hard-edged rim highlight (step, not smooth — keeps colors flat).

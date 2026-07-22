@@ -1,6 +1,9 @@
 import {
+  DefaultRenderingPipeline,
   Engine,
+  GlowLayer,
   HemisphericLight,
+  Mesh,
   Scene,
   Vector3,
 } from "@babylonjs/core";
@@ -63,6 +66,23 @@ export class Game {
     this.mats = new CelMaterialFactory(this.scene);
     this.input = new InputManager(canvas);
     this.cameraSys = new CameraSystem(this.scene);
+
+    // Post-processing: FXAA smooths the hard cel/outline edges. Glow comes
+    // from a GlowLayer rather than threshold bloom — it keys off material
+    // emissive color, so neon/reticle/tracer meshes bloom while the bright
+    // desert sand (high luminance but not emissive) stays crisp.
+    const g = CONFIG.graphics;
+    const pipeline = new DefaultRenderingPipeline("post", false, this.scene, [
+      this.cameraSys.camera,
+    ]);
+    // The cel shader outputs display-ready colors; the default image
+    // processing pass would re-apply gamma and wash them out.
+    pipeline.imageProcessingEnabled = false;
+    pipeline.fxaaEnabled = true;
+    const glow = new GlowLayer("glow", this.scene, {
+      blurKernelSize: g.glowKernel,
+    });
+    glow.intensity = g.glowIntensity;
     this.sfx = new Sfx();
     this.hud = new HUD();
     this.themeManager = new ThemeManager();
@@ -73,6 +93,9 @@ export class Game {
     this.player = new Player(this.scene, this.mats);
     this.player.setFirstPerson(true); // hidden until a run starts
     this.viewmodel = new Viewmodel(this.scene, this.mats, this.cameraSys.camera);
+    for (const m of this.scene.meshes) {
+      if (m.metadata && m.metadata.noGlow === true) glow.addExcludedMesh(m as Mesh);
+    }
 
     // --- system wiring ---
     this.combat.onPlayerHit = (dmg) => this.damagePlayer(dmg);
