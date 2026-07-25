@@ -19,11 +19,15 @@ export interface PlayerMods {
   magBonus: number;
 }
 
-/** Palette for the player character model. */
-const ARMOR = "#3a6ea5"; // helmet, chest, thighs
-const SUIT = "#26303d"; // under-suit: arms, shins, pelvis
+/**
+ * Palette for the player character model — field-drab, so the character
+ * reads as a silhouette lit by their own lamp rather than a bright block of
+ * color in an otherwise black room.
+ */
+const ARMOR = "#3f4a43"; // helmet, chest, thighs
+const SUIT = "#1f262c"; // under-suit: arms, shins, pelvis
 const TRIM = "#2b2b33"; // gloves, boots, gun
-const VISOR = "#ffd23f";
+const VISOR = "#ffb347"; // emissive: visor slit and shoulder lamp
 
 /**
  * Player pawn: movement (walk/jump/gravity) with Babylon collision sliding,
@@ -138,10 +142,19 @@ export class Player {
     this.torso = joint("spine", this.body, 0, 0.12);
     box("chest", 0.46, 0.5, 0.28, ARMOR, this.torso, 0, 0.24, 0);
 
-    // Head: helmet + visor.
+    // Head: helmet + glowing visor slit.
     this.head = joint("neck", this.torso, 0, 0.52);
     box("helmet", 0.26, 0.26, 0.26, ARMOR, this.head, 0, 0.13, 0);
-    box("visor", 0.2, 0.09, 0.03, VISOR, this.head, 0, 0.15, 0.135);
+    const visor = box("visor", 0.2, 0.09, 0.03, ARMOR, this.head, 0, 0.15, 0.135);
+    visor.material = mats.getEmissive(VISOR);
+    visor.metadata = { noOutline: true };
+
+    // Shoulder lamp: the physical source of the light the player carries
+    // (the light itself is driven by the LightingSystem).
+    box("lampHousing", 0.12, 0.12, 0.14, TRIM, this.torso, -0.26, 0.42, 0.08);
+    const lens = box("lampLens", 0.09, 0.09, 0.04, ARMOR, this.torso, -0.26, 0.42, 0.17);
+    lens.material = mats.getEmissive(VISOR);
+    lens.metadata = { noOutline: true };
 
     // Arms: shoulder and elbow joints, limb meshes hanging below each pivot.
     for (const side of [-1, 1] as const) {

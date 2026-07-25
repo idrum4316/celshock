@@ -1,5 +1,6 @@
-import { Material, Mesh, MeshBuilder, Scene, Vector3 } from "@babylonjs/core";
+import { Material, Mesh, Scene, Vector3 } from "@babylonjs/core";
 import { addOutline, CelMaterialFactory } from "../shaders/CelShader";
+import { animateRig, buildEnemyRig, type EnemyRig } from "./EnemyModels";
 import type { EnemyType } from "../themes/types";
 import type { Sfx } from "../core/Sfx";
 
@@ -26,8 +27,9 @@ type EnemyState = "spawning" | "chasing" | "attacking" | "dying";
 
 /**
  * Themed enemy with a small FSM: spawn-in -> chase/strafe -> telegraphed
- * attack -> death. Meshes are built procedurally from the type's body
- * archetype so every theme gets distinct placeholder silhouettes.
+ * attack -> death. The mesh comes from `EnemyModels`, which returns a posable
+ * joint rig; this class drives that rig from the FSM (stride amplitude from
+ * travel speed, jaw/arms from attack windup, collapse on death).
  */
 export class Enemy {
   root: Mesh;
@@ -40,12 +42,16 @@ export class Enemy {
   /** Set on the frame the enemy dies; consumed by the EnemySystem. */
   justDied = false;
 
+  private rig: EnemyRig;
+  private scale: number;
   private t = 0.4; // current state timer
   private lifeT = Math.random() * Math.PI * 2; // desync idle wobble
   private attackCooldown = 1 + Math.random(); // grace period after spawn
   private strafeDir = Math.random() < 0.5 ? -1 : 1;
   private strafeT = 1;
   private flashT = 0;
+  /** 0..1 travel speed relative to top speed, smoothed for the walk cycle. */
+  private moving = 0;
   private parts: { mesh: Mesh; mat: Material }[] = [];
   private groundY: number;
   private whiteMat: Material;
@@ -59,84 +65,27 @@ export class Enemy {
     this.type = type;
     this.hp = type.health;
     this.whiteMat = mats.get("#ffffff");
+    this.scale = type.scale;
 
-    const s = type.scale;
-    this.hitRadius = 0.9 * s;
+    this.rig = buildEnemyRig(scene, mats, type);
+    this.root = this.rig.root;
+    this.groundY = this.rig.groundY * this.scale;
+    this.hitRadius = this.rig.hitRadius * this.scale;
 
-    switch (type.body) {
-      case "quad": {
-        // Low, elongated body (wolves, scorpions).
-        this.root = MeshBuilder.CreateBox(
-          `enemy-${type.name}`,
-          { width: 0.7 * s, height: 0.6 * s, depth: 1.5 * s },
-          scene,
-        );
-        const head = MeshBuilder.CreateBox(
-          "head",
-          { width: 0.45 * s, height: 0.4 * s, depth: 0.5 * s },
-          scene,
-        );
-        head.parent = this.root;
-        head.position = new Vector3(0, 0.25 * s, 0.85 * s);
-        head.material = mats.get(type.accentColor);
-        this.groundY = 0.45 * s;
-        this.hitRadius = 0.85 * s;
-        break;
-      }
-      case "sphere": {
-        // Hovering drone body.
-        this.root = MeshBuilder.CreateSphere(
-          `enemy-${type.name}`,
-          { diameter: 1.0 * s, segments: 12 },
-          scene,
-        );
-        const eye = MeshBuilder.CreateBox(
-          "eye",
-          { width: 0.3 * s, height: 0.14 * s, depth: 0.12 * s },
-          scene,
-        );
-        eye.parent = this.root;
-        eye.position = new Vector3(0, 0.05 * s, 0.48 * s);
-        eye.material = mats.get(type.accentColor);
-        this.groundY = 2.3; // hover height
-        this.hitRadius = 0.65 * s;
-        break;
-      }
-      default: {
-        // Humanoid (archers, hackers, bandits).
-        this.root = MeshBuilder.CreateCapsule(
-          `enemy-${type.name}`,
-          { height: 1.7 * s, radius: 0.4 * s },
-          scene,
-        );
-        const head = MeshBuilder.CreateSphere(
-          "head",
-          { diameter: 0.5 * s, segments: 10 },
-          scene,
-        );
-        head.parent = this.root;
-        head.position = new Vector3(0, 1.0 * s, 0);
-        head.material = mats.get(type.accentColor);
-        this.groundY = 0.85 * s;
-        this.hitRadius = 0.95 * s;
-        break;
-      }
-    }
-
-    this.root.material = mats.get(type.color);
     this.root.position = new Vector3(pos.x, this.groundY, pos.z);
-    addOutline(this.root, 0.045);
+    addOutline(this.root, 0.04);
 
-    // Remember original materials for the white damage flash.
-    this.parts.push({ mesh: this.root, mat: this.root.material });
+    // Remember original materials for the white damage flash. Emissive parts
+    // (eyes, focus gems) are skipped so they keep burning through the flash.
     for (const child of this.root.getChildMeshes()) {
-      if (child instanceof Mesh && child.material) {
+      const isEmissive = child.metadata && child.metadata.noOutline === true;
+      if (child instanceof Mesh && child.material && !isEmissive) {
         this.parts.push({ mesh: child, mat: child.material });
       }
     }
 
     // Spawn-in: scale up from small.
-    this.root.scaling.setAll(0.05);
+    this.root.scaling.setAll(this.scale * 0.05);
   }
 
   /** Center used for hitscan ray-sphere tests. */
@@ -151,13 +100,16 @@ export class Enemy {
       this.setFlash(this.flashT > 0);
     }
 
+    const s = this.scale;
+    let attackK = 0;
+
     switch (this.state) {
       case "spawning": {
         this.t -= dt;
         const k = 1 - Math.max(0, this.t) / 0.4;
-        this.root.scaling.setAll(0.05 + 0.95 * k);
+        this.root.scaling.setAll(s * (0.05 + 0.95 * k));
         if (this.t <= 0) {
-          this.root.scaling.setAll(1);
+          this.root.scaling.setAll(s);
           this.state = "chasing";
         }
         break;
@@ -167,12 +119,13 @@ export class Enemy {
         break;
       case "attacking": {
         this.t -= dt;
-        // Telegraph: lean/scale up during windup.
-        const pulse = 1 + 0.15 * Math.sin((1 - this.t / this.windupTime()) * Math.PI);
-        this.root.scaling.setAll(pulse);
+        attackK = 1 - Math.max(0, this.t) / this.windupTime();
+        // Telegraph: the rig coils (see animateRig) and the body swells.
+        this.root.scaling.setAll(s * (1 + 0.12 * Math.sin(attackK * Math.PI)));
         this.facePoint(ctx.playerPos);
+        this.moving *= Math.max(0, 1 - dt * 6);
         if (this.t <= 0) {
-          this.root.scaling.setAll(1);
+          this.root.scaling.setAll(s);
           this.executeAttack(ctx);
           this.state = "chasing";
         }
@@ -180,12 +133,18 @@ export class Enemy {
       }
       case "dying": {
         this.t -= dt;
-        const k = Math.max(0, this.t / 0.5);
-        this.root.scaling.setAll(k);
-        this.root.position.y = this.groundY * k;
+        const k = Math.max(0, this.t / 0.6);
+        // Pitches forward and sinks away rather than simply shrinking.
+        if (this.rig.body) this.rig.body.rotation.x = (1 - k) * 1.5;
+        this.root.scaling.setAll(s * (0.4 + 0.6 * k));
+        this.root.position.y = this.groundY * k - (1 - k) * 0.4;
         if (this.t <= 0) this.dead = true;
         break;
       }
+    }
+
+    if (this.state !== "dying") {
+      animateRig(this.rig, this.type.body, this.lifeT, this.moving, attackK);
     }
   }
 
@@ -220,6 +179,7 @@ export class Enemy {
 
     if (desire.lengthSquared() > 0.0001) desire.normalize();
     const vel = desire.scale(type.speed);
+    const before = { x: pos.x, z: pos.z };
     pos.x += vel.x * dt;
     pos.z += vel.z * dt;
 
@@ -241,6 +201,12 @@ export class Enemy {
     const mz = ctx.bounds.depth / 2 - 1.5;
     pos.x = Math.max(-mx, Math.min(mx, pos.x));
     pos.z = Math.max(-mz, Math.min(mz, pos.z));
+
+    // Actual distance covered (after push-out) drives the walk cycle, so an
+    // enemy jammed against a prop stops running on the spot.
+    const travelled = Math.hypot(pos.x - before.x, pos.z - before.z);
+    const target = dt > 0 ? Math.min(1, travelled / dt / Math.max(type.speed, 0.001)) : 0;
+    this.moving += (target - this.moving) * Math.min(1, dt * 8);
 
     // Vertical: flyers bob, ground units stay planted.
     if (type.kind === "flyer") {
@@ -305,7 +271,7 @@ export class Enemy {
     this.setFlash(true);
     if (this.hp <= 0) {
       this.state = "dying";
-      this.t = 0.5;
+      this.t = 0.6;
       this.justDied = true;
       this.setFlash(false);
       return true;

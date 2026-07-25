@@ -1,5 +1,6 @@
 import { Material, Mesh, MeshBuilder, Scene, Vector3 } from "@babylonjs/core";
 import { addOutline, CelMaterialFactory } from "../shaders/CelShader";
+import { animateBossRig, buildBossRig, type BossRig } from "./BossModels";
 import type { BossType } from "../themes/types";
 import type { AICtx } from "./Enemy";
 
@@ -50,6 +51,10 @@ export class Boss {
   private groundY: number;
   private marker: Mesh | null = null;
   private markerPos = new Vector3();
+  private rig: BossRig;
+  /** Smoothed travel speed (0..1 of top speed) driving the gait. */
+  private moving = 0;
+  private lastPos = new Vector3();
 
   constructor(
     scene: Scene,
@@ -63,125 +68,38 @@ export class Boss {
     this.whiteMat = mats.get("#ffffff");
     const s = type.scale;
 
-    switch (type.pattern) {
-      case "slam": {
-        // Treant: thick trunk, leafy canopy, heavy arms.
-        this.root = MeshBuilder.CreateCylinder(
-          `boss-${type.name}`,
-          { height: 3.2, diameter: 1.7, tessellation: 10 },
-          scene,
-        );
-        const canopy = MeshBuilder.CreateSphere(
-          "canopy",
-          { diameter: 3.0, segments: 10 },
-          scene,
-        );
-        canopy.parent = this.root;
-        canopy.position = new Vector3(0, 2.2, 0);
-        canopy.material = mats.get(type.accentColor);
-        for (const sideSign of [-1, 1]) {
-          const arm = MeshBuilder.CreateBox(
-            "arm",
-            { width: 0.5, height: 2.2, depth: 0.5 },
-            scene,
-          );
-          arm.parent = this.root;
-          arm.position = new Vector3(1.2 * sideSign, 0.4, 0.3);
-          arm.rotation.x = -0.35;
-          arm.material = mats.get(type.color);
-        }
-        this.groundY = 1.6 * s;
-        this.hitRadius = 1.9 * s;
-        this.state = "chase";
-        break;
-      }
-      case "burst": {
-        // Cybernetic Titan: hovering armored torso with glowing core.
-        this.root = MeshBuilder.CreateBox(
-          `boss-${type.name}`,
-          { width: 2.0, height: 2.4, depth: 1.2 },
-          scene,
-        );
-        const head = MeshBuilder.CreateBox(
-          "head",
-          { width: 0.9, height: 0.7, depth: 0.9 },
-          scene,
-        );
-        head.parent = this.root;
-        head.position = new Vector3(0, 1.6, 0);
-        head.material = mats.get(type.accentColor);
-        for (const sideSign of [-1, 1]) {
-          const shoulder = MeshBuilder.CreateBox(
-            "shoulder",
-            { width: 0.8, height: 1.0, depth: 1.0 },
-            scene,
-          );
-          shoulder.parent = this.root;
-          shoulder.position = new Vector3(1.4 * sideSign, 0.9, 0);
-          shoulder.material = mats.get(type.color);
-        }
-        const core = MeshBuilder.CreateSphere("core", { diameter: 0.6 }, scene);
-        core.parent = this.root;
-        core.position = new Vector3(0, 0.3, 0.62);
-        core.material = mats.getEmissive(type.accentColor);
-        this.groundY = 1.6 * s;
-        this.hitRadius = 1.8 * s;
-        this.state = "chase";
-        break;
-      }
-      default: {
-        // Sand Worm: segmented body, mostly hidden in the sand.
-        this.root = MeshBuilder.CreateSphere(
-          `boss-${type.name}`,
-          { diameter: 2.2, segments: 12 },
-          scene,
-        );
-        const jaw = MeshBuilder.CreateCylinder(
-          "jaw",
-          { height: 0.9, diameterBottom: 1.6, diameterTop: 0.4, tessellation: 8 },
-          scene,
-        );
-        jaw.parent = this.root;
-        jaw.position = new Vector3(0, 1.2, 0);
-        jaw.material = mats.get(type.accentColor);
-        let segScale = 0.8;
-        for (let i = 1; i <= 3; i++) {
-          const seg = MeshBuilder.CreateSphere(
-            `seg${i}`,
-            { diameter: 2.2 * segScale, segments: 10 },
-            scene,
-          );
-          seg.parent = this.root;
-          seg.position = new Vector3(0, -0.25 * i, -1.5 * i);
-          seg.material = mats.get(type.color);
-          segScale *= 0.8;
-        }
-        this.groundY = 1.1 * s;
-        this.hitRadius = 1.6 * s;
-        this.state = "surface";
-        this.t = 4;
+    this.rig = buildBossRig(scene, mats, type);
+    this.root = this.rig.root;
+    this.groundY = this.rig.groundY * s;
+    this.hitRadius = this.rig.hitRadius * s;
 
-        // Dust marker that tracks the worm while it is underground.
-        this.marker = MeshBuilder.CreateCylinder(
-          "wormMarker",
-          { height: 0.12, diameter: 3.2, tessellation: 20 },
-          scene,
-        );
-        this.marker.material = mats.getEmissive(type.accentColor);
-        this.marker.visibility = 0.55;
-        this.marker.isVisible = false;
-        break;
-      }
+    if (type.pattern === "burrow") {
+      this.state = "surface";
+      this.t = 4;
+
+      // Dust marker that tracks the worm while it is underground.
+      this.marker = MeshBuilder.CreateCylinder(
+        "wormMarker",
+        { height: 0.12, diameter: 3.2, tessellation: 20 },
+        scene,
+      );
+      this.marker.material = mats.getEmissive(type.eyeColor);
+      this.marker.visibility = 0.55;
+      this.marker.isVisible = false;
+      this.marker.metadata = { noOutline: true };
+    } else {
+      this.state = "chase";
     }
 
-    this.root.material = mats.get(type.color);
     this.root.scaling.setAll(s);
     this.root.position = new Vector3(pos.x, this.groundY, pos.z);
+    this.lastPos.copyFrom(this.root.position);
     addOutline(this.root, 0.06);
 
-    this.parts.push({ mesh: this.root, mat: this.root.material });
+    // Emissive parts (eyes, core, throat) keep glowing through hit flashes.
     for (const child of this.root.getChildMeshes()) {
-      if (child instanceof Mesh && child.material) {
+      const isEmissive = child.metadata && child.metadata.noOutline === true;
+      if (child instanceof Mesh && child.material && !isEmissive) {
         this.parts.push({ mesh: child, mat: child.material });
       }
     }
@@ -205,8 +123,11 @@ export class Boss {
     if (this.state === "dying") {
       this.t -= dt;
       const k = Math.max(0, this.t / 1.2);
-      this.root.scaling.setAll(this.type.scale * k);
-      this.root.position.y = this.groundY * k;
+      // Buckles forward as its lights go out, then sinks into the floor.
+      if (this.rig.body) this.rig.body.rotation.x = (1 - k) * 1.2;
+      for (const glow of this.rig.glows) glow.scaling.setAll(Math.max(0.04, k));
+      this.root.scaling.setAll(this.type.scale * (0.35 + 0.65 * k));
+      this.root.position.y = this.groundY * k - (1 - k) * 1.2;
       if (this.t <= 0) this.dead = true;
       return;
     }
@@ -240,6 +161,42 @@ export class Boss {
     }
 
     this.clampToBounds(ctx);
+
+    // Pose the rig: gait from how far it actually moved, telegraph from the
+    // pattern's current state.
+    const travelled = Vector3.Distance(this.root.position, this.lastPos);
+    this.lastPos.copyFrom(this.root.position);
+    const target =
+      dt > 0 ? Math.min(1, travelled / dt / Math.max(this.type.speed, 0.001)) : 0;
+    this.moving += (target - this.moving) * Math.min(1, dt * 6);
+    animateBossRig(
+      this.rig,
+      this.type.pattern,
+      this.lifeT,
+      this.moving,
+      this.windupFraction(),
+    );
+  }
+
+  /** 0..1 telegraph progress: arms rear back, cannons heat, maws unhinge. */
+  private windupFraction(): number {
+    const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+    switch (this.state) {
+      case "windup":
+        return clamp01(1 - this.t / (this.type.pattern === "slam" ? 0.9 : 0.5));
+      case "dashWindup":
+        return clamp01(1 - this.t / 0.6);
+      case "burst":
+      case "dash":
+        return 1;
+      case "emerging":
+        return clamp01(1 - this.t / 0.45);
+      case "surface":
+        // The worm's maw opens over the last half second before it spits.
+        return clamp01(1 - this.attackCd / 0.5);
+      default:
+        return 0;
+    }
   }
 
   // --- Treant ---

@@ -2,19 +2,20 @@ import {
   DefaultRenderingPipeline,
   Engine,
   GlowLayer,
-  HemisphericLight,
   Mesh,
   Scene,
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { CelMaterialFactory } from "../shaders/CelShader";
+import { HorrorPost } from "../shaders/HorrorPost";
 import { Player } from "../entities/Player";
 import { Viewmodel } from "../entities/Viewmodel";
 import type { AICtx } from "../entities/Enemy";
-import { propAssets } from "../systems/AssetLibrary";
+import { Atmosphere } from "../systems/Atmosphere";
 import { CombatSystem } from "../systems/CombatSystem";
 import { EnemySystem } from "../systems/EnemySystem";
+import { LightingSystem } from "../systems/LightingSystem";
 import { LootSystem, PickupKind } from "../systems/LootSystem";
 import { Room, RoomGenerator } from "../systems/RoomGenerator";
 import { ThemeManager } from "../systems/ThemeManager";
@@ -44,6 +45,9 @@ export class Game {
   private combat: CombatSystem;
   private enemySys: EnemySystem;
   private loot: LootSystem;
+  private lighting: LightingSystem;
+  private atmosphere: Atmosphere;
+  private post: HorrorPost;
   private player: Player;
   private viewmodel: Viewmodel;
 
@@ -60,13 +64,10 @@ export class Game {
     this.scene = new Scene(this.engine);
     this.scene.collisionsEnabled = true;
 
-    // Effects use unlit emissive materials; cel materials carry their own
-    // light uniforms, so one soft ambient light is all the scene needs.
-    new HemisphericLight("ambient", new Vector3(0, 1, 0), this.scene);
-
+    // The scene has no Babylon lights at all: cel materials carry their own
+    // key/ambient/point-light uniforms (fed by the LightingSystem) and every
+    // effect material is unlit emissive.
     this.mats = new CelMaterialFactory(this.scene);
-    // Fire-and-forget: rooms fall back to procedural props until loaded.
-    void propAssets.load(this.scene, this.mats);
     this.input = new InputManager(canvas);
     this.cameraSys = new CameraSystem(this.scene);
 
@@ -86,10 +87,14 @@ export class Game {
       blurKernelSize: g.glowKernel,
     });
     glow.intensity = g.glowIntensity;
+    // Vignette/grain/aberration go last, over the finished frame.
+    this.post = new HorrorPost(this.scene, this.cameraSys.camera);
     this.sfx = new Sfx();
     this.hud = new HUD();
     this.themeManager = new ThemeManager();
-    this.roomGenerator = new RoomGenerator(this.scene, this.mats);
+    this.lighting = new LightingSystem();
+    this.atmosphere = new Atmosphere(this.scene);
+    this.roomGenerator = new RoomGenerator(this.scene, this.mats, this.lighting);
     this.combat = new CombatSystem(this.scene, this.mats);
     this.enemySys = new EnemySystem(this.scene, this.mats);
     this.loot = new LootSystem(this.scene, this.mats);
@@ -116,7 +121,18 @@ export class Game {
       damagePlayer: (dmg) => this.damagePlayer(dmg),
       fireProjectile: (from, dir, speed, dmg, color) =>
         this.combat.fireEnemyProjectile(from, dir, speed, dmg, color),
-      shockwave: (center, radius, color) => this.combat.shockwave(center, radius, color),
+      shockwave: (center, radius, color) => {
+        this.combat.shockwave(center, radius, color);
+        // The blast lights the arena for an instant.
+        const lc = CONFIG.lighting;
+        this.lighting.pulse(
+          center.add(new Vector3(0, 1.5, 0)),
+          color,
+          radius * 3,
+          lc.shockIntensity,
+          lc.shockLife,
+        );
+      },
       spawnMinion: (pos) => {
         if (this.theme) {
           this.enemySys.spawnMinion(this.theme.enemies[0], pos);
@@ -165,6 +181,7 @@ export class Game {
     }
 
     this.hud.update(dt);
+    this.post.update(dt);
     this.scene.render();
   }
 
@@ -184,11 +201,17 @@ export class Game {
     this.enemySys.disposeAll();
     this.combat.clearTransient();
     this.loot.clear();
+    this.lighting.clear();
 
     // Build the next one from a fresh theme.
     this.theme = this.themeManager.pick();
     this.themeManager.apply(this.scene, this.theme, this.mats);
     this.room = this.roomGenerator.generate(this.theme, this.roomIndex, isBossRoom);
+    this.atmosphere.apply(
+      this.theme.environment.particles,
+      this.room.width,
+      this.room.depth,
+    );
 
     this.combat.bounds = { width: this.room.width, depth: this.room.depth };
     this.aiCtx.bounds = this.combat.bounds;
@@ -245,6 +268,16 @@ export class Game {
         this.enemySys.getHittables(),
       );
       this.viewmodel.kick();
+      // Muzzle flash: a hard, very short pulse that lights whatever is in
+      // front of the player — the main reason to keep shooting in the dark.
+      const lc = CONFIG.lighting;
+      this.lighting.pulse(
+        muzzle,
+        lc.muzzleColor,
+        lc.muzzleRange,
+        lc.muzzleIntensity,
+        lc.muzzleLife,
+      );
       this.sfx.shoot();
       if (result === "enemy") {
         this.hud.flashHitmarker();
@@ -299,6 +332,32 @@ export class Game {
     // --- camera & rendering support ---
     this.cameraSys.update(dt, this.input, this.player.position);
     this.mats.updateCamera(this.cameraSys.camera.position);
+    // Lights that ride entities: the player's lamp, and a boss aura so the
+    // thing hunting you glows through the fog.
+    const lc = CONFIG.lighting;
+    this.lighting.setCarried(
+      "player-lamp",
+      this.player.position.add(new Vector3(0, lc.lampHeight, 0)),
+      lc.lampColor,
+      lc.lampRange,
+      lc.lampIntensity,
+    );
+    const boss = this.enemySys.boss;
+    if (boss && !boss.dead && this.theme) {
+      this.lighting.setCarried(
+        "boss",
+        boss.center.add(new Vector3(0, 2, 0)),
+        this.theme.boss.eyeColor,
+        lc.bossAuraRange,
+        lc.bossAuraIntensity,
+        lc.bossAuraFlicker,
+      );
+    } else {
+      this.lighting.removeCarried("boss");
+    }
+
+    // Lights are picked relative to the camera, so this has to follow it.
+    this.lighting.update(dt, this.cameraSys.camera.position, this.mats);
     this.player.setFirstPerson(this.cameraSys.isFirstPerson);
     this.viewmodel.update(dt, this.cameraSys, this.input, this.player);
 
@@ -315,6 +374,7 @@ export class Game {
     if (!this.player.alive) return;
     const died = this.player.takeDamage(amount);
     this.hud.flashDamage();
+    this.post.flashDamage();
     this.sfx.playerHurt();
     if (died) {
       this.state = "gameover";

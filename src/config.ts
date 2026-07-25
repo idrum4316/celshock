@@ -10,7 +10,8 @@ export const CONFIG = {
 
   player: {
     maxHealth: 100,
-    moveSpeed: 7.0,
+    /** Slightly quicker than the original arenas — the rooms got much bigger. */
+    moveSpeed: 8.0,
     /** Movement speed multiplier while aiming down sights. */
     adsMoveMult: 0.55,
     jumpVelocity: 8.5,
@@ -74,22 +75,29 @@ export const CONFIG = {
   },
 
   room: {
-    minSize: 28,
-    maxSize: 40,
-    bossSize: 46,
-    wallHeight: 6,
-    doorWidth: 4,
+    minSize: 64,
+    maxSize: 86,
+    bossSize: 106,
+    wallHeight: 14,
+    doorWidth: 5,
     /** Distance from the open door that triggers the next room. */
-    doorTriggerDistance: 2.4,
+    doorTriggerDistance: 2.8,
+    /**
+     * Floor area a theme's `countRange` is written against. Actual rooms are
+     * much bigger, so prop and spawn counts scale by area / this.
+     */
+    baselineArea: 1200,
+    /** Upper bound on the area multiplier, so huge rooms stay performant. */
+    maxAreaScale: 5,
   },
 
   enemies: {
     /** Enemies in room 1; each later room adds `perRoomExtra` more. */
-    baseCount: 3,
-    perRoomExtra: 1,
-    maxCount: 8,
+    baseCount: 5,
+    perRoomExtra: 2,
+    maxCount: 12,
     /** Chance a dying enemy drops a health orb. */
-    healthDropChance: 0.25,
+    healthDropChance: 0.3,
   },
 
   loot: {
@@ -110,7 +118,38 @@ export const CONFIG = {
 
   graphics: {
     /** Emissive glow (neon, reticle, tracers) — GlowLayer settings. */
-    glowIntensity: 0.7,
-    glowKernel: 48,
+    glowIntensity: 1.15,
+    glowKernel: 56,
+    /** Horror grade post-process (vignette / grain / chromatic aberration). */
+    vignette: 0.62,
+    grain: 0.055,
+    aberration: 0.55,
+    /** Peak red edge flash when the player is hit, and how fast it decays. */
+    damageFlash: 1.0,
+    damageFlashDecay: 2.6,
+  },
+
+  lighting: {
+    /** Muzzle flash pulse: color, reach, brightness, and life in seconds. */
+    muzzleColor: "#ffcf7a",
+    muzzleRange: 14,
+    muzzleIntensity: 2.6,
+    muzzleLife: 0.07,
+    /** Boss AOE / shockwave flash. */
+    shockIntensity: 3.2,
+    shockLife: 0.4,
+    /**
+     * Shoulder lamp the player carries. Without it these arenas are too dark
+     * to fight in between fixtures — and it gives the character a light of
+     * their own to be silhouetted against.
+     */
+    lampColor: "#ffd9a8",
+    lampRange: 18,
+    lampIntensity: 1.6,
+    lampHeight: 1.45,
+    /** Bosses carry an aura in their eye color so they loom out of the fog. */
+    bossAuraRange: 24,
+    bossAuraIntensity: 1.3,
+    bossAuraFlicker: 0.2,
   },
 } as const;
