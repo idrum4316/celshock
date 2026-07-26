@@ -189,15 +189,13 @@ export function buildRifle(
   const foregripPivot = pivot("foregripPivot", 0, -0.046, 0.44, 0.45);
   box("foregrip", POLYMER, 0.048, 0.1, 0.055, 0, -0.05, 0, foregripPivot);
 
-  // Folding front sight, hooded, sitting ahead of the optic on the rail.
-  box("fsBase", METAL, 0.038, 0.024, 0.032, 0, 0.088, 0.5);
-  box("fsPost", METAL, 0.014, 0.062, 0.014, 0, 0.128, 0.5);
-  for (const side of [-1, 1] as const) {
-    box("fsEar", METAL, 0.009, 0.058, 0.014, side * 0.02, 0.126, 0.5);
-  }
-  // Folded rear aperture, behind the optic.
-  box("rsBase", METAL, 0.04, 0.022, 0.04, 0, 0.088, -0.14);
-  box("rsAperture", METAL, 0.03, 0.035, 0.012, 0, 0.11, -0.14);
+  // Back-up irons, both folded flat the way they would be with an optic
+  // mounted — standing them up puts pillars in the middle of the sight
+  // picture, which is exactly what the hood is trying to keep clear.
+  box("fsBase", METAL, 0.038, 0.02, 0.03, 0, 0.086, 0.482);
+  box("fsLeaf", METAL, 0.03, 0.009, 0.07, 0, 0.0925, 0.53);
+  box("rsBase", METAL, 0.04, 0.02, 0.036, 0, 0.086, -0.14);
+  box("rsLeaf", METAL, 0.032, 0.012, 0.07, 0, 0.094, -0.185);
 
   // --- barrel: gas block, exposed barrel, birdcage flash hider ---
   box("gasBlock", BODY, 0.052, 0.055, 0.07, 0, 0, 0.575);
@@ -208,13 +206,16 @@ export function buildRifle(
   // --- holo sight: rail mount, rear emitter body, open hood ---
   box("opticMount", POLYMER, 0.062, 0.045, 0.12, 0, 0.106, WIN_Z);
   box("opticScrew", METAL, 0.02, 0.03, 0.02, 0.038, 0.1, WIN_Z);
-  // Emitter body bridges mount to hood; its top stops at the window's lower
-  // bar so nothing intrudes into the sight picture.
-  box("opticBody", POLYMER, 0.06, 0.05, 0.07, 0, 0.12, WIN_Z - 0.04);
-  box("sightL", POLYMER, 0.016, 0.1, 0.036, -0.048, WIN_Y, WIN_Z);
-  box("sightR", POLYMER, 0.016, 0.1, 0.036, 0.048, WIN_Y, WIN_Z);
-  box("sightTop", POLYMER, 0.112, 0.016, 0.036, 0, WIN_Y + 0.05, WIN_Z);
-  box("sightBot", POLYMER, 0.112, 0.016, 0.036, 0, WIN_Y - 0.05, WIN_Z);
+  // Emitter body bridges mount to hood; its top stops below the window's
+  // lower bar so nothing intrudes into the sight picture.
+  box("opticBody", POLYMER, 0.06, 0.045, 0.07, 0, 0.11, WIN_Z - 0.04);
+  // Hood: thin walls around a wide aperture. The frame is what the shooter
+  // looks past, so every millimetre of wall costs visibility — keep the bars
+  // near the outline width and let the opening carry the size.
+  box("sightL", POLYMER, 0.007, 0.114, 0.026, -0.0555, WIN_Y, WIN_Z);
+  box("sightR", POLYMER, 0.007, 0.114, 0.026, 0.0555, WIN_Y, WIN_Z);
+  box("sightTop", POLYMER, 0.118, 0.007, 0.026, 0, WIN_Y + 0.0535, WIN_Z);
+  box("sightBot", POLYMER, 0.118, 0.007, 0.026, 0, WIN_Y - 0.0535, WIN_Z);
 
   // Merge each color group. The root is still at identity here, so baking the
   // world matrices and re-parenting the results leaves the geometry in place.
@@ -235,7 +236,7 @@ export function buildRifle(
   // pass never wraps black borders around the glow.
   const ring = MeshBuilder.CreateTorus(
     `${prefix}_reticleRing`,
-    { diameter: 0.036, thickness: 0.0045, tessellation: 24 },
+    { diameter: 0.022, thickness: 0.0028, tessellation: 24 },
     scene,
   );
   ring.parent = root;
@@ -248,7 +249,7 @@ export function buildRifle(
 
   const dot = MeshBuilder.CreateSphere(
     `${prefix}_reticleDot`,
-    { diameter: 0.007, segments: 6 },
+    { diameter: 0.0045, segments: 6 },
     scene,
   );
   dot.parent = root;
@@ -268,7 +269,7 @@ export function buildRifle(
   glassMat.alpha = 0.12;
   const glass = MeshBuilder.CreatePlane(
     `${prefix}_holoGlass`,
-    { width: 0.08, height: 0.084, sideOrientation: Mesh.DOUBLESIDE },
+    { width: 0.104, height: 0.1, sideOrientation: Mesh.DOUBLESIDE },
     scene,
   );
   glass.parent = root;

@@ -38,7 +38,9 @@ export class Viewmodel {
     for (const m of this.parts.meshes) {
       m.renderingGroupId = 1;
       m.isVisible = false;
-      addOutline(m, 0.002);
+      // Thin: at ADS range the sight hood's walls are only a few millimetres,
+      // so a heavier outline doubles their apparent thickness.
+      addOutline(m, 0.0012);
     }
 
     // Place the root so the sight window center lands on the camera axis

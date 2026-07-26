@@ -93,8 +93,9 @@ export class Player {
     this.buildBody(scene, mats);
     addOutline(this.root, 0.025);
     // The rifle's parts are an order of magnitude smaller than the body's, so
-    // a body-width outline would swallow the whole weapon in black.
-    for (const m of this.rifle.meshes) m.outlineWidth = 0.008;
+    // a body-width outline would swallow the whole weapon in black — the
+    // sight hood's walls are thinner than the body outline on their own.
+    for (const m of this.rifle.meshes) m.outlineWidth = 0.004;
   }
 
   /**
