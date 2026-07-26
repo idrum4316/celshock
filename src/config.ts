@@ -207,6 +207,44 @@ export const CONFIG = {
     pitchMax: 1.25,
   },
 
+  /**
+   * Controller aim assist: a slowdown bubble around enemies plus a gentle
+   * rotational pull toward the acquired target.
+   *
+   * Gamepad only by construction — it engages solely while the pad is the
+   * active look device (last stick movement or any pad button; any mouse
+   * movement disengages it the same frame), and the slowdown multiplies the
+   * stick terms in CameraSystem exclusively. The mouse look path is never
+   * scaled, so keyboard/mouse aim is bit-for-bit unaffected, even with a
+   * pad plugged in.
+   */
+  aimAssist: {
+    /** No acquisition beyond this distance (metres). */
+    maxDistance: 60,
+    /**
+     * Half-angle of the acquisition cone around the crosshair (radians).
+     * The live enemy nearest the crosshair inside it wins. 0.08 ≈ 4.6° —
+     * a bot's chest subtends ~0.025 rad at 30 m, so this is "on or very
+     * near target", not "anywhere on screen".
+     */
+    acquireAngle: 0.08,
+    /** Stick sensitivity multiplier while a target is acquired. */
+    slowdownMult: 0.5,
+    /**
+     * Rotational pull toward the target, radians per second. ADS gets the
+     * full pull; hip-fire gets the weaker pull and only while firing or
+     * pushing the right stick, so a resting hip camera never drifts.
+     * rotateAdsSpeed may safely exceed the slowed ADS stick rate
+     * (stickSens * adsStickMult * slowdownMult) — AimAssistSystem cancels
+     * the pull in proportion to opposing stick deflection, so the player
+     * can always break free with a committed push.
+     */
+    rotateAdsSpeed: 1.1,
+    rotateHipSpeed: 0.45,
+    /** Vertical pull scales by this — gentler than horizontal tracking. */
+    verticalMult: 0.7,
+  },
+
   /** First-person rifle shown while aiming down sights (camera-local units). */
   viewmodel: {
     /** Distance from the eye to the holo sight window when fully aimed. */

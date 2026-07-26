@@ -40,6 +40,15 @@ Click the page once to capture the mouse (pointer lock). Gamepads use the
 browser's standard mapping and are hot-pluggable — press any button after
 connecting.
 
+Gamepad look comes with **aim assist**: the stick slows down while the
+crosshair is over an enemy, and the view pulls gently toward the target
+(full strength while aiming down sights, weaker at the hip while firing or
+steering). Pushing the stick against the pull cancels it — a committed push
+always breaks free. It only engages while the right stick is the active
+look device — the moment the mouse moves, assist disengages and sensitivity
+is untouched, so mixed setups never penalize keyboard/mouse aim. Tuning
+lives in `CONFIG.aimAssist`.
+
 ### How a round works
 
 - Two teams of sixteen — the **Wardens** (warm amber) and **the Blight** (cold
@@ -85,6 +94,7 @@ src/
     BattleSystem.ts         # Bot pool, AI scheduling, LOS, distance LOD
     ConquestSystem.ts       # Flags, capture meters, tickets, bleed, spawns
     CombatSystem.ts         # Hitscan + pooled tracers and sparks
+    AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
     Atmosphere.ts           # Drifting ash particle field
   world/

@@ -13,6 +13,7 @@ import { Bot } from "../entities/Bot";
 import type { Combatant, Team } from "../entities/Combatant";
 import { Player } from "../entities/Player";
 import { Viewmodel } from "../entities/Viewmodel";
+import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
 import { CombatSystem } from "../systems/CombatSystem";
@@ -51,6 +52,7 @@ export class Game {
   private sfx: Sfx;
   private mapBuilder: MapBuilder;
   private combat: CombatSystem;
+  private aimAssist: AimAssistSystem;
   private battle: BattleSystem;
   private conquest: ConquestSystem;
   private lighting: LightingSystem;
@@ -110,6 +112,7 @@ export class Game {
     this.atmosphere = new Atmosphere(this.scene);
     this.mapBuilder = new MapBuilder(this.scene, this.mats, this.lighting);
     this.combat = new CombatSystem(this.scene, this.mats);
+    this.aimAssist = new AimAssistSystem(this.scene);
     this.battle = new BattleSystem(this.scene, this.mats, this.combat);
     this.conquest = new ConquestSystem();
     this.player = new Player(this.scene, this.mats);
@@ -343,7 +346,19 @@ export class Game {
     // This tail order is load-bearing: light slot selection and the shader's
     // fog both key off the camera position, so anything that moves the camera
     // has to run before them.
-    this.cameraSys.update(dt, this.input, this.player.position);
+    // Aim assist reads last frame's camera pose and this frame's enemy list
+    // (consumed synchronously — the battle scratch array is safe to pass),
+    // and is inert unless the player is looking with a gamepad stick.
+    const assist = this.aimAssist.update(
+      dt,
+      this.input,
+      this.cameraSys.camera.position,
+      this.cameraSys.forward,
+      this.cameraSys.aimYaw,
+      this.cameraSys.aimPitch,
+      this.battle.hittablesAgainst(this.player.team),
+    );
+    this.cameraSys.update(dt, this.input, this.player.position, assist);
     this.mats.updateCamera(this.cameraSys.camera.position);
     const lc = CONFIG.lighting;
     this.lighting.setCarried(

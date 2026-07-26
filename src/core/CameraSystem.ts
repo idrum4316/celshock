@@ -94,17 +94,33 @@ export class CameraSystem {
     );
   }
 
-  update(dt: number, input: InputManager, playerPos: Vector3): void {
+  /**
+   * `assist` is the gamepad aim-assist frame from `AimAssistSystem` (null
+   * when inactive). Its slowdown is multiplied into the stick terms ONLY —
+   * the mouse look path is deliberately never scaled — and its rotation is
+   * applied on top of the player's own input, then clamped like any other.
+   */
+  update(
+    dt: number,
+    input: InputManager,
+    playerPos: Vector3,
+    assist: { stickMult: number; yaw: number; pitch: number } | null = null,
+  ): void {
     const c = CONFIG.camera;
 
     // --- look ---
     const nearFp = this.adsBlend > 0.5;
     const mouseMult = nearFp ? c.adsMouseMult : 1;
     const stickMult = nearFp ? c.adsStickMult : 1;
+    const assistMult = assist ? assist.stickMult : 1;
     this.yaw += input.mouseLookX * c.sensX * mouseMult;
     this.pitch -= input.mouseLookY * c.sensY * mouseMult;
-    this.yaw += input.stickLookX * c.stickSensX * stickMult * dt;
-    this.pitch -= input.stickLookY * c.stickSensY * stickMult * dt;
+    this.yaw += input.stickLookX * c.stickSensX * stickMult * assistMult * dt;
+    this.pitch -= input.stickLookY * c.stickSensY * stickMult * assistMult * dt;
+    if (assist) {
+      this.yaw += assist.yaw;
+      this.pitch += assist.pitch;
+    }
     this.pitch = Math.max(c.pitchMin, Math.min(c.pitchMax, this.pitch));
 
     // --- recoil settles back toward the player's own aim ---

@@ -30,6 +30,12 @@ export class InputManager {
   confirmPressed = false;
   pointerLocked = false;
   gamepadConnected = false;
+  /**
+   * True this frame when any pad axis (past the deadzone) or button is
+   * active. This is what lets aim assist tell "player is driving the pad"
+   * apart from "pad is idle on the desk while the mouse does the aiming".
+   */
+  padActive = false;
 
   // --- internals ---
   private keys = new Set<string>();
@@ -134,6 +140,20 @@ export class InputManager {
     const padReload = pad ? buttonHeld(pad, 2, trig) : false;
     const padStart = pad ? buttonHeld(pad, 9, trig) : false;
     const padSprint = pad ? buttonHeld(pad, 10, trig) : false;
+
+    this.padActive =
+      pad !== null &&
+      (px !== 0 ||
+        py !== 0 ||
+        this.stickLookX !== 0 ||
+        this.stickLookY !== 0 ||
+        padAds ||
+        padFire ||
+        padJump ||
+        padReload ||
+        padStart ||
+        padSprint ||
+        buttonHeld(pad, 8, trig));
 
     const buttons = this.pointerMask | this.mouseMask;
     this.ads = (buttons & 2) !== 0 || padAds;
