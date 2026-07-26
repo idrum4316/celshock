@@ -32,6 +32,43 @@ export const CONFIG = {
     range: 120,
   },
 
+  /**
+   * Recoil. Every shot kicks the aim up and slightly sideways and blooms the
+   * spread; both settle back on their own between bursts, so tapping stays
+   * accurate while holding the trigger walks the shots off target.
+   */
+  recoil: {
+    /** Aim kick per shot (radians): upward, and random left/right. */
+    pitchPerShot: 0.026,
+    yawPerShot: 0.011,
+    /** Multiplier while fully aimed down sights — a braced stance kicks less. */
+    adsMult: 0.55,
+    /**
+     * Fraction of each kick that springs back on its own. The remainder is
+     * pushed into the player's own aim and stays there, so a magazine held
+     * down walks the muzzle off target (~11 deg from the hip) and has to be
+     * pulled back by hand. At 1.0 recoil is pure decoration.
+     */
+    recoverFraction: 0.7,
+    /** How fast the springy part settles back (per second). */
+    recovery: 6.5,
+    /** Ceilings, so sustained fire can't walk the aim off the screen. */
+    maxPitch: 0.17,
+    maxYaw: 0.06,
+    /**
+     * Spread bloom: added per shot, its ceiling, and its bleed-off per second.
+     * The bleed-off has to be well under `bloomPerShot * fireRate` (0.048/s
+     * here) or holding the trigger never actually blooms.
+     */
+    bloomPerShot: 0.006,
+    maxBloom: 0.03,
+    bloomRecovery: 0.02,
+    /** Third-person weapon punch: recovery time (s), slide (m), pitch (rad). */
+    kickTime: 0.11,
+    kickBack: 0.05,
+    kickPitch: 0.12,
+  },
+
   camera: {
     /** Mouse sensitivity (radians per pixel). */
     sensX: 0.0022,

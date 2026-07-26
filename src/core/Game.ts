@@ -251,9 +251,8 @@ export class Game {
     // Mouse fire requires pointer lock so UI clicks never discharge the gun.
     const canFire = this.input.pointerLocked || this.input.gamepadConnected;
     if (this.input.fire && canFire && this.player.tryShot()) {
-      const w = CONFIG.weapon;
       const blend = this.cameraSys.adsBlend;
-      const spread = w.spreadHip + (w.spreadAds - w.spreadHip) * blend;
+      const spread = this.player.spread(blend);
       // Tracers start at whichever rifle is on screen: the first-person
       // viewmodel while sighted in, the character's rifle otherwise.
       const muzzle = this.cameraSys.isFirstPerson
@@ -266,6 +265,14 @@ export class Game {
         this.player.damage,
         muzzle,
         this.enemySys.getHittables(),
+      );
+      // Recoil: kick the aim up and off to a random side, softened while
+      // braced in ADS. It decays on its own, so the burst climbs and settles.
+      const rc = CONFIG.recoil;
+      const kickMult = 1 - (1 - rc.adsMult) * blend;
+      this.cameraSys.addRecoil(
+        rc.pitchPerShot * kickMult,
+        (Math.random() * 2 - 1) * rc.yawPerShot * kickMult,
       );
       this.viewmodel.kick();
       // Muzzle flash: a hard, very short pulse that lights whatever is in

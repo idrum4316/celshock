@@ -30,6 +30,9 @@ const SUIT = "#1f262c"; // under-suit: arms, shins, pelvis
 const TRIM = "#2b2b33"; // gloves, boots, webbing, hard fittings
 const VISOR = "#ffb347"; // emissive: visor slit and shoulder lamp
 
+/** Rifle position on the torso at rest; recoil slides it back from here. */
+const RIFLE_REST = new Vector3(0.3, 0.14, 0.28);
+
 /**
  * Player pawn: movement (walk/jump/gravity) with Babylon collision sliding,
  * weapon state (ammo/reload/fire cooldown), and a cel-shaded humanoid body
@@ -72,6 +75,10 @@ export class Player {
   private reloadT = 0;
   private fireCooldown = 0;
   private velY = 0;
+  /** Extra spread accumulated by sustained fire; bleeds off when not firing. */
+  private spreadBloom = 0;
+  /** Weapon punch, 1 at the shot and falling to 0 over `recoil.kickTime`. */
+  private weaponKickT = 0;
 
   mods: PlayerMods = { damageMult: 1, speedMult: 1, maxHpBonus: 0, magBonus: 0 };
 
@@ -279,7 +286,7 @@ export class Player {
     // axis. Slightly scaled down to fit the character's proportions.
     this.rifle = buildRifle(scene, mats, "player");
     this.rifle.root.parent = this.torso;
-    this.rifle.root.position.set(0.3, 0.14, 0.28);
+    this.rifle.root.position.copyFrom(RIFLE_REST);
     this.rifle.root.scaling.setAll(0.85);
     this.meshes.push(...this.rifle.meshes);
   }
@@ -300,6 +307,18 @@ export class Player {
     return CONFIG.weapon.damage * this.mods.damageMult;
   }
 
+  /**
+   * Bullet spread half-angle for the next shot, including recoil bloom.
+   * Bloom is damped in ADS by the same factor as the aim kick — a braced
+   * stance would otherwise lose far more precision than it has to give.
+   */
+  spread(adsBlend: number): number {
+    const w = CONFIG.weapon;
+    const base = w.spreadHip + (w.spreadAds - w.spreadHip) * adsBlend;
+    const bloomMult = 1 - (1 - CONFIG.recoil.adsMult) * adsBlend;
+    return base + this.spreadBloom * bloomMult;
+  }
+
   /** Full reset at the start of a run (permadeath — mods are cleared too). */
   fullReset(): void {
     this.mods = { damageMult: 1, speedMult: 1, maxHpBonus: 0, magBonus: 0 };
@@ -309,6 +328,8 @@ export class Player {
     this.reloading = false;
     this.fireCooldown = 0;
     this.velY = 0;
+    this.spreadBloom = 0;
+    this.weaponKickT = 0;
   }
 
   placeAt(spawn: Vector3): void {
@@ -355,6 +376,10 @@ export class Player {
 
     // --- weapon timers ---
     this.fireCooldown -= dt;
+    this.spreadBloom = Math.max(
+      0,
+      this.spreadBloom - CONFIG.recoil.bloomRecovery * dt,
+    );
     if (this.reloading) {
       this.reloadT -= dt;
       if (this.reloadT <= 0) {
@@ -405,25 +430,34 @@ export class Player {
       0.04 * walk +
       0.012 * Math.sin(this.idleT * 2.1) * idle;
 
-    // Torso: pitch with the camera aim, lean into the run, subtle sway.
-    this.torso.rotation.x = -cam.pitch * 0.45 + 0.1 * walk;
+    // Weapon punch: a hard hit that falls off fast (squared, so the spike is
+    // at the shot rather than smeared across the recovery).
+    this.weaponKickT = Math.max(0, this.weaponKickT - dt / CONFIG.recoil.kickTime);
+    const kick = this.weaponKickT * this.weaponKickT;
+
+    // Torso: pitch with the camera aim (recoil included, so the body rides
+    // the kick), lean into the run, subtle sway.
+    this.torso.rotation.x = -cam.aimPitch * 0.45 + 0.1 * walk - 0.05 * kick;
     this.torso.rotation.y = 0.06 * swing * walk;
     this.torso.rotation.z = 0.04 * swing * walk;
-    this.head.rotation.x = -cam.pitch * 0.3;
+    this.head.rotation.x = -cam.aimPitch * 0.3;
 
     // Arms: two-handed gun-ready pose. The right hand grips near the stock;
     // the left supports across the chest and drops during reloads.
-    this.shoulderR.rotation.set(-0.95, 0, -0.06);
-    this.elbowR.rotation.x = -0.55;
+    // The shooting arm absorbs the punch; the support arm follows it up.
+    this.shoulderR.rotation.set(-0.95 + 0.14 * kick, 0, -0.06);
+    this.elbowR.rotation.x = -0.55 - 0.18 * kick;
     this.shoulderL.rotation.set(
-      -0.75 + 0.55 * this.reloadBlend,
+      -0.75 + 0.55 * this.reloadBlend + 0.1 * kick,
       0.35,
       0.75 - 0.4 * this.reloadBlend,
     );
     this.elbowL.rotation.x = -1.0 + 0.45 * this.reloadBlend;
 
-    // Reload: tip the rifle down while the magazine swaps.
-    this.rifle.root.rotation.x = 0.5 * this.reloadBlend;
+    // Rifle: reload tips it down, recoil slides it back and lifts the muzzle.
+    const r = CONFIG.recoil;
+    this.rifle.root.rotation.x = 0.5 * this.reloadBlend - r.kickPitch * kick;
+    this.rifle.root.position.z = RIFLE_REST.z - r.kickBack * kick;
   }
 
   /**
@@ -434,8 +468,13 @@ export class Player {
     if (!this.alive || this.reloading || this.fireCooldown > 0 || this.ammo <= 0) {
       return false;
     }
+    const r = CONFIG.recoil;
     this.ammo -= 1;
     this.fireCooldown = 1 / CONFIG.weapon.fireRate;
+    // Weapon-side recoil: the spread bloom the next shot inherits, and the
+    // punch the body rides out. The aim kick itself belongs to the camera.
+    this.spreadBloom = Math.min(r.maxBloom, this.spreadBloom + r.bloomPerShot);
+    this.weaponKickT = 1;
     if (this.ammo === 0) this.startReload();
     return true;
   }

@@ -14,6 +14,14 @@ export class CameraSystem {
   /** 0 = fully third-person, 1 = fully first-person (ADS). */
   adsBlend = 0;
 
+  /**
+   * The springy part of the recoil, stacked on top of the player's own aim
+   * and decaying back to zero. The rest of each kick goes straight into
+   * `pitch`/`yaw` and stays there — see `addRecoil`.
+   */
+  private recoilPitch = 0;
+  private recoilYaw = 0;
+
   constructor(private scene: Scene) {
     this.camera = new FreeCamera("mainCamera", new Vector3(0, 3, -8), scene);
     this.camera.minZ = 0.05;
@@ -22,17 +30,27 @@ export class CameraSystem {
     scene.activeCamera = this.camera;
   }
 
+  /** Where the weapon is actually pointed: the player's aim plus recoil. */
+  get aimPitch(): number {
+    return this.pitch + this.recoilPitch;
+  }
+
+  get aimYaw(): number {
+    return this.yaw + this.recoilYaw;
+  }
+
   /** World-space aim direction (through the crosshair). */
   get forward(): Vector3 {
-    const cp = Math.cos(this.pitch);
+    const cp = Math.cos(this.aimPitch);
     return new Vector3(
-      cp * Math.sin(this.yaw),
-      Math.sin(this.pitch),
-      cp * Math.cos(this.yaw),
+      cp * Math.sin(this.aimYaw),
+      Math.sin(this.aimPitch),
+      cp * Math.cos(this.aimYaw),
     );
   }
 
-  /** Yaw-only forward, for movement on the ground plane. */
+  /** Yaw-only forward, for movement on the ground plane. Deliberately the
+   * un-recoiled yaw: strafing must not swim while the gun is kicking. */
   get flatForward(): Vector3 {
     return new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
   }
@@ -50,6 +68,30 @@ export class CameraSystem {
     this.yaw = yaw;
     this.pitch = 0.12;
     this.adsBlend = 0;
+    this.recoilPitch = 0;
+    this.recoilYaw = 0;
+  }
+
+  /**
+   * Kicks the aim; called once per shot fired. Each kick is split: most of it
+   * springs back on its own, but `1 - recoverFraction` of it is added to the
+   * player's own aim and never comes back, which is what actually walks the
+   * muzzle off target over a long burst. The permanent part moves `yaw` too,
+   * so the character turns with it — the same as any other look input.
+   */
+  addRecoil(pitch: number, yaw: number): void {
+    const r = CONFIG.recoil;
+    const keep = 1 - r.recoverFraction;
+    this.pitch += pitch * keep;
+    this.yaw += yaw * keep;
+    this.recoilPitch = Math.min(
+      r.maxPitch,
+      this.recoilPitch + pitch * r.recoverFraction,
+    );
+    this.recoilYaw = Math.max(
+      -r.maxYaw,
+      Math.min(r.maxYaw, this.recoilYaw + yaw * r.recoverFraction),
+    );
   }
 
   update(dt: number, input: InputManager, playerPos: Vector3): void {
@@ -64,6 +106,14 @@ export class CameraSystem {
     this.yaw += input.stickLookX * c.stickSensX * stickMult * dt;
     this.pitch -= input.stickLookY * c.stickSensY * stickMult * dt;
     this.pitch = Math.max(c.pitchMin, Math.min(c.pitchMax, this.pitch));
+
+    // --- recoil settles back toward the player's own aim ---
+    // A true exponential, not the frame-lerp used for the cosmetic blends:
+    // this one moves where the bullets go, so how high a burst climbs must
+    // not depend on the frame rate.
+    const settle = Math.exp(-CONFIG.recoil.recovery * dt);
+    this.recoilPitch *= settle;
+    this.recoilYaw *= settle;
 
     // --- ADS blend (exponential ease toward target) ---
     const target = input.ads ? 1 : 0;
