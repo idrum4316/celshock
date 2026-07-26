@@ -69,6 +69,8 @@ src/
     Sfx.ts                  # Procedural WebAudio sound effects (no assets)
   entities/
     Player.ts               # Movement, jumping, weapon state, jointed body
+    RifleModel.ts           # Low-poly SCAR-pattern rifle + holo sight builder
+    Viewmodel.ts            # First-person rifle: raise, sway, bob, recoil
     Enemy.ts                # FSM AI (spawn/chase/attack/die), drives the rig
     EnemyModels.ts          # Hound/humanoid/drone/wraith rigs + animation
     Boss.ts                 # Three boss patterns: slam / burst / burrow
