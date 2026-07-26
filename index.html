@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CELSHOCK — Cel-Shaded Roguelike Shooter</title>
+    <title>HOLLOWMERE — Cel-Shaded Conquest</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
@@ -25,36 +25,176 @@
         user-select: none;
       }
 
-      /* --- room counter --- */
-      #room-info {
+      /* --- killfeed --- */
+      #killfeed {
         position: absolute;
-        top: 18px;
-        left: 50%;
-        transform: translateX(-50%);
-        font-size: 15px;
+        top: 92px;
+        right: 22px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        font-size: 12px;
         font-weight: 700;
-        letter-spacing: 3px;
-        text-shadow: 0 2px 0 #000;
-        opacity: 0.9;
+        letter-spacing: 1px;
       }
+      .kill {
+        background: rgba(0, 0, 0, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        padding: 3px 8px;
+        display: flex;
+        gap: 7px;
+        align-items: center;
+        text-shadow: 0 1px 0 #000;
+        transition: opacity 0.6s ease-out;
+      }
+      .kill.fade { opacity: 0; }
+      .kill .x { opacity: 0.55; }
+      /* Anything the player did or had done to them reads brighter. */
+      .kill.mine { border-color: #ffc46b; }
+      .kill.mine .k { color: #ffc46b; }
 
-      /* --- boss bar --- */
-      #boss-bar-wrap {
+      /* --- scoreboard (hold Tab) --- */
+      #scoreboard {
         position: absolute;
-        top: 48px;
+        top: 50%;
         left: 50%;
-        transform: translateX(-50%);
-        width: min(520px, 70vw);
+        transform: translate(-50%, -50%);
+        background: rgba(6, 8, 14, 0.92);
+        border: 2px solid rgba(255, 255, 255, 0.18);
+        padding: 22px 30px;
         text-align: center;
       }
-      #boss-name {
-        font-size: 13px;
+      #scoreboard table { border-collapse: collapse; }
+      #scoreboard th,
+      #scoreboard td {
+        padding: 7px 20px;
+        font-size: 14px;
+        letter-spacing: 2px;
+        text-align: right;
+      }
+      #scoreboard th {
+        font-size: 11px;
+        opacity: 0.55;
+        font-weight: 700;
+      }
+      #scoreboard td.name { text-align: left; font-weight: 800; }
+      #scoreboard tr.mine td { color: #ffc46b; }
+      #scoreboard tr.theirs td { color: #ff5a4f; }
+      #scoreboard .you {
+        margin-top: 14px;
+        font-size: 12px;
+        letter-spacing: 2px;
+        opacity: 0.7;
+      }
+
+      /* --- deploy screen --- */
+      /* #hud is pointer-events:none so the HUD never eats a game click; this
+         overlay is the one thing that has to opt back in. */
+      #deploy {
+        position: absolute;
+        inset: 0;
+        background: rgba(6, 8, 14, 0.9);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        pointer-events: auto;
+      }
+      #deploy h2 {
+        font-size: 15px;
         font-weight: 800;
-        letter-spacing: 4px;
-        margin-bottom: 5px;
-        color: #ff5a4f;
+        letter-spacing: 6px;
+        opacity: 0.75;
+      }
+      #deploy-map {
+        width: min(62vh, 62vw);
+        height: min(62vh, 62vw);
+        border: 2px solid rgba(255, 255, 255, 0.22);
+        cursor: crosshair;
+        image-rendering: auto;
+      }
+      #deploy-status {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 3px;
+        opacity: 0.6;
+      }
+      #deploy-status.ready {
+        opacity: 1;
+        color: #ffc46b;
+      }
+
+      /* --- conquest: reinforcement counts --- */
+      #ticket-bar {
+        position: absolute;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 2px;
         text-shadow: 0 2px 0 #000;
       }
+      #ticket-bar b {
+        font-size: 21px;
+        letter-spacing: 1px;
+      }
+      #ticket-bar .team.mine { color: #ffc46b; }
+      #ticket-bar .team.theirs { color: #ff5a4f; }
+      #ticket-bar .sep { opacity: 0.45; }
+
+      /* --- conquest: the A..E flag strip --- */
+      #flag-strip {
+        position: absolute;
+        top: 50px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 8px;
+      }
+      .flag {
+        width: 46px;
+        text-align: center;
+        border: 2px solid #000;
+        border-radius: 3px;
+        background: rgba(0, 0, 0, 0.5);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+        padding: 2px 0 0;
+      }
+      .flag .id {
+        display: block;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 1px;
+        color: #8b8f96;
+        text-shadow: 0 1px 0 #000;
+      }
+      .flag.mine .id { color: #ffc46b; }
+      .flag.theirs .id { color: #ff5a4f; }
+      /* A contested flag pulses so it reads from the corner of the eye. */
+      .flag.contested { animation: flagPulse 0.7s ease-in-out infinite alternate; }
+      @keyframes flagPulse {
+        from { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18); }
+        to { box-shadow: 0 0 6px 2px rgba(255, 255, 255, 0.55); }
+      }
+      .flag .cap {
+        height: 4px;
+        margin: 2px 3px 3px;
+        background: rgba(255, 255, 255, 0.12);
+        overflow: hidden;
+      }
+      .flag .cap-fill {
+        height: 100%;
+        width: 0;
+        transition: width 0.15s linear;
+      }
+      .flag .cap-fill.mine { background: #ffc46b; }
+      .flag .cap-fill.theirs { background: #ff5a4f; }
 
       /* --- bars --- */
       .bar {
@@ -72,8 +212,6 @@
         transition: width 0.12s ease-out;
       }
       .bar .fill.low { background: #ff5a4f; }
-      .bar.boss { height: 16px; }
-      .bar.boss .fill { background: #ff5a4f; }
 
       /* --- bottom panels --- */
       #hud-bottom {

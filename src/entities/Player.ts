@@ -1,6 +1,7 @@
 import {
   Mesh,
   MeshBuilder,
+  Ray,
   Scene,
   TransformNode,
   Vector3,
@@ -10,6 +11,7 @@ import { addOutline, CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
 import { buildRifle, RifleParts } from "./RifleModel";
+import type { Combatant, Team } from "./Combatant";
 
 /** Run-scoped stat modifiers granted by loot. */
 export interface PlayerMods {
@@ -41,8 +43,19 @@ const RIFLE_REST = new Vector3(0.3, 0.14, 0.28);
  * The invisible root capsule stays the physics collider; all visible meshes
  * hang off `body`, a child TransformNode whose joints are posed every frame.
  */
-export class Player {
+export class Player implements Combatant {
   root: Mesh;
+  /** Which side the player fights for. Set by Game when a round starts. */
+  team: Team = 0;
+  /** Body centre and eye line, kept in sync each frame for hitscan and LOS. */
+  readonly center = new Vector3();
+  readonly eyePos = new Vector3();
+  readonly hitRadius = 0.7;
+  /**
+   * Wired by Game. Bots damage the player straight through `CombatSystem`, so
+   * this is how the flash, the sound, and the death handling still happen.
+   */
+  onDamaged: (amount: number, died: boolean) => void = () => {};
   private rifle!: RifleParts;
   private meshes: Mesh[] = [];
 
@@ -72,6 +85,10 @@ export class Player {
 
   ammo: number = CONFIG.weapon.magSize;
   reloading = false;
+  /** True while the sprint key is held and the player is actually running. */
+  sprinting = false;
+  /** Counts down from `regenDelay` after each hit; regen resumes at zero. */
+  private regenLockT = 0;
   private reloadT = 0;
   private fireCooldown = 0;
   private velY = 0;
@@ -83,9 +100,13 @@ export class Player {
   mods: PlayerMods = { damageMult: 1, speedMult: 1, maxHpBonus: 0, magBonus: 0 };
 
   private readonly groundY = CONFIG.player.height / 2;
+  /** Reused so the per-frame ground probe allocates nothing. */
+  private readonly probeRay = new Ray(new Vector3(), new Vector3(0, -1, 0), 1);
+  private scene: Scene;
 
   constructor(scene: Scene, mats: CelMaterialFactory) {
     const p = CONFIG.player;
+    this.scene = scene;
 
     // Invisible collider capsule — physics only, never rendered.
     this.root = MeshBuilder.CreateCapsule(
@@ -321,6 +342,7 @@ export class Player {
 
   /** Full reset at the start of a run (permadeath — mods are cleared too). */
   fullReset(): void {
+    this.regenLockT = 0;
     this.mods = { damageMult: 1, speedMult: 1, maxHpBonus: 0, magBonus: 0 };
     this.health = this.maxHealth;
     this.alive = true;
@@ -334,9 +356,35 @@ export class Player {
 
   placeAt(spawn: Vector3): void {
     this.root.position.copyFrom(spawn);
-    this.root.position.y = this.groundY;
+    this.root.position.y = spawn.y + this.groundY;
     this.velY = 0;
     this.grounded = true;
+    this.syncCombatant();
+  }
+
+  /**
+   * Height of the surface underfoot, from a short downward ray against the
+   * map's collider proxies.
+   *
+   * The probe starts a step-height above the feet so a rise reads as a step to
+   * walk up rather than a wall to stop against, and falls back to the valley
+   * floor when it finds nothing — the ground plane always exists, so a miss
+   * means the player is off the map rather than in the void.
+   */
+  private probeGround(): number {
+    const p = CONFIG.player;
+    const pos = this.root.position;
+    this.probeRay.origin.set(
+      pos.x,
+      pos.y - this.groundY + p.stepHeight + 0.05,
+      pos.z,
+    );
+    this.probeRay.length = p.groundProbeLength;
+    const hit = this.scene.pickWithRay(
+      this.probeRay,
+      (m) => !!m.metadata && m.metadata.solid === true,
+    );
+    return hit?.hit && hit.pickedPoint ? hit.pickedPoint.y : 0;
   }
 
   update(dt: number, input: InputManager, cam: CameraSystem): boolean {
@@ -344,10 +392,15 @@ export class Player {
     let jumped = false;
 
     // --- horizontal movement (camera-relative), with collision sliding ---
+    // Sprinting is mutually exclusive with aiming, and blocks firing (see
+    // `tryShot`) — otherwise it is strictly better than walking.
+    this.sprinting =
+      input.sprint && input.moveY > 0.1 && cam.adsBlend < 0.4 && !this.reloading;
     const speed =
       p.moveSpeed *
       this.mods.speedMult *
-      (cam.adsBlend > 0.4 ? p.adsMoveMult : 1);
+      (cam.adsBlend > 0.4 ? p.adsMoveMult : 1) *
+      (this.sprinting ? p.sprintMult : 1);
     const move = cam.flatForward
       .scale(input.moveY)
       .add(cam.flatRight.scale(input.moveX));
@@ -357,7 +410,7 @@ export class Player {
       this.root.moveWithCollisions(move.scale(speed * dt));
     }
 
-    // --- jump & gravity (flat arena floors, so a plane check suffices) ---
+    // --- jump & gravity, against whatever surface is actually underfoot ---
     if (input.jumpPressed && this.grounded) {
       this.velY = p.jumpVelocity;
       this.grounded = false;
@@ -365,14 +418,32 @@ export class Player {
     }
     this.velY -= p.gravity * dt;
     this.root.position.y += this.velY * dt;
-    if (this.root.position.y <= this.groundY) {
-      this.root.position.y = this.groundY;
+
+    // Hollowmere has terraces, embankments, ramps and a hayloft, so the floor
+    // is wherever the probe finds it rather than a fixed plane. Rising ground
+    // is snapped up to (a step, not a wall) only while falling or grounded, so
+    // a jump still arcs over a low wall instead of sticking to it.
+    const floorY = this.probeGround();
+    const foot = this.root.position.y - this.groundY;
+    if (foot <= floorY + (this.velY <= 0 ? p.stepHeight : 0)) {
+      this.root.position.y = floorY + this.groundY;
       this.velY = 0;
       this.grounded = true;
+    } else {
+      this.grounded = false;
     }
 
     // --- always face the camera yaw (over-the-shoulder aiming) ---
     this.root.rotation.y = cam.yaw;
+
+    // --- health regeneration ---
+    // Stay hurt for a few seconds after the last hit, then heal back to full.
+    // Without this, sixteen hostile bots and no medic turns the round into a
+    // respawn queue for anyone who wins a fight at half health.
+    this.regenLockT = Math.max(0, this.regenLockT - dt);
+    if (this.regenLockT <= 0 && this.health < this.maxHealth) {
+      this.health = Math.min(this.maxHealth, this.health + p.regenRate * dt);
+    }
 
     // --- weapon timers ---
     this.fireCooldown -= dt;
@@ -388,6 +459,7 @@ export class Player {
       }
     }
 
+    this.syncCombatant();
     this.animate(dt, moveInput, speed, cam);
     return jumped;
   }
@@ -465,7 +537,13 @@ export class Player {
    * Auto-reloads when the magazine empties.
    */
   tryShot(): boolean {
-    if (!this.alive || this.reloading || this.fireCooldown > 0 || this.ammo <= 0) {
+    if (
+      !this.alive ||
+      this.reloading ||
+      this.sprinting ||
+      this.fireCooldown > 0 ||
+      this.ammo <= 0
+    ) {
       return false;
     }
     const r = CONFIG.recoil;
@@ -496,14 +574,21 @@ export class Player {
   }
 
   /** Returns true if this damage killed the player. */
+  /** Keeps `center`/`eyePos` current; called once per frame from `update`. */
+  private syncCombatant(): void {
+    const p = this.root.position;
+    this.center.set(p.x, p.y, p.z);
+    this.eyePos.set(p.x, p.y + CONFIG.camera.fpHeight - this.groundY, p.z);
+  }
+
   takeDamage(amount: number): boolean {
     if (!this.alive) return false;
     this.health = Math.max(0, this.health - amount);
-    if (this.health <= 0) {
-      this.alive = false;
-      return true;
-    }
-    return false;
+    this.regenLockT = CONFIG.player.regenDelay;
+    const died = this.health <= 0;
+    if (died) this.alive = false;
+    this.onDamaged(amount, died);
+    return died;
   }
 
   heal(amount: number): void {

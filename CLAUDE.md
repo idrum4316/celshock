@@ -31,6 +31,14 @@ have already cost time:
   then let `CameraSystem` converge.
 - Recoil/spread numbers measured headless are wrong (fewer frames per shot means
   less spring-back between shots) — never tune from them.
+- `dt` is clamped to 0.05, so at ~5 fps headless **game time runs at ~25% of wall
+  clock**. Waiting for bots to walk across a 240 m map is not practical; force a
+  skirmish by overriding `battle.spawnPointFor` instead. Rules-level things
+  (capture times, bleed, ticket drain) are better driven directly by calling
+  `conquest.update(1/60, fakeCombatants)` in a loop.
+- `Game.updateGameplay` pushes HUD state every frame, so setting something like
+  `hud.setScoreboard(true, ...)` by hand is overwritten on the next tick. Drive
+  the input instead (`page.keyboard.down("Tab")`).
 - Killing a spawned `npx vite` can leave an orphan holding the port; free it by
   PID from `ss -tlnp`. Never `pkill -f vite` — it matches the calling shell's own
   command line.
@@ -48,16 +56,25 @@ file.
 ### Ownership and wiring
 
 `src/core/Game.ts` is the only place systems meet. Systems never import each
-other; `Game` wires them with callbacks (`combat.onPlayerHit`,
-`enemySys.onEnemyDied/onBossDied`) and hands enemy AI an `AICtx` (in
-`entities/Enemy.ts`) that is mutated in place each frame rather than rebuilt. New
-cross-system behavior belongs in that wiring, not in an import between systems.
+other; `Game` wires them with callbacks (`battle.onBotKilled/onBotFired`,
+`conquest.onCaptured/onNeutralised`, `player.onDamaged`, `deployScreen.onDeploy`)
+and hands bot AI a `BattleCtx` (in `entities/Bot.ts`) built once and read through
+to `BattleSystem` rather than rebuilt per frame. New cross-system behavior
+belongs in that wiring, not in an import between systems.
+
+`Game`'s state machine is `menu -> deploy -> playing`, with `deploy` re-entered
+on every death and `roundover` when a side runs out of tickets. The 3D scene
+renders in every state, which is what lets the deploy screen and the menu sit
+over a live view.
 
 `Game.updateGameplay` has a load-bearing order at the end of the frame: camera
 update → `mats.updateCamera()` → carried-light updates → `lighting.update(dt,
-camera.position, mats)` → `player.setFirstPerson()` → `viewmodel.update()`. Light
-slot selection and shader fog both key off the camera position, so anything that
-moves the camera must run before them.
+camera.position, mats)` → `sfx.setListener()` → `player.setFirstPerson()` →
+`viewmodel.update()`. Light slot selection, shader fog, and audio panning all key
+off the camera position, so anything that moves the camera must run before them.
+
+`ConquestSystem.update` runs *before* `BattleSystem.update`, so a bot's think
+tick sees this frame's flag ownership rather than last frame's.
 
 ### The scene has no Babylon lights
 
@@ -70,35 +87,130 @@ Effect meshes (tracers, sparks, neon, reticles) use unlit emissive
 `StandardMaterial`s from `mats.getEmissive()` and are unaffected by lighting
 entirely.
 
-Lights come in three flavors: static fixtures (`lighting.add()`, registered
-automatically from a theme prop's `light` spec), transient pulses
-(`lighting.pulse()` — muzzle flash, shockwave), and carried lights
-(`setCarried()`/`removeCarried()` — the player's shoulder lamp, a boss aura).
+Lights come in three flavors: static fixtures (`lighting.add()`, registered by
+`MapBuilder` from a builder's `LocalLight` list or a scatter prop's entry in
+`SCATTER_LIGHTS`), transient pulses (`lighting.pulse()` — muzzle flash), and
+carried lights (`setCarried()`/`removeCarried()` — the player's shoulder lamp).
 Transient and carried lights always get a slot; static fixtures compete
 nearest-first.
 
-### Themes are data, not code
+**That is why bot muzzle flashes are budgeted.** 32 bots firing would take all 16
+slots with transients and black out the village's own lanterns, so
+`BattleSystem` only records flash positions and `Game.spendMuzzleLightBudget`
+spends `CONFIG.lighting.muzzleBudgetPerFrame` on the nearest few. Adding any new
+per-bot transient light needs the same treatment.
 
-A `RoomTheme` (`src/themes/types.ts`) owns everything a room needs: palette, fog
-and mist, key/ambient/rim lighting, prop builders with their attached lights, the
-particle spec, the enemy roster, and the boss. `RoomGenerator` and the enemy/boss
-model builders consume that data and never special-case a theme, so **adding a
-theme is one new file plus one entry in `ThemeManager.themes`** — and a new enemy
-or boss needs no art, only numbers plus one of the existing `body`/`pattern`
-archetypes.
+### The map is data, not code
+
+`src/world/hollowmere/layout.ts` is the entire level: a list of placements
+(`{ kind, x, z, rotY, params }`), scatter regions, control points, and spawns.
+`BuildingKit` supplies the parametric pieces and `MapBuilder` consumes the
+layout; neither special-cases Hollowmere, so **a second map is one new layout
+file plus an `EnvironmentSpec`**.
+
+Builders assemble geometry **at the origin, unrotated**, and return three
+parallel lists (`meshes`, `colliders`, `lights`) in local space. `MapBuilder`
+merges the meshes per colour and then transforms all three into place. Building
+at identity is what makes the merge safe — `MergeMeshes` bakes world matrices and
+returns an identity-transform mesh, the same trick `RifleModel.buildRifle` uses.
+
+Layout gotchas that have already cost time:
+
+- A collider's top face must stay within `CONFIG.nav.stepHeight` (0.6) of the
+  ground beside it, or the nav flood fill never reaches it and bots treat it as a
+  wall. The boathouse and jetty decks both failed this at 0.62–0.73 m.
+- A control point's `pos` must not be inside a collider, or `surfaceAt` returns
+  -1 there. Flag C was originally centred on the well.
+- Ramps need `rotX` on the **collider**, not just the visual box, or the player
+  walks into an invisible flat slab.
+
+### Visual meshes and collider proxies are separate things
+
+The single most load-bearing rule in the world layer. Every ray test filters on
+`metadata.solid === true` — `CameraSystem`'s occlusion pick (every frame),
+`CombatSystem`'s hitscan (every shot), `BattleSystem`'s line-of-sight, and
+`Player.probeGround` — and `moveWithCollisions` walks every mesh with
+`checkCollisions`. At village scale, visual geometry must stay out of both.
+
+| Kind         | visible | pickable | collides | `solid` | merged | frozen |
+| ------------ | ------- | -------- | -------- | ------- | ------ | ------ |
+| **Visual**   | yes     | **no**   | **no**   | —       | yes    | yes    |
+| **Collider** | **no**  | yes      | yes      | yes     | no     | yes    |
+
+Colliders must line up with the surfaces they stand in for or bullet sparks land
+off the visible geometry. `MapBuilder.collider()` is the only place that creates
+them, and it also records a `WorldBox` for the nav grid — geometry added by any
+other path is invisible to navigation.
 
 ### Mesh metadata is a contract
 
 Three flags, all read elsewhere; new geometry that omits them misbehaves silently:
 
-- `solid: true` — walls and blocking props. Both `CameraSystem`'s collision pick
-  and `CombatSystem`'s hitscan filter on it, so unmarked geometry is shot
-  through and seen through. Decorative props stay unmarked (and unpickable) on
-  purpose so they never enter a ray test.
+- `solid: true` — collider proxies only (see above). Unmarked geometry is shot
+  through, seen through, and walked through.
 - `noOutline: true` — skipped by `addOutline()`. Every emissive part (eyes,
   flames, signs, reticle) needs it.
 - `noGlow: true` — excluded from the `GlowLayer` in the `Game` constructor. Only
   meshes existing at construction time are scanned.
+
+### Navigation
+
+`NavGrid` is built from the finished collider set at map load. The graph node is
+a **surface** — a (cell, height) pair — not a cell, because one cell can hold the
+creek floor and the bridge deck above it, or the barn floor and its hayloft.
+`MAX_SURFACES` is 3.
+
+Surface heights come from evaluating each collider's top-face *plane* at the cell
+centre, not from its bounding box. That is deliberate: a pitched ramp's AABB
+reports its peak across the whole footprint and would read as a wall. If you
+touch `topFaceHeight`, note that the half-thickness is `h/2/cos(rotX)` and the
+slope is `tan(rotX)` — writing it as `h/2*cos` and `-tan` is the easy sign error,
+and it silently makes every ramp unwalkable.
+
+Reachability is a flood fill from the map's outer ring. That is what keeps bots
+off rooftops: a roof is a perfectly good standable surface, but nothing beside it
+is within a step, so it is never reached.
+
+One flow field per objective (5 flags + 2 home spawns) is precomputed at load;
+the map is static so nothing is ever recomputed. Bots read `nav.steer()` and
+never run their own pathfinding.
+
+**Bots do not use `moveWithCollisions`.** A cell being walkable *is* the
+collision test, and it already accounts for headroom and step height; 32 agents
+walking the collidable mesh list every frame would not be affordable.
+
+### Bot scaling
+
+Three things carry the frame budget, and undoing any of them costs ~10× draw
+calls or a permanent hitch:
+
+- **The rig pool is built once and never disposed.** Death hides a rig, respawn
+  re-poses it. `new Bot()` allocates a dozen meshes and their GL buffers, and
+  Conquest respawns continuously.
+- **Bot rigs are nine merged meshes** (`SoldierModel`), against ~60 for the
+  player's. The outline pass draws everything twice, so fidelity is ~2× draw
+  calls per bot per mesh. The player keeps the detailed rig because it is the
+  only character always on screen — do not "unify" the two.
+- **AI is staggered at `CONFIG.bots.thinkRate`**, round-robin across frames.
+  `acquire()` gathers candidates by distance and ray-tests them in ascending
+  order, returning the first visible one — testing all of them fires up to 30
+  picks per think.
+
+Bots hold a target until it dies, breaks LOS, or leaves range. Without that
+hysteresis, "nearest visible enemy" flips every tick in a crowd, which resets
+`aimT` and means bots essentially never finish their reaction wind-up and fire.
+This looked exactly like "bots don't shoot" and is worth remembering.
+
+### Conquest rules
+
+`ConquestSystem` owns flags, the capture meter, tickets, and bleed. The meter
+runs -1..+1 and ownership flips only by crossing 0, so a flag must be
+neutralised before it changes hands. Occupancy is counted from the combatant
+list `Game` assembles each frame (player + all bots).
+
+The player's health regenerates after `CONFIG.player.regenDelay`. This is not
+decoration: with sixteen hostile bots and no medics, a pool that never refills
+turns the round into a respawn queue.
 
 ### Rendering constraints that look like bugs if you undo them
 
@@ -115,13 +227,15 @@ Three flags, all read elsewhere; new geometry that omits them misbehaves silentl
   direction, so an emissive detail must protrude past its neighbors' shells or
   the glow is swallowed (this is why the player's visor slit and the lamp lens
   stick out).
-- Prop counts scale with floor area, but **light-bearing props scale by the
-  square root of that** (`RoomGenerator` line ~205). Scaling them linearly floods
-  the 16 shader slots and destroys the darkness.
+- Fixture lights are hand-placed and must stay **spatially spread**. The 16-slot
+  shader cap is absolute; `LightingSystem` picks nearest-first, so clustering
+  lanterns wastes slots and flattens the darkness. The retired room generator
+  enforced this automatically with a sqrt scale — hand authoring means enforcing
+  it by eye.
 
 ### Procedural models
 
-Every mesh — player, enemies, bosses, weapon, props, environment — is built from
+Every mesh — player, bots, weapons, buildings, props, environment — is built from
 Babylon primitives at runtime. The game ships zero model files and zero audio
 files (`Sfx` synthesizes WebAudio). A glTF asset pipeline was tried and reverted;
 it survives only in `stash@{0}`. Don't reintroduce assets without being asked.
@@ -153,17 +267,23 @@ black cross-section.
   magazine held down genuinely walks off target and has to be pulled back by
   hand. This is an explicit product decision, not a bug — a fully-recovering
   version was rejected.
-- Player bullets are hitscan (one ray plus sphere tests). Tracers, sparks, and
-  enemy projectiles are object-pooled in `CombatSystem`; add effects to a pool
-  rather than allocating per shot.
-- Enemy and boss classes hold a small FSM and drive a joint rig built by
-  `EnemyModels`/`BossModels` (invisible root + `TransformNode` joints). Animation
-  is procedural — posed hierarchies, walk cycles driven by travel speed,
-  telegraph poses — so a new behavior means new FSM states, never new clips.
+- **Everyone** is hitscan — player and bots share `CombatSystem.fire()`, which
+  takes the shooter's target list so friendly fire is excluded by construction
+  rather than by a team check inside. There is no projectile pool to thrash in a
+  32-bot firefight. Tracers and sparks are pooled; add effects to a pool rather
+  than allocating per shot.
+- `CONFIG` is `as const`, so a field like `bots.engageRange` has a *literal*
+  type. `let x = CONFIG.bots.engageRange` then reassigning it fails to compile —
+  annotate `let x: number` instead.
+- `Bot` holds a small FSM and drives a joint rig built by `SoldierModel`
+  (invisible root + `TransformNode` joints). Animation is procedural — posed
+  hierarchies, walk cycles driven by travel speed — so a new behavior means new
+  FSM states, never new clips.
 
 ## Notes
 
-- `specs/game_design.md` is the original specification the prototype was built
-  against; it is history, not a live contract.
+- `specs/game_design.md` describes the *original roguelike* prototype. It is
+  history twice over now — the game is a Conquest shooter — and is not a live
+  contract.
 - The tracked `undefined/` directory is stray screenshot output from a script
   with a bad path. It is not part of the build.

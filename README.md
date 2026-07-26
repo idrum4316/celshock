@@ -1,11 +1,10 @@
-# CELSHOCK — Cel-Shaded Roguelike Third-Person Shooter
+# HOLLOWMERE — Cel-Shaded Conquest
 
-A browser-based, single-player roguelike third-person shooter built with
-**Babylon.js** and **TypeScript**. Fight through procedurally generated,
-themed rooms — a moonlit graveyard forest, a dead neon service level, a
-boneyard under a blood moon — with seamless third-person ↔ first-person ADS
-switching and a low-poly cel-shaded horror look: near-black arenas lit by
-flickering torches, broken neon, and your own shoulder lamp.
+A browser-based, single-player **Conquest** shooter built with **Babylon.js** and
+**TypeScript**. Sixteen-a-side against bots over five control points in a
+fog-drowned horror village, with seamless third-person ↔ first-person ADS
+switching and a low-poly cel-shaded look: a near-black valley lit by guttering
+lanterns, burning braziers, muzzle flashes, and your own shoulder lamp.
 
 ## Setup
 
@@ -25,36 +24,44 @@ Requires Node 18+ and a WebGL2-capable browser (Chrome/Edge/Firefox/Safari).
 
 ## Controls
 
-| Action  | Gamepad (Xbox / PS) | Keyboard / Mouse |
-| ------- | ------------------- | ---------------- |
-| Move    | Left stick          | WASD             |
-| Look    | Right stick         | Mouse            |
-| ADS     | LT / L2             | Right-click      |
-| Shoot   | RT / R2             | Left-click       |
-| Jump    | A / ✕               | Space            |
-| Reload  | X / ▢               | R                |
-| Confirm | A or Start          | Enter / Click    |
+| Action     | Gamepad (Xbox / PS) | Keyboard / Mouse |
+| ---------- | ------------------- | ---------------- |
+| Move       | Left stick          | WASD             |
+| Look       | Right stick         | Mouse            |
+| Sprint     | L3                  | Shift            |
+| ADS        | LT / L2             | Right-click      |
+| Shoot      | RT / R2             | Left-click       |
+| Jump       | A / ✕               | Space            |
+| Reload     | X / ▢               | R                |
+| Scoreboard | Back / Share        | Tab              |
+| Confirm    | A or Start          | Enter / Click    |
 
 Click the page once to capture the mouse (pointer lock). Gamepads use the
 browser's standard mapping and are hot-pluggable — press any button after
 connecting.
 
-### How a run works
+### How a round works
 
-- A run is **5 rooms**; each room gets a **random theme** (no immediate
-  repeats) with matching environment, props, lighting, and enemies. The
-  arenas are big and dark — your shoulder lamp, the fixtures, and your own
-  muzzle flashes are how you read them.
-- Clear all enemies to open the exit door; a random **powerup** (damage,
-  speed, max HP, or mag size) spawns at the room center. Enemies sometimes
-  drop **health orbs**.
-- Room 5 is a **boss arena** with the theme's boss. Beat it to win the run.
-- Death is **permadeath**: the run (and all powerups) resets.
+- Two teams of sixteen — the **Wardens** (warm amber) and **the Blight** (cold
+  crimson) — fight over **five control points** across a 240 × 240 m village.
+- Stand inside a zone to capture it. More bodies capture faster, with
+  diminishing returns; if both teams are inside, the meter freezes. A flag has
+  to be swept through **neutral** before it changes hands, so you cannot steal
+  one by briefly outnumbering the defender.
+- Each team starts with **400 reinforcements**. Every death costs one, and
+  whichever side holds **fewer flags bleeds** tickets steadily on top. Winning
+  fights while ignoring objectives still loses the round.
+- Death opens the **deploy screen**: a top-down map of the village where you
+  pick a spawn from the flags you hold, or fall back to your home gatehouse.
+  Health regenerates a few seconds after you stop taking fire.
+- The round ends when one side hits zero.
 
-Boss tips: jump over the Rotwood Treant's ground slam; dodge sideways when
-the Titan charges; keep moving when the Sand Worm's dust ring follows you.
-Every boss carries an aura in its eye color, so it looms out of the fog
-before you can make out its shape.
+Map notes: the **Mill** sits down in a creek 1.5 m below the embankments on
+either side, so whoever holds the banks shoots into it. The **Barn**'s hayloft
+is the best perch on the map and the ramp up to it is fully exposed. The
+**Chapel** is on a terrace with a single ramp — hard to take, easy to hold. The
+**Bog Docks** are mist-choked and cramped by design. The **Square** has four
+road approaches and almost no cover.
 
 ## Architecture
 
@@ -66,126 +73,166 @@ src/
     Game.ts                 # Orchestrator + game state machine + main loop
     InputManager.ts         # Unified keyboard/mouse + gamepad state
     CameraSystem.ts         # Third-person camera with blended first-person ADS
-    Sfx.ts                  # Procedural WebAudio sound effects (no assets)
+    Sfx.ts                  # Procedural WebAudio, spatialised and voice-capped
   entities/
-    Player.ts               # Movement, jumping, weapon state, jointed body
+    Player.ts               # Movement, sprint, jump, weapon state, jointed body
     RifleModel.ts           # Low-poly SCAR-pattern rifle + holo sight builder
     Viewmodel.ts            # First-person rifle: raise, sway, bob, recoil
-    Enemy.ts                # FSM AI (spawn/chase/attack/die), drives the rig
-    EnemyModels.ts          # Hound/humanoid/drone/wraith rigs + animation
-    Boss.ts                 # Three boss patterns: slam / burst / burrow
-    BossModels.ts           # Treant / Titan / Worm rigs + animation
+    Combatant.ts            # Team + the shared shootable/shooter interface
+    Bot.ts                  # Bot FSM: advance / engage / reposition / capture
+    SoldierModel.ts         # Cheap merged bot rig + procedural animation
   systems/
-    RoomGenerator.ts        # Procedural arenas: walls, door, props, spawns
-    ThemeManager.ts         # Theme registry + scene/lighting/fog application
+    BattleSystem.ts         # Bot pool, AI scheduling, LOS, distance LOD
+    ConquestSystem.ts       # Flags, capture meters, tickets, bleed, spawns
+    CombatSystem.ts         # Hitscan + pooled tracers and sparks
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
-    Atmosphere.ts           # Drifting ash / spore / ember particle field
-    CombatSystem.ts         # Hitscan, pooled tracers/projectiles/sparks, AOEs
-    EnemySystem.ts          # Spawning, AI updates, separation, clear detection
-    LootSystem.ts           # Health orbs + run-scoped powerups
-  themes/
-    types.ts                # RoomTheme / EnemyType / BossType / PropSpec
-    ForestTheme.ts          # Blackwood: Hounds + Archers + Wraiths, Treant boss
-    CyberpunkTheme.ts       # Dead Sector: Drones + Husks + Hounds, Titan boss
-    DesertTheme.ts          # Ashen Wastes: Scorpions + Bandits + Wraiths, Worm
+    Atmosphere.ts           # Drifting ash particle field
+  world/
+    MapBuilder.ts           # Builds the map; merges visuals, emits colliders
+    BuildingKit.ts          # Parametric cottages, chapel, barn, mill, ramps...
+    NavGrid.ts              # Walkable-surface graph + precomputed flow fields
+    Props.ts                # Scatter props: trees, graves, rubble, braziers
+    environment.ts          # EnvironmentSpec + applyEnvironment
+    hollowmere/
+      layout.ts             # THE MAP — every placement, flag, and spawn
+      environment.ts        # Hollowmere's palette, fog, mist, particles
   ui/
-    HUD.ts                  # DOM overlay: bars, crosshair, messages, menus
+    HUD.ts                  # DOM overlay: tickets, flags, killfeed, scoreboard
+    DeployScreen.ts         # Clickable top-down deploy map
   shaders/
     CelShader.ts            # Custom cel ShaderMaterial + outline helper
     HorrorPost.ts           # Vignette / grain / aberration / damage flash pass
 ```
 
-### The theme system
+### The map is data
 
-A `RoomTheme` is a single data object that owns *everything* a room needs to
-be internally consistent: floor/wall palette, sky/fog/mist colors, key light
-and ambient tint, prop builders (including the lights those props carry), the
-drifting particle spec, the enemy roster, and the boss definition.
+`src/world/hollowmere/layout.ts` is the whole level: a list of placements
+(`{ kind, x, z, rotY, params }`), scatter regions, control points, and spawns.
+`BuildingKit` provides the parametric pieces, `MapBuilder` consumes the layout,
+and neither special-cases Hollowmere — **a second map is one new layout file**.
 
-- `ThemeManager.pick()` selects a random theme per room and
-  `ThemeManager.apply()` pushes its environment into the scene clear color
-  and every cel material's lighting/fog uniforms.
-- `RoomGenerator` only consumes theme data — it never special-cases a theme —
-  so **adding a theme is one new file** exporting a `RoomTheme` plus one line
-  in `ThemeManager`'s registry.
-- Enemies and bosses are built procedurally from data (`body` archetype,
-  colors, eye color, scale, behavior numbers), so new enemy types need no art.
-- A prop with a `light` spec registers a dynamic point light when placed, so
-  lighting a new theme is data, not code.
+### Visual meshes and collision proxies are separate
+
+This is the load-bearing decision of the whole conversion. Every ray test runs
+against `metadata.solid === true` meshes — the camera's occlusion pull-in every
+frame, hitscan on every shot, and bot line-of-sight — and the player's collider
+walks every mesh with `checkCollisions`. At village scale, letting visual
+geometry do those jobs means thousands of triangle-picked meshes in the hot
+path.
+
+So nothing does both:
+
+| Kind         | visible | pickable | collides | `solid` | merged | frozen |
+| ------------ | ------- | -------- | -------- | ------- | ------ | ------ |
+| **Visual**   | yes     | **no**   | **no**   | —       | yes    | yes    |
+| **Collider** | **no**  | yes      | yes      | yes     | no     | yes    |
+
+Visual geometry is merged per colour — a cottage goes from ~20 meshes to 4, and
+because `renderOutline` draws a shell per mesh, from ~40 draws to 8. The whole
+village is ~160 drawn meshes and ~300 invisible collider boxes.
+
+### Navigation
+
+`NavGrid` rasterises every collider's **top face** into a 160 × 160 grid. The
+graph node is a *surface* — a (cell, height) pair — because one cell can hold
+the creek floor and the bridge deck above it, or the barn floor and its hayloft.
+Surfaces are linked when they are adjacent and within a step, then flood-filled
+from open ground; that flood fill is what keeps bots off rooftops, since a roof
+is standable but nothing next to it is within a step.
+
+One **flow field per objective** (five flags plus both home spawns) is computed
+at load, so all 32 bots share seven breadth-first searches instead of running
+their own pathfinding. The map is static, so none of it is ever recomputed.
+
+### Bots
+
+Thirty-two bots, from a pool built once and never disposed — death hides a rig,
+respawn re-poses it, so continuous respawning never allocates. Each rig is nine
+merged meshes (`SoldierModel`), against ~60 for the player's, because the
+outline pass draws everything twice and the player is the only character always
+on screen.
+
+The expensive half of the AI — target acquisition, line-of-sight rays, objective
+re-evaluation — runs at 5 Hz per bot, round-robin across frames, which is a
+couple of ray picks per frame for the whole roster. Movement integrates every
+frame. Bots hold a target until it dies, breaks line of sight, or leaves range:
+without that hysteresis "nearest visible enemy" flips every tick in a crowd and
+resets the reaction timer, so nobody ever fires.
+
+Distance LOD keyed off the camera: past the fog a rig is disabled outright, past
+35 m the pose freezes, past 20 m outlines are dropped.
 
 ### Rendering
 
 Cel shading is a custom `ShaderMaterial` (`src/shaders/CelShader.ts`). Light
-arrives in three banded parts, so the toon look survives a fully dynamic
-scene:
+arrives in three banded parts, so the toon look survives a fully dynamic scene:
 
-- a **directional key light** (moon / blood moon) quantized into 4 hard bands,
-- up to 16 **dynamic point lights** — torches, neon, muzzle flashes, the
+- a **directional key light** (the moon) quantized into 4 hard bands,
+- up to 16 **dynamic point lights** — lanterns, braziers, muzzle flashes, the
   player's lamp — quantized into 3 bands with a smooth radial falloff, and
 - a flat **ambient** term that sets how black the unlit side goes.
 
-A soft shoulder compresses anything above 0.75 so overlapping lights saturate
-in their own color instead of clipping to white. Atmosphere is theme-tinted
+A soft shoulder compresses anything above 0.75 so overlapping lights saturate in
+their own color instead of clipping to white. Atmosphere is theme-tinted
 distance fog plus a separate height-based ground mist, both blended in the
 fragment shader, and a step-function rim highlight adds the toon pop. Bold
-outlines use Babylon's outline renderer (inverted hull). Materials are cached
-per color and shared across meshes.
+outlines use Babylon's outline renderer (inverted hull). Materials are cached per
+color and shared across meshes.
 
-`LightingSystem` owns every dynamic light. A large arena holds far more
-fixtures than the shader has slots, so each frame the nearest ones win —
-imperceptible in practice, because distant lights are already swallowed by
-fog. Transient flashes (muzzle, shockwaves) and *carried* lights (the player's
-shoulder lamp, a boss's aura) are guaranteed a slot.
+`LightingSystem` owns every dynamic light and the shader has only 16 slots, so
+each frame the nearest fixtures win — imperceptible in practice, because distant
+lights are already swallowed by fog. Transient flashes and *carried* lights (the
+player's lamp) are guaranteed a slot, which is exactly why bot muzzle flashes
+are budgeted: 32 bots firing would take all 16 and black out the village.
 
 Finally `HorrorPost` grades the frame: vignette, corner desaturation, radial
 chromatic aberration, animated film grain, and a red flash on damage. It is
-hand-written because Babylon's image-processing block re-gammas the cel
-shader's already display-ready colors and washes the palette out.
+hand-written because Babylon's image-processing block re-gammas the cel shader's
+already display-ready colors and washes the palette out.
 
-Shading is **faceted**: the fragment shader recovers each triangle's
-geometric normal from screen-space derivatives of the world position instead
-of using the interpolated vertex normal. Doing it in the shader gets flat
-shading on every mesh for free — no `convertToFlatShadedMesh()` calls, no
-unwelded vertices, and it applies automatically to anything built later.
-Effect meshes (tracers, sparks, neon) use unlit emissive `StandardMaterial`s
-and are unaffected.
+Shading is **faceted**: the fragment shader recovers each triangle's geometric
+normal from screen-space derivatives of the world position instead of using the
+interpolated vertex normal. Doing it in the shader gets flat shading on every
+mesh for free — no `convertToFlatShadedMesh()` calls, no unwelded vertices, and
+it applies automatically to anything built later. Effect meshes (tracers, sparks)
+use unlit emissive `StandardMaterial`s and are unaffected.
 
-**The game ships no 3D model files.** Every mesh — player, enemies, bosses,
-weapons, props, environment — is built from Babylon primitives at runtime,
+**The game ships no 3D model files.** Every mesh — player, bots, weapons, props,
+buildings, environment — is built from Babylon primitives at runtime,
 deliberately coarse so the facets read as the art style.
 
 ### Performance notes
 
-- Tracers, sparks, and enemy projectiles are **object-pooled**.
-- Player bullets are hitscan (one ray + sphere tests per shot).
-- One `ShaderMaterial` per color, shared; all geometry is low-poly primitives.
-- Rooms are large (~65–105 m per side), so prop and spawn counts scale with
-  floor area — but light-bearing props scale by its square root, which keeps
-  both the shader's light slots and the darkness intact.
-- Static room geometry gets `freezeWorldMatrix()`; decorative props are
-  marked unpickable so they never enter a hitscan ray test.
+- Village visuals are **merged per colour, per structure**; scatter props are
+  merged per region.
+- Static geometry is `freezeWorldMatrix()`'d and unpickable; collider proxies
+  are plain invisible boxes.
+- Player and bot shots are **hitscan** — there is no projectile pool to thrash
+  in a 32-bot firefight. Tracers and sparks are pooled.
+- Bots move on the nav graph rather than through Babylon's collider; 32 agents
+  calling `moveWithCollisions` would walk the collidable mesh list 32× a frame.
+- Audio uses **one cached noise buffer**, distance attenuation, and a 24-voice
+  cap. Generating a fresh buffer per shot was ~1,900 `Math.random()` calls each.
 - No asset downloads: zero model files, and sound is synthesized at runtime.
 
 ## Known limitations
 
 - Characters are primitive assemblies, not modeled/rigged meshes; all
   "animation" is procedural (posed joint hierarchies, walk cycles driven by
-  travel speed, jaw/limb telegraphs, spawn/collapse tweens).
+  travel speed).
 - Point lights are per-pixel but cast **no shadows** — the darkness is fog,
   ambient, and falloff, not occlusion.
-- Enemy pathfinding is steering-based (seek + strafe + obstacle push-out),
-  not navmesh-based; enemies can hesitate around large prop clusters.
-- Single weapon; no manual weapon switching.
-- Rooms are single arenas connected by a door transition, not a persistent
-  dungeon map.
-- Sound is minimal procedural WebAudio.
+- Single weapon; no kits, classes, or vehicles.
+- Nav cells hold up to three surfaces, so unusually deep stacks of walkable
+  geometry would need `MAX_SURFACES` raised.
+- Bots use cover incidentally (the flow field routes them past buildings) rather
+  than deliberately picking firing positions.
+- One map. The system supports more, but only Hollowmere is authored.
 
 ## Next steps for expansion
 
-- **More themes**: add `src/themes/DungeonTheme.ts` / `AlienTheme.ts`
-  (interface already supports them) and register in `ThemeManager`.
-- More weapon types + weapon pickups as loot.
-- Navmesh or flow-field pathfinding for smarter enemies.
-- Elite enemy variants, room modifiers, and a meta-progression layer.
-- glTF character models with real animations driven by the existing FSMs.
-- Minimap, run stats, and seeded runs for sharing.
+- A second map: one new `layout.ts` plus an `EnvironmentSpec`.
+- Kits and weapon variety — extract a `WeaponType` the way themes were data.
+- Squad orders, so friendly bots can be told which flag to take.
+- Deliberate cover selection and suppression in the bot FSM.
+- Vehicles, which would need new physics, camera modes, and AI.

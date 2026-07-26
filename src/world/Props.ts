@@ -1,18 +1,31 @@
 import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../shaders/CelShader";
-import type { RoomTheme } from "./types";
+
+/**
+ * Scatter props for Hollowmere — the loose dressing that fills space between
+ * the authored buildings. Harvested from the retired room themes; each builder
+ * takes `(scene, mats)`, assembles a parented primitive hierarchy at the
+ * origin, and returns the root. Emissive children are tagged `noOutline` so
+ * the outline shell doesn't swallow their glow.
+ *
+ * Placement (position, rotation, scale) is the caller's business — unlike the
+ * old `PropSpec`, these carry no counts and no transform of their own.
+ */
 
 const BARK = "#4a4238";
 const DEAD_BARK = "#3c3730";
 const STONE = "#7a7f7c";
 const IRON = "#2f3338";
+const RUST = "#5d4a3c";
+const DARK_METAL = "#262a33";
+const CONCRETE = "#4a4d54";
 
 /**
  * Dead tree: a leaning bare trunk with a crown of clawing branches. No
  * canopy — the silhouette is all splinters, and moonlight through them is
  * most of what the player sees at distance.
  */
-function buildDeadTree(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildDeadTree(scene: Scene, mats: CelMaterialFactory): Mesh {
   const barkMat = mats.get(BARK);
   const trunk = MeshBuilder.CreateCylinder(
     "tree-trunk",
@@ -46,7 +59,7 @@ function buildDeadTree(scene: Scene, mats: CelMaterialFactory): Mesh {
 }
 
 /** Leaning headstone with a cracked-off corner. */
-function buildGravestone(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildGravestone(scene: Scene, mats: CelMaterialFactory): Mesh {
   const stone = mats.get(STONE);
   const slab = MeshBuilder.CreateBox(
     "grave-slab",
@@ -79,8 +92,8 @@ function buildGravestone(scene: Scene, mats: CelMaterialFactory): Mesh {
   return slab;
 }
 
-/** Iron lamp post — the warm anchor in an otherwise blue-black room. */
-function buildLantern(scene: Scene, mats: CelMaterialFactory): Mesh {
+/** Iron lamp post — the warm anchor in an otherwise blue-black village. */
+export function buildLantern(scene: Scene, mats: CelMaterialFactory): Mesh {
   const iron = mats.get(IRON);
   const post = MeshBuilder.CreateCylinder(
     "lantern-post",
@@ -129,7 +142,7 @@ function buildLantern(scene: Scene, mats: CelMaterialFactory): Mesh {
 }
 
 /** Cluster of luminous corpse-fungus — small, cold, and everywhere. */
-function buildFungus(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildFungus(scene: Scene, mats: CelMaterialFactory): Mesh {
   const stem = mats.get("#6a6f63");
   const glow = mats.getEmissive("#6effc0");
   const base = MeshBuilder.CreateCylinder(
@@ -168,7 +181,7 @@ function buildFungus(scene: Scene, mats: CelMaterialFactory): Mesh {
 }
 
 /** Fallen, half-rotted log. */
-function buildLog(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildLog(scene: Scene, mats: CelMaterialFactory): Mesh {
   const log = MeshBuilder.CreateCylinder(
     "log",
     { height: 3.0, diameterTop: 0.55, diameterBottom: 0.7, tessellation: 6 },
@@ -191,159 +204,72 @@ function buildLog(scene: Scene, mats: CelMaterialFactory): Mesh {
   return log;
 }
 
-/**
- * Blackwood: a moonlit graveyard forest under a dead sky. Lantern posts and
- * corpse-fungus are the only real light; everything else is silhouette.
- * Gaunt hounds run you down while bone archers and grave wraiths hang back.
- * Boss: the Rotwood Treant — ground-slam AOE (jump it!) and sapling minions.
- */
-export const ForestTheme: RoomTheme = {
-  name: "Blackwood",
-  environment: {
-    floorColor: "#3f4a3d",
-    wallColor: "#2b332c",
-    wallTrimColor: "#586352",
-    accentColor: "#7fe0a0",
-    skyColor: "#070a0d",
-    fogColor: "#0a0f13",
-    fogStart: 20,
-    fogEnd: 76,
-    mistColor: "#16211d",
-    mistHeight: 2.8,
-    mistStrength: 0.42,
-    lighting: {
-      color: "#8fb4ff",
-      intensity: 0.55,
-      direction: [-0.35, -0.85, 0.4],
-      ambientColor: "#1b2634",
-      ambientIntensity: 1.0,
-      rimColor: "#7ea6ff",
-      rimIntensity: 0.35,
-    },
-    particles: {
-      color: "#9effc8",
-      emissive: true,
-      count: 90,
-      size: 0.07,
-      riseSpeed: 0.35,
-    },
-    props: [
-      {
-        name: "dead-tree",
-        countRange: [7, 11],
-        blocking: true,
-        radius: 0.55,
-        scaleRange: [0.9, 1.7],
-        build: buildDeadTree,
-      },
-      {
-        name: "gravestone",
-        countRange: [5, 9],
-        blocking: true,
-        radius: 0.6,
-        scaleRange: [0.8, 1.3],
-        build: buildGravestone,
-      },
-      {
-        name: "log",
-        countRange: [3, 5],
-        blocking: true,
-        radius: 1.4,
-        scaleRange: [0.8, 1.2],
-        build: buildLog,
-      },
-      {
-        name: "lantern",
-        countRange: [2, 4],
-        blocking: true,
-        radius: 0.3,
-        scaleRange: [0.9, 1.2],
-        light: {
-          color: "#ffb257",
-          range: 22,
-          intensity: 2.4,
-          offset: [0.75, 3.2, 0],
-          flicker: 0.35,
-        },
-        build: buildLantern,
-      },
-      {
-        name: "fungus",
-        countRange: [3, 5],
-        blocking: false,
-        radius: 0.5,
-        scaleRange: [0.7, 1.4],
-        light: {
-          color: "#5bffb0",
-          range: 8,
-          intensity: 1.0,
-          offset: [0, 0.6, 0],
-          flicker: 0.12,
-        },
-        build: buildFungus,
-      },
-    ],
-  },
-  enemies: [
-    {
-      name: "Gaunt Hound",
-      kind: "melee",
-      body: "quad",
-      color: "#584f45",
-      accentColor: "#cec5ae",
-      eyeColor: "#ff5a3c",
-      scale: 1.05,
-      health: 34,
-      speed: 6.8,
-      damage: 10,
-      attackRange: 2.2,
-      attackCooldown: 1.2,
-    },
-    {
-      name: "Bone Archer",
-      kind: "ranged",
-      body: "capsule",
-      color: "#404f3a",
-      accentColor: "#c6bfa2",
-      eyeColor: "#9dff6a",
-      scale: 1,
-      health: 28,
-      speed: 3.4,
-      damage: 9,
-      attackRange: 18,
-      attackCooldown: 2.2,
-      projectileSpeed: 20,
-      projectileColor: "#9dff6a",
-    },
-    {
-      name: "Grave Wraith",
-      kind: "flyer",
-      body: "wraith",
-      color: "#333e4e",
-      accentColor: "#93aac9",
-      eyeColor: "#7fd8ff",
-      scale: 1.05,
-      health: 26,
-      speed: 4.2,
-      damage: 11,
-      attackRange: 15,
-      attackCooldown: 2.6,
-      projectileSpeed: 15,
-      projectileColor: "#7fd8ff",
-    },
-  ],
-  boss: {
-    name: "Rotwood Treant",
-    pattern: "slam",
-    color: "#4a3d2e",
-    accentColor: "#416a3d",
-    eyeColor: "#ff7a2f",
-    scale: 1.7,
-    health: 460,
-    speed: 2.8,
-    contactDamage: 14,
-    attackCooldown: 3.2,
-    aoeRadius: 7.5,
-    aoeDamage: 30,
-  },
-};
+/** Burning oil drum — the villagers' braziers, still lit. */
+export function buildFireDrum(scene: Scene, mats: CelMaterialFactory): Mesh {
+  const drum = MeshBuilder.CreateCylinder(
+    "drum",
+    { height: 1.2, diameter: 0.95, tessellation: 8 },
+    scene,
+  );
+  drum.position.y = 0.6;
+  drum.material = mats.get(RUST);
+
+  const rim = MeshBuilder.CreateTorus(
+    "drum-rim",
+    { diameter: 1.0, thickness: 0.1, tessellation: 10 },
+    scene,
+  );
+  rim.parent = drum;
+  rim.position.y = 0.55;
+  rim.material = mats.get(DARK_METAL);
+
+  const fire = MeshBuilder.CreateCylinder(
+    "drum-fire",
+    { height: 0.95, diameterTop: 0.06, diameterBottom: 0.72, tessellation: 6 },
+    scene,
+  );
+  fire.parent = drum;
+  fire.position.y = 0.9;
+  fire.material = mats.getEmissive("#ff8a2a");
+  fire.metadata = { noOutline: true };
+  return drum;
+}
+
+/** Collapsed masonry with rebar poking out — waist-high cover. */
+export function buildRubble(scene: Scene, mats: CelMaterialFactory): Mesh {
+  const heap = MeshBuilder.CreateBox(
+    "rubble",
+    { width: 1.9, height: 0.6, depth: 1.6 },
+    scene,
+  );
+  heap.position.y = 0.3;
+  heap.rotation.y = Math.random() * Math.PI;
+  heap.material = mats.get(CONCRETE);
+
+  for (let i = 0; i < 3; i++) {
+    const chunk = MeshBuilder.CreateBox(
+      `chunk${i}`,
+      { width: 0.7, height: 0.5, depth: 0.6 },
+      scene,
+    );
+    chunk.parent = heap;
+    chunk.position.set(
+      (Math.random() - 0.5) * 1.2,
+      0.4,
+      (Math.random() - 0.5) * 1.0,
+    );
+    chunk.rotation.set(Math.random(), Math.random(), Math.random());
+    chunk.material = mats.get("#565a62");
+  }
+
+  const rebar = MeshBuilder.CreateCylinder(
+    "rebar",
+    { height: 1.7, diameterTop: 0.05, diameterBottom: 0.07, tessellation: 4 },
+    scene,
+  );
+  rebar.parent = heap;
+  rebar.position.set(0.5, 0.8, -0.3);
+  rebar.rotation.z = 0.7;
+  rebar.material = mats.get("#6b5c4a");
+  return heap;
+}

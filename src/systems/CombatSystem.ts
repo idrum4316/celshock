@@ -9,7 +9,7 @@ import {
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 
-/** Anything the player's hitscan can damage (enemies and the boss). */
+/** Anything a hitscan shot can damage. */
 export interface Hittable {
   center: Vector3;
   hitRadius: number;
@@ -17,18 +17,16 @@ export interface Hittable {
   takeDamage(amount: number): boolean;
 }
 
+/** Outcome of one shot: who it hit, whether that killed them, and if it stopped on geometry. */
+export interface ShotResult {
+  target: Hittable | null;
+  killed: boolean;
+  hitWall: boolean;
+}
+
 interface Tracer {
   mesh: Mesh;
   life: number;
-}
-
-interface Projectile {
-  mesh: Mesh;
-  dir: Vector3;
-  speed: number;
-  damage: number;
-  life: number;
-  active: boolean;
 }
 
 interface Spark {
@@ -36,26 +34,16 @@ interface Spark {
   t: number;
 }
 
-interface Shockwave {
-  mesh: Mesh;
-  t: number;
-  maxRadius: number;
-}
-
 /**
- * Damage, hitscan shooting, and all transient combat effects.
- * Tracers, sparks, and enemy projectiles are object-pooled.
+ * Hitscan shooting and the transient effects it throws off. Tracers and
+ * sparks are object-pooled.
+ *
+ * Every combatant is hitscan — the player and both bot teams alike — so there
+ * is no projectile pool to thrash in a 32-bot firefight.
  */
 export class CombatSystem {
-  /** Current arena bounds; projectiles despawn against the walls. */
-  bounds = { width: 40, depth: 40 };
-  /** Wired by Game: applies damage to the player (respects game state). */
-  onPlayerHit: (damage: number) => void = () => {};
-
   private tracers: Tracer[] = [];
-  private projectiles: Projectile[] = [];
   private sparks: Spark[] = [];
-  private shockwaves: Shockwave[] = [];
 
   constructor(
     private scene: Scene,
@@ -74,23 +62,6 @@ export class CombatSystem {
       mesh.isPickable = false;
       this.tracers.push({ mesh, life: 0 });
     }
-    for (let i = 0; i < fx.projectilePoolSize; i++) {
-      const mesh = MeshBuilder.CreateSphere(
-        `proj${i}`,
-        { diameter: 0.38, segments: 6 },
-        scene,
-      );
-      mesh.isVisible = false;
-      mesh.isPickable = false;
-      this.projectiles.push({
-        mesh,
-        dir: new Vector3(),
-        speed: 0,
-        damage: 0,
-        life: 0,
-        active: false,
-      });
-    }
     for (let i = 0; i < fx.sparkPoolSize; i++) {
       const mesh = MeshBuilder.CreateSphere(
         `spark${i}`,
@@ -105,117 +76,62 @@ export class CombatSystem {
   }
 
   /**
-   * Player hitscan shot from the camera through the crosshair.
-   * Returns "enemy" on a hit (for the hitmarker), "wall"/"miss" otherwise.
+   * A hitscan shot. Used by the player and by every bot — same ray, same
+   * spread model, same tracer; only the target list and the origin differ.
+   *
+   * `targets` is whatever the shooter is allowed to hit, so friendly fire is
+   * excluded by construction rather than by a team check in here.
    */
-  playerFire(
-    camPos: Vector3,
+  fire(
+    origin: Vector3,
     aimDir: Vector3,
     spread: number,
     damage: number,
     muzzle: Vector3,
     targets: Hittable[],
-  ): "enemy" | "wall" | "miss" {
+  ): ShotResult {
     const dir = jitterDirection(aimDir, spread);
     const range = CONFIG.weapon.range;
 
     // Wall/prop/floor hit distance caps the shot.
-    const ray = new Ray(camPos, dir, range);
+    const ray = new Ray(origin, dir, range);
     const wallPick = this.scene.pickWithRay(
       ray,
       (m) => !!m.metadata && m.metadata.solid === true,
     );
     let hitDist = wallPick && wallPick.hit ? wallPick.distance : range;
-    let result: "enemy" | "wall" | "miss" =
-      wallPick && wallPick.hit ? "wall" : "miss";
+    const hitWall = !!(wallPick && wallPick.hit);
 
-    // Nearest enemy sphere along the ray, if closer than the wall.
+    // Nearest target sphere along the ray, if closer than the wall.
     let hitTarget: Hittable | null = null;
     for (const target of targets) {
       if (target.invulnerable) continue;
-      const d = raySphere(camPos, dir, target.center, target.hitRadius);
+      const d = raySphere(origin, dir, target.center, target.hitRadius);
       if (d !== null && d < hitDist) {
         hitDist = d;
         hitTarget = target;
       }
     }
 
-    const hitPoint = camPos.add(dir.scale(hitDist));
+    const hitPoint = origin.add(dir.scale(hitDist));
+    let killed = false;
     if (hitTarget) {
-      hitTarget.takeDamage(damage);
-      result = "enemy";
+      killed = hitTarget.takeDamage(damage);
       this.spawnSpark(hitPoint, "#ffe680");
-    } else if (result === "wall") {
+    } else if (hitWall) {
       this.spawnSpark(hitPoint, "#c8c8c8");
     }
 
     this.spawnTracer(muzzle, hitPoint);
-    return result;
+    return { target: hitTarget, killed, hitWall };
   }
 
-  /** Fires a themed enemy projectile (pooled). */
-  fireEnemyProjectile(
-    from: Vector3,
-    dir: Vector3,
-    speed: number,
-    damage: number,
-    colorHex: string,
-  ): void {
-    const p =
-      this.projectiles.find((x) => !x.active) ?? this.projectiles[0];
-    p.mesh.position.copyFrom(from);
-    p.mesh.material = this.mats.getEmissive(colorHex);
-    p.mesh.isVisible = true;
-    p.dir.copyFrom(dir);
-    p.speed = speed;
-    p.damage = damage;
-    p.life = 5;
-    p.active = true;
-  }
-
-  /** Expanding ground ring used to telegraph boss AOE hits. */
-  shockwave(center: Vector3, radius: number, colorHex: string): void {
-    const mesh = MeshBuilder.CreateTorus(
-      "shockwave",
-      { diameter: 1, thickness: 0.25, tessellation: 28 },
-      this.scene,
-    );
-    mesh.position.copyFrom(center);
-    mesh.material = this.mats.getEmissive(colorHex);
-    mesh.isPickable = false;
-    this.shockwaves.push({ mesh, t: 0, maxRadius: radius });
-  }
-
-  update(dt: number, playerPos: Vector3): void {
+  update(dt: number): void {
     // Tracers: stretch briefly then vanish.
     for (const tr of this.tracers) {
       if (tr.life > 0) {
         tr.life -= dt;
         if (tr.life <= 0) tr.mesh.isVisible = false;
-      }
-    }
-
-    // Enemy projectiles: move, hit the player, or despawn at walls.
-    const mx = this.bounds.width / 2 - 0.6;
-    const mz = this.bounds.depth / 2 - 0.6;
-    for (const p of this.projectiles) {
-      if (!p.active) continue;
-      p.life -= dt;
-      p.mesh.position.addInPlace(p.dir.scale(p.speed * dt));
-      const pos = p.mesh.position;
-      const toPlayer = playerPos.add(new Vector3(0, 0.9, 0)).subtract(pos);
-      if (toPlayer.length() < 0.85) {
-        this.onPlayerHit(p.damage);
-        this.deactivate(p);
-        continue;
-      }
-      if (
-        p.life <= 0 ||
-        pos.y < 0 ||
-        Math.abs(pos.x) > mx ||
-        Math.abs(pos.z) > mz
-      ) {
-        this.deactivate(p);
       }
     }
 
@@ -230,24 +146,10 @@ export class CombatSystem {
       }
     }
 
-    // Shockwaves: ring expands to the AOE radius and fades.
-    for (let i = this.shockwaves.length - 1; i >= 0; i--) {
-      const w = this.shockwaves[i];
-      w.t += dt;
-      const k = Math.min(1, w.t / 0.45);
-      const d = Math.max(0.5, k * w.maxRadius * 2);
-      w.mesh.scaling.set(d, 1, d);
-      w.mesh.visibility = 1 - k;
-      if (k >= 1) {
-        w.mesh.dispose();
-        this.shockwaves.splice(i, 1);
-      }
-    }
   }
 
-  /** Clears transient effects between rooms/runs. */
+  /** Clears transient effects between rounds. */
   clearTransient(): void {
-    for (const p of this.projectiles) this.deactivate(p);
     for (const tr of this.tracers) {
       tr.life = 0;
       tr.mesh.isVisible = false;
@@ -256,13 +158,6 @@ export class CombatSystem {
       s.t = 0;
       s.mesh.isVisible = false;
     }
-    for (const w of this.shockwaves) w.mesh.dispose();
-    this.shockwaves.length = 0;
-  }
-
-  private deactivate(p: Projectile): void {
-    p.active = false;
-    p.mesh.isVisible = false;
   }
 
   private spawnTracer(from: Vector3, to: Vector3): void {

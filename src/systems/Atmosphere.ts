@@ -5,7 +5,7 @@ import {
   Scene,
   Vector3,
 } from "@babylonjs/core";
-import type { ParticleSpec } from "../themes/types";
+import type { ParticleSpec } from "../world/environment";
 
 /**
  * Drifting motes filling the volume of the current room — spores, falling

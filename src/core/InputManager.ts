@@ -22,6 +22,10 @@ export class InputManager {
   fire = false;
   jumpPressed = false;
   reloadPressed = false;
+  /** Held. Hollowmere is 240 m across; sprint is traversal, not a perk. */
+  sprint = false;
+  /** Held: show the scoreboard. */
+  scoreboard = false;
   /** Edge-triggered "confirm" (Enter / click / gamepad A / Start). */
   confirmPressed = false;
   pointerLocked = false;
@@ -46,7 +50,8 @@ export class InputManager {
   constructor(canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", (e) => {
       this.keys.add(e.code);
-      if (e.code === "Space") e.preventDefault();
+      // Space scrolls the page; Tab would move focus off the canvas.
+      if (e.code === "Space" || e.code === "Tab") e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
     window.addEventListener("blur", () => {
@@ -122,16 +127,22 @@ export class InputManager {
     this.stickLookX = pad ? applyDeadzone(pad.axes[2] ?? 0, dz) : 0;
     this.stickLookY = pad ? applyDeadzone(pad.axes[3] ?? 0, dz) : 0;
 
-    // Actions (LT=6 ADS, RT=7 shoot, A=0 jump, X=2 reload, Start=9)
+    // Actions (LT=6 ADS, RT=7 shoot, A=0 jump, X=2 reload, L3=10, Start=9)
     const padAds = pad ? buttonHeld(pad, 6, trig) : false;
     const padFire = pad ? buttonHeld(pad, 7, trig) : false;
     const padJump = pad ? buttonHeld(pad, 0, trig) : false;
     const padReload = pad ? buttonHeld(pad, 2, trig) : false;
     const padStart = pad ? buttonHeld(pad, 9, trig) : false;
+    const padSprint = pad ? buttonHeld(pad, 10, trig) : false;
 
     const buttons = this.pointerMask | this.mouseMask;
     this.ads = (buttons & 2) !== 0 || padAds;
     this.fire = (buttons & 1) !== 0 || padFire;
+
+    this.sprint =
+      this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || padSprint;
+    // Back / View button (6 on the standard mapping is LT, 8 is Back).
+    this.scoreboard = this.keys.has("Tab") || (pad ? buttonHeld(pad, 8, trig) : false);
 
     const jumpNow = this.keys.has("Space") || padJump;
     this.jumpPressed = jumpNow && !this.prevJump;

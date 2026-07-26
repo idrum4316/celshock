@@ -1,17 +1,19 @@
+import type { ControlPoint } from "../systems/ConquestSystem";
+
 /**
- * DOM-based HUD: health/ammo, room counter, boss bar, crosshair, hitmarker,
- * damage vignette, toasts, and full-screen overlays (menu/death/victory).
- * Styling lives in index.html.
+ * DOM-based HUD: health/ammo, the Conquest scoreboard (tickets and the flag
+ * strip), crosshair, hitmarker, damage vignette, toasts, and full-screen
+ * overlays. Styling lives in index.html.
  */
 export class HUD {
   private root: HTMLElement;
   private healthFill: HTMLElement;
   private healthText: HTMLElement;
   private ammoText: HTMLElement;
-  private roomText: HTMLElement;
-  private bossWrap: HTMLElement;
-  private bossName: HTMLElement;
-  private bossFill: HTMLElement;
+  private ticketBar: HTMLElement;
+  private flagStrip: HTMLElement;
+  /** One cell per flag, rebuilt only when the roster changes. */
+  private flagCells: { wrap: HTMLElement; fill: HTMLElement }[] = [];
   private crosshair: HTMLElement;
   private hitmarker: HTMLElement;
   private vignette: HTMLElement;
@@ -19,6 +21,8 @@ export class HUD {
   private toasts: HTMLElement;
   private overlay: HTMLElement;
   private lockHint: HTMLElement;
+  private killfeed: HTMLElement;
+  private scoreboard: HTMLElement;
 
   private hitT = 0;
   private vignetteT = 0;
@@ -27,16 +31,15 @@ export class HUD {
   constructor() {
     this.root = document.getElementById("hud")!;
     this.root.innerHTML = `
-      <div id="room-info"></div>
-      <div id="boss-bar-wrap" class="hidden">
-        <div id="boss-name"></div>
-        <div class="bar boss"><div id="boss-fill" class="fill"></div></div>
-      </div>
+      <div id="ticket-bar"></div>
+      <div id="flag-strip"></div>
       <div id="crosshair"><div class="dot"></div><span class="ring"></span></div>
       <div id="hitmarker" class="hidden">✕</div>
       <div id="vignette"></div>
       <div id="message" class="hidden"></div>
       <div id="toasts"></div>
+      <div id="killfeed"></div>
+      <div id="scoreboard" class="hidden"></div>
       <div id="lock-hint" class="hidden">Click to capture the mouse</div>
       <div id="hud-bottom">
         <div class="panel">
@@ -51,10 +54,8 @@ export class HUD {
     this.healthFill = document.getElementById("health-fill")!;
     this.healthText = document.getElementById("health-text")!;
     this.ammoText = document.getElementById("ammo-text")!;
-    this.roomText = document.getElementById("room-info")!;
-    this.bossWrap = document.getElementById("boss-bar-wrap")!;
-    this.bossName = document.getElementById("boss-name")!;
-    this.bossFill = document.getElementById("boss-fill")!;
+    this.ticketBar = document.getElementById("ticket-bar")!;
+    this.flagStrip = document.getElementById("flag-strip")!;
     this.crosshair = document.getElementById("crosshair")!;
     this.hitmarker = document.getElementById("hitmarker")!;
     this.vignette = document.getElementById("vignette")!;
@@ -62,6 +63,8 @@ export class HUD {
     this.toasts = document.getElementById("toasts")!;
     this.overlay = document.getElementById("overlay")!;
     this.lockHint = document.getElementById("lock-hint")!;
+    this.killfeed = document.getElementById("killfeed")!;
+    this.scoreboard = document.getElementById("scoreboard")!;
   }
 
   update(dt: number): void {
@@ -91,18 +94,43 @@ export class HUD {
     this.ammoText.classList.toggle("reloading", reloading);
   }
 
-  setRoom(index: number, total: number, themeName: string): void {
-    this.roomText.textContent = `ROOM ${index} / ${total} — ${themeName.toUpperCase()}`;
+  /** Reinforcement counts, with the player's own team first. */
+  setTickets(names: readonly string[], tickets: readonly number[], playerTeam: number): void {
+    const mine = playerTeam;
+    const theirs = 1 - playerTeam;
+    this.ticketBar.innerHTML =
+      `<span class="team mine">${names[mine].toUpperCase()} <b>${tickets[mine]}</b></span>` +
+      `<span class="sep">/</span>` +
+      `<span class="team theirs"><b>${tickets[theirs]}</b> ${names[theirs].toUpperCase()}</span>`;
   }
 
-  setBoss(name: string | null, fraction: number): void {
-    if (name === null) {
-      this.bossWrap.classList.add("hidden");
-      return;
+  /**
+   * The A..E flag strip. Each cell shows its owner as a colour and its capture
+   * progress as a fill, so a flag being taken is visible without looking at it.
+   */
+  setFlags(points: ControlPoint[], playerTeam: number): void {
+    if (this.flagCells.length !== points.length) {
+      this.flagStrip.innerHTML = "";
+      this.flagCells = points.map((p) => {
+        const wrap = document.createElement("div");
+        wrap.className = "flag";
+        wrap.innerHTML = `<span class="id">${p.def.id}</span><div class="cap"><div class="cap-fill"></div></div>`;
+        this.flagStrip.appendChild(wrap);
+        return { wrap, fill: wrap.querySelector(".cap-fill") as HTMLElement };
+      });
     }
-    this.bossWrap.classList.remove("hidden");
-    this.bossName.textContent = name.toUpperCase();
-    this.bossFill.style.width = `${Math.max(0, fraction) * 100}%`;
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      const cell = this.flagCells[i];
+      const owner =
+        p.owner === null ? "neutral" : p.owner === playerTeam ? "mine" : "theirs";
+      cell.wrap.className = `flag ${owner}${p.contested ? " contested" : ""}`;
+      // Meter runs -1..+1; show it as distance from neutral either way.
+      cell.fill.style.width = `${Math.abs(p.meter) * 100}%`;
+      cell.fill.className = `cap-fill ${
+        Math.sign(p.meter) === (playerTeam === 0 ? -1 : 1) ? "mine" : "theirs"
+      }`;
+    }
   }
 
   setAds(ads: boolean): void {
@@ -134,6 +162,55 @@ export class HUD {
     setTimeout(() => el.remove(), 2600);
   }
 
+  /**
+   * One kill line. `mine` tints entries the player was involved in, so your own
+   * kills and deaths stand out from the background chatter of a 32-bot fight.
+   */
+  addKill(killer: string, victim: string, mine: boolean): void {
+    const el = document.createElement("div");
+    el.className = `kill${mine ? " mine" : ""}`;
+    el.innerHTML = `<span class="k">${killer}</span><span class="x">&#9587;</span><span class="v">${victim}</span>`;
+    this.killfeed.appendChild(el);
+    // Cap the feed: a full battle would otherwise fill the screen edge to edge.
+    while (this.killfeed.childElementCount > 6) {
+      this.killfeed.firstElementChild!.remove();
+    }
+    setTimeout(() => el.classList.add("fade"), 4000);
+    setTimeout(() => el.remove(), 4800);
+  }
+
+  setScoreboard(
+    visible: boolean,
+    rows?: {
+      teams: readonly string[];
+      tickets: readonly number[];
+      flags: readonly number[];
+      kills: readonly number[];
+      deaths: readonly number[];
+      playerTeam: number;
+      playerKills: number;
+      playerDeaths: number;
+    },
+  ): void {
+    this.scoreboard.classList.toggle("hidden", !visible);
+    if (!visible || !rows) return;
+    const row = (t: number) => `
+      <tr class="${t === rows.playerTeam ? "mine" : "theirs"}">
+        <td class="name">${rows.teams[t].toUpperCase()}</td>
+        <td>${rows.tickets[t]}</td>
+        <td>${rows.flags[t]}</td>
+        <td>${rows.kills[t]}</td>
+        <td>${rows.deaths[t]}</td>
+      </tr>`;
+    this.scoreboard.innerHTML = `
+      <table>
+        <tr><th>TEAM</th><th>TICKETS</th><th>FLAGS</th><th>KILLS</th><th>LOSSES</th></tr>
+        ${row(0)}${row(1)}
+      </table>
+      <div class="you">YOU &mdash; ${rows.playerKills} kills, ${rows.playerDeaths} deaths</div>
+    `;
+  }
+
   setLockHint(visible: boolean): void {
     this.lockHint.classList.toggle("hidden", !visible);
   }
@@ -141,8 +218,8 @@ export class HUD {
   showMenu(): void {
     this.overlay.classList.remove("hidden");
     this.overlay.innerHTML = `
-      <h1>CELSHOCK</h1>
-      <p class="tagline">A cel-shaded roguelike third-person shooter</p>
+      <h1>HOLLOWMERE</h1>
+      <p class="tagline">Conquest — take and hold five points against the Blight</p>
       <table class="controls">
         <tr><th></th><th>Gamepad</th><th>Keyboard / Mouse</th></tr>
         <tr><td>Move</td><td>Left stick</td><td>WASD</td></tr>
@@ -151,26 +228,23 @@ export class HUD {
         <tr><td>Shoot</td><td>RT</td><td>Left-click</td></tr>
         <tr><td>Jump</td><td>A / ✕</td><td>Space</td></tr>
         <tr><td>Reload</td><td>X / ▢</td><td>R</td></tr>
+        <tr><td>Sprint</td><td>L3</td><td>Shift</td></tr>
       </table>
       <p class="prompt">Click, press Enter, or press Start to begin</p>
     `;
   }
 
-  showGameOver(roomIndex: number, total: number): void {
+  showRoundOver(
+    winnerName: string,
+    playerWon: boolean,
+    tickets0: number,
+    tickets1: number,
+  ): void {
     this.overlay.classList.remove("hidden");
     this.overlay.innerHTML = `
-      <h1 class="dead">YOU DIED</h1>
-      <p class="tagline">Fell in room ${roomIndex} of ${total}. The run is lost — that's the roguelike deal.</p>
-      <p class="prompt">Click, press Enter, or press Start for a new run</p>
-    `;
-  }
-
-  showVictory(): void {
-    this.overlay.classList.remove("hidden");
-    this.overlay.innerHTML = `
-      <h1 class="win">RUN COMPLETE</h1>
-      <p class="tagline">Boss down. Every room cleared.</p>
-      <p class="prompt">Click, press Enter, or press Start for another run</p>
+      <h1 class="${playerWon ? "win" : "dead"}">${playerWon ? "VICTORY" : "DEFEAT"}</h1>
+      <p class="tagline">${winnerName} hold Hollowmere. Reinforcements remaining: ${tickets0} / ${tickets1}.</p>
+      <p class="prompt">Click, press Enter, or press Start for another round</p>
     `;
   }
 
