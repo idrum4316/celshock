@@ -35,6 +35,21 @@ export interface SpawnPointDef {
 }
 
 /**
+ * A rectangular body of shallow surface water. Purely visual: no collider,
+ * no nav cost — combatants wade across the ground beneath. Consumed by the
+ * WaterSystem, not by the MapBuilder (water is never merged or frozen).
+ */
+export interface WaterRect {
+  x: number;
+  z: number;
+  /** Extents along X and Z. */
+  width: number;
+  depth: number;
+  /** Surface height; defaults to CONFIG.water.surfaceY. */
+  y?: number;
+}
+
+/**
  * A collider's world-space geometry, kept alongside the mesh so the nav grid
  * can compute surface heights analytically instead of firing 25,600 rays.
  */
@@ -62,6 +77,8 @@ export interface GameMap {
   visuals: Mesh[];
   /** Walkable-surface graph with one precomputed flow field per objective. */
   nav: NavGrid;
+  /** Shallow-water bodies from the layout; empty when the map is dry. */
+  water: WaterRect[];
   dispose(): void;
 }
 
@@ -183,6 +200,7 @@ export class MapBuilder {
       colliders,
       colliderBoxes: this.boxes,
       visuals,
+      water: layout.water ?? [],
       dispose: () => {
         for (const m of visuals) m.dispose();
         for (const m of colliders) m.dispose();

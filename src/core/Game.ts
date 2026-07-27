@@ -19,6 +19,7 @@ import { BattleSystem } from "../systems/BattleSystem";
 import { CombatSystem } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
 import { LightingSystem } from "../systems/LightingSystem";
+import { WaterSystem } from "../systems/WaterSystem";
 import { applyEnvironment } from "../world/environment";
 import { HollowmereEnvironment } from "../world/hollowmere/environment";
 import { MapBuilder, type GameMap } from "../world/MapBuilder";
@@ -59,6 +60,7 @@ export class Game {
   private conquest: ConquestSystem;
   private lighting: LightingSystem;
   private atmosphere: Atmosphere;
+  private water: WaterSystem;
   private post: HorrorPost;
   private player: Player;
   private viewmodel: Viewmodel;
@@ -113,6 +115,7 @@ export class Game {
     this.minimap = new Minimap();
     this.lighting = new LightingSystem();
     this.atmosphere = new Atmosphere(this.scene);
+    this.water = new WaterSystem(this.scene, glow);
     this.mapBuilder = new MapBuilder(this.scene, this.mats, this.lighting);
     this.combat = new CombatSystem(this.scene, this.mats);
     this.aimAssist = new AimAssistSystem(this.scene);
@@ -227,6 +230,7 @@ export class Game {
       this.map.size,
       this.map.size,
     );
+    this.water.build(this.map.water, HollowmereEnvironment);
 
     this.battle.setMap(this.map);
     this.battle.reset();
@@ -378,6 +382,13 @@ export class Game {
       lc.lampIntensity,
     );
     this.lighting.update(dt, this.cameraSys.camera.position, this.mats);
+    // Water reads the same camera and the same winning light set, so it
+    // updates here too — before anything later can move the camera.
+    this.water.update(
+      dt,
+      this.cameraSys.camera.position,
+      this.lighting.activeLights,
+    );
     // Same rule as the lights and the fog: this has to follow the camera.
     this.sfx.setListener(this.cameraSys.camera.position, this.cameraSys.forward);
     this.player.setFirstPerson(this.cameraSys.isFirstPerson);

@@ -37,4 +37,11 @@ export const HollowmereEnvironment: EnvironmentSpec = {
     size: 0.06,
     riseSpeed: -0.25,
   },
+  // The creek at B and the bog at E: black-green standing water that mostly
+  // exists to catch the moon and the muzzle flashes.
+  water: {
+    deepColor: "#0e1a15",
+    shallowColor: "#2a4a44",
+    foamColor: "#5f7a6e",
+  },
 };

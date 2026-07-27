@@ -1,6 +1,6 @@
 import { Vector3 } from "@babylonjs/core";
 import type { BuildParams, BuilderKind } from "../BuildingKit";
-import type { ControlPointDef, SpawnPointDef } from "../MapBuilder";
+import type { ControlPointDef, SpawnPointDef, WaterRect } from "../MapBuilder";
 
 /**
  * HOLLOWMERE — the authored layout.
@@ -86,6 +86,7 @@ export interface MapLayout {
   scatter: ScatterSpec[];
   controlPoints: ControlPointDef[];
   spawns: SpawnPointDef[];
+  water?: WaterRect[];
 }
 
 const WARDEN = "#c9a15e";
@@ -294,9 +295,25 @@ const spawns: SpawnPointDef[] = [
   { team: null, controlPoint: "E", pos: new Vector3(40, 0, -66), yaw: 0 },
 ];
 
+/**
+ * Standing water. Ankle-deep everywhere (CONFIG.water.surfaceY), so bots and
+ * the player wade across the ground plane beneath — no swimming, and the nav
+ * grid never hears about it.
+ */
+const water: WaterRect[] = [
+  // The creek: fills the sunken lane between the two embankments, running
+  // under both footbridges and the mill's waterwheel. A touch wider than the
+  // lane so the edges tuck under the retaining walls instead of showing a seam.
+  { x: -85, z: -10, width: 6.6, depth: 76 },
+  // The bog: the pool the boathouse and jetties stand in. Stops short of the
+  // boathouse ramp foot in the north and the Blight road in the east.
+  { x: 37, z: -95, width: 50, depth: 42 },
+];
+
 export const HollowmereLayout: MapLayout = {
   placements,
   scatter,
   controlPoints,
   spawns,
+  water,
 };

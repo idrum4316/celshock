@@ -116,6 +116,15 @@ export class LightingSystem {
   }
 
   /**
+   * The lights that won shader slots in the last `update`, nearest-first by
+   * construction. Other uniform-lit materials (water) read the same set so
+   * every surface agrees about which lights exist.
+   */
+  get activeLights(): readonly PointLightData[] {
+    return this.active;
+  }
+
+  /**
    * Advances flicker/decay and uploads the winning lights to every cel
    * material. Call once per frame, after the camera has been updated.
    */

@@ -348,6 +348,33 @@ export const CONFIG = {
   },
 
   /**
+   * Shallow surface water (the creek at B, the bog at E). Visual only — the
+   * planes carry no collider, so wading is free and swimming never comes up.
+   * Palette lives in the map's EnvironmentSpec; this is motion and shape.
+   */
+  water: {
+    /** Default surface height above the ground plane: ankle-deep. */
+    surfaceY: 0.32,
+    /** Normal-map tiling (uv repeats per metre) for the two scrolled layers. */
+    waveScale1: 0.14,
+    waveScale2: 0.38,
+    /** Scroll speeds (uv per second); the layers cross at an angle. */
+    waveSpeed1: 0.045,
+    waveSpeed2: 0.08,
+    /** 0 = mirror flat, 1 = the normal map's full relief. */
+    waveStrength: 0.6,
+    /** Moon glint: Blinn exponent and brightness. */
+    specPower: 90,
+    specStrength: 0.9,
+    /** How fast the view angle tips the body from deep to shallow colour. */
+    fresnelPower: 2.2,
+    /** Shoreline foam: band width (m), mask tiling, mask scroll speed. */
+    foamWidth: 1.1,
+    foamScale: 0.3,
+    foamSpeed: 0.04,
+  },
+
+  /**
    * The two sides. Colors are the primary friend/foe read in a dark scene —
    * warm amber against cold crimson, both legible under blue moonlight.
    */

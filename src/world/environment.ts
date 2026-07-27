@@ -23,6 +23,16 @@ export interface ParticleSpec {
   riseSpeed: number;
 }
 
+/** Shallow-water palette. Omitting it leaves the map dry. */
+export interface WaterEnvSpec {
+  /** Body colour looking straight down. */
+  deepColor: string;
+  /** Colour the surface tips toward at grazing angles — the sky sheen. */
+  shallowColor: string;
+  /** Shoreline foam and drifting flecks. */
+  foamColor: string;
+}
+
 /**
  * Everything the renderer needs to make a place feel like one place: palette,
  * atmosphere, and the three light terms the cel shader bands.
@@ -53,6 +63,7 @@ export interface EnvironmentSpec {
     rimIntensity: number;
   };
   particles?: ParticleSpec;
+  water?: WaterEnvSpec;
 }
 
 /**

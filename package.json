@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "textures": "node scripts/generate-water-textures.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "^7.54.3",
