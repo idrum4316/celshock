@@ -1,4 +1,5 @@
 import {
+  type BaseTexture,
   Color3,
   Effect,
   Mesh,
@@ -8,6 +9,12 @@ import {
   Vector2,
   Vector3,
 } from "@babylonjs/core";
+// The bone includes self-register in the IncludesShadersStore; import them
+// explicitly so the cel vertex shader's #include<bones...> can never be
+// tree-shaken away. Their contents are guarded internally by
+// NUM_BONE_INFLUENCERS, so non-skinned materials compile to identical code.
+import "@babylonjs/core/Shaders/ShadersInclude/bonesDeclaration";
+import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
 
 /**
  * Custom cel-shading: quantized diffuse bands, a hard stylized rim highlight,
@@ -45,17 +52,35 @@ precision highp float;
 
 attribute vec3 position;
 attribute vec3 normal;
+#ifdef CEL_TEXTURED
+attribute vec2 uv;
+#endif
+
+// Self-guarded by NUM_BONE_INFLUENCERS (0 for rigid meshes, set automatically
+// by ShaderMaterial for skinned ones): declares matricesIndices/Weights and
+// the mBones/boneSampler uniforms.
+#include<bonesDeclaration>
 
 uniform mat4 world;
 uniform mat4 viewProjection;
 
 varying vec3 vNormalW;
 varying vec3 vPosW;
+#ifdef CEL_TEXTURED
+varying vec2 vUv;
+#endif
 
 void main() {
-  vec4 worldPos = world * vec4(position, 1.0);
+  mat4 finalWorld = world;
+  // No-op when NUM_BONE_INFLUENCERS == 0; otherwise blends finalWorld
+  // through the bone matrices.
+  #include<bonesVertex>
+  vec4 worldPos = finalWorld * vec4(position, 1.0);
   vPosW = worldPos.xyz;
-  vNormalW = normalize(mat3(world) * normal);
+  vNormalW = normalize(mat3(finalWorld) * normal);
+  #ifdef CEL_TEXTURED
+  vUv = uv;
+  #endif
   gl_Position = viewProjection * worldPos;
 }
 `;
@@ -73,7 +98,12 @@ uniform vec3 lightDir;
 uniform vec3 lightColor;
 uniform vec3 ambientColor;
 uniform vec3 rimColor;
+#ifdef CEL_TEXTURED
+uniform sampler2D baseColorTex;
+varying vec2 vUv;
+#else
 uniform vec3 baseColor;
+#endif
 uniform vec3 fogColor;
 uniform vec2 fogParams;  // x = start, y = end
 uniform vec3 mistColor;
@@ -123,7 +153,14 @@ void main() {
     }
   }
 
-  vec3 col = baseColor * light;
+  // Base albedo: flat palette color, or the skinned character's texture.
+  // Both are used raw (display-ready), matching the no-image-processing pipe.
+  #ifdef CEL_TEXTURED
+  vec3 base = texture2D(baseColorTex, vUv).rgb;
+  #else
+  vec3 base = baseColor;
+  #endif
+  vec3 col = base * light;
 
   // Soft shoulder: several lights overlapping (or a torch at point-blank
   // range) would otherwise clip to flat white and destroy the palette. This
@@ -135,7 +172,7 @@ void main() {
   // Hard-edged rim highlight (step, not smooth — keeps colors flat).
   vec3 viewDir = normalize(camPos - vPosW);
   float rim = 1.0 - max(dot(viewDir, n), 0.0);
-  col += baseColor * rimColor * step(0.72, rim);
+  col += base * rimColor * step(0.72, rim);
 
   // --- atmosphere ---
   float dist = length(vPosW - camPos);
@@ -171,6 +208,28 @@ export interface PointLightData {
  * all of them.
  */
 export class CelMaterialFactory {
+  /** Cache key for the one skinned+textured material (never a hex color). */
+  private static readonly SKINNED_KEY = "\0skinned";
+  /** Uniforms every cel material shares, flat or skinned. */
+  private static readonly UNIFORMS = [
+    "world",
+    "viewProjection",
+    "lightDir",
+    "lightColor",
+    "ambientColor",
+    "rimColor",
+    "baseColor",
+    "fogColor",
+    "fogParams",
+    "mistColor",
+    "mistParams",
+    "camPos",
+    "pointPos",
+    "pointColor",
+    "pointRange",
+    "pointCount",
+  ];
+
   private cache = new Map<string, ShaderMaterial>();
   private emissiveCache = new Map<string, StandardMaterial>();
 
@@ -202,24 +261,7 @@ export class CelMaterialFactory {
         { vertex: "cel", fragment: "cel" },
         {
           attributes: ["position", "normal"],
-          uniforms: [
-            "world",
-            "viewProjection",
-            "lightDir",
-            "lightColor",
-            "ambientColor",
-            "rimColor",
-            "baseColor",
-            "fogColor",
-            "fogParams",
-            "mistColor",
-            "mistParams",
-            "camPos",
-            "pointPos",
-            "pointColor",
-            "pointRange",
-            "pointCount",
-          ],
+          uniforms: [...CelMaterialFactory.UNIFORMS],
         },
       );
       mat.setColor3("baseColor", Color3.FromHexString(hex));
@@ -227,6 +269,37 @@ export class CelMaterialFactory {
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.cache.set(hex, mat);
+    }
+    return mat;
+  }
+
+  /**
+   * The one cel material for skinned, textured meshes (the imported player
+   * body). Same lighting/fog/rim pipeline as the flat colors, but the albedo
+   * comes from a texture and the vertex shader is bone-deformed — ShaderMaterial
+   * auto-adds the bone attributes, defines, and `boneSampler`/`mBones` uniforms
+   * when it binds a mesh with a skeleton. Cached under a sentinel key in the
+   * same map so environment, point-light, and camera updates reach it.
+   */
+  getSkinned(tex: BaseTexture): ShaderMaterial {
+    let mat = this.cache.get(CelMaterialFactory.SKINNED_KEY);
+    if (!mat) {
+      mat = new ShaderMaterial(
+        "cel-skinned",
+        this.scene,
+        { vertex: "cel", fragment: "cel" },
+        {
+          attributes: ["position", "normal", "uv"],
+          uniforms: [...CelMaterialFactory.UNIFORMS],
+          samplers: ["baseColorTex"],
+          defines: ["#define CEL_TEXTURED"],
+        },
+      );
+      mat.setTexture("baseColorTex", tex);
+      mat.setVector3("camPos", Vector3.Zero());
+      this.applyEnvironment(mat);
+      this.applyPointLights(mat);
+      this.cache.set(CelMaterialFactory.SKINNED_KEY, mat);
     }
     return mat;
   }

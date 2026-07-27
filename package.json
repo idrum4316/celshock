@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@babylonjs/core": "^7.54.3"
+    "@babylonjs/core": "^7.54.3",
+    "@babylonjs/loaders": "^7.54.3"
   },
   "devDependencies": {
     "playwright": "^1.61.1",

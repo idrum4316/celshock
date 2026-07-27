@@ -84,7 +84,9 @@ src/
     CameraSystem.ts         # Third-person camera with blended first-person ADS
     Sfx.ts                  # Procedural WebAudio, spatialised and voice-capped
   entities/
-    Player.ts               # Movement, sprint, jump, weapon state, jointed body
+    Player.ts               # Movement, sprint, jump, weapon state, body wiring
+    GlbSoldier.ts           # Player body: rigged GLB (models/*.glb), clips +
+                            # procedural bone overlay (aim/reload/rifle carry)
     RifleModel.ts           # Low-poly SCAR-pattern rifle + holo sight builder
     Viewmodel.ts            # First-person rifle: raise, sway, bob, recoil
     Combatant.ts            # Team + the shared shootable/shooter interface
@@ -224,7 +226,9 @@ deliberately coarse so the facets read as the art style.
   calling `moveWithCollisions` would walk the collidable mesh list 32× a frame.
 - Audio uses **one cached noise buffer**, distance attenuation, and a 24-voice
   cap. Generating a fresh buffer per shot was ~1,900 `Math.random()` calls each.
-- No asset downloads: zero model files, and sound is synthesized at runtime.
+- Almost no asset downloads: the one imported asset is the player's GLB body
+  (`models/`, see `GlbSoldier.ts`); bots, weapons, and the world are still
+  built from primitives, and all sound is synthesized at runtime.
 
 ## Known limitations
 

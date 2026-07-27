@@ -1,16 +1,17 @@
 import {
+  Color3,
   Mesh,
   MeshBuilder,
   Ray,
   Scene,
-  TransformNode,
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import { addOutline, CelMaterialFactory } from "../shaders/CelShader";
+import { CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
 import { buildRifle, RifleParts } from "./RifleModel";
+import { GlbSoldier } from "./GlbSoldier";
 import type { Combatant, Team } from "./Combatant";
 
 /** Run-scoped stat modifiers granted by loot. */
@@ -21,18 +22,7 @@ export interface PlayerMods {
   magBonus: number;
 }
 
-/**
- * Palette for the player character model — field-drab, so the character
- * reads as a silhouette lit by their own lamp rather than a bright block of
- * color in an otherwise black room.
- */
-const ARMOR = "#3f4a43"; // helmet shell, chest, thigh and shin guards
-const PLATE = "#4a564e"; // raised plates: pauldrons, pads, brow, boot soles
-const SUIT = "#1f262c"; // under-suit: arms, shins, pelvis
-const TRIM = "#2b2b33"; // gloves, boots, webbing, hard fittings
-const VISOR = "#ffb347"; // emissive: visor slit and shoulder lamp
-
-/** Rifle position on the torso at rest; recoil slides it back from here. */
+/** Where the rifle rides until the GLB body arrives and claims it. */
 const RIFLE_REST = new Vector3(0.3, 0.14, 0.28);
 
 /**
@@ -58,22 +48,12 @@ export class Player implements Combatant {
   onDamaged: (amount: number, died: boolean) => void = () => {};
   private rifle!: RifleParts;
   private meshes: Mesh[] = [];
+  /** The imported rigged body; null until the async GLB load resolves. */
+  private glb: GlbSoldier | null = null;
+  /** Last visibility state, applied to the GLB meshes when they arrive. */
+  private fpHidden = true;
 
-  // Visual rig (all joints are pivots; limb meshes hang below them).
-  private body!: TransformNode;
-  private torso!: TransformNode;
-  private head!: TransformNode;
-  private shoulderL!: TransformNode;
-  private shoulderR!: TransformNode;
-  private elbowL!: TransformNode;
-  private elbowR!: TransformNode;
-  private hipL!: TransformNode;
-  private hipR!: TransformNode;
-  private kneeL!: TransformNode;
-  private kneeR!: TransformNode;
-
-  // Animation state.
-  private walkPhase = 0;
+  // Animation state (smoothed inputs for the GLB pose overlay).
   private moveBlend = 0;
   private airBlend = 0;
   private reloadBlend = 0;
@@ -118,198 +98,34 @@ export class Player implements Combatant {
     this.root.isVisible = false;
     this.root.ellipsoid = new Vector3(p.radius, p.height / 2 - 0.05, p.radius);
 
-    this.buildBody(scene, mats);
-    addOutline(this.root, 0.025);
-    // The rifle's parts are an order of magnitude smaller than the body's, so
-    // a body-width outline would swallow the whole weapon in black — the
-    // sight hood's walls are thinner than the body outline on their own.
-    for (const m of this.rifle.meshes) m.outlineWidth = 0.004;
-  }
-
-  /**
-   * Builds the humanoid. Local Y is relative to the root center (0.9 above
-   * the ground), so the ground plane is at local y = -0.9 and the top of the
-   * helmet at +0.9.
-   */
-  private buildBody(scene: Scene, mats: CelMaterialFactory): void {
-    const box = (
-      name: string,
-      w: number,
-      h: number,
-      d: number,
-      color: string,
-      parent: TransformNode,
-      x = 0,
-      y = 0,
-      z = 0,
-    ): Mesh => {
-      const m = MeshBuilder.CreateBox(
-        `player_${name}`,
-        { width: w, height: h, depth: d },
-        scene,
-      );
-      m.parent = parent;
-      m.position.set(x, y, z);
-      m.material = mats.get(color);
-      this.meshes.push(m);
-      return m;
-    };
-    const joint = (
-      name: string,
-      parent: TransformNode,
-      x: number,
-      y: number,
-      z = 0,
-    ): TransformNode => {
-      const n = new TransformNode(`player_${name}`, scene);
-      n.parent = parent;
-      n.position.set(x, y, z);
-      return n;
-    };
-
-    /** Unlit parts (visor, lamp lens) — no outline, they read as light. */
-    const glow = (m: Mesh): Mesh => {
-      m.material = mats.getEmissive(VISOR);
-      m.metadata = { noOutline: true };
-      return m;
-    };
-    const cylinder = (
-      name: string,
-      diameter: number,
-      height: number,
-      color: string,
-      parent: TransformNode,
-      x: number,
-      y: number,
-      z: number,
-    ): Mesh => {
-      const m = MeshBuilder.CreateCylinder(
-        `player_${name}`,
-        { diameter, height, tessellation: 8 },
-        scene,
-      );
-      m.parent = parent;
-      m.position.set(x, y, z);
-      m.material = mats.get(color);
-      this.meshes.push(m);
-      return m;
-    };
-
-    this.body = new TransformNode("player_body", scene);
-    this.body.parent = this.root;
-
-    // Pelvis + belt rig (torso pivots at the lower spine for aim pitch).
-    box("pelvis", 0.4, 0.18, 0.26, SUIT, this.body, 0, 0.02, 0);
-    box("belt", 0.42, 0.07, 0.28, TRIM, this.body, 0, 0.1, 0);
-    box("beltBuckle", 0.09, 0.07, 0.04, PLATE, this.body, 0, 0.1, 0.145);
-    for (const side of [-1, 1] as const) {
-      box(`rearPouch${side < 0 ? "L" : "R"}`, 0.12, 0.13, 0.08, TRIM, this.body,
-        side * 0.13, 0.03, -0.16);
-    }
-
-    // Torso: chest carrier with a raised front plate, cummerbund, shoulder
-    // harness, mag pouches, and a rebreather pack on the back.
-    this.torso = joint("spine", this.body, 0, 0.12);
-    box("chest", 0.46, 0.5, 0.28, ARMOR, this.torso, 0, 0.24, 0);
-    box("chestPlate", 0.38, 0.26, 0.06, PLATE, this.torso, 0, 0.34, 0.15);
-    box("cummerbund", 0.44, 0.1, 0.3, TRIM, this.torso, 0, 0.04, 0);
-    box("magPouches", 0.22, 0.12, 0.09, TRIM, this.torso, 0, 0.14, 0.16);
-    box("collar", 0.3, 0.09, 0.24, ARMOR, this.torso, 0, 0.5, 0);
-    for (const side of [-1, 1] as const) {
-      const strap = box(`strap${side < 0 ? "L" : "R"}`, 0.07, 0.34, 0.05,
-        TRIM, this.torso, side * 0.12, 0.36, 0.145);
-      strap.rotation.z = side * 0.22;
-    }
-    box("pack", 0.3, 0.34, 0.14, TRIM, this.torso, 0, 0.28, -0.19);
-    for (const side of [-1, 1] as const) {
-      cylinder(`tank${side < 0 ? "L" : "R"}`, 0.1, 0.28, PLATE, this.torso,
-        side * 0.09, 0.3, -0.28);
-    }
-
-    // Head: helmet shell with a crown ridge, brow, ear cups, nape plate,
-    // rebreather mask, and the glowing visor slit.
-    this.head = joint("neck", this.torso, 0, 0.52);
-    box("neck", 0.14, 0.08, 0.14, SUIT, this.head, 0, 0.02, 0);
-    box("helmet", 0.26, 0.24, 0.27, ARMOR, this.head, 0, 0.15, 0);
-    box("crownRidge", 0.09, 0.06, 0.28, PLATE, this.head, 0, 0.28, 0);
-    box("brow", 0.28, 0.06, 0.08, PLATE, this.head, 0, 0.235, 0.11);
-    box("napePlate", 0.24, 0.1, 0.05, ARMOR, this.head, 0, 0.05, -0.13);
-    // Goggle housing, then the glowing slit set into its face. An emissive
-    // part has to sit clear of its neighbours' black outline shells (those
-    // grow ~0.025 outwards) or the glow gets swallowed — hence the housing
-    // protruding from the helmet, and carrying no outline of its own.
-    const recess = box("visorRecess", 0.24, 0.12, 0.06, TRIM, this.head, 0, 0.155, 0.145);
-    recess.metadata = { noOutline: true };
-    glow(box("visor", 0.19, 0.055, 0.03, TRIM, this.head, 0, 0.155, 0.18));
-    box("mask", 0.16, 0.1, 0.09, TRIM, this.head, 0, 0.06, 0.11);
-    for (const side of [-1, 1] as const) {
-      const tag = side < 0 ? "L" : "R";
-      box(`earCup${tag}`, 0.035, 0.12, 0.13, TRIM, this.head, side * 0.14, 0.14, -0.01);
-      box(`filter${tag}`, 0.07, 0.07, 0.07, PLATE, this.head, side * 0.095, 0.05, 0.1);
-    }
-
-    // Shoulder lamp: the physical source of the light the player carries
-    // (the light itself is driven by the LightingSystem).
-    box("lampHousing", 0.12, 0.12, 0.14, TRIM, this.torso, -0.26, 0.42, 0.08);
-    box("lampHood", 0.13, 0.04, 0.06, PLATE, this.torso, -0.26, 0.475, 0.15);
-    glow(box("lampLens", 0.09, 0.09, 0.04, TRIM, this.torso, -0.26, 0.42, 0.17));
-
-    // Arms: shoulder and elbow joints, limb meshes hanging below each pivot.
-    // Pauldrons ride the shoulder, elbow pads and bracers the elbow.
-    for (const side of [-1, 1] as const) {
-      const tag = side < 0 ? "L" : "R";
-      const shoulder = joint(`shoulder${tag}`, this.torso, side * 0.3, 0.43);
-      const pauldron = box(`pauldron${tag}`, 0.17, 0.14, 0.2, PLATE, shoulder,
-        side * 0.02, -0.02, 0);
-      pauldron.rotation.z = side * -0.28; // cap the shoulder instead of slabbing it
-      box(`upperArm${tag}`, 0.13, 0.3, 0.13, SUIT, shoulder, 0, -0.15, 0);
-      box(`bicepBand${tag}`, 0.14, 0.05, 0.14, TRIM, shoulder, 0, -0.24, 0);
-      const elbow = joint(`elbow${tag}`, shoulder, 0, -0.3);
-      box(`elbowPad${tag}`, 0.12, 0.09, 0.13, PLATE, elbow, 0, -0.02, 0.01);
-      box(`forearm${tag}`, 0.11, 0.26, 0.11, SUIT, elbow, 0, -0.13, 0);
-      box(`bracer${tag}`, 0.125, 0.14, 0.125, ARMOR, elbow, 0, -0.15, 0);
-      box(`hand${tag}`, 0.11, 0.1, 0.12, TRIM, elbow, 0, -0.3, 0);
-      box(`knuckles${tag}`, 0.11, 0.045, 0.06, PLATE, elbow, 0, -0.3, 0.055);
-      if (side < 0) {
-        this.shoulderL = shoulder;
-        this.elbowL = elbow;
-      } else {
-        this.shoulderR = shoulder;
-        this.elbowR = elbow;
-      }
-    }
-
-    // Legs: hip and knee joints; boot soles reach the ground at local -0.9.
-    for (const side of [-1, 1] as const) {
-      const tag = side < 0 ? "L" : "R";
-      const hip = joint(`hip${tag}`, this.body, side * 0.12, -0.02);
-      box(`thigh${tag}`, 0.17, 0.42, 0.19, SUIT, hip, 0, -0.21, 0);
-      box(`thighPlate${tag}`, 0.18, 0.26, 0.06, ARMOR, hip, 0, -0.18, 0.09);
-      if (side > 0) box("holster", 0.09, 0.17, 0.11, TRIM, hip, 0.1, -0.3, 0.01);
-      const knee = joint(`knee${tag}`, hip, 0, -0.42);
-      box(`kneePad${tag}`, 0.15, 0.1, 0.1, PLATE, knee, 0, -0.01, 0.06);
-      box(`shin${tag}`, 0.14, 0.38, 0.16, SUIT, knee, 0, -0.19, 0);
-      box(`shinGuard${tag}`, 0.15, 0.24, 0.06, ARMOR, knee, 0, -0.18, 0.09);
-      box(`boot${tag}`, 0.15, 0.075, 0.27, TRIM, knee, 0, -0.3975, 0.04);
-      box(`heel${tag}`, 0.14, 0.05, 0.08, TRIM, knee, 0, -0.42, -0.075);
-      box(`toeCap${tag}`, 0.155, 0.06, 0.07, ARMOR, knee, 0, -0.4, 0.145);
-      box(`sole${tag}`, 0.16, 0.025, 0.28, TRIM, knee, 0, -0.4475, 0.045);
-      if (side < 0) {
-        this.hipL = hip;
-        this.kneeL = knee;
-      } else {
-        this.hipR = hip;
-        this.kneeR = knee;
-      }
-    }
-
-    // Rifle rides the torso so it pitches with the aim; +z stays the barrel
-    // axis. Slightly scaled down to fit the character's proportions.
+    // The rifle exists from frame one (the GLB claims it when it arrives).
+    // Its parts are an order of magnitude smaller than the body's, so a
+    // body-width outline would swallow the whole weapon in black.
     this.rifle = buildRifle(scene, mats, "player");
-    this.rifle.root.parent = this.torso;
+    this.rifle.root.parent = this.root;
     this.rifle.root.position.copyFrom(RIFLE_REST);
     this.rifle.root.scaling.setAll(0.85);
+    for (const m of this.rifle.meshes) {
+      m.renderOutline = true;
+      m.outlineColor = Color3.Black();
+      m.outlineWidth = 0.004;
+    }
     this.meshes.push(...this.rifle.meshes);
+
+    // The rigged, textured body loads async; the menu/deploy flow covers the
+    // latency, and until it resolves the player is simply the hidden capsule
+    // plus the rifle (never visible before the first deploy).
+    void GlbSoldier.load(scene, mats)
+      .then((rig) => {
+        this.glb = rig;
+        rig.root.parent = this.root;
+        rig.attachRifle(this.rifle);
+        this.meshes = [...rig.meshes, ...this.rifle.meshes];
+        this.applyVisibility();
+      })
+      .catch((e: unknown) => {
+        console.error("GlbSoldier failed to load — player body missing", e);
+      });
   }
 
   get position(): Vector3 {
@@ -464,7 +280,11 @@ export class Player implements Combatant {
     return jumped;
   }
 
-  /** Procedural pose: walk cycle, jump tuck, aim pitch, reload, idle sway. */
+  /**
+   * Feeds the smoothed pose inputs to the GLB body, which applies them on
+   * the next rendered frame (clips + procedural bone overlay). All the
+   * easing stays here so the body's response is frame-rate independent.
+   */
   private animate(
     dt: number,
     moveInput: number,
@@ -480,56 +300,20 @@ export class Player implements Combatant {
     this.airBlend = ease(this.airBlend, this.grounded ? 0 : 1, 9);
     this.reloadBlend = ease(this.reloadBlend, this.reloading ? 1 : 0, 12);
 
-    // Stride phase advances with actual ground speed (~2.4 Hz at full run).
-    this.walkPhase += speed * this.moveBlend * 2.2 * dt;
-    const walk = this.moveBlend * (1 - this.airBlend);
-    const swing = Math.sin(this.walkPhase);
-
-    // Legs: hips counter-swing; the knee bends mid-swing and straightens
-    // for the plant (max(0, cos) is the swing-through window).
-    const jumpTuck = this.airBlend;
-    this.hipL.rotation.x = -0.62 * swing * walk - 0.55 * jumpTuck;
-    this.hipR.rotation.x = 0.62 * swing * walk + 0.25 * jumpTuck;
-    this.kneeL.rotation.x =
-      0.95 * Math.max(0, Math.cos(this.walkPhase)) * walk + 1.05 * jumpTuck;
-    this.kneeR.rotation.x =
-      0.95 * Math.max(0, -Math.cos(this.walkPhase)) * walk + 0.5 * jumpTuck;
-
-    // Body bob (two per stride), a slight crouch while running, idle breath.
-    const idle = (1 - this.moveBlend) * (1 - this.airBlend);
-    this.body.position.y =
-      0.05 * Math.abs(Math.cos(this.walkPhase)) * walk -
-      0.04 * walk +
-      0.012 * Math.sin(this.idleT * 2.1) * idle;
-
     // Weapon punch: a hard hit that falls off fast (squared, so the spike is
     // at the shot rather than smeared across the recovery).
     this.weaponKickT = Math.max(0, this.weaponKickT - dt / CONFIG.recoil.kickTime);
     const kick = this.weaponKickT * this.weaponKickT;
 
-    // Torso: pitch with the camera aim (recoil included, so the body rides
-    // the kick), lean into the run, subtle sway.
-    this.torso.rotation.x = -cam.aimPitch * 0.45 + 0.1 * walk - 0.05 * kick;
-    this.torso.rotation.y = 0.06 * swing * walk;
-    this.torso.rotation.z = 0.04 * swing * walk;
-    this.head.rotation.x = -cam.aimPitch * 0.3;
-
-    // Arms: two-handed gun-ready pose. The right hand grips near the stock;
-    // the left supports across the chest and drops during reloads.
-    // The shooting arm absorbs the punch; the support arm follows it up.
-    this.shoulderR.rotation.set(-0.95 + 0.14 * kick, 0, -0.06);
-    this.elbowR.rotation.x = -0.55 - 0.18 * kick;
-    this.shoulderL.rotation.set(
-      -0.75 + 0.55 * this.reloadBlend + 0.1 * kick,
-      0.35,
-      0.75 - 0.4 * this.reloadBlend,
-    );
-    this.elbowL.rotation.x = -1.0 + 0.45 * this.reloadBlend;
-
-    // Rifle: reload tips it down, recoil slides it back and lifts the muzzle.
-    const r = CONFIG.recoil;
-    this.rifle.root.rotation.x = 0.5 * this.reloadBlend - r.kickPitch * kick;
-    this.rifle.root.position.z = RIFLE_REST.z - r.kickBack * kick;
+    this.glb?.updatePose({
+      groundSpeed: speed * this.moveBlend,
+      moveBlend: this.moveBlend,
+      airBlend: this.airBlend,
+      reloadBlend: this.reloadBlend,
+      aimPitch: cam.aimPitch,
+      kick,
+      idleT: this.idleT,
+    });
   }
 
   /**
@@ -597,6 +381,11 @@ export class Player implements Combatant {
 
   /** Hides the body while in first-person ADS. */
   setFirstPerson(fp: boolean): void {
-    for (const part of this.meshes) part.isVisible = !fp;
+    this.fpHidden = fp;
+    this.applyVisibility();
+  }
+
+  private applyVisibility(): void {
+    for (const part of this.meshes) part.isVisible = !this.fpHidden;
   }
 }

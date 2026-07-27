@@ -9,10 +9,14 @@ shooter (16v16 vs bots, five control points, ticket bleed) built with
 **Babylon.js** + **TypeScript**, bundled with **Vite**. ES modules
 (`"type": "module"`), Node 18+, WebGL2 browser required.
 
-The game ships **zero model files and zero audio files** — every mesh is built
-from Babylon primitives at runtime and all sound is synthesized WebAudio
-(`src/core/Sfx.ts`). A glTF asset pipeline was tried and deliberately reverted;
-do not reintroduce asset files unless explicitly asked.
+The game ships **zero audio files and (almost) zero model files** — every mesh
+except one is built from Babylon primitives at runtime and all sound is
+synthesized WebAudio (`src/core/Sfx.ts`). The single exception, added by
+explicit request, is the **player's body**: a rigged GLB (`models/*.glb`)
+driven by `src/entities/GlbSoldier.ts` (own locomotion clips + a procedural
+bone overlay for aim/reload/rifle-carry). Bots and weapons stay primitive —
+do not extend the GLB approach to them (rig pooling/merging rules still
+apply), and do not add further asset files unless explicitly asked.
 
 ## Commands
 
@@ -44,7 +48,8 @@ in that wiring, not in a new import between systems. Game state machine:
 src/config.ts      # ALL tunable constants (CONFIG, as const) — no gameplay
                    # magic numbers elsewhere
 src/core/          # Game (orchestrator), InputManager, CameraSystem, Sfx
-src/entities/      # Player, Bot (FSM), SoldierModel, RifleModel, Viewmodel,
+src/entities/      # Player, GlbSoldier (imported player body), Bot (FSM),
+                   # SoldierModel, RifleModel, Viewmodel,
                    # Combatant (shared shootable interface)
 src/systems/       # BattleSystem (bot pool/AI), ConquestSystem (flags/tickets),
                    # CombatSystem (hitscan), LightingSystem, Atmosphere
