@@ -299,6 +299,23 @@ export const CONFIG = {
     damageFlashDecay: 2.6,
   },
 
+  /**
+   * The corner minimap: full-map and north-up (matching the deploy screen),
+   * drawn from the same collider data so the two can never disagree.
+   * Enemies are hidden unless their own gunfire gives them away.
+   */
+  minimap: {
+    /** Canvas size in pixels (square); the CSS box is set to match. */
+    size: 220,
+    /** Seconds an enemy stays on the minimap after one of their shots. */
+    enemyRevealTime: 2.2,
+    /** The final stretch of a reveal, spent fading out (seconds). */
+    enemyFadeTime: 0.6,
+    /** Blip radii in canvas pixels. */
+    friendlyRadius: 2,
+    enemyRadius: 2.5,
+  },
+
   lighting: {
     /** Muzzle flash pulse: color, reach, brightness, and life in seconds. */
     muzzleColor: "#ffcf7a",

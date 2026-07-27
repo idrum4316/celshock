@@ -109,6 +109,7 @@ src/
   ui/
     HUD.ts                  # DOM overlay: tickets, flags, killfeed, scoreboard
     DeployScreen.ts         # Clickable top-down deploy map
+    Minimap.ts              # Corner minimap: flags, friendlies, firing enemies
   shaders/
     CelShader.ts            # Custom cel ShaderMaterial + outline helper
     HorrorPost.ts           # Vignette / grain / aberration / damage flash pass

@@ -24,6 +24,7 @@ import { HollowmereEnvironment } from "../world/hollowmere/environment";
 import { MapBuilder, type GameMap } from "../world/MapBuilder";
 import { DeployScreen } from "../ui/DeployScreen";
 import { HUD } from "../ui/HUD";
+import { Minimap } from "../ui/Minimap";
 import { CameraSystem } from "./CameraSystem";
 import { InputManager } from "./InputManager";
 import { Sfx } from "./Sfx";
@@ -49,6 +50,7 @@ export class Game {
   private cameraSys: CameraSystem;
   private hud: HUD;
   private deployScreen: DeployScreen;
+  private minimap: Minimap;
   private sfx: Sfx;
   private mapBuilder: MapBuilder;
   private combat: CombatSystem;
@@ -108,6 +110,7 @@ export class Game {
     this.sfx = new Sfx();
     this.hud = new HUD();
     this.deployScreen = new DeployScreen();
+    this.minimap = new Minimap();
     this.lighting = new LightingSystem();
     this.atmosphere = new Atmosphere(this.scene);
     this.mapBuilder = new MapBuilder(this.scene, this.mats, this.lighting);
@@ -140,7 +143,11 @@ export class Game {
     };
     // Bots fire constantly and all over the map, so their shots are
     // spatialised and voice-capped rather than played flat like the player's.
-    this.battle.onBotFired = (at) => this.sfx.botShot(at);
+    this.battle.onBotFired = (bot, at) => {
+      this.sfx.botShot(at);
+      // Gunfire gives an enemy away on the minimap for a couple of seconds.
+      if (bot.team !== this.player.team) this.minimap.reveal(bot);
+    };
     this.battle.spawnPointFor = (bot) => this.spawnPointFor(bot.team);
     this.battle.objectiveFor = (bot) =>
       this.conquest.objectiveFor(bot.team, bot.squad, bot.position);
@@ -226,6 +233,7 @@ export class Game {
     this.conquest.start(this.map);
     this.player.fullReset();
     this.player.team = 0;
+    this.minimap.setMap(this.map, this.player.team);
     this.kills[0] = this.kills[1] = 0;
     this.losses[0] = this.losses[1] = 0;
     this.playerKills = 0;
@@ -247,6 +255,7 @@ export class Game {
     this.cameraSys.reset(spawn ? spawn.yaw : 0);
     this.deployScreen.hide();
     this.viewmodel.setVisible(true);
+    this.minimap.setVisible(true);
     this.state = "playing";
   }
 
@@ -396,6 +405,14 @@ export class Game {
       playerDeaths: this.playerDeaths,
     });
     this.hud.setLockHint(!this.input.pointerLocked && !this.input.gamepadConnected);
+    this.minimap.update(
+      dt,
+      this.player.position,
+      this.cameraSys.yaw,
+      this.conquest.points,
+      this.battle.bots,
+      this.player.team,
+    );
   }
 
   /**
@@ -405,6 +422,7 @@ export class Game {
   private enterDeploy(delay: number): void {
     this.respawnT = delay;
     this.viewmodel.setVisible(false);
+    this.minimap.setVisible(false);
     this.hud.setScoreboard(false);
     if (this.map) this.deployScreen.show(this.map, this.conquest, this.player.team);
     this.deployScreen.update(this.respawnT);
@@ -426,6 +444,7 @@ export class Game {
     this.hud.setFlags(this.conquest.points, this.player.team);
     this.overlayT = 0;
     this.viewmodel.setVisible(false);
+    this.minimap.setVisible(false);
     this.battle.reset();
     document.exitPointerLock();
     const won = winner === this.player.team;

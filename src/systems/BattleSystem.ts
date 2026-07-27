@@ -38,7 +38,7 @@ export class BattleSystem {
   /** Wired by Game: a bot died. */
   onBotKilled: (bot: Bot, killer: Team) => void = () => {};
   /** Wired by Game: a bot pulled the trigger, at this world position. */
-  onBotFired: (at: Vector3) => void = () => {};
+  onBotFired: (bot: Bot, at: Vector3) => void = () => {};
   /** Wired by Game: where should this bot deploy? */
   spawnPointFor: (bot: Bot) => { pos: Vector3; yaw: number } | null = () => null;
   /** Wired by Game: which flag is this bot's squad heading for? */
@@ -259,7 +259,7 @@ export class BattleSystem {
     );
     const at = muzzle.clone();
     this.muzzleFlashes.push(at);
-    this.onBotFired(at);
+    this.onBotFired(bot, at);
     // The victim is whoever the ray actually found, which is often not the bot
     // that was being aimed at — a squadmate walks into the line all the time.
     if (shot.killed && shot.target instanceof Bot) {

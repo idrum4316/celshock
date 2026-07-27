@@ -50,7 +50,7 @@ src/systems/       # BattleSystem (bot pool/AI), ConquestSystem (flags/tickets),
                    # CombatSystem (hitscan), LightingSystem, Atmosphere
 src/world/         # MapBuilder, BuildingKit, NavGrid, Props, environment
 src/world/hollowmere/  # THE MAP as data: layout.ts + environment.ts
-src/ui/            # HUD, DeployScreen (DOM overlays)
+src/ui/            # HUD, DeployScreen, Minimap (DOM/canvas overlays)
 src/shaders/       # CelShader (custom ShaderMaterial), HorrorPost (grade)
 ```
 
