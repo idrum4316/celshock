@@ -83,6 +83,16 @@ const SCATTER_LIGHTS: Partial<
   fireDrum: { color: "#ff8a2a", range: 19, intensity: 2.0, y: 1.1, flicker: 0.4 },
 };
 
+/** Approximate prop heights at scale 1, for the burial check in `findSpot`. */
+const PROP_HEIGHTS: Record<ScatterSpec["prop"], number> = {
+  deadTree: 5.4,
+  gravestone: 1.7,
+  log: 0.9,
+  fungus: 1.1,
+  rubble: 1.5,
+  fireDrum: 2.1,
+};
+
 /**
  * Builds Hollowmere from `hollowmere/layout.ts`.
  *
@@ -273,13 +283,16 @@ export class MapBuilder {
         );
       }
       if (spec.blocking) {
+        // Real prop height, not a generic 3 m — a rubble heap's collider
+        // reaching 3 m up blocks shots and sightlines over empty air.
+        const h = PROP_HEIGHTS[spec.prop] * scale;
         colliders.push(
           this.collider(`${spec.prop}-col`, {
             w: clearance * 2,
-            h: 3 * scale,
+            h,
             d: clearance * 2,
             x: spot.x,
-            y: (spec.y ?? 0) + 1.5 * scale,
+            y: (spec.y ?? 0) + h / 2,
             z: spot.z,
           }),
         );
@@ -294,7 +307,8 @@ export class MapBuilder {
 
   /**
    * A free spot inside the region: 14 tries, rejecting anything that overlaps
-   * an earlier prop or lands on an authored structure. Returns null to skip.
+   * an earlier prop or lands inside a structure's collider. Returns null to
+   * skip.
    */
   private findSpot(
     spec: ScatterSpec,
@@ -317,9 +331,50 @@ export class MapBuilder {
           break;
         }
       }
+      if (ok && this.insideCollider(spec, x, z, clearance)) ok = false;
       if (ok) return { x, z };
     }
     return null;
+  }
+
+  /**
+   * True when a prop at (x, z) would end up buried inside an existing
+   * collider box. Colliders below the prop's base don't count (gravestones
+   * *stand on* the terrace), and neither do colliders clear above its top
+   * (a log passes *under* a creek bridge). Ramps count as their full
+   * footprint, so nothing spawns halfway into a slope.
+   */
+  private insideCollider(
+    spec: ScatterSpec,
+    x: number,
+    z: number,
+    clearance: number,
+  ): boolean {
+    const baseY = spec.y ?? 0;
+    const topY = baseY + PROP_HEIGHTS[spec.prop] * (spec.scale?.[1] ?? 1);
+    // The collider a prop gets spans `clearance` out from its centre — pad by
+    // the full amount or the new collider ends up inside the structure's.
+    const pad = clearance;
+    for (const b of this.boxes) {
+      // A tilted box (rotX ramps) spans a taller band than its thickness.
+      let halfH = b.h / 2;
+      if (b.rotX !== 0) halfH += (Math.abs(Math.sin(b.rotX)) * b.d) / 2;
+      if (topY <= b.cy - halfH + 0.05 || baseY >= b.cy + halfH - 0.05) continue;
+      // XZ overlap, tested in the box's local frame.
+      let lx = x - b.cx;
+      let lz = z - b.cz;
+      if (b.rotY !== 0) {
+        const c = Math.cos(b.rotY);
+        const s = Math.sin(b.rotY);
+        const rx = lx * c - lz * s;
+        lz = lx * s + lz * c;
+        lx = rx;
+      }
+      if (Math.abs(lx) <= b.w / 2 + pad && Math.abs(lz) <= b.d / 2 + pad) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
