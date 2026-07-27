@@ -46,7 +46,8 @@ export const CONFIG = {
     perTeam: 16,
     squadSize: 4,
     maxHealth: 100,
-    moveSpeed: 6.4,
+    /** Roughly the player's jog; the advancing sprint stays under theirs. */
+    moveSpeed: 4.4,
     /** Sprint multiplier while advancing with no target. */
     advanceSprintMult: 1.35,
     /**
@@ -57,7 +58,8 @@ export const CONFIG = {
     thinkRate: 5,
     /** Seconds between acquiring a target and the first shot. */
     reactionTime: 0.35,
-    damage: 13,
+    /** 25 per hit against 100 HP = 4 shots to kill, matching the player. */
+    damage: 25,
     fireRate: 5.5,
     /** Rounds per burst, and the pause between bursts. */
     burstSize: 5,
@@ -101,16 +103,20 @@ export const CONFIG = {
 
   player: {
     maxHealth: 100,
-    /** Slightly quicker than the original arenas — the rooms got much bigger. */
-    moveSpeed: 8.0,
+    /**
+     * Realistic infantry pace: a loaded combat jog is ~4 m/s. The original
+     * 8 m/s read as a full sprint and made the village feel small.
+     */
+    moveSpeed: 4.6,
     /** Movement speed multiplier while aiming down sights. */
     adsMoveMult: 0.55,
     /**
-     * Sprint multiplier. A 240 m map takes 30 s to cross at base speed, so
-     * this is traversal necessity rather than a feature. Firing is blocked
-     * while sprinting.
+     * Sprint multiplier: 6.9 m/s, an honest loaded sprint. Crossing the
+     * 240 m map takes ~35 s at it (vs ~52 s jogging), so this stays
+     * traversal necessity rather than a feature. Firing is blocked while
+     * sprinting.
      */
-    sprintMult: 1.6,
+    sprintMult: 1.5,
     jumpVelocity: 8.5,
     gravity: 22.0,
     height: 1.8,
@@ -135,7 +141,8 @@ export const CONFIG = {
   },
 
   weapon: {
-    damage: 12,
+    /** 30 per hit against 100 HP = 4 shots to kill. */
+    damage: 30,
     /** Rounds per second (full auto). */
     fireRate: 8,
     magSize: 24,
