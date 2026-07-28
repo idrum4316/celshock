@@ -23,6 +23,33 @@ export interface ParticleSpec {
   riseSpeed: number;
 }
 
+/**
+ * The night-sky palette. Everything here is baked or tinted by `Sky`
+ * (`src/systems/Sky.ts`); geometry (dome radius, cloud layer heights, scroll
+ * speeds) lives in `CONFIG.sky`. Omitting it leaves the bare clear colour.
+ */
+export interface SkySpec {
+  /** Top of the dome gradient. */
+  zenithColor: string;
+  /**
+   * Bright band at the horizon line. Should sit close to `fogColor` so the
+   * dome melts into the fogged ridge instead of cutting against it.
+   */
+  horizonColor: string;
+  /** Baked star field: colour, count, and 0..1 brightness. */
+  starColor: string;
+  starCount: number;
+  starBrightness: number;
+  /**
+   * The moon hangs opposite the key light's direction, so the disc always
+   * agrees with the shadows. This is just its colour — size is `CONFIG.sky`.
+   */
+  moonColor: string;
+  /** Drifting cloud banks: tint (moonlit grey-blue) and 0..1 ceiling alpha. */
+  cloudColor: string;
+  cloudOpacity: number;
+}
+
 /** Shallow-water palette. Omitting it leaves the map dry. */
 export interface WaterEnvSpec {
   /** Body colour looking straight down. */
@@ -64,6 +91,7 @@ export interface EnvironmentSpec {
   };
   particles?: ParticleSpec;
   water?: WaterEnvSpec;
+  sky?: SkySpec;
 }
 
 /**

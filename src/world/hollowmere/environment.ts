@@ -37,6 +37,22 @@ export const HollowmereEnvironment: EnvironmentSpec = {
     size: 0.06,
     riseSpeed: -0.25,
   },
+  /**
+   * A cold, high moon (it sits opposite the key light, ~58 deg up in the
+   * south-east) over a near-black zenith, with a faint dead-green band at
+   * the horizon that hands off to the fog. Stars are dim and sparse — thin
+   * cloud cover, not a clear night.
+   */
+  sky: {
+    zenithColor: "#020305",
+    horizonColor: "#14201d",
+    starColor: "#aebfcf",
+    starCount: 240,
+    starBrightness: 0.6,
+    moonColor: "#d4e4ff",
+    cloudColor: "#3a4a58",
+    cloudOpacity: 0.4,
+  },
   // The creek at B and the bog at E: black-green standing water that mostly
   // exists to catch the moon and the muzzle flashes.
   water: {

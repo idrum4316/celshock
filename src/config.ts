@@ -391,6 +391,49 @@ export const CONFIG = {
   },
 
   /**
+   * The night sky (src/systems/Sky.ts): a gradient dome with baked stars and
+   * moon halo, an emissive moon disc that feeds the GlowLayer, and drifting
+   * cloud banks. Palette lives in the map's EnvironmentSpec (`sky`); this is
+   * geometry and motion. Everything rides at `infiniteDistance`, so radii and
+   * heights are angular conveniences, not reachable places.
+   */
+  sky: {
+    /** Dome radius. Well under the camera's default 10000 far plane. */
+    domeRadius: 600,
+    /** Dome texture: width wraps the horizon, height runs pole to pole. */
+    domeTextureWidth: 1024,
+    domeTextureHeight: 512,
+    /** Moon disc radius and its distance along the key-light source dir.
+     *  Beyond the cloud shells (so they veil it) and just inside the dome. */
+    moonRadius: 26,
+    moonDistance: 595,
+    /**
+     * Emissive scale on the moon colour — above 1 so the GlowLayer blooms it
+     * into a proper halo on top of the soft one baked into the dome texture.
+     */
+    moonEmissiveBoost: 1.7,
+    /** Radius of the baked halo gradient around the moon, in texture px. */
+    haloRadiusPx: 46,
+    /** Largest star dot, in texture px; most stars are drawn far smaller. */
+    starMaxSize: 1.7,
+    /**
+     * Cloud banks: sphere shells just inside the dome (a plane would show
+     * its edges as a hard square hanging in the sky). Each scrolls a
+     * wrapping blob texture azimuthally; `speedU` is uv per second (a full
+     * circuit takes ~5-10 minutes — clouds should drift, not fly),
+     * `uScale` is the texture repeat around the horizon, `radiusOffset` how
+     * far inside the dome the shell floats, and `opacity` multiplies the
+     * map spec's `cloudOpacity`.
+     */
+    cloudTextureSize: 256,
+    cloudBlobs: 30,
+    cloudLayers: [
+      { radiusOffset: 12, uScale: 1, speedU: 0.0035, opacity: 1.0 },
+      { radiusOffset: 26, uScale: 2, speedU: -0.0018, opacity: 0.55 },
+    ],
+  },
+
+  /**
    * The two sides. Colors are the primary friend/foe read in a dark scene —
    * warm amber against cold crimson, both legible under blue moonlight.
    */

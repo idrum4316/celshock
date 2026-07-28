@@ -99,6 +99,7 @@ src/
     AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
     Atmosphere.ts           # Drifting ash particle field
+    Sky.ts                  # Generated sky dome (gradient/stars/halo), moon, clouds
   world/
     MapBuilder.ts           # Builds the map; merges visuals, emits colliders
     BuildingKit.ts          # Parametric cottages, chapel, barn, mill, ramps...

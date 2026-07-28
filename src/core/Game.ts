@@ -18,6 +18,7 @@ import { BattleSystem } from "../systems/BattleSystem";
 import { CombatSystem } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
 import { LightingSystem } from "../systems/LightingSystem";
+import { Sky } from "../systems/Sky";
 import { WaterSystem } from "../systems/WaterSystem";
 import { applyEnvironment } from "../world/environment";
 import { HollowmereEnvironment } from "../world/hollowmere/environment";
@@ -59,6 +60,7 @@ export class Game {
   private conquest: ConquestSystem;
   private lighting: LightingSystem;
   private atmosphere: Atmosphere;
+  private sky: Sky;
   private water: WaterSystem;
   private post: HorrorPost;
   private player: Player;
@@ -124,6 +126,10 @@ export class Game {
     for (const m of this.scene.meshes) {
       if (m.metadata && m.metadata.noGlow === true) glow.addExcludedMesh(m as Mesh);
     }
+    // The sky hangs behind every state (menu included), so it is dressed
+    // once here and re-applied per round alongside the environment.
+    this.sky = new Sky(this.scene, glow);
+    this.sky.apply(HollowmereEnvironment);
 
     // --- system wiring ---
     // Systems never import each other; every cross-system behaviour is a
@@ -211,6 +217,7 @@ export class Game {
 
     this.hud.update(dt);
     this.post.update(dt);
+    this.sky.update(dt);
     this.scene.render();
   }
 
@@ -221,6 +228,7 @@ export class Game {
     this.combat.clearTransient();
 
     applyEnvironment(this.scene, HollowmereEnvironment, this.mats);
+    this.sky.apply(HollowmereEnvironment);
     this.map = this.mapBuilder.build();
     this.atmosphere.apply(
       HollowmereEnvironment.particles,
