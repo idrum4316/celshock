@@ -219,14 +219,20 @@ export const CONFIG = {
     stickSensX: 2.8,
     stickSensY: 1.8,
     adsStickMult: 0.5,
-    /** Third-person over-the-shoulder framing (hip fire). */
-    thirdPersonDistance: 4.0,
-    shoulderOffset: 0.75,
-    pivotHeight: 1.6,
+    /**
+     * Third-person over-the-shoulder framing (hip fire). Tuned so the
+     * character fills roughly half the frame height: ~3.3 m back at chest
+     * height puts head-to-feet at ~0.52 rad against fovHip 0.95.
+     * NOTE: pivotHeight is relative to the player capsule CENTER (~0.9 m
+     * above ground), so 0.55 puts the pivot at ~1.45 m — chest height.
+     */
+    thirdPersonDistance: 3.3,
+    shoulderOffset: 0.65,
+    pivotHeight: 0.55,
     /** ADS framing: the shoulder cam pulls in and recentres over the
      *  shoulder rather than going first-person. */
-    adsDistance: 2.2,
-    adsShoulderOffset: 0.5,
+    adsDistance: 2.0,
+    adsShoulderOffset: 0.45,
     /** Eye height — bot line-of-sight checks against the player use this. */
     eyeHeight: 1.55,
     fovHip: 0.95,
