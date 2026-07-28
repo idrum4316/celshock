@@ -445,6 +445,11 @@ export class GlbSoldier {
     }
   }
 
+  /** Scratch for the constant lower-arm drop direction: handguardPoint
+   * reuses the shared temps (tmpV1/tmpV2), so poseArm keeps its blend
+   * target here across that call. */
+  private readonly aimDrop = new Vector3();
+
   /**
    * Aims one two-joint arm at the carry directions, rotated by aim pitch so
    * the rifle tracks the camera; reload drops the support arm to the mag.
@@ -483,7 +488,9 @@ export class GlbSoldier {
     if (isLeft) {
       // Support hand holds the handguard: aim the forearm at the guard point
       // of this frame's rifle pose (right hand is already final). Blends
-      // toward the constant drop direction while reloading.
+      // toward the constant drop direction while reloading. The guard lookup
+      // clobbers the shared temps, so the drop direction is kept aside.
+      this.aimDrop.copyFrom(tmpV2);
       const lowerChild = this.childJointOf(lower);
       if (lowerChild && p.reloadBlend < 0.999) {
         const guard = this.handguardPoint(p);
@@ -495,13 +502,15 @@ export class GlbSoldier {
           tmpV3.copyFrom(guard).subtractInPlace(elbow);
           if (tmpV3.lengthSquared() > 1e-8) {
             tmpV3.normalize();
-            Vector3.LerpToRef(tmpV3, tmpV2, p.reloadBlend, tmpV3);
+            Vector3.LerpToRef(tmpV3, this.aimDrop, p.reloadBlend, tmpV3);
             tmpV3.normalize();
             this.aimJoint(lower, lowerChild, tmpV3, 1);
             return;
           }
         }
       }
+      this.aimJoint(lower, lowerChild, this.aimDrop, 1);
+      return;
     }
     this.aimJoint(lower, this.childJointOf(lower), tmpV2, 1);
   }
@@ -635,9 +644,12 @@ export class GlbSoldier {
       // Wait for a settled idle frame so the capture is the real carry
       // pose — the rifle offset was tuned against exactly this frame.
       if (this.idleW < 0.95) return;
-      // calLocal = charRot⁻¹ · handWorld  (character-space grip frame)
+      // calLocal = handWorld · charRot⁻¹  (character-space grip frame:
+      // world = charSpace · charRot, so the inverse post-multiplies. The
+      // pre-multiplied order only works when the capture happens at yaw 0;
+      // any other capture yaw bakes a permanent twist into the rifle.)
       charRot.invertToRef(tmpM4);
-      this[slot] = tmpM4.multiply(hw).clone();
+      this[slot] = hw.multiply(tmpM4);
       return;
     }
     // desired = calLocal · charRot · pitch — world deltas post-multiply, so
