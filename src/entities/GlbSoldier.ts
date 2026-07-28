@@ -253,7 +253,7 @@ export class GlbSoldier {
     // Bind-pose bounds don't track a walking skeleton; skip frustum culling.
     skinned.alwaysSelectAsActiveMesh = true;
     skinned.metadata = { ...(skinned.metadata ?? {}), noGlow: true };
-    addOutline(skinned, 0.02);
+    addOutline(skinned, 0.012);
     rig.meshes.push(skinned);
 
     const joint = (name: string) => rig.joints.get(name) ?? null;

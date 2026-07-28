@@ -183,7 +183,7 @@ export function buildSoldier(
   ]);
 
   for (const m of meshes) {
-    if (!m.metadata?.noOutline) addOutline(m, 0.02);
+    if (!m.metadata?.noOutline) addOutline(m, 0.012);
   }
 
   return {
