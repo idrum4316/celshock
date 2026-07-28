@@ -152,17 +152,25 @@ export class MapBuilder {
     this.buildValley(size, visuals, colliders);
 
     // --- authored structures ---
+    // Roads are merged into one draw call per material so overlapping junctions
+    // (the central cross, etc.) don't z-fight between separate meshes.
+    const roadParts: Mesh[] = [];
     for (const p of layout.placements) {
       const builder = BUILDERS[p.kind];
       const s: Structure = builder(this.scene, this.mats, p.params ?? {});
       const origin = new Vector3(p.x, p.y ?? 0, p.z);
       const rotY = p.rotY ?? 0;
+      const isRoad = p.kind === "road";
 
       for (const merged of mergeByMaterial(s.meshes, p.kind)) {
         merged.rotation.y = rotY;
         merged.position.addInPlace(origin);
-        if (!merged.metadata?.noOutline) addOutline(merged, 0.05);
-        visuals.push(merged);
+        if (isRoad) {
+          roadParts.push(merged);
+        } else {
+          if (!merged.metadata?.noOutline) addOutline(merged, 0.05);
+          visuals.push(merged);
+        }
       }
       for (const box of s.colliders) {
         colliders.push(this.collider(`${p.kind}-col`, box, origin, rotY));
@@ -171,6 +179,11 @@ export class MapBuilder {
         const at = rotateY(l.x, l.y, l.z, rotY).addInPlace(origin);
         this.lighting.add(at, l.color, l.range, l.intensity, l.flicker);
       }
+    }
+
+    for (const merged of mergeByMaterial(roadParts, "roads")) {
+      if (!merged.metadata?.noOutline) addOutline(merged, 0.05);
+      visuals.push(merged);
     }
 
     // --- scattered dressing ---

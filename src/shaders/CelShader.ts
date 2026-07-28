@@ -18,7 +18,9 @@ import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
 
 /**
  * Custom cel-shading: quantized diffuse bands, a hard stylized rim highlight,
- * flat colors, and per-theme atmosphere blended in the fragment shader.
+ * flat colors (or a texture albedo — uv-mapped for the skinned player body,
+ * world-XZ-mapped for ground surfaces like cobblestone roads), and per-theme
+ * atmosphere blended in the fragment shader.
  * Outlines are drawn with Babylon's outline renderer (inverted hull).
  *
  * Lighting has three parts, all banded so the toon look survives:
@@ -102,7 +104,14 @@ uniform vec3 rimColor;
 uniform sampler2D baseColorTex;
 varying vec2 vUv;
 #else
+#ifdef CEL_GROUND_TEX
+// World-mapped ground albedo: sampled at vPosW.xz * texScale, so no UVs are
+// needed and the pattern keeps a constant real-world size across placements.
+uniform sampler2D baseColorTex;
+uniform float texScale;
+#else
 uniform vec3 baseColor;
+#endif
 #endif
 uniform vec3 fogColor;
 uniform vec2 fogParams;  // x = start, y = end
@@ -153,12 +162,17 @@ void main() {
     }
   }
 
-  // Base albedo: flat palette color, or the skinned character's texture.
-  // Both are used raw (display-ready), matching the no-image-processing pipe.
+  // Base albedo: flat palette color, the skinned character's texture, or a
+  // world-mapped ground texture. All are used raw (display-ready), matching
+  // the no-image-processing pipe.
   #ifdef CEL_TEXTURED
   vec3 base = texture2D(baseColorTex, vUv).rgb;
   #else
+  #ifdef CEL_GROUND_TEX
+  vec3 base = texture2D(baseColorTex, vPosW.xz * texScale).rgb;
+  #else
   vec3 base = baseColor;
+  #endif
   #endif
   vec3 col = base * light;
 
@@ -300,6 +314,44 @@ export class CelMaterialFactory {
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.cache.set(CelMaterialFactory.SKINNED_KEY, mat);
+    }
+    return mat;
+  }
+
+  /**
+   * A cel material whose albedo is a texture sampled in world space
+   * (`vPosW.xz * texScale`) rather than from UVs — for flat ground surfaces
+   * only (walls would streak). World mapping means every mesh sharing it
+   * tiles seamlessly at a constant real-world scale no matter how it is
+   * sized, rotated about Y, or merged, and primitives need no UV authoring.
+   * Cached per key in the shared map so environment, point-light, and camera
+   * updates reach it like any flat colour.
+   *
+   * @param key cache key, e.g. "cobble" — one material per texture/scale pair
+   * @param tex tiling texture; mipmaps + anisotropy are the caller's job
+   * @param texScale texture repeats per metre (1 / metres-per-tile)
+   */
+  getGroundTextured(key: string, tex: BaseTexture, texScale: number): ShaderMaterial {
+    const cacheKey = `\0ground-${key}`;
+    let mat = this.cache.get(cacheKey);
+    if (!mat) {
+      mat = new ShaderMaterial(
+        `cel-ground-${key}`,
+        this.scene,
+        { vertex: "cel", fragment: "cel" },
+        {
+          attributes: ["position", "normal"],
+          uniforms: [...CelMaterialFactory.UNIFORMS, "texScale"],
+          samplers: ["baseColorTex"],
+          defines: ["#define CEL_GROUND_TEX"],
+        },
+      );
+      mat.setTexture("baseColorTex", tex);
+      mat.setFloat("texScale", texScale);
+      mat.setVector3("camPos", Vector3.Zero());
+      this.applyEnvironment(mat);
+      this.applyPointLights(mat);
+      this.cache.set(cacheKey, mat);
     }
     return mat;
   }

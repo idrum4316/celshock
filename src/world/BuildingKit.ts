@@ -1,6 +1,7 @@
 import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { LightSpec } from "./environment";
+import { COBBLE_TEX_SCALE, getCobblestoneTexture } from "./textures";
 
 /**
  * Parametric builders for everything Hollowmere is made of.
@@ -49,6 +50,8 @@ export interface BuildParams {
   rampSide?: -1 | 1;
   /** Gatehouse: banner colour identifying the owning team. */
   teamColor?: string;
+  /** Road: cobblestone street (default) or the old flat dirt track. */
+  surface?: "cobble" | "dirt";
 }
 
 /** A fixture light in the structure's local space. */
@@ -116,6 +119,36 @@ class Build implements Structure {
     m.position.set(x, y, z);
     if (rot) m.rotation.set(rot.x ?? 0, rot.y ?? 0, rot.z ?? 0);
     m.material = this.mats.get(color);
+    this.meshes.push(m);
+    return m;
+  }
+
+  /**
+   * A box surfaced with a world-mapped ground texture (cobblestone). The
+   * shader samples by world XZ, so no UV authoring is needed and the pattern
+   * keeps a constant real-world size however the box is sized — and tiles
+   * seamlessly across separate structures sharing the material. For
+   * up-facing surfaces only; walls would streak.
+   */
+  groundBox(
+    w: number,
+    h: number,
+    d: number,
+    x: number,
+    y: number,
+    z: number,
+  ): Mesh {
+    const m = MeshBuilder.CreateBox(
+      `${this.tag}-ground${this.meshes.length}`,
+      { width: w, height: h, depth: d },
+      this.scene,
+    );
+    m.position.set(x, y, z);
+    m.material = this.mats.getGroundTextured(
+      "cobble",
+      getCobblestoneTexture(this.scene),
+      COBBLE_TEX_SCALE,
+    );
     this.meshes.push(m);
     return m;
   }
@@ -680,14 +713,21 @@ export function buildRamp(
   return b;
 }
 
-/** Flat dirt road surface. Visual only — it sits on the ground plane. */
+/**
+ * Flat road surface. Visual only — it sits on the ground plane. Cobblestone
+ * by default; `surface: "dirt"` gives the old flat track for farm lanes.
+ */
 export function buildRoad(
   scene: Scene,
   mats: CelMaterialFactory,
   p: BuildParams = {},
 ): Structure {
   const b = new Build(scene, mats, "road");
-  b.box(p.width ?? 8, 0.08, p.length ?? 40, 0, 0.04, 0, DIRT);
+  if (p.surface === "dirt") {
+    b.box(p.width ?? 8, 0.08, p.length ?? 40, 0, 0.04, 0, DIRT);
+  } else {
+    b.groundBox(p.width ?? 8, 0.08, p.length ?? 40, 0, 0.04, 0);
+  }
   return b;
 }
 
