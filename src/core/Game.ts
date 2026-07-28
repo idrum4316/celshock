@@ -12,7 +12,6 @@ import { HorrorPost } from "../shaders/HorrorPost";
 import { Bot } from "../entities/Bot";
 import type { Combatant, Team } from "../entities/Combatant";
 import { Player } from "../entities/Player";
-import { Viewmodel } from "../entities/Viewmodel";
 import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
@@ -63,7 +62,6 @@ export class Game {
   private water: WaterSystem;
   private post: HorrorPost;
   private player: Player;
-  private viewmodel: Viewmodel;
 
   private state: GameState = "menu";
   private map: GameMap | null = null;
@@ -122,8 +120,7 @@ export class Game {
     this.battle = new BattleSystem(this.scene, this.mats, this.combat);
     this.conquest = new ConquestSystem();
     this.player = new Player(this.scene, this.mats);
-    this.player.setFirstPerson(true); // hidden until a round starts
-    this.viewmodel = new Viewmodel(this.scene, this.mats, this.cameraSys.camera);
+    this.player.setBodyHidden(true); // hidden until a round starts
     for (const m of this.scene.meshes) {
       if (m.metadata && m.metadata.noGlow === true) glow.addExcludedMesh(m as Mesh);
     }
@@ -258,7 +255,7 @@ export class Game {
     this.player.placeAt(spawn ? spawn.pos.add(jitter) : new Vector3(0, 0, 0));
     this.cameraSys.reset(spawn ? spawn.yaw : 0);
     this.deployScreen.hide();
-    this.viewmodel.setVisible(true);
+    this.player.setBodyHidden(false);
     this.minimap.setVisible(true);
     this.state = "playing";
   }
@@ -292,11 +289,9 @@ export class Game {
     if (this.input.fire && canFire && this.player.tryShot()) {
       const blend = this.cameraSys.adsBlend;
       const spread = this.player.spread(blend);
-      // Tracers start at whichever rifle is on screen: the first-person
-      // viewmodel while sighted in, the character's rifle otherwise.
-      const muzzle = this.cameraSys.isFirstPerson
-        ? this.viewmodel.muzzleWorld()
-        : this.player.muzzleWorld();
+      // Tracers start at the character's rifle — the camera never goes
+      // first-person, so that rifle is always the one on screen.
+      const muzzle = this.player.muzzleWorld();
       const shot = this.combat.fire(
         this.cameraSys.camera.position,
         this.cameraSys.forward,
@@ -313,7 +308,6 @@ export class Game {
         rc.pitchPerShot * kickMult,
         (Math.random() * 2 - 1) * rc.yawPerShot * kickMult,
       );
-      this.viewmodel.kick();
       // Muzzle flash: a hard, very short pulse that lights whatever is in
       // front of the player — the main reason to keep shooting in the dark.
       const lc = CONFIG.lighting;
@@ -391,14 +385,12 @@ export class Game {
     );
     // Same rule as the lights and the fog: this has to follow the camera.
     this.sfx.setListener(this.cameraSys.camera.position, this.cameraSys.forward);
-    this.player.setFirstPerson(this.cameraSys.isFirstPerson);
-    this.viewmodel.update(dt, this.cameraSys, this.input, this.player);
 
     // --- HUD ---
     this.hud.setHealth(this.player.health, this.player.maxHealth);
     this.hud.setAmmo(this.player.ammo, this.player.magSize, this.player.reloading);
-    // The holo reticle replaces the DOM crosshair once first-person.
-    this.hud.setAds(this.cameraSys.isFirstPerson);
+    // Tightens the crosshair ring while aiming.
+    this.hud.setAds(this.input.ads);
     this.hud.setTickets(
       [CONFIG.teams[0].name, CONFIG.teams[1].name],
       this.conquest.tickets,
@@ -432,7 +424,6 @@ export class Game {
    */
   private enterDeploy(delay: number): void {
     this.respawnT = delay;
-    this.viewmodel.setVisible(false);
     this.minimap.setVisible(false);
     this.hud.setScoreboard(false);
     if (this.map) this.deployScreen.show(this.map, this.conquest, this.player.team);
@@ -454,7 +445,6 @@ export class Game {
     );
     this.hud.setFlags(this.conquest.points, this.player.team);
     this.overlayT = 0;
-    this.viewmodel.setVisible(false);
     this.minimap.setVisible(false);
     this.battle.reset();
     document.exitPointerLock();

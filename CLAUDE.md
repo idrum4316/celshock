@@ -69,8 +69,8 @@ over a live view.
 
 `Game.updateGameplay` has a load-bearing order at the end of the frame: camera
 update → `mats.updateCamera()` → carried-light updates → `lighting.update(dt,
-camera.position, mats)` → `sfx.setListener()` → `player.setFirstPerson()` →
-`viewmodel.update()`. Light slot selection, shader fog, and audio panning all key
+camera.position, mats)` → `sfx.setListener()`. Light slot selection, shader fog,
+and audio panning all key
 off the camera position, so anything that moves the camera must run before them.
 
 `ConquestSystem.update` runs *before* `BattleSystem.update`, so a bot's think
@@ -266,14 +266,6 @@ it survives only in `stash@{0}`. Don't reintroduce assets without being asked.
 per color group instead of a black shell around every screw. It works only
 because the root is still at identity while building: `MergeMeshes` bakes world
 matrices and returns an identity-transform mesh, which is then re-parented.
-
-**ADS obstruction drives the optic's dimensions.** At
-`CONFIG.viewmodel.adsSightDistance = 0.52` the sight window subtends ~31% of
-screen height, so hood walls are 0.007, the irons are modelled folded flat
-(upright posts put pillars in the middle of the glass), and the viewmodel outline
-is 0.0012. Raising `adsSightDistance` to shrink the rifle is not an option: past
-~0.55 the buttstock crosses the camera's `minZ` and fills the lower screen with a
-black cross-section.
 
 ### Gameplay conventions
 

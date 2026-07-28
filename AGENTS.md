@@ -49,7 +49,7 @@ src/config.ts      # ALL tunable constants (CONFIG, as const) — no gameplay
                    # magic numbers elsewhere
 src/core/          # Game (orchestrator), InputManager, CameraSystem, Sfx
 src/entities/      # Player, GlbSoldier (imported player body), Bot (FSM),
-                   # SoldierModel, RifleModel, Viewmodel,
+                   # SoldierModel, RifleModel,
                    # Combatant (shared shootable interface)
 src/systems/       # BattleSystem (bot pool/AI), ConquestSystem (flags/tickets),
                    # CombatSystem (hitscan), LightingSystem, Atmosphere
@@ -85,7 +85,7 @@ constraints in depth. Read both before a substantial change.
   staggered round-robin at `CONFIG.bots.thinkRate`.
 - **Frame-order matters** at the end of `Game.updateGameplay`: camera →
   `mats.updateCamera()` → carried lights → `lighting.update()` →
-  `sfx.setListener()` → `player.setFirstPerson()` → `viewmodel.update()`.
+  `sfx.setListener()`.
   `ConquestSystem.update` runs before `BattleSystem.update` so bots see this
   frame's flag ownership.
 - **Rendering constraints:** `pipeline.imageProcessingEnabled` must stay

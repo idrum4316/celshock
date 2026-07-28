@@ -2,8 +2,9 @@
 
 A browser-based, single-player **Conquest** shooter built with **Babylon.js** and
 **TypeScript**. Sixteen-a-side against bots over five control points in a
-fog-drowned horror village, with seamless third-person ↔ first-person ADS
-switching and a low-poly cel-shaded look: a near-black valley lit by guttering
+fog-drowned horror village, with a third-person over-the-shoulder camera
+(ADS tightens the shoulder framing — it never goes first-person) and a
+low-poly cel-shaded look: a near-black valley lit by guttering
 lanterns, burning braziers, muzzle flashes, and your own shoulder lamp.
 
 ## Setup
@@ -81,14 +82,13 @@ src/
   core/
     Game.ts                 # Orchestrator + game state machine + main loop
     InputManager.ts         # Unified keyboard/mouse + gamepad state
-    CameraSystem.ts         # Third-person camera with blended first-person ADS
+    CameraSystem.ts         # Third-person shoulder cam; ADS pulls in + zooms
     Sfx.ts                  # Procedural WebAudio, spatialised and voice-capped
   entities/
     Player.ts               # Movement, sprint, jump, weapon state, body wiring
     GlbSoldier.ts           # Player body: rigged GLB (models/*.glb), clips +
                             # procedural bone overlay (aim/reload/rifle carry)
     RifleModel.ts           # Low-poly SCAR-pattern rifle + holo sight builder
-    Viewmodel.ts            # First-person rifle: raise, sway, bob, recoil
     Combatant.ts            # Team + the shared shootable/shooter interface
     Bot.ts                  # Bot FSM: advance / engage / reposition / capture
     SoldierModel.ts         # Cheap merged bot rig + procedural animation

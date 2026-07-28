@@ -51,7 +51,7 @@ export class Player implements Combatant {
   /** The imported rigged body; null until the async GLB load resolves. */
   private glb: GlbSoldier | null = null;
   /** Last visibility state, applied to the GLB meshes when they arrive. */
-  private fpHidden = true;
+  private bodyHidden = true;
 
   // Animation state (smoothed inputs for the GLB pose overlay).
   private moveBlend = 0;
@@ -362,7 +362,7 @@ export class Player implements Combatant {
   private syncCombatant(): void {
     const p = this.root.position;
     this.center.set(p.x, p.y, p.z);
-    this.eyePos.set(p.x, p.y + CONFIG.camera.fpHeight - this.groundY, p.z);
+    this.eyePos.set(p.x, p.y + CONFIG.camera.eyeHeight - this.groundY, p.z);
   }
 
   takeDamage(amount: number): boolean {
@@ -379,13 +379,17 @@ export class Player implements Combatant {
     this.health = Math.min(this.maxHealth, this.health + amount);
   }
 
-  /** Hides the body while in first-person ADS. */
-  setFirstPerson(fp: boolean): void {
-    this.fpHidden = fp;
+  /**
+   * Shows/hides the body. Hidden only outside gameplay (menu backdrop);
+   * during play the camera never goes first-person, so the body stays
+   * visible the whole time.
+   */
+  setBodyHidden(hidden: boolean): void {
+    this.bodyHidden = hidden;
     this.applyVisibility();
   }
 
   private applyVisibility(): void {
-    for (const part of this.meshes) part.isVisible = !this.fpHidden;
+    for (const part of this.meshes) part.isVisible = !this.bodyHidden;
   }
 }

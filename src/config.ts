@@ -219,15 +219,19 @@ export const CONFIG = {
     stickSensX: 2.8,
     stickSensY: 1.8,
     adsStickMult: 0.5,
-    /** Third-person over-the-shoulder framing. */
+    /** Third-person over-the-shoulder framing (hip fire). */
     thirdPersonDistance: 4.0,
     shoulderOffset: 0.75,
     pivotHeight: 1.6,
-    /** First-person eye height. */
-    fpHeight: 1.55,
+    /** ADS framing: the shoulder cam pulls in and recentres over the
+     *  shoulder rather than going first-person. */
+    adsDistance: 2.2,
+    adsShoulderOffset: 0.5,
+    /** Eye height — bot line-of-sight checks against the player use this. */
+    eyeHeight: 1.55,
     fovHip: 0.95,
     fovAds: 0.62,
-    /** How fast the third<->first person blend converges (per second). */
+    /** How fast the hip<->ADS blend converges (per second). */
     adsBlendSpeed: 10,
     pitchMin: -0.95,
     pitchMax: 1.25,
@@ -269,19 +273,6 @@ export const CONFIG = {
     rotateHipSpeed: 0.45,
     /** Vertical pull scales by this — gentler than horizontal tracking. */
     verticalMult: 0.7,
-  },
-
-  /** First-person rifle shown while aiming down sights (camera-local units). */
-  viewmodel: {
-    /** Distance from the eye to the holo sight window when fully aimed. */
-    adsSightDistance: 0.52,
-    /** Lowered ready pose the rifle raises from during the ADS transition. */
-    hipPos: [0.18, -0.3, 0.5],
-    hipRot: [0.12, -0.14, 0.08],
-    /** Recoil kick: recovery time (s), rearward slide (m), pitch (rad). */
-    kickTime: 0.09,
-    kickBack: 0.035,
-    kickPitch: 0.05,
   },
 
   input: {

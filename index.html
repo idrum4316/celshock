@@ -277,8 +277,9 @@
         transform: translate(-50%, -50%);
         transition: opacity 0.1s;
       }
-      /* Hidden while aiming down sights — the holographic reticle takes over. */
-      #crosshair.ads { opacity: 0; }
+      /* ADS never leaves third person, so the crosshair stays — the ring
+         just tightens to read as "braced". */
+      #crosshair.ads .ring { width: 16px; height: 16px; }
       #crosshair .dot {
         width: 4px;
         height: 4px;
