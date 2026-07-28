@@ -157,6 +157,17 @@ One **flow field per objective** (five flags plus both home spawns) is computed
 at load, so all 32 bots share seven breadth-first searches instead of running
 their own pathfinding. The map is static, so none of it is ever recomputed.
 
+The grid routes; it does not collide. It samples one column per 1.5 m cell
+*centre*, so anything narrower than a cell — every scattered tree, gravestone
+and fire drum — can sit between two centres and be invisible to it, and bots
+walked straight into props and stood inside them. `ObstacleField` covers that
+gap: collider boxes are bucketed at load, and each step is pushed clear of
+whatever it overlaps before the grid is asked whether the spot is standable.
+Steps also slide along a blocked axis rather than failing outright, and a
+watchdog sidesteps a bot that stops making progress. Bots being embedded in
+geometry was never only cosmetic — `CombatSystem` stops every shot at the first
+`solid` hit, so a bot inside a tree had the tree soaking up rounds aimed at it.
+
 ### Bots
 
 Thirty-two bots, from a pool built once and never disposed — death hides a rig,

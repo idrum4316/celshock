@@ -25,6 +25,12 @@ export interface BattleCtx {
   fieldFor(bot: Bot): FlowField | null;
   /** Push-apart from nearby friendlies, written into `out`. */
   separation(bot: Bot, out: Vector3): void;
+  /**
+   * Pushes a body at `(x, y, z)` out of any collider it overlaps, writing the
+   * result into `out`. Returns false, leaving `out` set to the input, when the
+   * spot was already clear.
+   */
+  clearObstacles(x: number, y: number, z: number, out: Vector3): boolean;
 }
 
 // Module-scope scratch vectors. AI runs 32 times a frame and allocating a
@@ -32,6 +38,7 @@ export interface BattleCtx {
 const _dir = new Vector3();
 const _sep = new Vector3();
 const _to = new Vector3();
+const _spot = new Vector3();
 
 export class Bot implements Combatant {
   readonly team: Team;
@@ -66,6 +73,16 @@ export class Bot implements Combatant {
   private strafeT = 0;
   /** Set when the bot has recently been hit; drives `reposition`. */
   private pressure = 0;
+  /** How long the bot has been trying to move without getting anywhere. */
+  private stuckT = 0;
+  /** Seconds left of the sidestep the watchdog triggered. */
+  private detourT = 0;
+  /** Which way round the obstruction that sidestep goes. */
+  private detourSide = 1;
+  /** Sidesteps taken since the bot last actually got somewhere. */
+  private stuckStreak = 0;
+  /** While positive, the bot may clip geometry to get out of a pinch. */
+  private squeezeT = 0;
 
   constructor(
     scene: Scene,
@@ -92,6 +109,10 @@ export class Bot implements Combatant {
     this.pressure = 0;
     this.burstLeft = CONFIG.bots.burstSize;
     this.fireCooldown = 0;
+    this.stuckT = 0;
+    this.detourT = 0;
+    this.stuckStreak = 0;
+    this.squeezeT = 0;
     this.syncTransform();
     this.setEnabled(true);
   }
@@ -142,6 +163,7 @@ export class Bot implements Combatant {
 
     const b = CONFIG.bots;
     this.pressure = Math.max(0, this.pressure - dt * 0.5);
+    this.squeezeT = Math.max(0, this.squeezeT - dt);
     this.strafeT -= dt;
     if (this.strafeT <= 0) {
       this.strafeT = 0.8 + Math.random() * 1.6;
@@ -191,24 +213,54 @@ export class Bot implements Combatant {
 
     ctx.separation(this, _sep);
     _dir.addInPlace(_sep);
+
+    if (this.detourT > 0) {
+      // Watchdog sidestep: swing the intent round to the detour side so the bot
+      // walks *along* whatever it is grinding on. Keeping a third of the
+      // original heading means it still drifts the right way while it does.
+      this.detourT -= dt;
+      const tx = -_dir.z * this.detourSide;
+      const tz = _dir.x * this.detourSide;
+      _dir.set(_dir.x * 0.3 + tx, 0, _dir.z * 0.3 + tz);
+    }
+
+    // De-penetrate before anything else: a bot that ended up inside a collider
+    // — spawned on a prop, shoved there by separation — has to get out even
+    // when it is standing still, or it is left unshootable.
+    this.stepTo(ctx, 0, 0);
+
     const len = Math.hypot(_dir.x, _dir.z);
     if (len > 1e-4) {
       const step = (speed * dt) / len;
-      const nx = this.position.x + _dir.x * step;
-      const nz = this.position.z + _dir.z * step;
-      // Bots move on the nav graph rather than through Babylon's collider:
-      // 32 agents calling moveWithCollisions would walk the whole collidable
-      // mesh list 32 times a frame. A cell being walkable *is* the collision
-      // test, and it already accounts for headroom and step height.
-      const surface = ctx.nav.surfaceAt(nx, this.position.y, nz);
-      if (surface >= 0) {
-        this.position.x = nx;
-        this.position.z = nz;
-        this.position.y = ctx.nav.heightOf(surface);
+      const fromX = this.position.x;
+      const fromZ = this.position.z;
+      this.tryMove(ctx, _dir.x * step, _dir.z * step);
+
+      // A bot that asked to move and barely did is grinding on something.
+      const covered = Math.hypot(this.position.x - fromX, this.position.z - fromZ);
+      if (covered < speed * dt * b.stuckFraction) {
+        this.stuckT += dt;
+        if (this.stuckT > b.stuckTime && this.detourT <= 0) {
+          this.stuckT = 0;
+          this.detourT = b.detourTime;
+          this.detourSide = this.pickDetourSide(ctx, _dir.x / len, _dir.z / len);
+          // Sidestepping twice with nothing to show for it means the bot is
+          // wedged somewhere narrower than its own body — a gate post, a gap
+          // between two props — where the push-out cancels every step it
+          // takes. Let it clip through: overlapping geometry for a second is
+          // the lesser evil against standing there for the rest of the round.
+          if (++this.stuckStreak >= 2) this.squeezeT = b.detourTime;
+        }
+      } else {
+        this.stuckT = 0;
+        this.stuckStreak = 0;
       }
+
       this.walkPhase += (speed * dt) / 0.9;
       this.moveBlend = Math.min(1, this.moveBlend + dt * 6);
     } else {
+      this.stuckT = 0;
+      this.stuckStreak = 0;
       this.moveBlend = Math.max(0, this.moveBlend - dt * 6);
     }
 
@@ -228,6 +280,96 @@ export class Bot implements Combatant {
     if (animate) {
       animateSoldier(this.rig, this.walkPhase, this.moveBlend, this.aimPitch(), 0);
     }
+  }
+
+  /**
+   * Which way to sidestep round whatever the bot is grinding on: it probes a
+   * body's length along each tangent and takes the more open one.
+   *
+   * Picking by probe rather than by coin flip is what stops the watchdog
+   * oscillating. Each detour is short and re-triggers as soon as the bot faces
+   * the obstruction again, so a side chosen at random alternates left/right
+   * against a long wall and the bot stays exactly where it is. The probe scores
+   * the same side every time, and consecutive detours add up into a walk around
+   * the building.
+   */
+  private pickDetourSide(ctx: BattleCtx, dirX: number, dirZ: number): number {
+    const probe = CONFIG.bots.detourProbe;
+    let bestSide = this.detourSide;
+    let bestScore = -Infinity;
+    for (const side of [1, -1]) {
+      const px = this.position.x - dirZ * side * probe;
+      const pz = this.position.z + dirX * side * probe;
+      const surface = ctx.nav.surfaceAt(px, this.position.y, pz);
+      if (surface < 0) continue;
+      if (Math.abs(ctx.nav.heightOf(surface) - this.position.y) > CONFIG.nav.stepHeight) {
+        continue;
+      }
+      // How far the push-out has to shove the probe back is how blocked that
+      // side is; an untouched probe scores zero, the best possible.
+      ctx.clearObstacles(px, this.position.y, pz, _spot);
+      const score = -Math.hypot(_spot.x - px, _spot.z - pz);
+      // Ties keep the current side, so an ongoing detour doesn't reverse.
+      if (score > bestScore + 1e-3 || (side === this.detourSide && score >= bestScore)) {
+        bestScore = score;
+        bestSide = side;
+      }
+    }
+    return bestSide;
+  }
+
+  /**
+   * A step with wall sliding. Head-on is tried first, then each axis alone, so
+   * a bot pressed into a wall walks along it instead of standing there. The old
+   * all-or-nothing test is what made bots visibly hang on corners: `engage` and
+   * `capture` steer straight at a target rather than along the flow field, so
+   * walking into geometry is the normal case, not the exception.
+   */
+  private tryMove(ctx: BattleCtx, dx: number, dz: number): boolean {
+    if (this.stepTo(ctx, dx, dz)) return true;
+    if (Math.abs(dx) > 1e-5 && this.stepTo(ctx, dx, 0)) return true;
+    if (Math.abs(dz) > 1e-5 && this.stepTo(ctx, 0, dz)) return true;
+    return false;
+  }
+
+  /**
+   * Moves by `(dx, dz)` if the destination is somewhere a body can stand.
+   *
+   * Bots move on the nav graph rather than through Babylon's collider: 32
+   * agents calling `moveWithCollisions` would walk the whole collidable mesh
+   * list 32 times a frame. But the grid only samples cell centres, so the
+   * destination is also pushed clear of any collider it overlaps — most of the
+   * map's props are narrower than a cell and are otherwise invisible to
+   * navigation entirely.
+   *
+   * The push-out is a preference, not a veto: where the clear spot is somewhere
+   * the graph won't allow, the bot takes the overlapping one instead. Standing
+   * half in a wall is bad, but being frozen where the old code could walk is
+   * worse, and it is the failure the player reads as a broken bot.
+   */
+  private stepTo(ctx: BattleCtx, dx: number, dz: number): boolean {
+    const tx = this.position.x + dx;
+    const tz = this.position.z + dz;
+    if (this.squeezeT > 0) return this.settle(ctx, tx, tz);
+    if (
+      ctx.clearObstacles(tx, this.position.y, tz, _spot) &&
+      this.settle(ctx, _spot.x, _spot.z)
+    ) {
+      return true;
+    }
+    return this.settle(ctx, tx, tz);
+  }
+
+  /** Stands at `(x, z)` if the nav graph has a surface there within a step. */
+  private settle(ctx: BattleCtx, x: number, z: number): boolean {
+    const surface = ctx.nav.surfaceAt(x, this.position.y, z);
+    if (surface < 0) return false;
+    // The graph only links surfaces within a step of each other; hold the same
+    // rule here or a bot can drop off the bridge into the creek in one frame.
+    const height = ctx.nav.heightOf(surface);
+    if (Math.abs(height - this.position.y) > CONFIG.nav.stepHeight) return false;
+    this.position.set(x, height, z);
+    return true;
   }
 
   /** Burst fire, gated by reaction time and a per-burst pause. */

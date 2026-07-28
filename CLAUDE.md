@@ -179,6 +179,27 @@ never run their own pathfinding.
 collision test, and it already accounts for headroom and step height; 32 agents
 walking the collidable mesh list every frame would not be affordable.
 
+**The grid is too coarse to be the whole collision test, though.** It samples
+one column per cell *centre*, so a collider narrower than 1.5 m — every
+scattered tree (1.1 m), gravestone, and fire drum — can sit between centres and
+leave every cell around it walkable. `ObstacleField` (`world/ObstacleField.ts`)
+is the sub-cell half: collider boxes bucketed at load, queried per step to push
+a body clear of anything it overlaps. `Bot.stepTo` consults it, then asks the
+grid; `Bot.tryMove` retries each axis alone so a blocked step slides instead of
+freezing. Two rules keep the push-out from causing the problem it fixes:
+
+- It is a *preference*, never a veto — if the pushed-clear spot is somewhere the
+  graph rejects, the bot takes the overlapping one. Frozen is worse than
+  clipping.
+- Two fruitless sidesteps in a row set `squeezeT`, which drops the push-out
+  entirely for a second, so a bot wedged in a gap narrower than its own body
+  gets out instead of standing there for the rest of the round.
+
+This is why bots being stuck in props also made them unshootable:
+`CombatSystem.fire` caps a shot at the first `solid` hit and only counts a
+target sphere closer than that, so the prop ate every round aimed at the body
+inside it. The two symptoms are one bug.
+
 ### Bot scaling
 
 Three things carry the frame budget, and undoing any of them costs ~10× draw

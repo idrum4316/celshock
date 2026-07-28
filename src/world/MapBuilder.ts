@@ -6,6 +6,7 @@ import { BUILDERS, type BoxSpec, type Structure } from "./BuildingKit";
 import { HollowmereEnvironment } from "./hollowmere/environment";
 import { HollowmereLayout, type ScatterSpec } from "./hollowmere/layout";
 import { NavGrid } from "./NavGrid";
+import { ObstacleField } from "./ObstacleField";
 import {
   buildDeadTree,
   buildFireDrum,
@@ -77,6 +78,8 @@ export interface GameMap {
   visuals: Mesh[];
   /** Walkable-surface graph with one precomputed flow field per objective. */
   nav: NavGrid;
+  /** Sub-cell collision the nav grid is too coarse to express. */
+  obstacles: ObstacleField;
   /** Shallow-water bodies from the layout; empty when the map is dry. */
   water: WaterRect[];
   dispose(): void;
@@ -208,6 +211,7 @@ export class MapBuilder {
     return {
       size,
       nav,
+      obstacles: new ObstacleField(size, this.boxes),
       controlPoints: layout.controlPoints,
       spawns: layout.spawns,
       colliders,

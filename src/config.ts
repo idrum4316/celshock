@@ -80,6 +80,20 @@ export const CONFIG = {
     minEngageRange: 6,
     /** Separation distance for the crowd-avoidance pass. */
     separation: 1.5,
+    /**
+     * Unstick watchdog. A bot that wants to move but covers less than
+     * `stuckFraction` of its intended step for `stuckTime` seconds is grinding
+     * on something its flow field cannot see — a scattered tree, a squadmate
+     * pinning it to a wall — so it sidesteps for `detourTime` before trying the
+     * direct line again. Without this a bot whose objective lies dead behind a
+     * tree trunk pushes into the trunk forever: the push-out is exactly
+     * opposite its steering, so there is no tangential motion to break the tie.
+     */
+    stuckTime: 0.5,
+    stuckFraction: 0.35,
+    detourTime: 1.0,
+    /** How far to the side the watchdog looks when choosing a way round. */
+    detourProbe: 1.6,
     /** Distance past which the pose is frozen (still translates). */
     lodFreezeDistance: 35,
     /** Distance past which outlines are dropped. */
@@ -90,8 +104,13 @@ export const CONFIG = {
   nav: {
     /** Cell size in metres. 1.5 over a 240 m map gives a 160x160 grid. */
     cellSize: 1.5,
-    /** Cells within this distance of a collider are marked unwalkable. */
-    clearance: 0.5,
+    /**
+     * Half-width of a bot's body, used by `ObstacleField` to hold it off
+     * collider faces. The rig's shoulders span ~0.35 m either side, so this is
+     * a body plus a little air. Raising it past ~0.7 makes the narrowest
+     * authored doorway (1.6 m, the cottages) impassable.
+     */
+    bodyRadius: 0.4,
     /** Max step-up a bot can walk over without a ramp. */
     stepHeight: 0.6,
   },

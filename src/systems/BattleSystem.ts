@@ -5,6 +5,7 @@ import { OTHER_TEAM, type Combatant, type Team } from "../entities/Combatant";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { FlowField, NavGrid } from "../world/NavGrid";
 import type { GameMap } from "../world/MapBuilder";
+import type { ObstacleField } from "../world/ObstacleField";
 import type { CombatSystem, Hittable } from "./CombatSystem";
 
 /**
@@ -47,6 +48,7 @@ export class BattleSystem {
   inCaptureZone: (bot: Bot) => boolean = () => false;
 
   private nav: NavGrid | null = null;
+  private obstacles: ObstacleField | null = null;
   private player: Combatant | null = null;
   private thinkCursor = 0;
   /** Carried across frames so a fractional think budget isn't lost. */
@@ -89,11 +91,16 @@ export class BattleSystem {
       fire: (bot, target, spread) => this.botFire(bot, target, spread),
       fieldFor: (bot) => this.fieldFor(bot),
       separation: (bot, out) => this.separation(bot, out),
+      clearObstacles: (x, y, z, out) =>
+        this.obstacles
+          ? this.obstacles.resolve(x, y, z, CONFIG.nav.bodyRadius, out)
+          : (out.set(x, y, z), false),
     };
   }
 
   setMap(map: GameMap): void {
     this.nav = map.nav;
+    this.obstacles = map.obstacles;
   }
 
   setPlayer(player: Combatant): void {
