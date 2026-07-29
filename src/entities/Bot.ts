@@ -174,7 +174,10 @@ export class Bot implements Combatant {
   update(dt: number, ctx: BattleCtx, animate: boolean): void {
     if (this.state === "dead") {
       this.deadT += dt;
-      if (animate) animateSoldier(this.rig, 0, 0, 0, Math.min(1, this.deadT / 0.7));
+      // The collapse tween ignores the pose-freeze LOD: it is five property
+      // writes, and a corpse that holds its mid-stride pose past
+      // lodFreezeDistance and then vanishes reads as a pop, not a death.
+      animateSoldier(this.rig, 0, 0, 0, Math.min(1, this.deadT / 0.7));
       if (this.deadT > 0.9) this.setEnabled(false);
       this.respawnT -= dt;
       return;
