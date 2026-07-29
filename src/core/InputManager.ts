@@ -34,7 +34,10 @@ export class InputManager {
   fire = false;
   jumpPressed = false;
   reloadPressed = false;
-  /** Held. Hollowmere is 240 m across; sprint is traversal, not a perk. */
+  /**
+   * Keyboard: held Shift. Gamepad: L3 toggles — holding a stick click for a
+   * 240 m crossing is miserable, so the pad latches instead.
+   */
   sprint = false;
   /** Held: show the scoreboard. */
   scoreboard = false;
@@ -64,6 +67,9 @@ export class InputManager {
   private prevJump = false;
   private prevReload = false;
   private prevConfirm = false;
+  private prevPadSprint = false;
+  /** Latched L3 sprint state — toggled on each L3 press, cleared on blur. */
+  private padSprintOn = false;
 
   constructor(canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", (e) => {
@@ -76,6 +82,7 @@ export class InputManager {
       this.keys.clear();
       this.pointerMask = 0;
       this.mouseMask = 0;
+      this.padSprintOn = false;
     });
 
     // Button state is read from `buttons` bitmasks (not individual
@@ -171,8 +178,13 @@ export class InputManager {
     this.ads = (buttons & 2) !== 0 || padAds;
     this.fire = (buttons & 1) !== 0 || padFire;
 
+    // L3 toggles sprint rather than holding it — a stick click is fatiguing
+    // to hold, and sprint here is traversal, not a burst.
+    if (padSprint && !this.prevPadSprint) this.padSprintOn = !this.padSprintOn;
+    this.prevPadSprint = padSprint;
+
     this.sprint =
-      this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || padSprint;
+      this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.padSprintOn;
     // Back / View button (6 on the standard mapping is LT, 8 is Back).
     this.scoreboard = this.keys.has("Tab") || (pad ? buttonHeld(pad, 8, trig) : false);
 
