@@ -127,6 +127,12 @@ export class Bot implements Combatant {
     this.stuckStreak = 0;
     this.squeezeT = 0;
     this.syncTransform();
+    // Re-pose to idle. The pooled rig may still hold the death collapse
+    // (pitched forward, sunk 0.7 m), and animateSoldier only runs inside
+    // CONFIG.bots.lodFreezeDistance — without this a bot respawning beyond
+    // it walks around buried to the helmet until the player closes in and
+    // the pose unfreezes (the "submarine" pop-up).
+    animateSoldier(this.rig, 0, 0, 0, 0);
     this.setEnabled(true);
   }
 
