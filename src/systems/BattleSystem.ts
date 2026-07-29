@@ -137,6 +137,13 @@ export class BattleSystem {
     for (const bot of this.bots) {
       if (bot.alive && bot.team !== team) out.push(bot);
     }
+    // The player must be hittable too — acquire() aims bots at them, so
+    // leaving them out here makes enemy shots fly through the player. The
+    // team check keeps the player out of their own shot's target list
+    // (Game passes player.team for player fire and aim assist).
+    if (this.player && this.player.alive && this.player.team !== team) {
+      out.push(this.player);
+    }
     return out;
   }
 
