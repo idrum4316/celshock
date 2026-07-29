@@ -2,7 +2,8 @@
  * GlbSoldier.ts — The player's body: the ONE imported asset in the game
  * (models/*.glb, added by explicit request). Owns asset loading/material
  * swap and the procedural per-frame bone overlay (stance, aim pitch,
- * two-handed rifle carry, reload, rifle follow) applied after animations.
+ * lower/upper-body strafe split, velocity lean, jump tuck, two-handed rifle
+ * carry, phased reload, rifle follow) applied after animations.
  * Split across soldier/: tuning.ts (constants + SoldierPoseParams),
  * matrixKit.ts (WorldChain + why-matrices rationale), stance.ts (idle pose),
  * clipDriver.ts (locomotion clips). The overlay pipeline below stays in one
@@ -32,14 +33,33 @@ import { addOutline, CelMaterialFactory } from "../shaders/CelShader";
 import type { RifleParts } from "./RifleModel";
 import glbUrl from "../../models/Meshy_AI_A_modern_soldier_with_biped_Meshy_AI_Meshy_Merged_Animations.glb?url";
 import {
+  AIR_BASE_KNEE,
+  AIR_BASE_THIGH,
+  AIR_REACH_KNEE,
+  AIR_REACH_THIGH,
+  AIR_TUCK_KNEE,
+  AIR_TUCK_THIGH,
   ARM_PITCH_FOLLOW,
+  BACKPEDAL_LEAN,
   CARRY,
   FACE_YAW,
   HANDGUARD_FORWARD,
+  HEAD_GLANCE,
+  HIP_YAW_COUNTER,
+  HIP_YAW_MAX,
+  MAG_DOWN,
+  MAG_FORWARD,
   MODEL_SCALE,
   RELOAD_ARM_DROP,
+  RELOAD_MAG_IN,
+  RELOAD_MAG_OUT,
   RELOAD_RIFLE_DROP,
+  RELOAD_SEAT,
   RIFLE_OFFSET,
+  SPRINT_LEAN,
+  STRAFE_ROLL,
+  TURN_SWAY,
+  TURN_SWAY_MAX,
   type SoldierPoseParams,
 } from "./soldier/tuning";
 import { WorldChain, orthonormalizeRows, type ChainNode } from "./soldier/matrixKit";
@@ -83,6 +103,13 @@ const tmpV2 = new Vector3();
 const tmpV3 = new Vector3();
 const tmpScale = new Vector3();
 
+const clamp = (v: number, lo: number, hi: number) =>
+  Math.min(hi, Math.max(lo, v));
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
 export class GlbSoldier {
   /** Parent this under the player capsule; it carries scale/yaw/feet offset. */
   readonly root: TransformNode;
@@ -110,6 +137,11 @@ export class GlbSoldier {
   private armL: TransformNode | null = null;
   private foreL: TransformNode | null = null;
   private handL: TransformNode | null = null;
+  // Leg joints: owned by the clips on the ground, posed procedurally in air.
+  private upLegL: TransformNode | null = null;
+  private upLegR: TransformNode | null = null;
+  private legL: TransformNode | null = null;
+  private legR: TransformNode | null = null;
 
   /** Averaged mid-stride pose from the Walking clip, used as the idle stance. */
   private readonly stance = new Map<TransformNode, Quaternion>();
@@ -124,7 +156,16 @@ export class GlbSoldier {
     aimPitch: 0,
     kick: 0,
     idleT: 0,
+    localVelX: 0,
+    localVelZ: 0,
+    velY: 0,
+    reloadPhase: 1,
+    sprintBlend: 0,
+    turnRate: 0,
   };
+
+  /** Smoothed hips yaw for the lower/upper-body strafe split (rad). */
+  private hipsYaw = 0;
 
   /** Per-render world-matrix memo + child registry (see matrixKit). */
   private readonly chain = new WorldChain();
@@ -192,6 +233,10 @@ export class GlbSoldier {
     rig.armL = joint("LeftArm");
     rig.foreL = joint("LeftForeArm");
     rig.handL = joint("LeftHand");
+    rig.upLegL = joint("LeftUpLeg");
+    rig.upLegR = joint("RightUpLeg");
+    rig.legL = joint("LeftLeg");
+    rig.legR = joint("RightLeg");
     for (const node of rig.joints.values()) {
       rig.chain.register(node);
     }
@@ -243,8 +288,9 @@ export class GlbSoldier {
     const dt = Math.min(this.scene.getEngine().getDeltaTime() / 1000, 0.05);
     const p = this.params;
 
-    this.clips?.update(dt, p.groundSpeed, p.airBlend);
+    this.clips?.update(dt, p.groundSpeed, p.localVelZ, p.airBlend);
     const idleW = this.clips?.idleW ?? 1;
+    const moveW = 1 - idleW;
 
     // Current-frame capsule transform: Player.update just wrote position/yaw
     // and the render loop hasn't recomputed matrices yet.
@@ -256,8 +302,9 @@ export class GlbSoldier {
       this.chain.seed(capsule, capsule.computeWorldMatrix(true));
     }
 
-    // 1. Idle/airborne stance on the joints the clips own when moving.
-    const stanceW = Math.max(idleW, p.airBlend * 0.55);
+    // 1. Idle/airborne stance on the joints the clips own when moving. The
+    // airborne weight is FULL: the air pose below owns the legs outright.
+    const stanceW = Math.max(idleW, p.airBlend);
     if (stanceW > 0.001) {
       for (const [j, q] of this.stance) {
         if (j === this.armR || j === this.armL || j === this.foreR || j === this.foreL) continue;
@@ -272,20 +319,71 @@ export class GlbSoldier {
       }
     }
 
-    // 2. Aim pitch distributed over the spine (+ breath sway at idle), then head.
+    // 1b. Idle weight shift: a slow hip sway so standing still isn't a statue.
+    if (this.hips && this.stanceHipsPos && idleW > 0.01) {
+      this.hips.position.x +=
+        this.stanceHipsPos.y * 0.02 * Math.sin(p.idleT * 0.45) * idleW;
+      this.chain.invalidate(this.hips);
+    }
+
+    // 1c. Lower/upper-body split: hips yaw toward the velocity direction
+    // (clamped) so a strafe walks sideways instead of gliding; the spine
+    // counter-rotates in step 2 to keep the torso and rifle on the camera.
+    const up = Vector3.UpReadOnly;
+    let hipsYawTarget = 0;
+    if (moveW > 0.01 && p.airBlend < 0.5) {
+      const lat = p.localVelX;
+      const fwdAbs = Math.abs(p.localVelZ);
+      if (lat * lat + fwdAbs * fwdAbs > 0.09) {
+        hipsYawTarget =
+          clamp(Math.atan2(lat, fwdAbs), -HIP_YAW_MAX, HIP_YAW_MAX) *
+          moveW *
+          (1 - p.airBlend);
+      }
+    }
+    this.hipsYaw += (hipsYawTarget - this.hipsYaw) * Math.min(1, dt * 7);
+    if (this.hips) this.worldDelta(this.hips, up, this.hipsYaw);
+
+    // 2. Aim pitch distributed over the spine, plus the velocity lean
+    // (sprint tips forward, backpedal leans back), the strafe roll, the
+    // torso's follow-through behind camera turns, and the counter-yaw that
+    // cancels 1c above the waist. The head glances down at the mag swap.
     const right = this.charRight();
+    const fwd = this.charForward();
     const breath = 0.02 * Math.sin(p.idleT * 2.1) * idleW;
     const pitch = -p.aimPitch;
-    if (this.spine) this.worldDelta(this.spine, right, pitch * 0.1);
-    if (this.spine1) this.worldDelta(this.spine1, right, pitch * 0.15);
+    const backW = clamp(-p.localVelZ / 3.5, 0, 1) * moveW;
+    const lean = SPRINT_LEAN * p.sprintBlend - BACKPEDAL_LEAN * backW;
+    const roll =
+      -STRAFE_ROLL *
+      clamp(p.localVelX / CONFIG.player.moveSpeed, -1, 1) *
+      moveW *
+      (1 - p.airBlend);
+    const sway =
+      clamp(-p.turnRate * TURN_SWAY, -TURN_SWAY_MAX, TURN_SWAY_MAX) *
+      (1 - p.airBlend);
+    const magW = this.magWindowW(p);
+    if (this.spine) {
+      this.worldDelta(this.spine, right, pitch * 0.1);
+      this.worldDelta(this.spine, up, -this.hipsYaw * HIP_YAW_COUNTER.spine);
+    }
+    if (this.spine1) {
+      this.worldDelta(this.spine1, right, pitch * 0.15 + lean * 0.4);
+      this.worldDelta(this.spine1, up, -this.hipsYaw * HIP_YAW_COUNTER.spine1);
+      this.worldDelta(this.spine1, fwd, roll * 0.5);
+    }
     if (this.spine2) {
       this.worldDelta(
         this.spine2,
         right,
-        pitch * 0.2 + breath + 0.22 * p.reloadBlend,
+        pitch * 0.2 + breath + 0.22 * p.reloadBlend + lean * 0.6,
       );
+      this.worldDelta(this.spine2, up, -this.hipsYaw * HIP_YAW_COUNTER.spine2 + sway);
+      this.worldDelta(this.spine2, fwd, roll * 0.5);
     }
-    if (this.head) this.worldDelta(this.head, right, pitch * 0.3);
+    if (this.head) {
+      this.worldDelta(this.head, right, pitch * 0.3 + HEAD_GLANCE * magW);
+    }
 
     // 3. Two-handed rifle carry (full override of the clips' arm swing).
     this.poseArm(this.armR, this.foreR, CARRY.upperR, CARRY.lowerR, p);
@@ -298,6 +396,27 @@ export class GlbSoldier {
     const charRot = this.charRotationMatrix();
     this.pinHand(this.handR, "calR", handAngle, charRot);
     this.pinHand(this.handL, "calL", handAngle, charRot);
+
+    // 3c. Airborne legs: knees tuck on the rise, reach for the ground on the
+    // fall, with a small base crouch so the apex isn't a statue. The stance
+    // (full weight while airborne) already neutralised the clip stride, so
+    // these deltas pose from mid-stride. Angles are about the character's
+    // right axis: negative swings a leg forward, positive swings it back.
+    const airW = p.airBlend;
+    if (airW > 0.01) {
+      const jv = CONFIG.player.jumpVelocity;
+      const rise = clamp(p.velY / jv, 0, 1);
+      const fall = clamp(-p.velY / jv, 0, 1);
+      const thigh =
+        (AIR_REACH_THIGH * fall - AIR_TUCK_THIGH * rise - AIR_BASE_THIGH) * airW;
+      const knee =
+        (AIR_TUCK_KNEE * rise - AIR_REACH_KNEE * fall + AIR_BASE_KNEE) * airW;
+      // A touch of asymmetry keeps the tuck from looking mirrored.
+      if (this.upLegL) this.worldDelta(this.upLegL, right, thigh);
+      if (this.upLegR) this.worldDelta(this.upLegR, right, thigh * 0.65 - 0.08 * airW);
+      if (this.legL) this.worldDelta(this.legL, right, knee);
+      if (this.legR) this.worldDelta(this.legR, right, knee * 0.8);
+    }
 
     // 4. Rifle follows the (final) right hand.
     this.followRifle(p);
@@ -345,9 +464,11 @@ export class GlbSoldier {
 
     if (isLeft) {
       // Support hand holds the handguard: aim the forearm at the guard point
-      // of this frame's rifle pose (right hand is already final). Blends
-      // toward the constant drop direction while reloading. The guard lookup
-      // clobbers the shared temps, so the drop direction is kept aside.
+      // of this frame's rifle pose (right hand is already final). Mid-reload
+      // it leaves the guard for the magazine well (magW); the constant drop
+      // direction remains the base whenever no precise target applies. The
+      // point lookups allocate rather than clobber the shared temps, so the
+      // drop direction is kept aside across them.
       this.aimDrop.copyFrom(tmpV2);
       const lowerChild = this.chain.childOf(lower);
       if (lowerChild && p.reloadBlend < 0.999) {
@@ -360,7 +481,23 @@ export class GlbSoldier {
           tmpV3.copyFrom(guard).subtractInPlace(elbow);
           if (tmpV3.lengthSquared() > 1e-8) {
             tmpV3.normalize();
-            Vector3.LerpToRef(tmpV3, this.aimDrop, p.reloadBlend, tmpV3);
+            const magW = this.magWindowW(p);
+            if (magW > 0.001) {
+              const mag = this.magPoint(p);
+              if (mag) {
+                const magDir = mag.subtractInPlace(elbow);
+                if (magDir.lengthSquared() > 1e-8) {
+                  Vector3.LerpToRef(tmpV3, magDir.normalize(), magW, tmpV3);
+                  tmpV3.normalize();
+                }
+              }
+            }
+            Vector3.LerpToRef(
+              tmpV3,
+              this.aimDrop,
+              p.reloadBlend * (1 - magW),
+              tmpV3,
+            );
             tmpV3.normalize();
             this.aimJoint(lower, lowerChild, tmpV3, 1);
             return;
@@ -413,6 +550,48 @@ export class GlbSoldier {
       a[12] + (a[8] / len) * HANDGUARD_FORWARD,
       a[13] + (a[9] / len) * HANDGUARD_FORWARD,
       a[14] + (a[10] / len) * HANDGUARD_FORWARD,
+    );
+  }
+
+  /**
+   * Support-hand-to-magazine weight over the reload cycle: ramps in as the
+   * hand leaves the handguard, holds through the swap, ramps out on the way
+   * back. Zero unless a reload is actually in flight.
+   */
+  private magWindowW(p: SoldierPoseParams): number {
+    if (p.reloadBlend < 0.01) return 0;
+    const ph = p.reloadPhase;
+    return (
+      p.reloadBlend *
+      smoothstep(RELOAD_MAG_IN[0], RELOAD_MAG_IN[1], ph) *
+      (1 - smoothstep(RELOAD_MAG_OUT[0], RELOAD_MAG_OUT[1], ph))
+    );
+  }
+
+  /** Brief weight for the mag-seat wiggle near the end of the swap. */
+  private seatW(phase: number): number {
+    return (
+      smoothstep(RELOAD_SEAT[0], RELOAD_SEAT[0] + 0.06, phase) *
+      (1 - smoothstep(RELOAD_SEAT[1] - 0.06, RELOAD_SEAT[1], phase))
+    );
+  }
+
+  /**
+   * World position of the magazine well (the reload support-hand target),
+   * from the rifle target — the tipped-down rifle while reloading, so the
+   * hand tracks it. Includes the small seat wiggle.
+   */
+  private magPoint(p: SoldierPoseParams): Vector3 | null {
+    const m = this.rifleWorldTarget(p);
+    if (!m) return null;
+    const a = m.m;
+    const zLen = Math.hypot(a[8], a[9], a[10]) || 1;
+    const yLen = Math.hypot(a[4], a[5], a[6]) || 1;
+    const jiggle = Math.sin(p.reloadPhase * 26) * 0.015 * this.seatW(p.reloadPhase);
+    return new Vector3(
+      a[12] + (a[8] / zLen) * MAG_FORWARD - (a[4] / yLen) * MAG_DOWN,
+      a[13] + (a[9] / zLen) * MAG_FORWARD - (a[5] / yLen) * MAG_DOWN + jiggle,
+      a[14] + (a[10] / zLen) * MAG_FORWARD - (a[6] / yLen) * MAG_DOWN,
     );
   }
 

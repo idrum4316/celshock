@@ -67,6 +67,13 @@ export class Player implements Combatant {
   private airBlend = 0;
   private reloadBlend = 0;
   private idleT = 0;
+  /** Smoothed character-space velocity (m/s): strafe/backpedal/lean drives. */
+  private localVelX = 0;
+  private localVelZ = 0;
+  private sprintBlend = 0;
+  /** Smoothed camera yaw rate (rad/s): torso follow-through lag. */
+  private turnRate = 0;
+  private prevYaw = 0;
 
   health: number = CONFIG.player.maxHealth;
   alive = true;
@@ -234,6 +241,11 @@ export class Player implements Combatant {
     if (move.lengthSquared() > 0.0001) {
       this.root.moveWithCollisions(move.scale(speed * dt));
     }
+    // Intended velocity in character space (+x right, +z forward): the pose
+    // overlay's strafe/backpedal/lean signals. The body always faces the
+    // camera yaw, so camera-relative is character-relative.
+    const velX = move.dot(cam.flatRight) * speed;
+    const velZ = move.dot(cam.flatForward) * speed;
 
     // --- jump & gravity, against whatever surface is actually underfoot ---
     if (input.jumpPressed && this.grounded) {
@@ -285,7 +297,7 @@ export class Player implements Combatant {
     }
 
     this.syncCombatant();
-    this.animate(dt, moveInput, speed, cam);
+    this.animate(dt, moveInput, speed, velX, velZ, cam);
     return jumped;
   }
 
@@ -298,6 +310,8 @@ export class Player implements Combatant {
     dt: number,
     moveInput: number,
     speed: number,
+    velX: number,
+    velZ: number,
     cam: CameraSystem,
   ): void {
     this.idleT += dt;
@@ -308,6 +322,17 @@ export class Player implements Combatant {
     this.moveBlend = ease(this.moveBlend, moveInput, 10);
     this.airBlend = ease(this.airBlend, this.grounded ? 0 : 1, 9);
     this.reloadBlend = ease(this.reloadBlend, this.reloading ? 1 : 0, 12);
+    this.sprintBlend = ease(this.sprintBlend, this.sprinting ? 1 : 0, 6);
+    // Character-space velocity eases toward intent: the smoothing lag is
+    // what makes the torso lean chase the movement instead of snapping.
+    this.localVelX = ease(this.localVelX, velX, 12);
+    this.localVelZ = ease(this.localVelZ, velZ, 12);
+    // Camera yaw rate, wrapped and smoothed: the torso trails the turn.
+    let dYaw = cam.yaw - this.prevYaw;
+    this.prevYaw = cam.yaw;
+    if (dYaw > Math.PI) dYaw -= Math.PI * 2;
+    else if (dYaw < -Math.PI) dYaw += Math.PI * 2;
+    this.turnRate = ease(this.turnRate, dt > 0 ? dYaw / dt : 0, 8);
 
     // Weapon punch: a hard hit that falls off fast (squared, so the spike is
     // at the shot rather than smeared across the recovery).
@@ -322,6 +347,12 @@ export class Player implements Combatant {
       aimPitch: cam.aimPitch,
       kick,
       idleT: this.idleT,
+      localVelX: this.localVelX,
+      localVelZ: this.localVelZ,
+      velY: this.velY,
+      reloadPhase: this.reloadProgress,
+      sprintBlend: this.sprintBlend,
+      turnRate: this.turnRate,
     });
   }
 
