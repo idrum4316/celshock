@@ -39,7 +39,9 @@ Requires Node 18+ and a WebGL2-capable browser (Chrome/Edge/Firefox/Safari).
 
 Click the page once to capture the mouse (pointer lock). Gamepads use the
 browser's standard mapping and are hot-pluggable — press any button after
-connecting.
+connecting. Pads with vibration support get **rumble** for shots, hits,
+kills, and damage taken (requires a browser with the Gamepad haptics API,
+e.g. Chrome/Edge with an Xbox or DualSense controller).
 
 Gamepad look comes with **aim assist**: the stick slows down while the
 crosshair is over an enemy, and the view pulls gently toward the target

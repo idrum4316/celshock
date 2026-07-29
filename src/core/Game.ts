@@ -345,10 +345,18 @@ export class Game {
         lc.muzzleLife,
       );
       this.sfx.shoot();
+      const haptic = CONFIG.rumble;
+      this.input.rumble(haptic.shotStrong, haptic.shotWeak, haptic.shotMs);
       if (shot.target) {
         this.hud.flashHitmarker();
         this.sfx.hit();
-        if (shot.killed && shot.target instanceof Bot) {
+        const killed = shot.killed && shot.target instanceof Bot;
+        this.input.rumble(
+          killed ? haptic.killStrong : haptic.hitStrong,
+          killed ? haptic.killWeak : haptic.hitWeak,
+          killed ? haptic.killMs : haptic.hitMs,
+        );
+        if (killed && shot.target instanceof Bot) {
           this.sfx.enemyDie();
           this.conquest.registerDeath(shot.target.team);
           this.kills[this.player.team] += 1;
@@ -509,6 +517,12 @@ export class Game {
     this.hud.flashDamage();
     this.post.flashDamage();
     this.sfx.playerHurt();
+    const haptic = CONFIG.rumble;
+    this.input.rumble(
+      died ? haptic.deathStrong : haptic.hurtStrong,
+      died ? haptic.deathWeak : haptic.hurtWeak,
+      died ? haptic.deathMs : haptic.hurtMs,
+    );
     if (died) {
       this.conquest.registerDeath(this.player.team);
       this.losses[this.player.team] += 1;

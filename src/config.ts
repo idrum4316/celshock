@@ -290,6 +290,36 @@ export const CONFIG = {
     triggerThreshold: 0.35,
   },
 
+  /**
+   * Gamepad haptics (GamepadHapticsActuator "dual-rumble"). Magnitudes are
+   * 0..1, durations in ms. Unsupported pads/browsers silently no-op. Per-shot
+   * pulses are kept light and short so full-auto reads as a buzz; each new
+   * pulse preempts the previous one rather than queueing.
+   */
+  rumble: {
+    enabled: true,
+    /** Per shot fired: light tick on the weak (high-frequency) motor. */
+    shotWeak: 0.35,
+    shotStrong: 0.12,
+    shotMs: 60,
+    /** Hitmarker confirmation. */
+    hitWeak: 0.55,
+    hitStrong: 0.2,
+    hitMs: 70,
+    /** Kill confirmation — replaces the hit pulse. */
+    killWeak: 0.7,
+    killStrong: 0.45,
+    killMs: 140,
+    /** Taking damage: heavy motor leads. */
+    hurtWeak: 0.4,
+    hurtStrong: 0.9,
+    hurtMs: 220,
+    /** Death: longest, heaviest pulse. */
+    deathWeak: 0.7,
+    deathStrong: 1,
+    deathMs: 550,
+  },
+
   audio: {
     /**
      * Concurrent one-shots. Thirty-two bots firing is ~160 shots a second; past

@@ -75,7 +75,7 @@ src/
   config.ts                 # ALL tunable constants (no magic numbers in code)
   core/
     Game.ts                 # Orchestrator + game state machine + main loop
-    InputManager.ts         # Unified keyboard/mouse + gamepad state
+    InputManager.ts         # Unified keyboard/mouse + gamepad state + rumble
     CameraSystem.ts         # Third-person shoulder cam; ADS pulls in + zooms
     Sfx.ts                  # Procedural WebAudio, spatialised and voice-capped
   entities/

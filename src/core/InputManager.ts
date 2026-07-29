@@ -1,11 +1,14 @@
 /**
- * InputManager.ts — Unified keyboard/mouse + gamepad input state.
- * Owns: raw event listeners and the per-frame public fields (move/look/actions)
- * that Game and CameraSystem read.
+ * InputManager.ts — Unified keyboard/mouse + gamepad input state, plus gamepad
+ * haptics (rumble()).
+ * Owns: raw event listeners, the per-frame public fields (move/look/actions)
+ * that Game and CameraSystem read, and the GamepadHapticsActuator pulses.
  * Invariants: update() must be called exactly once per frame — it composes
  * state and RESETS accumulators and edge-triggered flags (jumpPressed,
  * reloadPressed, confirmPressed, ads). Anything that assigned those fields
  * externally is overwritten next tick (this bites headless test scripts).
+ * rumble() must stay a silent no-op when there is no pad, no actuator, or
+ * the effect is rejected — haptics are a garnish, never a failure path.
  */
 import { CONFIG } from "../config";
 
@@ -189,6 +192,29 @@ export class InputManager {
       padStart;
     this.confirmPressed = confirmNow && !this.prevConfirm;
     this.prevConfirm = confirmNow;
+  }
+
+  /**
+   * Fires a dual-rumble pulse on the connected gamepad. Silently no-ops when
+   * there is no pad, when the browser/controller has no haptics actuator, or
+   * when the effect is rejected (e.g. the tab is unfocused). A new pulse
+   * preempts the one still playing — that is what makes full-auto fire read
+   * as a continuous buzz instead of a queue of echoes firing after the
+   * trigger is released. Magnitudes are clamped to 0..1.
+   */
+  rumble(strong: number, weak: number, durationMs: number): void {
+    if (!CONFIG.rumble.enabled) return;
+    const actuator = this.readGamepad()?.vibrationActuator;
+    if (!actuator) return;
+    actuator
+      .playEffect("dual-rumble", {
+        duration: durationMs,
+        strongMagnitude: clamp(strong, 0, 1),
+        weakMagnitude: clamp(weak, 0, 1),
+      })
+      .catch(() => {
+        // Preempted or unsupported — haptics never propagate failure.
+      });
   }
 
   private readGamepad(): Gamepad | null {
