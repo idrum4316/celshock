@@ -211,6 +211,34 @@ export const CONFIG = {
     kickTime: 0.11,
     kickBack: 0.05,
     kickPitch: 0.12,
+    /**
+     * Cosmetic view punch per shot: an FOV spike, a backward camera shove,
+     * and a fast random jitter, all decaying over punchTime. Deliberately NOT
+     * part of aimPitch/aimYaw — bullets never see it; it only sells impact to
+     * the eye. Kept small: at 8 rps the peaks overlap into a constant buzz.
+     */
+    punchTime: 0.09,
+    fovPunch: 0.025,
+    camPush: 0.035,
+    shakePitch: 0.004,
+    shakeYaw: 0.003,
+  },
+
+  /**
+   * Gunfeel dressing: the visible muzzle flash mesh and ejected brass.
+   * Player-only — bots get neither (their flashes are the budgeted light
+   * pulses, and 32 bots' worth of casing meshes is draw-call noise nobody
+   * can see anyway).
+   */
+  gunfeel: {
+    /** Seconds the muzzle flash mesh stays visible per shot. */
+    flashTime: 0.05,
+    /** Ejected brass: pool size, lifetime (s), launch speeds (m/s), gravity. */
+    casingPool: 12,
+    casingLife: 0.9,
+    casingGravity: 12,
+    casingEject: 1.8,
+    casingUp: 2.6,
   },
 
   camera: {
@@ -299,9 +327,9 @@ export const CONFIG = {
   rumble: {
     enabled: true,
     /** Per shot fired: light tick on the weak (high-frequency) motor. */
-    shotWeak: 0.35,
-    shotStrong: 0.12,
-    shotMs: 60,
+    shotWeak: 0.4,
+    shotStrong: 0.3,
+    shotMs: 70,
     /** Hitmarker confirmation. */
     hitWeak: 0.55,
     hitStrong: 0.2,

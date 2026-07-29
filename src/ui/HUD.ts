@@ -23,6 +23,8 @@ export class HUD {
   /** One cell per flag, rebuilt only when the roster changes. */
   private flagCells: { wrap: HTMLElement; fill: HTMLElement }[] = [];
   private crosshair: HTMLElement;
+  /** The crosshair's ring, resized every frame to the live bullet spread. */
+  private crosshairRing: HTMLElement;
   private hitmarker: HTMLElement;
   private vignette: HTMLElement;
   private message: HTMLElement;
@@ -65,6 +67,7 @@ export class HUD {
     this.ticketBar = document.getElementById("ticket-bar")!;
     this.flagStrip = document.getElementById("flag-strip")!;
     this.crosshair = document.getElementById("crosshair")!;
+    this.crosshairRing = this.crosshair.querySelector(".ring") as HTMLElement;
     this.hitmarker = document.getElementById("hitmarker")!;
     this.vignette = document.getElementById("vignette")!;
     this.message = document.getElementById("message")!;
@@ -141,8 +144,16 @@ export class HUD {
     }
   }
 
-  setAds(ads: boolean): void {
+  /**
+   * Crosshair state, pushed every frame. The ring's diameter IS the current
+   * bullet spread in screen pixels, so recoil bloom is visible as the ring
+   * opening up and settling as it bleeds off.
+   */
+  setCrosshair(ads: boolean, spreadPx: number): void {
     this.crosshair.classList.toggle("ads", ads);
+    const size = Math.round(Math.max(10, Math.min(90, spreadPx)));
+    this.crosshairRing.style.width = `${size}px`;
+    this.crosshairRing.style.height = `${size}px`;
   }
 
   flashHitmarker(): void {

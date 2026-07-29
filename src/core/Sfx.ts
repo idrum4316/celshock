@@ -85,13 +85,24 @@ export class Sfx {
 
   // --- player-local one-shots (always 2D, always audible) ---
 
+  /**
+   * The player's rifle. Four layers, because weight lives in the low end:
+   * a low sine thump is the body, a descending square is the supersonic
+   * crack, lowpass-swept noise is the boom tail, and a short bright noise
+   * slice is the muzzle snap. Four voices per shot at 8 rps averages ~5
+   * concurrent — affordable against the 24-voice cap.
+   */
   shoot(): void {
-    this.tone(210, 0.06, "square", 0.05, 0.45);
-    this.noise(0.04, 0.03);
+    this.tone(120, 0.14, "sine", 0.3, 0.32);
+    this.tone(1500, 0.045, "square", 0.1, 0.2);
+    this.boom(0.16, 0.35);
+    this.noise(0.03, 0.18);
   }
 
+  /** Hitmarker: a chunky two-part "thock", not a beep. */
   hit(): void {
-    this.tone(880, 0.04, "square", 0.04, 1);
+    this.tone(520, 0.05, "square", 0.07, 0.7);
+    this.noise(0.025, 0.12);
   }
 
   enemyDie(): void {
@@ -201,6 +212,36 @@ export class Sfx {
       osc.stop(t0 + dur + 0.02);
     } catch {
       // audio is non-critical; ignore failures
+    }
+  }
+
+  /**
+   * Noise through a lowpass filter swept downward — the booming tail of a
+   * gunshot. Same shared buffer and voice-cap rules as `noise()`.
+   */
+  private boom(dur: number, vol: number): void {
+    if (!this.ctx || !this.master || !this.noiseBuffer) return;
+    if (this.voices >= CONFIG.audio.maxVoices) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(900, t0);
+      filter.frequency.exponentialRampToValueAtTime(120, t0 + dur);
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(vol, t0);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      src.connect(filter).connect(gain).connect(this.master);
+      this.voices += 1;
+      src.onended = () => {
+        this.voices -= 1;
+      };
+      const offset = Math.random() * Math.max(0, this.noiseBuffer.duration - dur);
+      src.start(t0, offset, dur);
+    } catch {
+      // ignore
     }
   }
 

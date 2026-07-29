@@ -1,11 +1,14 @@
 /**
  * Player.ts — Player controller: movement/sprint/jump physics, health/regen,
- * weapon state (fire/reload/spread), and the GLB body wiring.
+ * weapon state (fire/reload/spread), gunfeel dressing (muzzle flash mesh,
+ * ejected brass), and the GLB body wiring.
  * Owns: the player Combatant. Body loads async (GlbSoldier) and starts hidden.
  * Invariants: probeGround and step-up ray tests filter metadata.solid === true.
  * Health regenerates after CONFIG.player.regenDelay — with 16 hostile bots and
  * no medics this is load-bearing, not decoration. muzzleWorld() assumes the
- * rifle is loaded. Damage flows out via the onDamaged callback wired in Game.
+ * rifle is loaded. The flash mesh and casing pool are player-only visuals
+ * (bots get neither — see CONFIG.gunfeel). Damage flows out via the
+ * onDamaged callback wired in Game.
  */
 import {
   Color3,
@@ -13,6 +16,7 @@ import {
   MeshBuilder,
   Ray,
   Scene,
+  TransformNode,
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -33,6 +37,20 @@ export interface PlayerMods {
 
 /** Where the rifle rides until the GLB body arrives and claims it. */
 const RIFLE_REST = new Vector3(0.3, 0.14, 0.28);
+
+/** Ejection port, in rifle-local space (matches RifleModel's ejectPort box). */
+const CASING_PORT = new Vector3(0.05, 0.04, 0.06);
+
+/** One live brass case: world-space ballistic, despawned on `t` expiry. */
+interface Casing {
+  mesh: Mesh;
+  vel: Vector3;
+  spin: number;
+  t: number;
+}
+
+/** Scratch for the eject direction — no allocation per shot. */
+const _casingDir = new Vector3();
 
 /**
  * Player pawn: movement (walk/jump/gravity) with Babylon collision sliding,
@@ -92,6 +110,13 @@ export class Player implements Combatant {
   private spreadBloom = 0;
   /** Weapon punch, 1 at the shot and falling to 0 over `recoil.kickTime`. */
   private weaponKickT = 0;
+  /** Muzzle flash star: shown for `gunfeel.flashTime` after each shot. */
+  private flashRoot!: TransformNode;
+  private flashT = 0;
+  /** Ejected brass pool; a case is live while its `t > 0`. */
+  private casings: Casing[] = [];
+  /** Scratch for casing integration — no per-frame allocation. */
+  private readonly casingStep = new Vector3();
 
   mods: PlayerMods = { damageMult: 1, speedMult: 1, maxHpBonus: 0, magBonus: 0 };
 
@@ -127,6 +152,41 @@ export class Player implements Combatant {
       m.outlineWidth = 0.004;
     }
     this.meshes.push(...this.rifle.meshes);
+
+    // --- gunfeel dressing: muzzle flash star + brass pool (player only) ---
+    // The flash is three crossed emissive petals at the muzzle; per shot it
+    // gets a random roll and scale so no two shots strobe identically.
+    this.flashRoot = new TransformNode("player_muzzleFlash", scene);
+    this.flashRoot.parent = this.rifle.muzzle;
+    this.flashRoot.setEnabled(false);
+    const flashMat = mats.getEmissive("#ffd9a0");
+    for (let i = 0; i < 3; i++) {
+      const petal = MeshBuilder.CreatePlane(
+        `player_flashPetal${i}`,
+        { width: 0.34, height: 0.15, sideOrientation: Mesh.DOUBLESIDE },
+        scene,
+      );
+      petal.parent = this.flashRoot;
+      petal.rotation.y = Math.PI / 2; // length runs along the barrel
+      petal.rotation.z = (i * Math.PI) / 3;
+      petal.position.z = 0.14;
+      petal.material = flashMat;
+      petal.metadata = { noOutline: true };
+      petal.isPickable = false;
+    }
+
+    const casingMat = mats.get("#b99b4e");
+    for (let i = 0; i < CONFIG.gunfeel.casingPool; i++) {
+      const m = MeshBuilder.CreateBox(
+        `player_casing${i}`,
+        { width: 0.016, height: 0.016, depth: 0.05 },
+        scene,
+      );
+      m.material = casingMat;
+      m.isPickable = false;
+      m.isVisible = false;
+      this.casings.push({ mesh: m, vel: new Vector3(), spin: 0, t: 0 });
+    }
 
     // The rigged, textured body loads async; the menu/deploy flow covers the
     // latency, and until it resolves the player is simply the hidden capsule
@@ -184,6 +244,12 @@ export class Player implements Combatant {
     this.velY = 0;
     this.spreadBloom = 0;
     this.weaponKickT = 0;
+    this.flashT = 0;
+    this.flashRoot.setEnabled(false);
+    for (const c of this.casings) {
+      c.t = 0;
+      c.mesh.isVisible = false;
+    }
   }
 
   placeAt(spawn: Vector3): void {
@@ -297,6 +363,7 @@ export class Player implements Combatant {
     }
 
     this.syncCombatant();
+    this.updateGunfeel(dt);
     this.animate(dt, moveInput, speed, velX, velZ, cam);
     return jumped;
   }
@@ -377,8 +444,71 @@ export class Player implements Combatant {
     // punch the body rides out. The aim kick itself belongs to the camera.
     this.spreadBloom = Math.min(r.maxBloom, this.spreadBloom + r.bloomPerShot);
     this.weaponKickT = 1;
+    // Muzzle flash: a single-frame-scale strobe with a random roll and scale,
+    // so full-auto reads as flicker rather than one static sprite.
+    const g = CONFIG.gunfeel;
+    this.flashT = g.flashTime;
+    this.flashRoot.setEnabled(true);
+    this.flashRoot.rotation.z = Math.random() * Math.PI;
+    this.flashRoot.scaling.setAll(0.85 + Math.random() * 0.4);
+    this.ejectCasing();
     if (this.ammo === 0) this.startReload();
     return true;
+  }
+
+  /**
+   * Pops one brass case out of the eject port: sideways off the rifle with a
+   * random upward toss and tumble. Pool-starved shots just skip the case.
+   */
+  private ejectCasing(): void {
+    const c = this.casings.find((c) => c.t <= 0);
+    if (!c) return;
+    const g = CONFIG.gunfeel;
+    const wm = this.rifle.root.getWorldMatrix();
+    Vector3.TransformCoordinatesToRef(CASING_PORT, wm, c.mesh.position);
+    Vector3.TransformNormalToRef(_casingDir.set(1, 0, -0.2), wm, c.vel);
+    c.vel.normalize().scaleInPlace(g.casingEject * (0.8 + Math.random() * 0.4));
+    c.vel.y += g.casingUp * (0.7 + Math.random() * 0.6);
+    c.spin = (Math.random() * 2 - 1) * 25;
+    c.mesh.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    c.t = g.casingLife;
+    c.mesh.isVisible = !this.bodyHidden;
+  }
+
+  /**
+   * Advances the flash strobe and the live brass. Cases fall ballistically
+   * and come to rest on the ground plane under the player (an approximation
+   * — they're never more than a toss away) until their lifetime expires.
+   */
+  private updateGunfeel(dt: number): void {
+    if (this.flashT > 0) {
+      this.flashT -= dt;
+      if (this.flashT <= 0) this.flashRoot.setEnabled(false);
+    }
+    const g = CONFIG.gunfeel;
+    const restY = this.root.position.y - this.groundY + 0.02;
+    for (const c of this.casings) {
+      if (c.t <= 0) continue;
+      c.t -= dt;
+      if (c.t <= 0) {
+        c.mesh.isVisible = false;
+        continue;
+      }
+      if (c.vel.y !== 0 || c.mesh.position.y > restY) {
+        c.vel.y -= g.casingGravity * dt;
+        c.mesh.position.addInPlace(
+          this.casingStep.copyFrom(c.vel).scaleInPlace(dt),
+        );
+        if (c.mesh.position.y <= restY && c.vel.y < 0) {
+          c.mesh.position.y = restY;
+          c.vel.setAll(0); // bounced to rest; tumble stops with it
+          c.spin = 0;
+        } else {
+          c.mesh.rotation.x += c.spin * dt;
+          c.mesh.rotation.z += c.spin * 0.7 * dt;
+        }
+      }
+    }
   }
 
   startReload(): boolean {
@@ -431,5 +561,10 @@ export class Player implements Combatant {
 
   private applyVisibility(): void {
     for (const part of this.meshes) part.isVisible = !this.bodyHidden;
+    // Live brass follows the body; the flash handles itself per shot via
+    // flashRoot.setEnabled, and never fires while the body is hidden anyway.
+    for (const c of this.casings) {
+      c.mesh.isVisible = c.t > 0 && !this.bodyHidden;
+    }
   }
 }

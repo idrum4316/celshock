@@ -334,6 +334,9 @@ export class Game {
         rc.pitchPerShot * kickMult,
         (Math.random() * 2 - 1) * rc.yawPerShot * kickMult,
       );
+      // Cosmetic view punch: FOV spike + shove + jitter on the rendered
+      // camera only — the bullets above already left with the clean aim.
+      this.cameraSys.addPunch();
       // Muzzle flash: a hard, very short pulse that lights whatever is in
       // front of the player — the main reason to keep shooting in the dark.
       const lc = CONFIG.lighting;
@@ -443,8 +446,13 @@ export class Game {
   private updateHud(dt: number): void {
     this.hud.setHealth(this.player.health, this.player.maxHealth);
     this.hud.setAmmo(this.player.ammo, this.player.magSize, this.player.reloading);
-    // Tightens the crosshair ring while aiming.
-    this.hud.setAds(this.input.ads);
+    // The crosshair ring IS the live spread: radians at the aim plane,
+    // projected through the current FOV into screen pixels.
+    const spreadPx =
+      (Math.tan(this.player.spread(this.cameraSys.adsBlend)) /
+        Math.tan(this.cameraSys.camera.fov / 2)) *
+      (window.innerHeight / 2);
+    this.hud.setCrosshair(this.input.ads, spreadPx);
     this.hud.setTickets(
       [CONFIG.teams[0].name, CONFIG.teams[1].name],
       this.conquest.tickets,

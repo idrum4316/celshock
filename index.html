@@ -277,9 +277,8 @@
         transform: translate(-50%, -50%);
         transition: opacity 0.1s;
       }
-      /* ADS never leaves third person, so the crosshair stays — the ring
-         just tightens to read as "braced". */
-      #crosshair.ads .ring { width: 16px; height: 16px; }
+      /* ADS never leaves third person, so the crosshair stays. The ring's
+         size is set inline every frame from the live bullet spread. */
       #crosshair .dot {
         width: 4px;
         height: 4px;

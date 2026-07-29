@@ -1,13 +1,17 @@
 /**
  * CameraSystem.ts — Third-person over-the-shoulder camera: aim yaw/pitch, ADS
- * blend (distance/offset/FOV/sensitivity), recoil, wall-occlusion pull-in.
+ * blend (distance/offset/FOV/sensitivity), recoil, per-shot view punch,
+ * wall-occlusion pull-in.
  * Owns: the scene's active camera. Never goes first-person.
  * Invariants: recoil decay uses true Math.exp(-rate*dt) — NOT the frame-lerp
  * idiom — because burst climb must not vary with frame rate. Recoil only
  * partly springs back (CONFIG.recoil.recoverFraction); the rest is pushed into
  * the player's aim permanently — a deliberate product decision, not a bug.
- * Occlusion pick filters metadata.solid === true. Must run before
- * mats.updateCamera()/lighting.update()/sfx.setListener() in Game's frame order.
+ * The view punch (FOV spike / camera shove / jitter) is pure cosmetics: it is
+ * applied only to the rendered camera, never to aimPitch/aimYaw, so bullets
+ * and bots never see it. Occlusion pick filters metadata.solid === true.
+ * Must run before mats.updateCamera()/lighting.update()/sfx.setListener()
+ * in Game's frame order.
  */
 import { FreeCamera, Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -34,6 +38,11 @@ export class CameraSystem {
    */
   private recoilPitch = 0;
   private recoilYaw = 0;
+  /**
+   * View punch, 1 at the shot and falling to 0 over `recoil.punchTime`.
+   * Squared before use so the spike is at the impact frame.
+   */
+  private punchT = 0;
 
   constructor(private scene: Scene) {
     this.camera = new FreeCamera("mainCamera", new Vector3(0, 3, -8), scene);
@@ -78,6 +87,16 @@ export class CameraSystem {
     this.adsBlend = 0;
     this.recoilPitch = 0;
     this.recoilYaw = 0;
+    this.punchT = 0;
+  }
+
+  /**
+   * Fires the cosmetic view punch; called once per shot. Unlike `addRecoil`
+   * this touches nothing the bullets read — it is FOV, a small backward
+   * shove, and high-frequency jitter on the rendered camera only.
+   */
+  addPunch(): void {
+    this.punchT = 1;
   }
 
   /**
@@ -139,6 +158,9 @@ export class CameraSystem {
     this.recoilPitch *= settle;
     this.recoilYaw *= settle;
 
+    // --- view punch decays (cosmetic — safe to use a plain time decay) ---
+    this.punchT = Math.max(0, this.punchT - dt / CONFIG.recoil.punchTime);
+
     // --- ADS blend (exponential ease toward target) ---
     const target = input.ads ? 1 : 0;
     this.adsBlend += (target - this.adsBlend) * Math.min(1, dt * c.adsBlendSpeed);
@@ -169,9 +191,29 @@ export class CameraSystem {
       }
     }
 
+    // --- view punch: FOV spike, backward shove, and jitter on the rendered
+    // camera only. aimPitch/aimYaw are untouched, so tracers, hitscan, and
+    // the audio listener never see the shake. ---
+    const r = CONFIG.recoil;
+    const punch = this.punchT * this.punchT;
+    if (punch > 0) {
+      pos = pos.subtract(dir.scale(r.camPush * punch));
+    }
+
     this.camera.position.copyFrom(pos);
-    this.camera.setTarget(pos.add(dir));
-    this.camera.fov = c.fovHip + (c.fovAds - c.fovHip) * t;
+    if (punch > 0) {
+      const shPitch = (Math.random() * 2 - 1) * r.shakePitch * punch;
+      const shYaw = (Math.random() * 2 - 1) * r.shakeYaw * punch;
+      const sp = this.aimPitch + shPitch;
+      const sy = this.aimYaw + shYaw;
+      const cp = Math.cos(sp);
+      this.camera.setTarget(
+        pos.add(new Vector3(cp * Math.sin(sy), Math.sin(sp), cp * Math.cos(sy))),
+      );
+    } else {
+      this.camera.setTarget(pos.add(dir));
+    }
+    this.camera.fov = c.fovHip + (c.fovAds - c.fovHip) * t + r.fovPunch * punch;
   }
 }
 
