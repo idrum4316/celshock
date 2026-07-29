@@ -31,6 +31,7 @@ import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
 import { CombatSystem } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
+import { GrassSystem } from "../systems/GrassSystem";
 import { LightingSystem } from "../systems/LightingSystem";
 import { Sky } from "../systems/Sky";
 import { WaterSystem } from "../systems/WaterSystem";
@@ -76,6 +77,7 @@ export class Game {
   private atmosphere: Atmosphere;
   private sky: Sky;
   private water: WaterSystem;
+  private grass: GrassSystem;
   private post: HorrorPost;
   private player: Player;
 
@@ -130,6 +132,7 @@ export class Game {
     this.lighting = new LightingSystem();
     this.atmosphere = new Atmosphere(this.scene);
     this.water = new WaterSystem(this.scene, glow);
+    this.grass = new GrassSystem(this.scene, glow);
     this.mapBuilder = new MapBuilder(this.scene, this.mats, this.lighting);
     this.combat = new CombatSystem(this.scene, this.mats);
     this.aimAssist = new AimAssistSystem(this.scene);
@@ -250,6 +253,7 @@ export class Game {
       this.map.size,
     );
     this.water.build(this.map.water, HollowmereEnvironment);
+    this.grass.build(this.map.grass, HollowmereEnvironment, this.map.colliderBoxes);
 
     this.battle.setMap(this.map);
     this.battle.reset();
@@ -380,7 +384,7 @@ export class Game {
    * selection, the shader's fog, and audio panning all key off the camera
    * position, so anything that moves the camera must run before them:
    * aim assist -> camera update -> mats.updateCamera() -> carried lights ->
-   * lighting.update() -> water.update() -> sfx.setListener().
+   * lighting.update() -> water.update() -> grass.update() -> sfx.setListener().
    * Nothing after this method may move the camera.
    */
   private updateCameraAndLighting(dt: number): void {
@@ -413,6 +417,15 @@ export class Game {
       dt,
       this.cameraSys.camera.position,
       this.lighting.activeLights,
+    );
+    // Grass reads the same camera and light set, plus the combatant list
+    // (assembled above for the conquest occupancy pass) as its pushers —
+    // that list is what bends the blades around running bodies.
+    this.grass.update(
+      dt,
+      this.cameraSys.camera.position,
+      this.lighting.activeLights,
+      this.combatants,
     );
     // Same rule as the lights and the fog: this has to follow the camera.
     this.sfx.setListener(this.cameraSys.camera.position, this.cameraSys.forward);

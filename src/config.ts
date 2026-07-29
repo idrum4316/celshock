@@ -395,6 +395,42 @@ export const CONFIG = {
   },
 
   /**
+   * Grass fields (src/systems/GrassSystem.ts): thin-instanced tufts with a
+   * vertex-shader wind sway plus a radial "pusher" bend around every nearby
+   * combatant — the ripple as you run through it. Visual only: no collider,
+   * no picking, no outline. Palette lives in the map's EnvironmentSpec.
+   */
+  grass: {
+    /** Tufts per square metre when a rect doesn't override density. One tuft
+     *  is `bladesPerTuft` blades, so this is ~5x that in blades. */
+    density: 1.1,
+    bladesPerTuft: 5,
+    /**
+     * Blade height range (metres). Knee-high at the top end — tall enough to
+     * read as a field and to swallow boots, short enough that it never hides
+     * a crawling firefight.
+     */
+    heightMin: 0.45,
+    heightMax: 0.85,
+    /** Ambient wind: XZ direction (normalized on use), tip travel (m), speed. */
+    windDir: [0.78, 0.63],
+    windStrength: 0.16,
+    windSpeed: 1.7,
+    /**
+     * Character interaction: how far out a body bends blades (m) and how far
+     * the tip travels at ground zero (m). The radius wants to be just past a
+     * sprint stride so the grass reacts ahead of the feet, not under them.
+     */
+    pushRadius: 1.35,
+    pushStrength: 0.6,
+    /**
+     * Shader array size for simultaneous pushers. The player plus the seven
+     * nearest bots; beyond that the bend is outside reading distance anyway.
+     */
+    maxPushers: 8,
+  },
+
+  /**
    * The night sky (src/systems/Sky.ts): a gradient dome with baked stars and
    * moon halo, an emissive moon disc that feeds the GlowLayer, and drifting
    * cloud banks. Palette lives in the map's EnvironmentSpec (`sky`); this is

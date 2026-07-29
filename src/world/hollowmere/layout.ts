@@ -1,7 +1,7 @@
 /**
  * hollowmere/layout.ts — THE MAP, as data: structure placements, scatter
- * regions, control points, spawns, water rects. Consumed by MapBuilder;
- * nothing here is code to special-case.
+ * regions, control points, spawns, water rects, grass rects. Consumed by
+ * MapBuilder; nothing here is code to special-case.
  * Gotchas that have already cost time: collider top faces within
  * CONFIG.nav.stepHeight of adjacent ground or bots treat decks as walls;
  * a control point's pos must NOT sit inside a collider (surfaceAt returns -1);
@@ -10,7 +10,7 @@
  */
 import { Vector3 } from "@babylonjs/core";
 import type { BuildParams, BuilderKind } from "../BuildingKit";
-import type { ControlPointDef, SpawnPointDef, WaterRect } from "../MapBuilder";
+import type { ControlPointDef, GrassRect, SpawnPointDef, WaterRect } from "../MapBuilder";
 
 /**
  * HOLLOWMERE — the authored layout.
@@ -97,6 +97,7 @@ export interface MapLayout {
   controlPoints: ControlPointDef[];
   spawns: SpawnPointDef[];
   water?: WaterRect[];
+  grass?: GrassRect[];
 }
 
 const WARDEN = "#c9a15e";
@@ -320,10 +321,37 @@ const water: WaterRect[] = [
   { x: 37, z: -95, width: 50, depth: 42 },
 ];
 
+/**
+ * Grass fields. Pale, dead, knee-high — the valley's one crop that still
+ * grows. Placement rules: rects dodge roads (roads are visual-only, so no
+ * collider rejects a blade poking through the cobbles — that check is on the
+ * author), while structures, fences, and props are cleared automatically by
+ * the GrassSystem's collider rejection. Grass in the bog pool reads as
+ * reeds: the blades outgrow the ankle-deep waterline on purpose.
+ */
+const grass: GrassRect[] = [
+  // The chapel graveyard, on the terrace: strips either side of the nave.
+  { x: -72, z: 81, width: 12, depth: 28, y: TERRACE_H },
+  { x: -48, z: 81, width: 12, depth: 28, y: TERRACE_H },
+  // The creek embankments, on the bank tops — reeds above the sunken lane.
+  { x: -97, z: -10, width: 15, depth: 70, y: BANK_H, density: 0.7 },
+  { x: -73, z: -10, width: 15, depth: 70, y: BANK_H, density: 0.7 },
+  // The field west of the square, between the north road and the chapel road.
+  { x: -13, z: 27, width: 16, depth: 18, density: 0.6 },
+  // The farmstead paddocks — tall grass over the open sightlines at D.
+  { x: 68, z: 16, width: 18, depth: 15 },
+  { x: 93, z: 44, width: 16, depth: 14 },
+  // The bog: the pool's shallows grow reeds around the jetties.
+  { x: 40, z: -88, width: 36, depth: 20, density: 0.8 },
+  // The dead woods in the north-east corner, sparse under the trees.
+  { x: 98, z: 88, width: 30, depth: 30, density: 0.5 },
+];
+
 export const HollowmereLayout: MapLayout = {
   placements,
   scatter,
   controlPoints,
   spawns,
   water,
+  grass,
 };

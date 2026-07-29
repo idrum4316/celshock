@@ -64,6 +64,25 @@ export interface WaterRect {
 }
 
 /**
+ * A rectangular grass field. Purely visual: no collider, no nav cost —
+ * combatants walk straight through (the shader bends the blades around
+ * them). Consumed by the GrassSystem, not by the MapBuilder (grass is never
+ * merged or frozen here; tufts that would grow inside a collider are
+ * rejected by the GrassSystem at build time).
+ */
+export interface GrassRect {
+  x: number;
+  z: number;
+  /** Extents along X and Z. */
+  width: number;
+  depth: number;
+  /** Base height — set for fields on a terrace or embankment. */
+  y?: number;
+  /** Tufts per m²; defaults to CONFIG.grass.density. */
+  density?: number;
+}
+
+/**
  * A collider's world-space geometry, kept alongside the mesh so the nav grid
  * can compute surface heights analytically instead of firing 25,600 rays.
  */
@@ -95,6 +114,8 @@ export interface GameMap {
   obstacles: ObstacleField;
   /** Shallow-water bodies from the layout; empty when the map is dry. */
   water: WaterRect[];
+  /** Grass fields from the layout; empty when the map is bald. */
+  grass: GrassRect[];
   dispose(): void;
 }
 
@@ -231,6 +252,7 @@ export class MapBuilder {
       colliderBoxes: this.boxes,
       visuals,
       water: layout.water ?? [],
+      grass: layout.grass ?? [],
       dispose: () => {
         for (const m of visuals) m.dispose();
         for (const m of colliders) m.dispose();

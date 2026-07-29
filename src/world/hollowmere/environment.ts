@@ -66,4 +66,10 @@ export const HollowmereEnvironment: EnvironmentSpec = {
     shallowColor: "#2a4a44",
     foamColor: "#5f7a6e",
   },
+  // Dead grass: grey-olive stalks, pale straw tips. The root sits just under
+  // the floor colour so the fields read as the valley floor continuing.
+  grass: {
+    rootColor: "#2e3128",
+    tipColor: "#7d7f5c",
+  },
 };

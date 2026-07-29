@@ -66,6 +66,15 @@ export interface WaterEnvSpec {
   foamColor: string;
 }
 
+/** Grass-field palette. Omitting it leaves the map bald. */
+export interface GrassEnvSpec {
+  /** Blade colour at the root — should sit close to floorColor so the field
+   *  reads as growing out of the ground, not scattered on top of it. */
+  rootColor: string;
+  /** Blade colour at the tip — the part that catches the key light. */
+  tipColor: string;
+}
+
 /**
  * Everything the renderer needs to make a place feel like one place: palette,
  * atmosphere, and the three light terms the cel shader bands.
@@ -97,6 +106,7 @@ export interface EnvironmentSpec {
   };
   particles?: ParticleSpec;
   water?: WaterEnvSpec;
+  grass?: GrassEnvSpec;
   sky?: SkySpec;
 }
 
