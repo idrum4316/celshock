@@ -80,8 +80,13 @@ src/
     Sfx.ts                  # Procedural WebAudio, spatialised and voice-capped
   entities/
     Player.ts               # Movement, sprint, jump, weapon state, body wiring
-    GlbSoldier.ts           # Player body: rigged GLB (models/*.glb), clips +
+    GlbSoldier.ts           # Player body: rigged GLB (models/*.glb) + the
                             # procedural bone overlay (aim/reload/rifle carry)
+    soldier/                # GlbSoldier's extracted pieces:
+      tuning.ts             #   asset-measured constants + SoldierPoseParams
+      matrixKit.ts          #   WorldChain memo + why-matrices rationale
+      stance.ts             #   idle stance captured from the Walking clip
+      clipDriver.ts         #   locomotion clip selection/crossfade/speed
     RifleModel.ts           # Low-poly SCAR-pattern rifle + holo sight builder
     Combatant.ts            # Team + the shared shootable/shooter interface
     Bot.ts                  # Bot FSM: advance / engage / reposition / capture
@@ -97,7 +102,12 @@ src/
     WaterSystem.ts          # Water surfaces from map WaterRects
   world/
     MapBuilder.ts           # Builds the map; merges visuals, emits colliders
-    BuildingKit.ts          # Parametric cottages, chapel, barn, mill, ramps...
+    BuildingKit.ts          # Facade: shared types + BUILDERS registry
+    kit/
+      core.ts               # Build accumulator, palette, builder contract
+      buildings.ts          # cottage, chapel, barn, mill, boathouse, gatehouse
+      structures.ts         # silo, well, stall, fence, bridge, haystack, lamp
+      terrain.ts            # terrace, ramp, road, jetty
     NavGrid.ts              # Walkable-surface graph + precomputed flow fields
     ObstacleField.ts        # Sub-cell collision push-out for thin props
     Props.ts                # Scatter props: trees, graves, rubble, braziers

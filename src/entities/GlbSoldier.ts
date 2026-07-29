@@ -1,8 +1,13 @@
 /**
  * GlbSoldier.ts — The player's body: the ONE imported asset in the game
- * (models/*.glb, added by explicit request). Owns locomotion clip playback
- * plus a procedural per-frame bone overlay (aim/reload/rifle carry) applied
- * after animations, and world-space rifle attachment.
+ * (models/*.glb, added by explicit request). Owns asset loading/material
+ * swap and the procedural per-frame bone overlay (stance, aim pitch,
+ * two-handed rifle carry, reload, rifle follow) applied after animations.
+ * Split across soldier/: tuning.ts (constants + SoldierPoseParams),
+ * matrixKit.ts (WorldChain + why-matrices rationale), stance.ts (idle pose),
+ * clipDriver.ts (locomotion clips). The overlay pipeline below stays in one
+ * file deliberately — its methods share matrix temp registers, and splitting
+ * them risks clobbering a live temp.
  * Invariants: uses Matrix math throughout — the glTF root is mirrored, and
  * quaternion decomposition fails on mirrored nodes; do not "simplify" to
  * quaternions. Calibration matrices assume the stance was captured at yaw 0.
@@ -11,7 +16,6 @@
  * further asset files unless explicitly asked.
  */
 import {
-  AnimationGroup,
   Matrix,
   Mesh,
   Quaternion,
@@ -27,6 +31,22 @@ import { CONFIG } from "../config";
 import { addOutline, CelMaterialFactory } from "../shaders/CelShader";
 import type { RifleParts } from "./RifleModel";
 import glbUrl from "../../models/Meshy_AI_A_modern_soldier_with_biped_Meshy_AI_Meshy_Merged_Animations.glb?url";
+import {
+  ARM_PITCH_FOLLOW,
+  CARRY,
+  FACE_YAW,
+  HANDGUARD_FORWARD,
+  MODEL_SCALE,
+  RELOAD_ARM_DROP,
+  RELOAD_RIFLE_DROP,
+  RIFLE_OFFSET,
+  type SoldierPoseParams,
+} from "./soldier/tuning";
+import { WorldChain, orthonormalizeRows, type ChainNode } from "./soldier/matrixKit";
+import { captureStance } from "./soldier/stance";
+import { ClipDriver } from "./soldier/clipDriver";
+
+export type { SoldierPoseParams };
 
 /**
  * The imported player body: a rigged, textured GLB soldier that replaces the
@@ -51,82 +71,6 @@ import glbUrl from "../../models/Meshy_AI_A_modern_soldier_with_biped_Meshy_AI_M
  * axes — no hand-authored local rotations anywhere.
  */
 
-/** Per-frame inputs, mirrored from the values Player.animate already smooths. */
-export interface SoldierPoseParams {
-  /** Actual ground speed (m/s): config speed scaled by move input. */
-  groundSpeed: number;
-  /** Smoothed move-input magnitude 0..1. */
-  moveBlend: number;
-  /** Smoothed airborne weight 0..1. */
-  airBlend: number;
-  /** Smoothed reload weight 0..1. */
-  reloadBlend: number;
-  /** Camera aim pitch (rad, + up), recoil included. */
-  aimPitch: number;
-  /** Weapon punch 0..1 (weaponKickT squared). */
-  kick: number;
-  /** Free-running clock for the idle breath sway. */
-  idleT: number;
-}
-
-// --- art constants for this specific asset ---------------------------------
-
-/** Bind-pose height in model units, measured from the GLB's bounds. */
-const MODEL_HEIGHT = 1.67;
-/** Uniform scale that makes the asset fill the 1.8 m player capsule. */
-const MODEL_SCALE = CONFIG.player.height / MODEL_HEIGHT;
-/** Extra yaw so the model's authored facing matches the capsule's +Z. */
-const FACE_YAW = 0;
-
-/** Ground speeds (m/s) that pick the clip, with a hysteresis band between. */
-const WALK_ENTER = 4.8;
-const RUN_ENTER = 5.5;
-/** Speeds at which each clip plays at speedRatio 1 (no foot-slide). */
-const WALK_REF_SPEED = 4.4;
-const RUN_REF_SPEED = CONFIG.player.moveSpeed;
-
-/** Clip weight ramps in over this ground speed (below it the stance wins). */
-const CLIP_FULL_SPEED = 2.5;
-
-/**
- * Two-handed rifle carry, as world-space direction targets in character
- * space (+z forward, +x right, +y up): which way each arm segment points.
- * Tuned in the model viewer (see CLAUDE.md) against the asset's skeleton.
- */
-const CARRY = {
-  upperR: new Vector3(0.22, -0.72, 0.65),
-  lowerR: new Vector3(-0.08, -0.2, 0.98),
-  upperL: new Vector3(-0.15, -0.5, 0.85),
-  lowerL: new Vector3(0.42, 0.08, 0.9),
-};
-/** How much of the aim pitch the arms inherit, so the rifle tracks the camera. */
-const ARM_PITCH_FOLLOW = 0.85;
-/** Extra downward tip for the left arm while reloading (drops to the mag). */
-const RELOAD_ARM_DROP = 0.9;
-/** Rifle tip-down while reloading, applied through the right arm. */
-const RELOAD_RIFLE_DROP = 0.5;
-
-/** Rifle offset in the right-hand joint's frame (position in metres). The
- * euler maps the hand's basis onto "barrel forward, top rail up"; measured
- * against the asset's carry pose in the model viewer. */
-const RIFLE_OFFSET = {
-  pos: new Vector3(0, -0.02, 0.02),
-  euler: new Vector3(-1.268, 2.987, 2.405),
-  scale: 0.85,
-};
-/** Distance from the rifle origin to the handguard hold (left-hand target). */
-const HANDGUARD_FORWARD = 0.2;
-
-/** Structural view over TransformNode for the world-chain walk. */
-interface ChainNode {
-  position: Vector3;
-  scaling: Vector3;
-  rotationQuaternion: Quaternion | null;
-  rotation?: Vector3;
-  parent: unknown;
-  children?: unknown[];
-}
-
 const tmpM2 = new Matrix();
 const tmpM3 = new Matrix();
 const tmpM4 = new Matrix();
@@ -134,33 +78,10 @@ const tmpM5 = new Matrix();
 const tmpQ1 = Quaternion.Identity();
 const tmpQ2 = Quaternion.Identity();
 const tmpQ3 = Quaternion.Identity();
-/** Reserved for worldOf's euler fallback so it never clobbers a live temp. */
-const tmpQEuler = Quaternion.Identity();
 const tmpV1 = new Vector3();
 const tmpV2 = new Vector3();
 const tmpV3 = new Vector3();
 const tmpScale = new Vector3();
-
-/**
- * Babylon's glTF import converts handedness with a z-mirror on the "__root__"
- * node, so every joint/armature world matrix has a negative determinant and
- * decompose() cannot read its rotation as a quaternion. All overlay math
- * therefore composes in matrices (the reflection cancels in the conjugation
- * W·D·W⁻¹ and in the rifle's local), never in quaternions.
- */
-
-/** Normalizes the rotation rows of a world matrix, keeping translation and
- * handedness: drops the armature's uniform 0.01 scale without decompose(). */
-function orthonormalizeRows(m: Matrix): void {
-  const a = m.m as unknown as Float32Array;
-  for (let row = 0; row < 3; row++) {
-    const i = row * 4;
-    const len = Math.hypot(a[i], a[i + 1], a[i + 2]) || 1;
-    a[i] /= len;
-    a[i + 1] /= len;
-    a[i + 2] /= len;
-  }
-}
 
 export class GlbSoldier {
   /** Parent this under the player capsule; it carries scale/yaw/feet offset. */
@@ -172,8 +93,7 @@ export class GlbSoldier {
   /** The glTF "__root__" (rotation π about Y + z-mirror): the rifle parents
    * here so its local matrix keeps a positive determinant. */
   private gltfRoot: TransformNode | null = null;
-  private walk: AnimationGroup | null = null;
-  private run: AnimationGroup | null = null;
+  private clips: ClipDriver | null = null;
   private rifle: RifleParts | null = null;
 
   /** All joint nodes by name (the animation targets). */
@@ -194,14 +114,6 @@ export class GlbSoldier {
   /** Averaged mid-stride pose from the Walking clip, used as the idle stance. */
   private readonly stance = new Map<TransformNode, Quaternion>();
   private stanceHipsPos: Vector3 | null = null;
-  /** Joint -> child joints, for memo invalidation after an override write. */
-  private readonly children = new Map<unknown, TransformNode[]>();
-
-  // Smoothed clip-mix state.
-  private walkW = 0;
-  private runW = 0;
-  private band: "walk" | "run" = "walk";
-  private idleW = 0;
 
   // Latest params from Player.animate; applied on the next render.
   private params: SoldierPoseParams = {
@@ -214,8 +126,8 @@ export class GlbSoldier {
     idleT: 0,
   };
 
-  /** Per-render world-matrix memo, seeded from the (refreshed) capsule. */
-  private readonly worldMemo = new Map<unknown, Matrix>();
+  /** Per-render world-matrix memo + child registry (see matrixKit). */
+  private readonly chain = new WorldChain();
 
   private constructor(scene: Scene) {
     this.scene = scene;
@@ -281,19 +193,20 @@ export class GlbSoldier {
     rig.foreL = joint("LeftForeArm");
     rig.handL = joint("LeftHand");
     for (const node of rig.joints.values()) {
-      const list = rig.children.get(node.parent) ?? [];
-      list.push(node);
-      rig.children.set(node.parent, list);
+      rig.chain.register(node);
     }
 
-    rig.walk = res.animationGroups.find((g) => g.name === "Walking") ?? null;
-    rig.run = res.animationGroups.find((g) => g.name === "Running") ?? null;
-    for (const g of [rig.walk, rig.run]) {
+    const walk = res.animationGroups.find((g) => g.name === "Walking") ?? null;
+    const run = res.animationGroups.find((g) => g.name === "Running") ?? null;
+    for (const g of [walk, run]) {
       if (!g) continue;
       g.start(true);
       g.setWeightForAllAnimatables(0);
     }
-    rig.captureStance();
+    rig.clips = new ClipDriver(walk, run);
+    const stance = captureStance(walk);
+    for (const [j, q] of stance.joints) rig.stance.set(j, q);
+    rig.stanceHipsPos = stance.hipsPos;
 
     // The overlay writes joint locals after the animation system, every render.
     scene.onAfterAnimationsObservable.add(() => rig.applyOverlay());
@@ -319,52 +232,9 @@ export class GlbSoldier {
   debugBoneWorld(name: string): Vector3 | null {
     const j = this.joints.get(name);
     if (!j) return null;
-    this.worldMemo.clear();
-    const m = this.worldOf(j as unknown as ChainNode);
+    this.chain.clear();
+    const m = this.chain.worldOf(j as unknown as ChainNode);
     return Vector3.TransformCoordinates(Vector3.Zero(), m);
-  }
-
-  /**
-   * Averages the Walking clip's keys into a neutral mid-stride stance used
-   * when no clip drives the joints (idle, airborne). Quaternions are summed
-   * sign-aligned to the first key and normalised.
-   */
-  private captureStance(): void {
-    if (!this.walk) return;
-    const acc = new Map<TransformNode, { q: Quaternion; ref: Quaternion }>();
-    let hipsPos = Vector3.Zero();
-    let hipsN = 0;
-    for (const ta of this.walk.targetedAnimations) {
-      const target = ta.target as TransformNode;
-      const keys = ta.animation.getKeys();
-      if (!keys.length) continue;
-      if (ta.animation.targetProperty === "rotationQuaternion") {
-        const entry = acc.get(target) ?? {
-          q: Quaternion.Zero(),
-          ref: keys[0].value as Quaternion,
-        };
-        for (const k of keys) {
-          const v = k.value as Quaternion;
-          const sign = Quaternion.Dot(v, entry.ref) < 0 ? -1 : 1;
-          entry.q.x += v.x * sign;
-          entry.q.y += v.y * sign;
-          entry.q.z += v.z * sign;
-          entry.q.w += v.w * sign;
-        }
-        acc.set(target, entry);
-      } else if (
-        ta.animation.targetProperty === "position" &&
-        target.name === "Hips"
-      ) {
-        for (const k of keys) hipsPos.addInPlace(k.value as Vector3);
-        hipsN += keys.length;
-      }
-    }
-    for (const [j, e] of acc) {
-      e.q.normalize();
-      this.stance.set(j, e.q.clone());
-    }
-    if (hipsN > 0) this.stanceHipsPos = hipsPos.scale(1 / hipsN);
   }
 
   // --- per-render overlay ---------------------------------------------------
@@ -373,37 +243,38 @@ export class GlbSoldier {
     const dt = Math.min(this.scene.getEngine().getDeltaTime() / 1000, 0.05);
     const p = this.params;
 
-    this.driveClips(dt, p);
+    this.clips?.update(dt, p.groundSpeed, p.airBlend);
+    const idleW = this.clips?.idleW ?? 1;
 
     // Current-frame capsule transform: Player.update just wrote position/yaw
     // and the render loop hasn't recomputed matrices yet.
     const capsule = this.root.parent as ChainNode & {
       computeWorldMatrix?: (force?: boolean) => Matrix;
     } | null;
-    this.worldMemo.clear();
+    this.chain.clear();
     if (capsule?.computeWorldMatrix) {
-      this.worldMemo.set(capsule, capsule.computeWorldMatrix(true));
+      this.chain.seed(capsule, capsule.computeWorldMatrix(true));
     }
 
     // 1. Idle/airborne stance on the joints the clips own when moving.
-    const stanceW = Math.max(this.idleW, p.airBlend * 0.55);
+    const stanceW = Math.max(idleW, p.airBlend * 0.55);
     if (stanceW > 0.001) {
       for (const [j, q] of this.stance) {
         if (j === this.armR || j === this.armL || j === this.foreR || j === this.foreL) continue;
         const cur = j.rotationQuaternion;
         if (!cur) continue;
         Quaternion.SlerpToRef(cur, q, stanceW, cur);
-        this.invalidate(j);
+        this.chain.invalidate(j);
       }
       if (this.hips && this.stanceHipsPos) {
         Vector3.LerpToRef(this.hips.position, this.stanceHipsPos, stanceW, this.hips.position);
-        this.invalidate(this.hips);
+        this.chain.invalidate(this.hips);
       }
     }
 
     // 2. Aim pitch distributed over the spine (+ breath sway at idle), then head.
     const right = this.charRight();
-    const breath = 0.02 * Math.sin(p.idleT * 2.1) * this.idleW;
+    const breath = 0.02 * Math.sin(p.idleT * 2.1) * idleW;
     const pitch = -p.aimPitch;
     if (this.spine) this.worldDelta(this.spine, right, pitch * 0.1);
     if (this.spine1) this.worldDelta(this.spine1, right, pitch * 0.15);
@@ -430,31 +301,6 @@ export class GlbSoldier {
 
     // 4. Rifle follows the (final) right hand.
     this.followRifle(p);
-  }
-
-  /** Clip selection, crossfade, and playback speed from ground speed. */
-  private driveClips(dt: number, p: SoldierPoseParams): void {
-    const gs = p.groundSpeed;
-    if (gs > RUN_ENTER) this.band = "run";
-    else if (gs < WALK_ENTER) this.band = "walk";
-
-    const clipW = Math.min(1, gs / CLIP_FULL_SPEED) * (1 - p.airBlend * 0.8);
-    const walkTarget = this.band === "walk" ? clipW : 0;
-    const runTarget = this.band === "run" ? clipW : 0;
-    const ease = (cur: number, target: number, rate: number) =>
-      cur + (target - cur) * Math.min(1, dt * rate);
-    this.walkW = ease(this.walkW, walkTarget, 8);
-    this.runW = ease(this.runW, runTarget, 8);
-    this.idleW = ease(this.idleW, 1 - Math.min(1, gs / 1.2), 5);
-
-    if (this.walk) {
-      this.walk.setWeightForAllAnimatables(this.walkW);
-      this.walk.speedRatio = Math.min(1.4, Math.max(0.5, gs / WALK_REF_SPEED));
-    }
-    if (this.run) {
-      this.run.setWeightForAllAnimatables(this.runW);
-      this.run.speedRatio = Math.min(1.8, Math.max(0.6, gs / RUN_REF_SPEED));
-    }
   }
 
   /** Scratch for the constant lower-arm drop direction: handguardPoint
@@ -495,7 +341,7 @@ export class GlbSoldier {
     toWorld(upperDir, tmpV1).rotateByQuaternionToRef(tmpQ3, tmpV1).normalize();
     toWorld(lowerDir, tmpV2).rotateByQuaternionToRef(tmpQ3, tmpV2).normalize();
 
-    this.aimJoint(upper, this.childJointOf(upper), tmpV1, 1);
+    this.aimJoint(upper, this.chain.childOf(upper), tmpV1, 1);
 
     if (isLeft) {
       // Support hand holds the handguard: aim the forearm at the guard point
@@ -503,13 +349,13 @@ export class GlbSoldier {
       // toward the constant drop direction while reloading. The guard lookup
       // clobbers the shared temps, so the drop direction is kept aside.
       this.aimDrop.copyFrom(tmpV2);
-      const lowerChild = this.childJointOf(lower);
+      const lowerChild = this.chain.childOf(lower);
       if (lowerChild && p.reloadBlend < 0.999) {
         const guard = this.handguardPoint(p);
         if (guard) {
           const elbow = Vector3.TransformCoordinates(
             Vector3.Zero(),
-            this.worldOf(lower as unknown as ChainNode),
+            this.chain.worldOf(lower as unknown as ChainNode),
           );
           tmpV3.copyFrom(guard).subtractInPlace(elbow);
           if (tmpV3.lengthSquared() > 1e-8) {
@@ -524,7 +370,7 @@ export class GlbSoldier {
       this.aimJoint(lower, lowerChild, this.aimDrop, 1);
       return;
     }
-    this.aimJoint(lower, this.childJointOf(lower), tmpV2, 1);
+    this.aimJoint(lower, this.chain.childOf(lower), tmpV2, 1);
   }
 
   /** Scratch matrix for the rifle world target (not shared with other temps). */
@@ -545,7 +391,7 @@ export class GlbSoldier {
   private rifleWorldTarget(p: SoldierPoseParams): Matrix | null {
     if (!this.handR) return null;
     const r = CONFIG.recoil;
-    const hw = tmpM5.copyFrom(this.worldOf(this.handR as unknown as ChainNode));
+    const hw = tmpM5.copyFrom(this.chain.worldOf(this.handR as unknown as ChainNode));
     orthonormalizeRows(hw);
     tmpV2.copyFrom(RIFLE_OFFSET.euler);
     tmpV2.x += -r.kickPitch * p.kick;
@@ -579,7 +425,7 @@ export class GlbSoldier {
   private applyWorldDelta(joint: TransformNode, delta: Matrix): void {
     const parent = joint.parent as ChainNode | null;
     if (!parent) return;
-    const w = this.worldOf(parent);
+    const w = this.chain.worldOf(parent);
     w.invertToRef(tmpM4);
     const q = joint.rotationQuaternion ?? Quaternion.Identity();
     Matrix.ComposeToRef(joint.scaling, q, joint.position, tmpM5);
@@ -588,7 +434,7 @@ export class GlbSoldier {
     tmpM5.multiplyToRef(tmpM4, tmpM5);
     if (!tmpM5.decompose(undefined, tmpQ1, undefined)) return;
     joint.rotationQuaternion = tmpQ1.clone();
-    this.invalidate(joint);
+    this.chain.invalidate(joint);
   }
 
   /** Rotates a joint in world space, about `axis` by `angle`, on top of the
@@ -610,8 +456,8 @@ export class GlbSoldier {
     weight: number,
   ): void {
     if (!child || weight <= 0) return;
-    const bw = this.worldOf(joint as unknown as ChainNode);
-    const cw = this.worldOf(child as unknown as ChainNode);
+    const bw = this.chain.worldOf(joint as unknown as ChainNode);
+    const cw = this.chain.worldOf(child as unknown as ChainNode);
     const bPos = Vector3.TransformCoordinates(Vector3.Zero(), bw);
     const cPos = Vector3.TransformCoordinates(Vector3.Zero(), cw);
     tmpV3.copyFrom(cPos).subtractInPlace(bPos);
@@ -628,7 +474,7 @@ export class GlbSoldier {
 
   /** The capsule's rotation (proper, det > 0) as a rotation matrix. */
   private charRotationMatrix(): Matrix {
-    const w = this.worldOf(this.root as unknown as ChainNode);
+    const w = this.chain.worldOf(this.root as unknown as ChainNode);
     w.decompose(tmpScale, tmpQ1, tmpV3);
     return Matrix.FromQuaternionToRef(tmpQ1, this.charRotM);
   }
@@ -645,7 +491,7 @@ export class GlbSoldier {
     charRot: Matrix,
   ): void {
     if (!hand) return;
-    const hw = tmpM5.copyFrom(this.worldOf(hand as unknown as ChainNode));
+    const hw = tmpM5.copyFrom(this.chain.worldOf(hand as unknown as ChainNode));
     orthonormalizeRows(hw);
     const ha = hw.m as unknown as Float32Array;
     ha[12] = 0;
@@ -655,7 +501,7 @@ export class GlbSoldier {
     if (!cal) {
       // Wait for a settled idle frame so the capture is the real carry
       // pose — the rifle offset was tuned against exactly this frame.
-      if (this.idleW < 0.95) return;
+      if ((this.clips?.idleW ?? 0) < 0.95) return;
       // calLocal = handWorld · charRot⁻¹  (character-space grip frame:
       // world = charSpace · charRot, so the inverse post-multiplies. The
       // pre-multiplied order only works when the capture happens at yaw 0;
@@ -683,7 +529,7 @@ export class GlbSoldier {
     if (!target) return;
     // To gltfRoot-local, where the inherited mirror cancels and the local
     // decomposes cleanly (positive determinant).
-    this.worldOf(this.gltfRoot as unknown as ChainNode).invertToRef(tmpM4);
+    this.chain.worldOf(this.gltfRoot as unknown as ChainNode).invertToRef(tmpM4);
     target.multiplyToRef(tmpM4, tmpM3);
     if (!tmpM3.decompose(tmpScale, tmpQ2, tmpV3)) return;
     this.rifle.root.position.copyFrom(tmpV3);
@@ -698,45 +544,15 @@ export class GlbSoldier {
 
   /** Character right axis in world space (the capsule's, not the model's). */
   private charRight(): Vector3 {
-    const w = this.worldOf(this.root as unknown as ChainNode);
+    const w = this.chain.worldOf(this.root as unknown as ChainNode);
     w.decompose(tmpScale, tmpQ1, tmpV3);
     return Vector3.TransformNormal(Vector3.Right(), Matrix.FromQuaternionToRef(tmpQ1, tmpM2)).normalize();
   }
 
   /** Character forward axis in world space (the capsule's facing). */
   private charForward(): Vector3 {
-    const w = this.worldOf(this.root as unknown as ChainNode);
+    const w = this.chain.worldOf(this.root as unknown as ChainNode);
     w.decompose(tmpScale, tmpQ1, tmpV3);
     return Vector3.TransformNormal(Vector3.Forward(), Matrix.FromQuaternionToRef(tmpQ1, tmpM2)).normalize();
-  }
-
-  private childJointOf(joint: TransformNode): TransformNode | null {
-    return this.children.get(joint)?.[0] ?? null;
-  }
-
-  /** Drops the memo for a joint and its descendants after an override write. */
-  private invalidate(joint: TransformNode): void {
-    this.worldMemo.delete(joint);
-    for (const c of this.children.get(joint) ?? []) this.invalidate(c);
-  }
-
-  /**
-   * Current-frame world matrix for any node between a joint and the capsule,
-   * composed from live local TRS (post-animation, post-override) and memoized
-   * per render. The capsule at the top is seeded refreshed.
-   */
-  private worldOf(n: ChainNode): Matrix {
-    const hit = this.worldMemo.get(n);
-    if (hit) return hit;
-    const q =
-      n.rotationQuaternion ??
-      (n.rotation
-        ? Quaternion.FromEulerVectorToRef(n.rotation, tmpQEuler)
-        : Quaternion.Identity());
-    const local = Matrix.ComposeToRef(n.scaling, q, n.position, new Matrix());
-    const parent = n.parent as ChainNode | null;
-    const world = parent ? local.multiply(this.worldOf(parent)) : local;
-    this.worldMemo.set(n, world);
-    return world;
   }
 }

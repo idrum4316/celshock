@@ -371,10 +371,19 @@ export class Game {
     this.spendMuzzleLightBudget();
     this.combat.update(dt);
 
-    // --- camera & rendering support ---
-    // This tail order is load-bearing: light slot selection and the shader's
-    // fog both key off the camera position, so anything that moves the camera
-    // has to run before them.
+    this.updateCameraAndLighting(dt);
+    this.updateHud(dt);
+  }
+
+  /**
+   * Camera & rendering support. This tail order is LOAD-BEARING: light slot
+   * selection, the shader's fog, and audio panning all key off the camera
+   * position, so anything that moves the camera must run before them:
+   * aim assist -> camera update -> mats.updateCamera() -> carried lights ->
+   * lighting.update() -> water.update() -> sfx.setListener().
+   * Nothing after this method may move the camera.
+   */
+  private updateCameraAndLighting(dt: number): void {
     // Aim assist reads last frame's camera pose and this frame's enemy list
     // (consumed synchronously — the battle scratch array is safe to pass),
     // and is inert unless the player is looking with a gamepad stick.
@@ -407,8 +416,10 @@ export class Game {
     );
     // Same rule as the lights and the fog: this has to follow the camera.
     this.sfx.setListener(this.cameraSys.camera.position, this.cameraSys.forward);
+  }
 
-    // --- HUD ---
+  /** Pushes this frame's state to the DOM HUD and the minimap. */
+  private updateHud(dt: number): void {
     this.hud.setHealth(this.player.health, this.player.maxHealth);
     this.hud.setAmmo(this.player.ammo, this.player.magSize, this.player.reloading);
     // Tightens the crosshair ring while aiming.
