@@ -1,6 +1,26 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Single source of truth for AI coding agents (and contributors) working in this
+repository. `AGENTS.md` is a pointer to this file; `README.md` is user-facing.
+
+## Project overview
+
+**HOLLOWMERE — Cel-Shaded Conquest**: a browser-based, single-player Conquest
+shooter (16v16 vs bots, five control points, ticket bleed) built with
+**Babylon.js** + **TypeScript**, bundled with **Vite**. ES modules
+(`"type": "module"`), Node 18+, WebGL2 browser required.
+
+The game ships **zero audio files and (almost) zero model files** — every mesh
+except one is built from Babylon primitives at runtime and all sound is
+synthesized WebAudio (`src/core/Sfx.ts`). The single exception, added by
+explicit request, is the **player's body**: a rigged GLB (`models/*.glb`)
+driven by `src/entities/GlbSoldier.ts` (own locomotion clips + a procedural
+bone overlay for aim/reload/rifle-carry). Bots and weapons stay primitive —
+do not extend the GLB approach to them (rig pooling/merging rules still
+apply), and do not add further asset files unless explicitly asked.
+
+**Every source file has a contract header** at the top stating what it owns,
+its invariants, and what it must never do. Read it before editing that file.
 
 ## Commands
 
@@ -47,11 +67,56 @@ To inspect a model in isolation, drop a throwaway `modelviewer.html` + `.ts` at
 the repo root (Vite serves it as a second page) with an `ArcRotateCamera` driven
 by `camera.setPosition`.
 
-## Architecture
+## File tour
 
-`README.md` has the full file-by-file tour and the design rationale — read it
-before a substantial change. What follows is what isn't obvious from any single
-file.
+```
+main.ts                     # Bootstrap
+src/
+  config.ts                 # ALL tunable constants (no magic numbers in code)
+  core/
+    Game.ts                 # Orchestrator + game state machine + main loop
+    InputManager.ts         # Unified keyboard/mouse + gamepad state
+    CameraSystem.ts         # Third-person shoulder cam; ADS pulls in + zooms
+    Sfx.ts                  # Procedural WebAudio, spatialised and voice-capped
+  entities/
+    Player.ts               # Movement, sprint, jump, weapon state, body wiring
+    GlbSoldier.ts           # Player body: rigged GLB (models/*.glb), clips +
+                            # procedural bone overlay (aim/reload/rifle carry)
+    RifleModel.ts           # Low-poly SCAR-pattern rifle + holo sight builder
+    Combatant.ts            # Team + the shared shootable/shooter interface
+    Bot.ts                  # Bot FSM: advance / engage / reposition / capture
+    SoldierModel.ts         # Cheap merged bot rig + procedural animation
+  systems/
+    BattleSystem.ts         # Bot pool, AI scheduling, LOS, distance LOD
+    ConquestSystem.ts       # Flags, capture meters, tickets, bleed, spawns
+    CombatSystem.ts         # Hitscan + pooled tracers and sparks
+    AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
+    LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
+    Atmosphere.ts           # Drifting ash particle field
+    Sky.ts                  # Generated sky dome (gradient/stars/halo), moon, clouds
+    WaterSystem.ts          # Water surfaces from map WaterRects
+  world/
+    MapBuilder.ts           # Builds the map; merges visuals, emits colliders
+    BuildingKit.ts          # Parametric cottages, chapel, barn, mill, ramps...
+    NavGrid.ts              # Walkable-surface graph + precomputed flow fields
+    ObstacleField.ts        # Sub-cell collision push-out for thin props
+    Props.ts                # Scatter props: trees, graves, rubble, braziers
+    textures.ts             # Generated canvas textures (cobblestone etc.)
+    environment.ts          # EnvironmentSpec + applyEnvironment
+    hollowmere/
+      layout.ts             # THE MAP — every placement, flag, and spawn
+      environment.ts        # Hollowmere's palette, fog, mist, particles
+  ui/
+    HUD.ts                  # DOM overlay: tickets, flags, killfeed, scoreboard
+    DeployScreen.ts         # Clickable top-down deploy map
+    Minimap.ts              # Corner minimap: flags, friendlies, firing enemies
+  shaders/
+    CelShader.ts            # Custom cel ShaderMaterial + outline helper
+    WaterShader.ts          # Animated water ShaderMaterial
+    HorrorPost.ts           # Vignette / grain / aberration / damage flash pass
+```
+
+## Architecture
 
 ### Ownership and wiring
 
@@ -70,8 +135,8 @@ over a live view.
 `Game.updateGameplay` has a load-bearing order at the end of the frame: camera
 update → `mats.updateCamera()` → carried-light updates → `lighting.update(dt,
 camera.position, mats)` → `sfx.setListener()`. Light slot selection, shader fog,
-and audio panning all key
-off the camera position, so anything that moves the camera must run before them.
+and audio panning all key off the camera position, so anything that moves the
+camera must run before them.
 
 `ConquestSystem.update` runs *before* `BattleSystem.update`, so a bot's think
 tick sees this frame's flag ownership rather than last frame's.
@@ -256,10 +321,9 @@ turns the round into a respawn queue.
 
 ### Procedural models
 
-Every mesh — player, bots, weapons, buildings, props, environment — is built from
-Babylon primitives at runtime. The game ships zero model files and zero audio
-files (`Sfx` synthesizes WebAudio). A glTF asset pipeline was tried and reverted;
-it survives only in `stash@{0}`. Don't reintroduce assets without being asked.
+Every mesh except the player's GLB body is built from Babylon primitives at
+runtime, and all audio is synthesized (`Sfx`). Don't reintroduce asset files
+without being asked.
 
 `RifleModel.buildRifle()` merges its ~50 static boxes into one mesh per color
 (BODY/POLYMER/METAL) — that merge is what makes the outline pass draw one border
@@ -267,10 +331,13 @@ per color group instead of a black shell around every screw. It works only
 because the root is still at identity while building: `MergeMeshes` bakes world
 matrices and returns an identity-transform mesh, which is then re-parented.
 
-### Gameplay conventions
+## Conventions
 
 - **All tunables live in `src/config.ts`** (`CONFIG`, `as const`). No gameplay
   magic numbers elsewhere — art/geometry constants stay in their model file.
+- `CONFIG` is `as const`, so a field like `bots.engageRange` has a *literal*
+  type. `let x = CONFIG.bots.engageRange` then reassigning it fails to compile —
+  annotate `let x: number` instead.
 - Smoothing is normally the frame-lerp idiom `Math.min(1, dt * rate)`. Recoil
   decay in `CameraSystem` deliberately uses true `Math.exp(-rate * dt)` instead,
   because it moves where bullets go and burst climb must not vary with frame
@@ -285,18 +352,20 @@ matrices and returns an identity-transform mesh, which is then re-parented.
   rather than by a team check inside. There is no projectile pool to thrash in a
   32-bot firefight. Tracers and sparks are pooled; add effects to a pool rather
   than allocating per shot.
-- `CONFIG` is `as const`, so a field like `bots.engageRange` has a *literal*
-  type. `let x = CONFIG.bots.engageRange` then reassigning it fails to compile —
-  annotate `let x: number` instead.
+- TypeScript is strict with `noUnusedLocals`/`noUnusedParameters` — the
+  typecheck will fail on dead variables.
 - `Bot` holds a small FSM and drives a joint rig built by `SoldierModel`
   (invisible root + `TransformNode` joints). Animation is procedural — posed
   hierarchies, walk cycles driven by travel speed — so a new behavior means new
   FSM states, never new clips.
+- The map is data: a second map is one new `layout.ts` + `EnvironmentSpec`;
+  `MapBuilder`/`BuildingKit` must not special-case Hollowmere.
 
-## Notes
+## Files not to edit / not part of the build
 
-- `specs/game_design.md` describes the *original roguelike* prototype. It is
-  history twice over now — the game is a Conquest shooter — and is not a live
-  contract.
-- The tracked `undefined/` directory is stray screenshot output from a script
-  with a bad path. It is not part of the build.
+- `dist/` — build output (gitignored); regenerate with `npm run build`.
+- `node_modules/` — gitignored.
+- `specs/game_design.md` — describes the original roguelike prototype;
+  historical, **not a live contract**.
+- `undefined/` — tracked stray screenshot output from a script with a bad path;
+  ignore it.

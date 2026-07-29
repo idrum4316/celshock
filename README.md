@@ -47,8 +47,7 @@ crosshair is over an enemy, and the view pulls gently toward the target
 steering). Pushing the stick against the pull cancels it — a committed push
 always breaks free. It only engages while the right stick is the active
 look device — the moment the mouse moves, assist disengages and sensitivity
-is untouched, so mixed setups never penalize keyboard/mouse aim. Tuning
-lives in `CONFIG.aimAssist`.
+is untouched, so mixed setups never penalize keyboard/mouse aim.
 
 ### How a round works
 
@@ -73,178 +72,22 @@ is the best perch on the map and the ramp up to it is fully exposed. The
 **Bog Docks** are mist-choked and cramped by design. The **Square** has four
 road approaches and almost no cover.
 
-## Architecture
+## Tech in one paragraph
 
-```
-main.ts                     # Bootstrap
-src/
-  config.ts                 # All tunable constants (no magic numbers in code)
-  core/
-    Game.ts                 # Orchestrator + game state machine + main loop
-    InputManager.ts         # Unified keyboard/mouse + gamepad state
-    CameraSystem.ts         # Third-person shoulder cam; ADS pulls in + zooms
-    Sfx.ts                  # Procedural WebAudio, spatialised and voice-capped
-  entities/
-    Player.ts               # Movement, sprint, jump, weapon state, body wiring
-    GlbSoldier.ts           # Player body: rigged GLB (models/*.glb), clips +
-                            # procedural bone overlay (aim/reload/rifle carry)
-    RifleModel.ts           # Low-poly SCAR-pattern rifle + holo sight builder
-    Combatant.ts            # Team + the shared shootable/shooter interface
-    Bot.ts                  # Bot FSM: advance / engage / reposition / capture
-    SoldierModel.ts         # Cheap merged bot rig + procedural animation
-  systems/
-    BattleSystem.ts         # Bot pool, AI scheduling, LOS, distance LOD
-    ConquestSystem.ts       # Flags, capture meters, tickets, bleed, spawns
-    CombatSystem.ts         # Hitscan + pooled tracers and sparks
-    AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
-    LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
-    Atmosphere.ts           # Drifting ash particle field
-    Sky.ts                  # Generated sky dome (gradient/stars/halo), moon, clouds
-  world/
-    MapBuilder.ts           # Builds the map; merges visuals, emits colliders
-    BuildingKit.ts          # Parametric cottages, chapel, barn, mill, ramps...
-    NavGrid.ts              # Walkable-surface graph + precomputed flow fields
-    Props.ts                # Scatter props: trees, graves, rubble, braziers
-    environment.ts          # EnvironmentSpec + applyEnvironment
-    hollowmere/
-      layout.ts             # THE MAP — every placement, flag, and spawn
-      environment.ts        # Hollowmere's palette, fog, mist, particles
-  ui/
-    HUD.ts                  # DOM overlay: tickets, flags, killfeed, scoreboard
-    DeployScreen.ts         # Clickable top-down deploy map
-    Minimap.ts              # Corner minimap: flags, friendlies, firing enemies
-  shaders/
-    CelShader.ts            # Custom cel ShaderMaterial + outline helper
-    HorrorPost.ts           # Vignette / grain / aberration / damage flash pass
-```
+Everything you see and hear is generated at runtime: every mesh (except the
+player's rigged GLB body) is built from Babylon primitives and merged per
+colour, all audio is synthesized WebAudio, the cel look is a custom
+`ShaderMaterial` with 16 dynamic point-light slots, and the 32 bots steer on a
+precomputed nav grid with one flow field per objective — no pathfinding, no
+physics engine, no asset downloads beyond the one GLB.
 
-### The map is data
-
-`src/world/hollowmere/layout.ts` is the whole level: a list of placements
-(`{ kind, x, z, rotY, params }`), scatter regions, control points, and spawns.
-`BuildingKit` provides the parametric pieces, `MapBuilder` consumes the layout,
-and neither special-cases Hollowmere — **a second map is one new layout file**.
-
-### Visual meshes and collision proxies are separate
-
-This is the load-bearing decision of the whole conversion. Every ray test runs
-against `metadata.solid === true` meshes — the camera's occlusion pull-in every
-frame, hitscan on every shot, and bot line-of-sight — and the player's collider
-walks every mesh with `checkCollisions`. At village scale, letting visual
-geometry do those jobs means thousands of triangle-picked meshes in the hot
-path.
-
-So nothing does both:
-
-| Kind         | visible | pickable | collides | `solid` | merged | frozen |
-| ------------ | ------- | -------- | -------- | ------- | ------ | ------ |
-| **Visual**   | yes     | **no**   | **no**   | —       | yes    | yes    |
-| **Collider** | **no**  | yes      | yes      | yes     | no     | yes    |
-
-Visual geometry is merged per colour — a cottage goes from ~20 meshes to 4, and
-because `renderOutline` draws a shell per mesh, from ~40 draws to 8. The whole
-village is ~160 drawn meshes and ~300 invisible collider boxes.
-
-### Navigation
-
-`NavGrid` rasterises every collider's **top face** into a 160 × 160 grid. The
-graph node is a *surface* — a (cell, height) pair — because one cell can hold
-the creek floor and the bridge deck above it, or the barn floor and its hayloft.
-Surfaces are linked when they are adjacent and within a step, then flood-filled
-from open ground; that flood fill is what keeps bots off rooftops, since a roof
-is standable but nothing next to it is within a step.
-
-One **flow field per objective** (five flags plus both home spawns) is computed
-at load, so all 32 bots share seven breadth-first searches instead of running
-their own pathfinding. The map is static, so none of it is ever recomputed.
-
-The grid routes; it does not collide. It samples one column per 1.5 m cell
-*centre*, so anything narrower than a cell — every scattered tree, gravestone
-and fire drum — can sit between two centres and be invisible to it, and bots
-walked straight into props and stood inside them. `ObstacleField` covers that
-gap: collider boxes are bucketed at load, and each step is pushed clear of
-whatever it overlaps before the grid is asked whether the spot is standable.
-Steps also slide along a blocked axis rather than failing outright, and a
-watchdog sidesteps a bot that stops making progress. Bots being embedded in
-geometry was never only cosmetic — `CombatSystem` stops every shot at the first
-`solid` hit, so a bot inside a tree had the tree soaking up rounds aimed at it.
-
-### Bots
-
-Thirty-two bots, from a pool built once and never disposed — death hides a rig,
-respawn re-poses it, so continuous respawning never allocates. Each rig is nine
-merged meshes (`SoldierModel`), against ~60 for the player's, because the
-outline pass draws everything twice and the player is the only character always
-on screen.
-
-The expensive half of the AI — target acquisition, line-of-sight rays, objective
-re-evaluation — runs at 5 Hz per bot, round-robin across frames, which is a
-couple of ray picks per frame for the whole roster. Movement integrates every
-frame. Bots hold a target until it dies, breaks line of sight, or leaves range:
-without that hysteresis "nearest visible enemy" flips every tick in a crowd and
-resets the reaction timer, so nobody ever fires.
-
-Distance LOD keyed off the camera: past the fog a rig is disabled outright, past
-35 m the pose freezes, past 20 m outlines are dropped.
-
-### Rendering
-
-Cel shading is a custom `ShaderMaterial` (`src/shaders/CelShader.ts`). Light
-arrives in three banded parts, so the toon look survives a fully dynamic scene:
-
-- a **directional key light** (the moon) quantized into 4 hard bands,
-- up to 16 **dynamic point lights** — lanterns, braziers, muzzle flashes, the
-  player's lamp — quantized into 3 bands with a smooth radial falloff, and
-- a flat **ambient** term that sets how black the unlit side goes.
-
-A soft shoulder compresses anything above 0.75 so overlapping lights saturate in
-their own color instead of clipping to white. Atmosphere is theme-tinted
-distance fog plus a separate height-based ground mist, both blended in the
-fragment shader, and a step-function rim highlight adds the toon pop. Bold
-outlines use Babylon's outline renderer (inverted hull). Materials are cached per
-color and shared across meshes.
-
-`LightingSystem` owns every dynamic light and the shader has only 16 slots, so
-each frame the nearest fixtures win — imperceptible in practice, because distant
-lights are already swallowed by fog. Transient flashes and *carried* lights (the
-player's lamp) are guaranteed a slot, which is exactly why bot muzzle flashes
-are budgeted: 32 bots firing would take all 16 and black out the village.
-
-Finally `HorrorPost` grades the frame: vignette, corner desaturation, radial
-chromatic aberration, animated film grain, and a red flash on damage. It is
-hand-written because Babylon's image-processing block re-gammas the cel shader's
-already display-ready colors and washes the palette out.
-
-Shading is **faceted**: the fragment shader recovers each triangle's geometric
-normal from screen-space derivatives of the world position instead of using the
-interpolated vertex normal. Doing it in the shader gets flat shading on every
-mesh for free — no `convertToFlatShadedMesh()` calls, no unwelded vertices, and
-it applies automatically to anything built later. Effect meshes (tracers, sparks)
-use unlit emissive `StandardMaterial`s and are unaffected.
-
-**The game ships no 3D model files.** Every mesh — player, bots, weapons, props,
-buildings, environment — is built from Babylon primitives at runtime,
-deliberately coarse so the facets read as the art style.
-
-### Performance notes
-
-- Village visuals are **merged per colour, per structure**; scatter props are
-  merged per region.
-- Static geometry is `freezeWorldMatrix()`'d and unpickable; collider proxies
-  are plain invisible boxes.
-- Player and bot shots are **hitscan** — there is no projectile pool to thrash
-  in a 32-bot firefight. Tracers and sparks are pooled.
-- Bots move on the nav graph rather than through Babylon's collider; 32 agents
-  calling `moveWithCollisions` would walk the collidable mesh list 32× a frame.
-- Audio uses **one cached noise buffer**, distance attenuation, and a 24-voice
-  cap. Generating a fresh buffer per shot was ~1,900 `Math.random()` calls each.
-- Almost no asset downloads: the one imported asset is the player's GLB body
-  (`models/`, see `GlbSoldier.ts`); bots, weapons, and the world are still
-  built from primitives, and all sound is synthesized at runtime.
+**Contributor/agent documentation lives in [`CLAUDE.md`](CLAUDE.md)** —
+architecture, load-bearing invariants, and conventions. Every source file also
+has a contract header at the top.
 
 ## Known limitations
 
-- Characters are primitive assemblies, not modeled/rigged meshes; all
+- Characters (bots) are primitive assemblies, not modeled/rigged meshes; all
   "animation" is procedural (posed joint hierarchies, walk cycles driven by
   travel speed).
 - Point lights are per-pixel but cast **no shadows** — the darkness is fog,

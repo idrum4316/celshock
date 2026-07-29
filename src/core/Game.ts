@@ -1,3 +1,17 @@
+/**
+ * Game.ts — Orchestrator: engine/scene init, state machine, main loop, and ALL
+ * cross-system wiring. The only place systems meet — systems never import each
+ * other; new cross-system behavior is a callback wired here.
+ * State machine: menu -> deploy -> playing (deploy re-entered on each death)
+ * -> roundover. The 3D scene renders live behind every state.
+ * Load-bearing frame order at the end of updateGameplay: camera update ->
+ * mats.updateCamera() -> carried lights -> lighting.update() -> sfx.setListener().
+ * ConquestSystem.update runs before BattleSystem.update (bots see this frame's
+ * flag ownership). Muzzle-flash light budget is spent here
+ * (spendMuzzleLightBudget) — new per-bot transient lights need the same treatment.
+ * Also owns: GlowLayer scan (construction-time only; metadata.noGlow contract),
+ * pipeline.imageProcessingEnabled === false, window.__celshock debug handle.
+ */
 import {
   DefaultRenderingPipeline,
   Engine,

@@ -1,3 +1,13 @@
+/**
+ * CombatSystem.ts — Hitscan for EVERYONE (player and bots share fire()), plus
+ * pooled tracer/spark effects.
+ * Invariants: fire() takes the shooter's target list — friendly fire is
+ * excluded by the caller's list construction, never by a team check inside.
+ * Wall ray filters metadata.solid === true and caps the shot; a target sphere
+ * farther than the first solid hit does not count (a bot embedded in a prop is
+ * unshootable — movement bugs become combat bugs). Tracers/sparks are
+ * fixed-size pools: add new effects to a pool, NEVER allocate per shot.
+ */
 import {
   Mesh,
   MeshBuilder,

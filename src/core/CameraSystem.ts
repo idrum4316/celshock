@@ -1,3 +1,14 @@
+/**
+ * CameraSystem.ts — Third-person over-the-shoulder camera: aim yaw/pitch, ADS
+ * blend (distance/offset/FOV/sensitivity), recoil, wall-occlusion pull-in.
+ * Owns: the scene's active camera. Never goes first-person.
+ * Invariants: recoil decay uses true Math.exp(-rate*dt) — NOT the frame-lerp
+ * idiom — because burst climb must not vary with frame rate. Recoil only
+ * partly springs back (CONFIG.recoil.recoverFraction); the rest is pushed into
+ * the player's aim permanently — a deliberate product decision, not a bug.
+ * Occlusion pick filters metadata.solid === true. Must run before
+ * mats.updateCamera()/lighting.update()/sfx.setListener() in Game's frame order.
+ */
 import { FreeCamera, Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { InputManager } from "./InputManager";

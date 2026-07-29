@@ -1,3 +1,9 @@
+/**
+ * hollowmere/environment.ts — Hollowmere's EnvironmentSpec: palette, fog,
+ * ground mist, moon light, sky, water, ash particles. Pure data — consumed by
+ * applyEnvironment/Sky/WaterSystem/Atmosphere. Fixture light POSITIONS live in
+ * layout.ts/BuildingKit, not here.
+ */
 import type { EnvironmentSpec } from "../environment";
 
 /**

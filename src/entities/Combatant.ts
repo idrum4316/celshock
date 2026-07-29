@@ -1,3 +1,9 @@
+/**
+ * Combatant.ts — The shared shootable/shooter interface (player + bots) and
+ * the Team type (0/1 index into CONFIG.teams). Pure types, no runtime logic.
+ * CombatSystem.fire() takes a shooter's target list built from Combatants, so
+ * friendly fire is excluded by construction, never by a team check inside.
+ */
 import type { Vector3 } from "@babylonjs/core";
 import type { Hittable } from "../systems/CombatSystem";
 

@@ -1,3 +1,15 @@
+/**
+ * CelShader.ts — The look: custom cel ShaderMaterial (banded directional key +
+ * up to MAX_POINT_LIGHTS=16 dynamic point lights + ambient, fog, ground mist,
+ * rim) and CelMaterialFactory, the cache every lit material comes from.
+ * Invariants: the scene has NO Babylon lights — light arrives only via these
+ * uniforms, uploaded by LightingSystem once per frame. Flat/faceted shading is
+ * recovered in the fragment shader from screen-space derivatives — NEVER call
+ * convertToFlatShadedMesh(). Output is display-ready color, which is why
+ * pipeline.imageProcessingEnabled must stay false. Materials are cached/shared
+ * per color — don't create per-mesh materials. addOutline() skips meshes with
+ * metadata.noOutline; effect meshes use getEmissive() (unlit StandardMaterial).
+ */
 import {
   type BaseTexture,
   Color3,

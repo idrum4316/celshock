@@ -1,3 +1,11 @@
+/**
+ * WaterSystem.ts — Water surfaces built from the map's WaterRects; syncs each
+ * water material's time/camera/point-light uniforms every frame.
+ * Invariants: water meshes are unpickable, non-colliding, and never carry
+ * metadata.solid — ray tests must not see them. update() runs after the camera
+ * and LightingSystem updates (shares the same 16 light slots). Meshes are
+ * frozen; textures loaded once and reused across rebuilds.
+ */
 import {
   Color3,
   type GlowLayer,

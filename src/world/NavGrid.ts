@@ -1,3 +1,15 @@
+/**
+ * NavGrid.ts — Walkable-surface graph + one precomputed flow field per
+ * objective (5 flags + 2 home spawns). Built ONCE at map load from the final
+ * collider set; runtime is read-only (bots call steer(), never pathfind).
+ * Invariants: a graph node is a (cell, height) SURFACE — one cell can hold
+ * creek floor + bridge deck (MAX_SURFACES=3). Surface heights come from the
+ * collider's top-face PLANE at the cell centre, not its AABB: half-thickness
+ * is h/2/cos(rotX), slope is tan(rotX) — the h/2*cos / -tan sign error makes
+ * every ramp silently unwalkable. Reachability is a flood fill from open
+ * ground, which is what keeps bots off rooftops. stepHeight must match
+ * ObstacleField. Too coarse to be the only collision test — see ObstacleField.
+ */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { WorldBox } from "./MapBuilder";

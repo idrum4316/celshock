@@ -1,3 +1,13 @@
+/**
+ * SoldierModel.ts — The cheap bot rig: nine merged meshes (vs ~60 for the
+ * player's GLB body) plus procedural animation (animateSoldier: walk cycle,
+ * aim, death collapse — posed TransformNode joints, never clips).
+ * Invariants: merging per color is what keeps 32 bots affordable — the outline
+ * pass draws every mesh twice. Do NOT "unify" this rig with the player's
+ * detailed GLB body; the player keeps fidelity because it's the only character
+ * always on screen. Emissive parts (visor) need metadata.noOutline. Rigs are
+ * built once by BattleSystem's pool and re-posed on respawn, never disposed.
+ */
 import { Mesh, MeshBuilder, Scene, TransformNode } from "@babylonjs/core";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
 

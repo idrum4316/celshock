@@ -1,3 +1,16 @@
+/**
+ * Bot.ts — AI combatant: FSM (advance/engage/reposition/capture/dead),
+ * movement, aiming, firing. Rig visuals come from SoldierModel.
+ * Invariants: NEVER uses moveWithCollisions and never runs its own pathfinding —
+ * movement steers on NavGrid flow fields + ObstacleField push-out. Think ticks
+ * (target acquisition, FSM transitions) are rate-limited and staggered by
+ * BattleSystem; update() (movement/animation) runs every frame. Bots hold a
+ * target until it dies/breaks LOS/leaves range — removing that hysteresis
+ * makes bots never fire. Obstacle push-out is a preference, not a veto:
+ * squeezeT drops it when wedged. Bots are pooled by BattleSystem — death hides
+ * the rig, respawn re-poses it; never allocate a new Bot per respawn.
+ * Animation is procedural; new behavior = new FSM state, never new clips.
+ */
 import { Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";

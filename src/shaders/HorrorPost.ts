@@ -1,3 +1,10 @@
+/**
+ * HorrorPost.ts — Full-screen grade: vignette, corner desaturation, radial
+ * chromatic aberration, animated grain, red damage flash.
+ * Why hand-written: Babylon's image-processing pass re-gammas the cel shader's
+ * already display-ready colors and washes the palette out — which is also why
+ * pipeline.imageProcessingEnabled stays false. Keep the grade in this pass.
+ */
 import { Camera, Effect, PostProcess, Scene } from "@babylonjs/core";
 import { CONFIG } from "../config";
 

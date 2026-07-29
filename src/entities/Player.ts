@@ -1,3 +1,12 @@
+/**
+ * Player.ts — Player controller: movement/sprint/jump physics, health/regen,
+ * weapon state (fire/reload/spread), and the GLB body wiring.
+ * Owns: the player Combatant. Body loads async (GlbSoldier) and starts hidden.
+ * Invariants: probeGround and step-up ray tests filter metadata.solid === true.
+ * Health regenerates after CONFIG.player.regenDelay — with 16 hostile bots and
+ * no medics this is load-bearing, not decoration. muzzleWorld() assumes the
+ * rifle is loaded. Damage flows out via the onDamaged callback wired in Game.
+ */
 import {
   Color3,
   Mesh,

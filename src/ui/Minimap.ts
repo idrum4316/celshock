@@ -1,3 +1,10 @@
+/**
+ * Minimap.ts — Corner minimap: prerendered static backdrop (per map), flags,
+ * friendlies, player. Canvas redrawn each frame.
+ * Invariants: enemies are NEVER shown live — only briefly via reveal() when
+ * they fire. That's a deliberate information-rule, not a missing feature.
+ * setMap() must be called once per round to rebuild the backdrop.
+ */
 import type { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { Bot } from "../entities/Bot";

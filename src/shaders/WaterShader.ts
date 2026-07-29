@@ -1,3 +1,10 @@
+/**
+ * WaterShader.ts — Stylized shallow-water ShaderMaterial: scrolling normal
+ * layers, banded lighting (matching the cel look), shoreline foam, fresnel.
+ * Invariants: point-light uniform arrays are pre-allocated to MAX_POINT_LIGHTS
+ * and filled by WaterSystem each frame from the same LightingSystem slots as
+ * the cel shader. No vertex displacement; opaque output. No Babylon lights.
+ */
 import { Effect, Scene, ShaderMaterial, Texture, Vector3, Vector4 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { MAX_POINT_LIGHTS } from "./CelShader";

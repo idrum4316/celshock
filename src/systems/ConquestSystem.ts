@@ -1,3 +1,13 @@
+/**
+ * ConquestSystem.ts — Conquest rules: flags, capture meters, tickets, bleed,
+ * spawn selection, bot objective assignment.
+ * Invariants: the meter runs -1..+1 and ownership flips only by crossing 0 —
+ * a flag must be neutralised before it changes hands. Occupancy comes from the
+ * combatant list Game assembles each frame. update() runs BEFORE
+ * BattleSystem.update so bots see this frame's ownership. Events go out via
+ * onCaptured/onNeutralised callbacks wired in Game — never import other
+ * systems. All numbers come from CONFIG.conquest.
+ */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { Combatant, Team } from "../entities/Combatant";

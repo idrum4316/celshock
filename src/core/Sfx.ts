@@ -1,3 +1,12 @@
+/**
+ * Sfx.ts — All audio: synthesized WebAudio, zero asset files.
+ * Owns: the AudioContext, one cached noise buffer shared by every shot, voice
+ * cap (CONFIG.audio.maxVoices — over-cap sounds are skipped silently), and
+ * positional panning relative to the listener.
+ * Invariants: never generate a fresh noise buffer per sound. setListener() is
+ * called once per frame by Game, after the camera update. Firefox needs the
+ * legacy setPosition/setOrientation path — keep both.
+ */
 import type { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 

@@ -1,3 +1,15 @@
+/**
+ * LightingSystem.ts — Sole owner of ALL dynamic light. The scene has no
+ * Babylon lights; this uploads the winning slots to the cel materials (and
+ * water) once per frame via setPointLights().
+ * Invariants: MAX_POINT_LIGHTS (16) is an absolute shader cap. Transient
+ * pulses (muzzle flash) and carried lights (player lamp) always get a slot;
+ * static fixtures compete nearest-first — so fixtures must be hand-placed
+ * SPATIALLY SPREAD, and any new per-bot transient light must be budgeted
+ * through Game.spendMuzzleLightBudget. update() runs after the camera update
+ * (slot selection keys off camera position). Adding a PointLight or
+ * HemisphericLight to the scene does nothing to cel-shaded meshes — don't.
+ */
 import { Color3, Vector3 } from "@babylonjs/core";
 import {
   CelMaterialFactory,

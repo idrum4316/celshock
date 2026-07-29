@@ -1,3 +1,15 @@
+/**
+ * GlbSoldier.ts — The player's body: the ONE imported asset in the game
+ * (models/*.glb, added by explicit request). Owns locomotion clip playback
+ * plus a procedural per-frame bone overlay (aim/reload/rifle carry) applied
+ * after animations, and world-space rifle attachment.
+ * Invariants: uses Matrix math throughout — the glTF root is mirrored, and
+ * quaternion decomposition fails on mirrored nodes; do not "simplify" to
+ * quaternions. Calibration matrices assume the stance was captured at yaw 0.
+ * Do NOT extend the GLB approach to bots or weapons (they stay primitive;
+ * SoldierModel's pooling/merging rules still apply to them), and do not add
+ * further asset files unless explicitly asked.
+ */
 import {
   AnimationGroup,
   Matrix,

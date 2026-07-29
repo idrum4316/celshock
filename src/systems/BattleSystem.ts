@@ -1,3 +1,16 @@
+/**
+ * BattleSystem.ts — Bot roster: a fixed pool built once and NEVER disposed
+ * (death hides a rig, respawn re-poses it — respawning is continuous), AI
+ * scheduling, LOS, distance LOD.
+ * Invariants: think ticks are staggered round-robin at CONFIG.bots.thinkRate —
+ * target acquisition ray-tests candidates nearest-first and stops at the first
+ * visible one. LOS rays filter metadata.solid === true. Bot muzzle flashes are
+ * NOT pulsed from here — this system only records flash positions and Game
+ * spends CONFIG.lighting.muzzleBudgetPerFrame on the nearest few (16 shader
+ * light slots are absolute). Runs AFTER ConquestSystem.update each frame.
+ * Cross-system effects go out via onBotKilled/onBotFired callbacks wired in
+ * Game — never import other systems.
+ */
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { Bot, type BattleCtx } from "../entities/Bot";

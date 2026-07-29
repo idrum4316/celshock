@@ -1,3 +1,11 @@
+/**
+ * Props.ts — Scatter prop factories (trees, gravestones, lanterns, fungus,
+ * logs, fire drums, rubble). Pure mesh builders: each assembles at the origin
+ * and returns a hierarchy; placement/merging/colliders are the caller's job.
+ * Invariants: emissive parts (lantern glow, fire, fungus) MUST set
+ * metadata.noOutline (and noGlow where they shouldn't feed the GlowLayer).
+ * Never set metadata.solid here — colliders come from MapBuilder only.
+ */
 import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 

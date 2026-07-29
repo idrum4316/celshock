@@ -1,3 +1,16 @@
+/**
+ * MapBuilder.ts — Turns layout data into a GameMap: merges visual meshes per
+ * material (frozen, unpickable), emits collider proxies, registers fixture
+ * lights, builds NavGrid + ObstacleField.
+ * Invariants: collider() is the ONLY place colliders are created — invisible,
+ * pickable, checkCollisions, metadata.solid === true, never merged — and it
+ * records the WorldBox for navigation. Geometry added by any other path is
+ * invisible to rays AND bots. Colliders must line up with the visuals they
+ * stand in for (sparks land on colliders). Visuals must never be pickable or
+ * solid. Builders arrive at identity transform; merging then transforming is
+ * what makes MergeMeshes safe. Must NOT special-case Hollowmere — a second map
+ * is one new layout file.
+ */
 import { Material, Mesh, MeshBuilder, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";

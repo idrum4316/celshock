@@ -1,3 +1,8 @@
+/**
+ * Atmosphere.ts — One shared drifting-particle system (ash/embers/motes),
+ * reconfigured per environment via apply(ParticleSpec). Texture is generated
+ * at runtime. apply(undefined) stops the emitters.
+ */
 import {
   Color4,
   DynamicTexture,

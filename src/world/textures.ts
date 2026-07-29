@@ -1,3 +1,10 @@
+/**
+ * textures.ts — Runtime-generated canvas textures (cobblestone), cached per
+ * scene via WeakMap. Zero asset files. Deterministic PRNG so every client
+ * renders identical ground.
+ * Invariants: texture SIZE must stay a power of two (mipmaps) and
+ * anisotropicFilteringLevel = 8 (prevents shimmer at grazing angles).
+ */
 import { DynamicTexture, Scene, Texture } from "@babylonjs/core";
 
 /**

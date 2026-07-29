@@ -1,3 +1,16 @@
+/**
+ * BuildingKit.ts — Parametric structure builders (cottages, chapel, barn,
+ * mill, ramps, ...). Each builder assembles geometry AT THE ORIGIN, UNROTATED
+ * and returns parallel local-space lists: meshes / collider specs / lights.
+ * MapBuilder merges, then transforms into place.
+ * Invariants: builders NEVER set metadata.solid, checkCollisions, or
+ * isPickable — MapBuilder owns that split. Building at identity is what makes
+ * MergeMeshes safe. Emissive parts (windows, flames) need metadata.noOutline.
+ * Collider top faces must stay within CONFIG.nav.stepHeight of adjacent ground
+ * or the nav flood fill never reaches them. Ramp colliders need rotX, not just
+ * the visual. New builders go in the BUILDERS registry; no Hollowmere
+ * special-casing.
+ */
 import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { LightSpec } from "./environment";

@@ -1,3 +1,11 @@
+/**
+ * DeployScreen.ts — Top-down deploy map: renders spawn options from the
+ * GameMap's collider geometry, hit-tests clicks, fires onDeploy (wired in
+ * Game) when a selection is confirmed.
+ * Invariants: CSS contract — #hud is pointer-events:none and this overlay
+ * opts back in; don't break that or gameplay clicks die. Re-checks map/
+ * conquest readiness every update; the 3D scene renders live behind it.
+ */
 import { CONFIG } from "../config";
 import type { Team } from "../entities/Combatant";
 import type { ConquestSystem } from "../systems/ConquestSystem";

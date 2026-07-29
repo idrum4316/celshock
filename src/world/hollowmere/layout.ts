@@ -1,3 +1,13 @@
+/**
+ * hollowmere/layout.ts — THE MAP, as data: structure placements, scatter
+ * regions, control points, spawns, water rects. Consumed by MapBuilder;
+ * nothing here is code to special-case.
+ * Gotchas that have already cost time: collider top faces within
+ * CONFIG.nav.stepHeight of adjacent ground or bots treat decks as walls;
+ * a control point's pos must NOT sit inside a collider (surfaceAt returns -1);
+ * scatter clearance values must match prop collider extents. A second map is
+ * one new file shaped like this plus an EnvironmentSpec.
+ */
 import { Vector3 } from "@babylonjs/core";
 import type { BuildParams, BuilderKind } from "../BuildingKit";
 import type { ControlPointDef, SpawnPointDef, WaterRect } from "../MapBuilder";

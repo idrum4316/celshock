@@ -1,6 +1,10 @@
 /**
- * Central game configuration. No gameplay values should be hardcoded elsewhere —
- * tune everything from here.
+ * config.ts — Central game configuration (`CONFIG`, `as const`).
+ * Owns: ALL gameplay/balance tunables. No gameplay magic numbers elsewhere;
+ * art/geometry constants stay in their model file.
+ * Gotcha: `as const` gives fields literal types — `let x = CONFIG.bots.x` then
+ * reassigning fails to compile. Annotate `let x: number` instead.
+ * Keep the per-value comments: they record why a number is what it is.
  */
 export const CONFIG = {
   /** Conquest round rules. */

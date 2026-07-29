@@ -1,3 +1,12 @@
+/**
+ * InputManager.ts — Unified keyboard/mouse + gamepad input state.
+ * Owns: raw event listeners and the per-frame public fields (move/look/actions)
+ * that Game and CameraSystem read.
+ * Invariants: update() must be called exactly once per frame — it composes
+ * state and RESETS accumulators and edge-triggered flags (jumpPressed,
+ * reloadPressed, confirmPressed, ads). Anything that assigned those fields
+ * externally is overwritten next tick (this bites headless test scripts).
+ */
 import { CONFIG } from "../config";
 
 /**

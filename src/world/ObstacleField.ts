@@ -1,3 +1,12 @@
+/**
+ * ObstacleField.ts — Sub-cell collision: collider boxes bucketed at load,
+ * queried per bot step to push a body clear of thin obstacles (trees,
+ * gravestones, drums) that fall between NavGrid cell centres.
+ * Invariants: the push-out is a PREFERENCE, never a veto — callers (Bot) keep
+ * the overlapping position if the pushed-clear one isn't walkable; frozen is
+ * worse than clipping. HEADROOM and CONFIG.nav.stepHeight must stay in sync
+ * with NavGrid. Height tests use box planes so ramps push correctly.
+ */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { WorldBox } from "./MapBuilder";

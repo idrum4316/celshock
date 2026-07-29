@@ -1,3 +1,11 @@
+/**
+ * HUD.ts — In-game DOM overlay: health/ammo, tickets, flag strip, crosshair,
+ * hitmarker, damage vignette, toasts, killfeed, scoreboard, menu/round-over.
+ * Invariants: Game pushes state every frame (setHealth/setAmmo/setFlags/...) —
+ * setting HUD state from anywhere else is overwritten next tick. Pure DOM
+ * manipulation; reads ControlPoint data, never imports game systems beyond
+ * types. Transient elements (toasts, killfeed) self-remove via setTimeout.
+ */
 import type { ControlPoint } from "../systems/ConquestSystem";
 
 /**

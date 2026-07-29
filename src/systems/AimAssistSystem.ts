@@ -1,3 +1,11 @@
+/**
+ * AimAssistSystem.ts — Gamepad-only aim assist: stick slowdown over targets
+ * plus a gentle rotational pull toward them.
+ * Invariants: NEVER affects mouse/keyboard — it disengages the moment the
+ * mouse moves and leaves mouse sensitivity untouched. The pull must always be
+ * defeatable by a committed stick push. LOS ray filters metadata.solid ===
+ * true (walls block assist). Called by Game before CameraSystem.update.
+ */
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { InputManager } from "../core/InputManager";

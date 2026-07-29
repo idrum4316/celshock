@@ -1,3 +1,13 @@
+/**
+ * RifleModel.ts — Builds the low-poly rifle + holo sight from primitives.
+ * Returns RifleParts: pose root plus alignment landmarks (muzzle, grip, ...).
+ * Invariants: buildRifle() merges its ~50 boxes into one mesh per color while
+ * the root is still at identity — MergeMeshes bakes world matrices, so the
+ * merge only works unrotated at the origin (same trick as BuildingKit). The
+ * merge is what makes the outline pass draw one border per color group.
+ * Emissive parts (reticle, glass) MUST carry metadata.noOutline/noGlow or they
+ * get black shells and glow-scan artifacts.
+ */
 import {
   Color3,
   Mesh,

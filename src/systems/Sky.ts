@@ -1,3 +1,11 @@
+/**
+ * Sky.ts — Procedural night sky: baked dome texture (gradient/stars/halo),
+ * moon, scrolling cloud layers. All unlit emissive meshes, infiniteDistance,
+ * unpickable; moon bloom via the GlowLayer.
+ * Invariants: moonDir is negated to align with the shader's light direction;
+ * the moon renders in a later renderingGroup than the dome. Rebuilt from an
+ * EnvironmentSpec via apply() — keep it data-driven, no Hollowmere specifics.
+ */
 import {
   Color3,
   DynamicTexture,
