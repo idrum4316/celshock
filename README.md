@@ -1,7 +1,7 @@
 # HOLLOWMERE — Cel-Shaded Conquest
 
 A browser-based, single-player **Conquest** shooter built with **Babylon.js** and
-**TypeScript**. Sixteen-a-side against bots over five control points in a
+**TypeScript**. Eight-a-side against bots over five control points in a
 fog-drowned horror village, with a third-person over-the-shoulder camera
 (ADS tightens the shoulder framing — it never goes first-person) and a
 low-poly cel-shaded look: a near-black valley lit by guttering
@@ -79,7 +79,7 @@ road approaches and almost no cover.
 Everything you see and hear is generated at runtime: every mesh (except the
 player's rigged GLB body) is built from Babylon primitives and merged per
 colour, all audio is synthesized WebAudio, the cel look is a custom
-`ShaderMaterial` with 16 dynamic point-light slots, and the 32 bots steer on a
+`ShaderMaterial` with 16 dynamic point-light slots, and the 16 bots steer on a
 precomputed nav grid with one flow field per objective — no pathfinding, no
 physics engine, no asset downloads beyond the one GLB.
 

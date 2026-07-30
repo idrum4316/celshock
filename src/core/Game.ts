@@ -546,7 +546,7 @@ export class Game {
 
   /**
    * Muzzle flashes are transient lights, and transients always win a shader
-   * slot. Thirty-two bots firing would take all sixteen and black out the
+   * slot. Sixteen bots firing would take all sixteen and black out the
    * village's own lanterns, so only the nearest few close-range flashes get one.
    */
   private spendMuzzleLightBudget(): void {

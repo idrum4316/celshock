@@ -6,7 +6,7 @@ repository. `AGENTS.md` is a pointer to this file; `README.md` is user-facing.
 ## Project overview
 
 **HOLLOWMERE — Cel-Shaded Conquest**: a browser-based, single-player Conquest
-shooter (16v16 vs bots, five control points, ticket bleed) built with
+shooter (8v8 vs bots, five control points, ticket bleed) built with
 **Babylon.js** + **TypeScript**, bundled with **Vite**. ES modules
 (`"type": "module"`), Node 18+, WebGL2 browser required.
 
@@ -169,7 +169,7 @@ carried lights (`setCarried()`/`removeCarried()` — the player's shoulder lamp)
 Transient and carried lights always get a slot; static fixtures compete
 nearest-first.
 
-**That is why bot muzzle flashes are budgeted.** 32 bots firing would take all 16
+**That is why bot muzzle flashes are budgeted.** 16 bots firing would take all 16
 slots with transients and black out the village's own lanterns, so
 `BattleSystem` only records flash positions and `Game.spendMuzzleLightBudget`
 spends `CONFIG.lighting.muzzleBudgetPerFrame` on the nearest few. Adding any new
@@ -251,7 +251,7 @@ the map is static so nothing is ever recomputed. Bots read `nav.steer()` and
 never run their own pathfinding.
 
 **Bots do not use `moveWithCollisions`.** A cell being walkable *is* the
-collision test, and it already accounts for headroom and step height; 32 agents
+collision test, and it already accounts for headroom and step height; 16 agents
 walking the collidable mesh list every frame would not be affordable.
 
 **The grid is too coarse to be the whole collision test, though.** It samples
@@ -360,7 +360,7 @@ matrices and returns an identity-transform mesh, which is then re-parented.
 - **Everyone** is hitscan — player and bots share `CombatSystem.fire()`, which
   takes the shooter's target list so friendly fire is excluded by construction
   rather than by a team check inside. There is no projectile pool to thrash in a
-  32-bot firefight. Tracers and sparks are pooled; add effects to a pool rather
+  16-bot firefight. Tracers and sparks are pooled; add effects to a pool rather
   than allocating per shot.
 - TypeScript is strict with `noUnusedLocals`/`noUnusedParameters` — the
   typecheck will fail on dead variables.

@@ -24,7 +24,7 @@ import { CONFIG } from "../config";
  * - **Positional playback.** A distant firefight has to sit behind you rather
  *   than in your ear, so world-space sounds run through a `PannerNode` with
  *   distance rolloff and are dropped entirely past `maxDistance`.
- * - **A voice cap.** Thirty-two bots at five rounds a second is ~160 gunshots
+ * - **A voice cap.** Sixteen bots at five rounds a second is ~80 gunshots
  *   a second. Beyond `maxVoices` concurrent one-shots, new ones are skipped —
  *   the ear cannot pick them apart anyway, and the scheduler can't keep up.
  */

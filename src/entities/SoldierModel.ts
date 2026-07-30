@@ -2,7 +2,7 @@
  * SoldierModel.ts — The cheap bot rig: nine merged meshes (vs ~60 for the
  * player's GLB body) plus procedural animation (animateSoldier: walk cycle,
  * aim, death collapse — posed TransformNode joints, never clips).
- * Invariants: merging per color is what keeps 32 bots affordable — the outline
+ * Invariants: merging per color is what keeps 16 bots affordable — the outline
  * pass draws every mesh twice. Do NOT "unify" this rig with the player's
  * detailed GLB body; the player keeps fidelity because it's the only character
  * always on screen. Emissive parts (visor) need metadata.noOutline. Rigs are
@@ -12,13 +12,13 @@ import { Mesh, MeshBuilder, Scene, TransformNode } from "@babylonjs/core";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
 
 /**
- * The bot soldier rig: a humanoid built to be cheap enough to draw thirty-two
+ * The bot soldier rig: a humanoid built to be cheap enough to draw sixteen
  * of at once.
  *
  * `Player.buildBody` assembles ~60 individual meshes, and every one of them is
  * drawn twice because of the outline pass. That is fine for the one character
  * always at the centre of the screen, and ruinous for a full Conquest roster —
- * 32 bots at that fidelity is ~1,700 draw calls before the village is drawn at
+ * 16 bots at that fidelity is ~850 draw calls before the village is drawn at
  * all.
  *
  * So each limb here is built from several boxes and then **merged into one mesh

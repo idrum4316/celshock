@@ -44,10 +44,10 @@ export const CONFIG = {
     respawnDelay: 8,
   },
 
-  /** Bot roster, AI cadence, and the render LOD that makes 32 of them viable. */
+  /** Bot roster, AI cadence, and the render LOD that makes 16 of them viable. */
   bots: {
     /** Per team. The rig pool is sized to exactly `perTeam * 2`. */
-    perTeam: 16,
+    perTeam: 8,
     squadSize: 4,
     maxHealth: 100,
     /** Roughly the player's jog; the advancing sprint stays under theirs. */
@@ -57,7 +57,7 @@ export const CONFIG = {
     /**
      * Full AI (target selection, LOS raycast, objective re-evaluation) runs at
      * this rate per bot, round-robin across frames. Movement still integrates
-     * every frame. At 5 Hz with 32 bots that is ~2.7 ray picks per frame.
+     * every frame. At 5 Hz with 16 bots that is ~1.3 ray picks per frame.
      */
     thinkRate: 5,
     /** Seconds between acquiring a target and the first shot. */
@@ -227,7 +227,7 @@ export const CONFIG = {
   /**
    * Gunfeel dressing: the visible muzzle flash mesh and ejected brass.
    * Player-only — bots get neither (their flashes are the budgeted light
-   * pulses, and 32 bots' worth of casing meshes is draw-call noise nobody
+   * pulses, and 16 bots' worth of casing meshes is draw-call noise nobody
    * can see anyway).
    */
   gunfeel: {
@@ -350,7 +350,7 @@ export const CONFIG = {
 
   audio: {
     /**
-     * Concurrent one-shots. Thirty-two bots firing is ~160 shots a second; past
+     * Concurrent one-shots. Sixteen bots firing is ~80 shots a second; past
      * this many voices the ear can't separate them and the scheduler can't keep
      * up, so extras are dropped rather than queued.
      */
@@ -364,7 +364,7 @@ export const CONFIG = {
   effects: {
     tracerLife: 0.07,
     /**
-     * Sized for a 32-bot firefight: everyone is hitscan, so a tracer is drawn
+     * Sized for a 16-bot firefight: everyone is hitscan, so a tracer is drawn
      * per shot from every combatant that fires.
      */
     tracerPoolSize: 64,
@@ -408,7 +408,7 @@ export const CONFIG = {
     muzzleIntensity: 2.6,
     muzzleLife: 0.07,
     /**
-     * Transient pulses always win a shader light slot, so 32 bots firing at
+     * Transient pulses always win a shader light slot, so 16 bots firing at
      * once would saturate all 16 and black out the village's own lanterns.
      * Only the nearest few muzzle flashes get a light, and only up close.
      */

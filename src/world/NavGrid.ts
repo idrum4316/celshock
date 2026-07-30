@@ -24,7 +24,7 @@ import type { WorldBox } from "./MapBuilder";
  * of obstacle circles afterwards. That works in an empty box and fails
  * completely in a village — a bot would grind along a cottage wall forever
  * instead of walking round it. A grid gives real pathing, and precomputing a
- * field per goal means 32 bots share the same seven searches rather than each
+ * field per goal means 16 bots share the same seven searches rather than each
  * running its own A*.
  *
  * ## Surfaces, not cells

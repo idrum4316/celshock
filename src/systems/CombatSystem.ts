@@ -49,7 +49,7 @@ interface Spark {
  * sparks are object-pooled.
  *
  * Every combatant is hitscan — the player and both bot teams alike — so there
- * is no projectile pool to thrash in a 32-bot firefight.
+ * is no projectile pool to thrash in a 16-bot firefight.
  */
 export class CombatSystem {
   private tracers: Tracer[] = [];

@@ -4,7 +4,7 @@
  * ejected brass), and the GLB body wiring.
  * Owns: the player Combatant. Body loads async (GlbSoldier) and starts hidden.
  * Invariants: probeGround and step-up ray tests filter metadata.solid === true.
- * Health regenerates after CONFIG.player.regenDelay — with 16 hostile bots and
+ * Health regenerates after CONFIG.player.regenDelay — with 8 hostile bots and
  * no medics this is load-bearing, not decoration. muzzleWorld() assumes the
  * rifle is loaded. The flash mesh and casing pool are player-only visuals
  * (bots get neither — see CONFIG.gunfeel). Damage flows out via the

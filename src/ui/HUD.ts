@@ -183,7 +183,7 @@ export class HUD {
 
   /**
    * One kill line. `mine` tints entries the player was involved in, so your own
-   * kills and deaths stand out from the background chatter of a 32-bot fight.
+   * kills and deaths stand out from the background chatter of a 16-bot fight.
    */
   addKill(killer: string, victim: string, mine: boolean): void {
     const el = document.createElement("div");

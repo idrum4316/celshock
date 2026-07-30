@@ -205,7 +205,7 @@ export class BattleSystem {
    * Candidates are gathered by distance first and only then ray-tested, in
    * ascending order, returning the first one that is actually visible. Testing
    * every candidate instead would fire up to thirty rays per think — at 5 Hz
-   * across 32 bots that is thousands of `pickWithRay` calls a second. This way
+   * across 16 bots that is thousands of `pickWithRay` calls a second. This way
    * the common case is one ray.
    */
   private acquire(bot: Bot): Combatant | null {

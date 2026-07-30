@@ -46,7 +46,7 @@ export interface BattleCtx {
   clearObstacles(x: number, y: number, z: number, out: Vector3): boolean;
 }
 
-// Module-scope scratch vectors. AI runs 32 times a frame and allocating a
+// Module-scope scratch vectors. AI runs 16 times a frame and allocating a
 // handful of Vector3s per bot per frame was measurable churn in the old code.
 const _dir = new Vector3();
 const _sep = new Vector3();
@@ -357,9 +357,9 @@ export class Bot implements Combatant {
   /**
    * Moves by `(dx, dz)` if the destination is somewhere a body can stand.
    *
-   * Bots move on the nav graph rather than through Babylon's collider: 32
+   * Bots move on the nav graph rather than through Babylon's collider: 16
    * agents calling `moveWithCollisions` would walk the whole collidable mesh
-   * list 32 times a frame. But the grid only samples cell centres, so the
+   * list 16 times a frame. But the grid only samples cell centres, so the
    * destination is also pushed clear of any collider it overlaps — most of the
    * map's props are narrower than a cell and are otherwise invisible to
    * navigation entirely.
