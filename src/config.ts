@@ -446,6 +446,12 @@ export const CONFIG = {
        */
       cobble: { color: "#5f7ba6", intensity: 0.35, shininess: 8 },
     },
+    /**
+     * Cobblestone bump: fake relief height (metres) of a sett dome at
+     * height-map value 1.0. The light bands ripple across individual
+     * stones; too high and the street reads as rubble.
+     */
+    cobbleBumpScale: 0.1,
   },
 
   /**

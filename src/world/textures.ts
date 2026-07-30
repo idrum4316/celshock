@@ -1,7 +1,8 @@
 /**
- * textures.ts — Runtime-generated canvas textures (cobblestone), cached per
- * scene via WeakMap. Zero asset files. Deterministic PRNG so every client
- * renders identical ground.
+ * textures.ts — Runtime-generated canvas textures (cobblestone albedo + its
+ * matching bump height map), cached per scene via WeakMap. Zero asset files.
+ * Deterministic PRNG so every client renders identical ground, and so the
+ * bump domes land exactly on the painted stones.
  * Invariants: texture SIZE must stay a power of two (mipmaps) and
  * anisotropicFilteringLevel = 8 (prevents shimmer at grazing angles).
  */
@@ -86,13 +87,16 @@ function stonePath(
   ctx.closePath();
 }
 
-function drawCobblestones(ctx: ReturnType<DynamicTexture["getContext"]>): void {
+/**
+ * The shared cobble layout, rebuilt from the one seed on demand. Both the
+ * albedo and the height map draw from this exact list, so every dome in the
+ * bump map sits precisely on a painted stone — a mismatch would light the
+ * mortar and sink the stones.
+ */
+function cobbleLayout(): Stone[] {
   const rng = mulberry32(0xc0bb1e);
   const cw = SIZE / COLS;
   const ch = SIZE / ROWS;
-
-  // Layout computed once, then stamped at all nine wrap offsets so the tile
-  // repeats seamlessly — stones that run off one edge reappear on the other.
   const stones: Stone[] = [];
   for (let row = 0; row < ROWS; row++) {
     // Running bond: alternate rows shift half a stone sideways.
@@ -111,36 +115,126 @@ function drawCobblestones(ctx: ReturnType<DynamicTexture["getContext"]>): void {
       });
     }
   }
+  return stones;
+}
 
-  ctx.fillStyle = MORTAR;
-  ctx.fillRect(0, 0, SIZE, SIZE);
-
+/** Stamps `paint` at all nine wrap offsets so the tile repeats seamlessly —
+ * stones that run off one edge reappear on the other. */
+function stampWrapped(
+  ctx: ReturnType<DynamicTexture["getContext"]>,
+  paint: () => void,
+): void {
   for (const dy of [-SIZE, 0, SIZE]) {
     for (const dx of [-SIZE, 0, SIZE]) {
       ctx.save();
       ctx.translate(dx, dy);
-      for (const s of stones) {
-        ctx.fillStyle = s.tone;
-        stonePath(ctx, s);
-        ctx.fill();
-        if (s.highlight) {
-          // A single flat band across the top third — the posterized
-          // "lit facet". The shader's light bands do the rest.
-          ctx.fillStyle = HIGHLIGHT;
-          stonePath(ctx, {
-            ...s,
-            y: s.y + s.h * 0.1,
-            h: s.h * 0.28,
-            w: s.w * 0.84,
-            x: s.x + s.w * 0.08,
-            r: s.r * 0.6,
-          });
-          ctx.fill();
-        }
-      }
+      paint();
       ctx.restore();
     }
   }
+}
+
+function drawCobblestones(ctx: ReturnType<DynamicTexture["getContext"]>): void {
+  const stones = cobbleLayout();
+
+  ctx.fillStyle = MORTAR;
+  ctx.fillRect(0, 0, SIZE, SIZE);
+
+  stampWrapped(ctx, () => {
+    for (const s of stones) {
+      ctx.fillStyle = s.tone;
+      stonePath(ctx, s);
+      ctx.fill();
+      if (s.highlight) {
+        // A single flat band across the top third — the posterized
+        // "lit facet". The shader's light bands do the rest.
+        ctx.fillStyle = HIGHLIGHT;
+        stonePath(ctx, {
+          ...s,
+          y: s.y + s.h * 0.1,
+          h: s.h * 0.28,
+          w: s.w * 0.84,
+          x: s.x + s.w * 0.08,
+          r: s.r * 0.6,
+        });
+        ctx.fill();
+      }
+    }
+  });
+}
+
+/** Grayscale string for a 0..1 height value. */
+function gray(v: number): string {
+  const c = Math.round(Math.min(1, Math.max(0, v)) * 255);
+  return `rgb(${c},${c},${c})`;
+}
+
+/**
+ * Height map matching the albedo stone-for-stone: black mortar grooves,
+ * each stone a *worn pillow* — a flat crown with a rounded shoulder that
+ * falls to black exactly at the stone's edges. An earlier version used a
+ * plain linear radial gradient, which is a cone (constant slope) and reads
+ * as a bump stuck on every sett; the plateau profile plus per-stone jitter
+ * is what makes the street read as weathered masonry.
+ *
+ * The dome is drawn in unit space scaled to the stone's own aspect, so it
+ * is elliptical like the sett, not circular. The cel shader's CEL_BUMP path
+ * turns the per-pixel slope of this into a perturbed normal. Gradients are
+ * fine here — the "flat tones only" rule governs albedo; it is the shader's
+ * band quantization that keeps the lit result toon, not the height data.
+ */
+function drawCobblestoneHeights(
+  ctx: ReturnType<DynamicTexture["getContext"]>,
+): void {
+  const stones = cobbleLayout();
+  // A SECOND rng stream, consumed in the same deterministic draw order. It
+  // must not touch cobbleLayout's seed — adding draws there would shift the
+  // sequence and repaint the whole street's albedo.
+  const rng = mulberry32(0xd0e5 ^ 0xc0bb1e);
+
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, SIZE, SIZE);
+
+  stampWrapped(ctx, () => {
+    for (const s of stones) {
+      // Worn setts are never identical: peak height, dome centre drift,
+      // and how much flat crown survives all vary per stone.
+      const peak = 0.72 + rng() * 0.28;
+      const ox = (rng() - 0.5) * s.w * 0.14;
+      const oy = (rng() - 0.5) * s.h * 0.14;
+      const plateau = 0.35 + rng() * 0.25; // flat-top fraction of the radius
+      const shoulder = plateau + (0.95 - plateau) * 0.55;
+
+      ctx.save();
+      ctx.translate(s.x + s.w / 2 + ox, s.y + s.h / 2 + oy);
+      ctx.scale(s.w / 2, s.h / 2);
+      // Unit-space gradient: flat crown out to `plateau`, a quick rounded
+      // shoulder, then black at the rim — so mortar between stones is a
+      // true groove, and corners (past radius 1) clamp to black like the
+      // albedo's rounded-rect cut.
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+      g.addColorStop(0, gray(peak));
+      g.addColorStop(plateau, gray(peak * 0.97));
+      g.addColorStop(shoulder, gray(peak * 0.45));
+      g.addColorStop(0.95, gray(0.02));
+      g.addColorStop(1, "#000000");
+      ctx.fillStyle = g;
+      // Rounded-rect path in the same unit space; the corner radius scaled
+      // by the smaller half-extent tracks the albedo's arcs closely enough
+      // (height there is ~black either way).
+      stonePath(ctx, {
+        x: -1,
+        y: -1,
+        w: 2,
+        h: 2,
+        r: (2 * s.r) / Math.min(s.w, s.h),
+        tone: "",
+        highlight: false,
+      });
+      ctx.fill();
+      ctx.restore();
+    }
+  });
 }
 
 /** Generated textures are per-scene and built once, on first use. */
@@ -175,4 +269,12 @@ function getGenerated(
 /** The village street cobblestone: grey-brown setts in dark mortar. */
 export function getCobblestoneTexture(scene: Scene): DynamicTexture {
   return getGenerated(scene, "cobblestone", drawCobblestones);
+}
+
+/**
+ * Matching height map for the cobblestone albedo (same layout, same seed):
+ * domed setts over black mortar, consumed by the cel shader's CEL_BUMP path.
+ */
+export function getCobblestoneBumpTexture(scene: Scene): DynamicTexture {
+  return getGenerated(scene, "cobblestone-bump", drawCobblestoneHeights);
 }

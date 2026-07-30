@@ -22,7 +22,11 @@ import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
 import { CONFIG } from "../../config";
 import type { CelMaterialFactory } from "../../shaders/CelShader";
 import type { LightSpec } from "../environment";
-import { COBBLE_TEX_SCALE, getCobblestoneTexture } from "../textures";
+import {
+  COBBLE_TEX_SCALE,
+  getCobblestoneBumpTexture,
+  getCobblestoneTexture,
+} from "../textures";
 
 /**
  * A collider box in the structure's local space. `rotX` exists for ramps —
@@ -151,12 +155,17 @@ export class Build implements Structure {
       this.scene,
     );
     m.position.set(x, y, z);
-    // Wet-stone sheen: the street catches a hard streak looking moonward.
+    // Wet-stone sheen + per-sett bump: the street catches a hard streak
+    // looking moonward, and the light bands ripple over individual stones.
     m.material = this.mats.getGroundTextured(
       "cobble",
       getCobblestoneTexture(this.scene),
       COBBLE_TEX_SCALE,
-      CONFIG.graphics.spec.cobble,
+      {
+        spec: CONFIG.graphics.spec.cobble,
+        bump: getCobblestoneBumpTexture(this.scene),
+        bumpScale: CONFIG.graphics.cobbleBumpScale,
+      },
     );
     this.meshes.push(m);
     return m;

@@ -38,7 +38,10 @@ import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
  * Custom cel-shading: quantized diffuse bands, a hard stylized rim highlight,
  * flat colors (or a texture albedo — uv-mapped for the skinned player body,
  * world-XZ-mapped for ground surfaces like cobblestone roads), and per-theme
- * atmosphere blended in the fragment shader.
+ * atmosphere blended in the fragment shader. Ground-textured materials may
+ * also carry a matching height map (CEL_BUMP): the facet normal is perturbed
+ * by the height slope (surface-gradient bump — no tangents, no UVs), so the
+ * light bands ripple across individual cobblestones.
  * Outlines are drawn with Babylon's outline renderer (inverted hull).
  *
  * Lighting has four parts, all banded so the toon look survives:
@@ -133,6 +136,11 @@ varying vec2 vUv;
 // needed and the pattern keeps a constant real-world size across placements.
 uniform sampler2D baseColorTex;
 uniform float texScale;
+#ifdef CEL_BUMP
+// Height map matching the albedo texel-for-texel (domed setts, dark mortar).
+uniform sampler2D bumpTex;
+uniform float bumpScale; // metres of fake relief at height value 1.0
+#endif
 #else
 uniform vec3 baseColor;
 #endif
@@ -189,11 +197,40 @@ float shadowVisibility(vec3 n) {
   return mix(shadowParams.y, 1.0, lit);
 }
 
+#ifdef CEL_BUMP
+// Bump mapping for the world-XZ ground textures: perturbs the facet normal
+// by the height map's slope, so the quantized light bands ripple across
+// individual stones instead of sliding over one flat plane. This is the
+// surface-gradient formulation (Mikkelsen 2010): it works in whatever space
+// the height map is sampled in — world XZ here — with no tangent frame and
+// no UVs, and dFdx/dFdy are already in use for facetNormal().
+vec3 perturbNormal(vec3 n) {
+  vec2 uv = vPosW.xz * texScale;
+  float h = texture2D(bumpTex, uv).r * bumpScale;
+  vec3 sigmaX = dFdx(vPosW);
+  vec3 sigmaY = dFdy(vPosW);
+  vec3 r1 = cross(sigmaY, n);
+  vec3 r2 = cross(n, sigmaX);
+  float det = dot(sigmaX, r1);
+  vec3 grad = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);
+  return normalize(abs(det) * n - grad);
+}
+#endif
+
 void main() {
   vec3 n = facetNormal();
 
   // --- directional key light (4 bands), gated by the stepped shadow ---
+  // The shadow's normal-offset uses the true facet normal — the bump relief
+  // is fake, and offsetting along it would leak light at stone edges.
   float shadow = shadowVisibility(n);
+
+  #ifdef CEL_BUMP
+  // From here on the bumped normal drives every lighting term: key bands,
+  // point lights, rim, and the specular streak all follow the setts.
+  n = perturbNormal(n);
+  #endif
+
   vec3 light = ambientColor;
   light += lightColor * band(max(dot(n, -lightDir), 0.0), 4.0) * shadow;
 
@@ -448,15 +485,20 @@ export class CelMaterialFactory {
    * @param key cache key, e.g. "cobble" — one material per texture/scale pair
    * @param tex tiling texture; mipmaps + anisotropy are the caller's job
    * @param texScale texture repeats per metre (1 / metres-per-tile)
-   * @param spec enables the toon specular band (wet sheen); omit for matte
+   * @param opts.spec enables the toon specular band (wet sheen); omit for matte
+   * @param opts.bump height map matching the albedo texel-for-texel — the
+   *   shader perturbs the normal by its slope (CEL_BUMP). Must tile exactly
+   *   like the albedo.
+   * @param opts.bumpScale metres of fake relief at height value 1.0
    */
   getGroundTextured(
     key: string,
     tex: BaseTexture,
     texScale: number,
-    spec?: SpecSpec,
+    opts: { spec?: SpecSpec; bump?: BaseTexture; bumpScale?: number } = {},
   ): ShaderMaterial {
-    const cacheKey = `\0ground-${key}${spec ? "-spec" : ""}`;
+    const { spec, bump } = opts;
+    const cacheKey = `\0ground-${key}${spec ? "-spec" : ""}${bump ? "-bump" : ""}`;
     let mat = this.cache.get(cacheKey);
     if (!mat) {
       mat = new ShaderMaterial(
@@ -465,13 +507,28 @@ export class CelMaterialFactory {
         { vertex: "cel", fragment: "cel" },
         {
           attributes: ["position", "normal"],
-          uniforms: [...CelMaterialFactory.UNIFORMS, "texScale"],
-          samplers: ["baseColorTex", ...CelMaterialFactory.SAMPLERS],
-          defines: ["#define CEL_GROUND_TEX"],
+          uniforms: [
+            ...CelMaterialFactory.UNIFORMS,
+            "texScale",
+            ...(bump ? ["bumpScale"] : []),
+          ],
+          samplers: [
+            "baseColorTex",
+            ...(bump ? ["bumpTex"] : []),
+            ...CelMaterialFactory.SAMPLERS,
+          ],
+          defines: [
+            "#define CEL_GROUND_TEX",
+            ...(bump ? ["#define CEL_BUMP"] : []),
+          ],
         },
       );
       mat.setTexture("baseColorTex", tex);
       mat.setFloat("texScale", texScale);
+      if (bump) {
+        mat.setTexture("bumpTex", bump);
+        mat.setFloat("bumpScale", opts.bumpScale ?? 0.1);
+      }
       mat.setVector3("camPos", Vector3.Zero());
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
