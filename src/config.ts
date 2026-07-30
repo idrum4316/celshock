@@ -426,6 +426,26 @@ export const CONFIG = {
       /** Fallback ink for materials with no flat base colour to darken. */
       fallbackColor: "#12141a",
     },
+    /**
+     * Toon specular: one hard two-band Blinn highlight from the key light,
+     * gated by the same stepped shadow as the diffuse term. Only surfaces
+     * listed here carry it — everything else stays matte, which is most of
+     * the point: a highlight reads as special when metal and wet stone are
+     * the only things that shine.
+     */
+    spec: {
+      /**
+       * Rifle metal (rails, fittings, crown): tight cold glint off the
+       * moon. High shininess keeps it a pinpoint on small parts.
+       */
+      rifle: { color: "#aecbf2", intensity: 0.6, shininess: 32 },
+      /**
+       * Wet cobblestone streets: broad, dim grazing sheen, so the road
+       * catches a streak when you look toward the moon — the "rained an
+       * hour ago" read. Low shininess spreads it across the street.
+       */
+      cobble: { color: "#5f7ba6", intensity: 0.35, shininess: 8 },
+    },
   },
 
   /**

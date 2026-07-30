@@ -17,6 +17,7 @@ import {
   TransformNode,
   Vector3,
 } from "@babylonjs/core";
+import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 
 /** Handles into a built rifle: the pose root plus alignment landmarks. */
@@ -72,7 +73,13 @@ export function buildRifle(
   const pivots: TransformNode[] = [];
 
   const collect = (color: string, m: Mesh): Mesh => {
-    m.material = mats.get(color);
+    // The small metal parts are the rifle's only glossy surface — a hard
+    // moon glint on the rails/fittings sells them as steel against the
+    // matte receiver and polymer.
+    m.material =
+      color === METAL
+        ? mats.getGlossy(color, CONFIG.graphics.spec.rifle)
+        : mats.get(color);
     m.isPickable = false;
     const g = groups.get(color);
     if (g) g.push(m);

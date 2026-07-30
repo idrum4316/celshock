@@ -19,6 +19,7 @@
  *   BuildingKit.ts's BUILDERS.
  */
 import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
+import { CONFIG } from "../../config";
 import type { CelMaterialFactory } from "../../shaders/CelShader";
 import type { LightSpec } from "../environment";
 import { COBBLE_TEX_SCALE, getCobblestoneTexture } from "../textures";
@@ -150,10 +151,12 @@ export class Build implements Structure {
       this.scene,
     );
     m.position.set(x, y, z);
+    // Wet-stone sheen: the street catches a hard streak looking moonward.
     m.material = this.mats.getGroundTextured(
       "cobble",
       getCobblestoneTexture(this.scene),
       COBBLE_TEX_SCALE,
+      CONFIG.graphics.spec.cobble,
     );
     this.meshes.push(m);
     return m;

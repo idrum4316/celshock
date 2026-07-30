@@ -1,8 +1,8 @@
 /**
  * CelShader.ts — The look: custom cel ShaderMaterial (banded directional key +
  * up to MAX_POINT_LIGHTS=16 dynamic point lights + ambient, fog, ground mist,
- * rim, hard stepped shadows) and CelMaterialFactory, the cache every lit
- * material comes from.
+ * rim, hard stepped shadows, opt-in toon specular) and CelMaterialFactory,
+ * the cache every lit material comes from.
  * Invariants: the scene's ONLY Babylon light is ShadowSystem's shadow-camera
  * DirectionalLight, which no material reads — light arrives via these
  * uniforms, uploaded by LightingSystem once per frame. Flat/faceted shading is
@@ -50,6 +50,9 @@ import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
  * - a flat ambient term that sets how black the unlit side goes — the main
  *   dial for the horror mood. Point lights deliberately ignore the shadow
  *   map, so a lantern still warms ground the moon can't reach.
+ * Opt-in per material (getGlossy / getGroundTextured's spec): a toon
+ * specular — one two-band Blinn highlight from the key light, gated by the
+ * same shadow. Everything not explicitly glossy stays matte.
  *
  * Atmosphere is distance fog plus a separate height-based ground mist, so
  * arenas fade into darkness and the floor sits in a low-lying haze.
@@ -152,6 +155,11 @@ uniform mat4 lightMatrix;
 uniform sampler2D shadowMap;
 uniform vec3 shadowParams; // x = depth bias, y = darkness, z = normal offset
 
+// Toon specular: one hard two-band Blinn highlight from the key light.
+// specColor is premultiplied by intensity — black (the default) is matte.
+uniform vec3 specColor;
+uniform float specShininess;
+
 // Geometric (per-triangle) normal from the world position's screen-space
 // derivatives. The cross product's sign depends on triangle winding and
 // viewing direction, so it is flipped to agree with the interpolated normal.
@@ -185,9 +193,9 @@ void main() {
   vec3 n = facetNormal();
 
   // --- directional key light (4 bands), gated by the stepped shadow ---
+  float shadow = shadowVisibility(n);
   vec3 light = ambientColor;
-  light += lightColor * band(max(dot(n, -lightDir), 0.0), 4.0)
-    * shadowVisibility(n);
+  light += lightColor * band(max(dot(n, -lightDir), 0.0), 4.0) * shadow;
 
   // --- point lights (3 bands, smooth inverse-square-ish falloff) ---
   for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
@@ -231,6 +239,16 @@ void main() {
   float rim = 1.0 - max(dot(viewDir, n), 0.0);
   col += base * rimColor * step(0.72, rim);
 
+  // Toon specular: Blinn half-vector against the key light, quantized into
+  // two hard bands (bright core + faint halo) and gated by the same shadow
+  // as the diffuse — a glint never appears where the moon doesn't reach.
+  // Added after the soft shoulder on purpose: a highlight is allowed to
+  // blow past the 0.75 ceiling, that's what makes it read as a shine.
+  // Matte materials carry specColor 0 and this contributes nothing.
+  vec3 h = normalize(viewDir - lightDir);
+  float spec = pow(max(dot(n, h), 0.0), specShininess);
+  col += specColor * band(spec, 2.0) * shadow;
+
   // --- atmosphere ---
   float dist = length(vPosW - camPos);
 
@@ -257,6 +275,15 @@ export interface PointLightData {
   /** Radius at which the contribution reaches zero. */
   range: number;
   intensity: number;
+}
+
+/** Toon specular settings for one glossy material (see CONFIG.graphics.spec). */
+export interface SpecSpec {
+  /** Highlight tint, e.g. "#aecbf2"; scaled by intensity on upload. */
+  color: string;
+  intensity: number;
+  /** Blinn exponent — high is a pinpoint glint, low a broad wet sheen. */
+  shininess: number;
 }
 
 /**
@@ -287,6 +314,8 @@ export class CelMaterialFactory {
     "pointCount",
     "lightMatrix",
     "shadowParams",
+    "specColor",
+    "specShininess",
   ];
   /** Every cel material samples the shadow map, whatever its albedo path. */
   private static readonly SAMPLERS = ["shadowMap"];
@@ -336,7 +365,40 @@ export class CelMaterialFactory {
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
+      this.applySpec(mat, null);
       this.cache.set(hex, mat);
+    }
+    return mat;
+  }
+
+  /**
+   * The same flat cel colour as get(), but with the toon specular band
+   * enabled — a hard key-light highlight for metal, glass, wet stone.
+   * Cached under its own key so the matte variant of the same colour is
+   * untouched; named `cel-gloss-#rrggbb` so outlineInkFor() still recovers
+   * the palette colour for the ink.
+   */
+  getGlossy(hex: string, spec: SpecSpec): ShaderMaterial {
+    const cacheKey = `\0gloss-${hex}`;
+    let mat = this.cache.get(cacheKey);
+    if (!mat) {
+      mat = new ShaderMaterial(
+        `cel-gloss-${hex}`,
+        this.scene,
+        { vertex: "cel", fragment: "cel" },
+        {
+          attributes: ["position", "normal"],
+          uniforms: [...CelMaterialFactory.UNIFORMS],
+          samplers: [...CelMaterialFactory.SAMPLERS],
+        },
+      );
+      mat.setColor3("baseColor", Color3.FromHexString(hex));
+      mat.setVector3("camPos", Vector3.Zero());
+      this.applyEnvironment(mat);
+      this.applyPointLights(mat);
+      this.applyShadow(mat);
+      this.applySpec(mat, spec);
+      this.cache.set(cacheKey, mat);
     }
     return mat;
   }
@@ -368,6 +430,7 @@ export class CelMaterialFactory {
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
+      this.applySpec(mat, null);
       this.cache.set(CelMaterialFactory.SKINNED_KEY, mat);
     }
     return mat;
@@ -385,9 +448,15 @@ export class CelMaterialFactory {
    * @param key cache key, e.g. "cobble" — one material per texture/scale pair
    * @param tex tiling texture; mipmaps + anisotropy are the caller's job
    * @param texScale texture repeats per metre (1 / metres-per-tile)
+   * @param spec enables the toon specular band (wet sheen); omit for matte
    */
-  getGroundTextured(key: string, tex: BaseTexture, texScale: number): ShaderMaterial {
-    const cacheKey = `\0ground-${key}`;
+  getGroundTextured(
+    key: string,
+    tex: BaseTexture,
+    texScale: number,
+    spec?: SpecSpec,
+  ): ShaderMaterial {
+    const cacheKey = `\0ground-${key}${spec ? "-spec" : ""}`;
     let mat = this.cache.get(cacheKey);
     if (!mat) {
       mat = new ShaderMaterial(
@@ -407,6 +476,7 @@ export class CelMaterialFactory {
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
+      this.applySpec(mat, spec ?? null);
       this.cache.set(cacheKey, mat);
     }
     return mat;
@@ -521,6 +591,21 @@ export class CelMaterialFactory {
     mat.setMatrix("lightMatrix", this.shadowMatrix);
     mat.setVector3("shadowParams", this.shadowParams);
   }
+
+  /** Specular is per-material, never theme-wide: null keeps a material matte. */
+  private applySpec(mat: ShaderMaterial, spec: SpecSpec | null): void {
+    if (!spec) {
+      mat.setColor3("specColor", Color3.Black());
+      // Shininess 1 is a no-op exponent — the zero specColor wins anyway.
+      mat.setFloat("specShininess", 1);
+      return;
+    }
+    mat.setColor3(
+      "specColor",
+      Color3.FromHexString(spec.color).scale(spec.intensity),
+    );
+    mat.setFloat("specShininess", Math.max(1, spec.shininess));
+  }
 }
 
 /**
@@ -533,14 +618,16 @@ const outlineEntries: { mesh: Mesh; width: number }[] = [];
 /**
  * Ink for a mesh: a darkened take on its own cel colour, so outlines read as
  * coloured line work instead of a uniform black cut-out. The factory names
- * flat materials `cel-#rrggbb`, which is how the colour is recovered here;
- * textured/skinned materials get the palette-neutral fallback ink.
+ * flat materials `cel-#rrggbb` (matte) or `cel-gloss-#rrggbb` (specular),
+ * which is how the colour is recovered here; textured/skinned materials get
+ * the palette-neutral fallback ink.
  */
 function outlineInkFor(mesh: Mesh): Color3 {
   const o = CONFIG.graphics.outlines;
   const name = mesh.material?.name ?? "";
-  if (name.startsWith("cel-#")) {
-    return Color3.FromHexString(name.slice(4)).scale(o.tintFactor);
+  const m = /^cel-(?:gloss-)?(#(?:[0-9a-fA-F]{6}))$/.exec(name);
+  if (m) {
+    return Color3.FromHexString(m[1]).scale(o.tintFactor);
   }
   return Color3.FromHexString(o.fallbackColor);
 }
