@@ -80,9 +80,11 @@ export const BACKPEDAL_ENTER = 0.6;
 
 /**
  * Lower/upper-body split for strafe: the hips yaw toward the velocity
- * direction (clamped) while the spine chain counter-rotates onto the
- * camera. Legs then walk "forward" in hip space, which reads as a
- * side-step; the arms are procedurally pinned so they don't care.
+ * direction (clamped, and mirrored by the clip's playback direction — a
+ * backpedal steps backward in hip space) while the spine chain
+ * counter-rotates onto the camera. Legs then walk "forward" in hip space,
+ * which reads as a side-step; the arms are procedurally pinned so they
+ * don't care.
  */
 export const HIP_YAW_MAX = 1.05;
 /** Share of the hips yaw each spine link gives back (must sum to 1). */

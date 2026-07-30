@@ -6,7 +6,9 @@
  * reverse (negative speedRatio), which reads as a backpedal instead of a
  * forward walk with the feet cycling the wrong way.
  * Called once per render from GlbSoldier's overlay; exposes idleW, which the
- * overlay also uses for the stance blend and the grip-calibration capture.
+ * overlay also uses for the stance blend and the grip-calibration capture,
+ * and stepDir, which the overlay uses to mirror the strafe hip-yaw while
+ * backpedaling.
  */
 import { AnimationGroup } from "@babylonjs/core";
 import {
@@ -37,6 +39,15 @@ export class ClipDriver {
    * cycle (a stutter step) instead of popping the legs mid-stride.
    */
   private dir = 1;
+
+  /**
+   * Smoothed clip playback direction: +1 forward, -1 backpedal. Eased
+   * between the two, so consumers (the strafe hip-yaw) also ease through
+   * neutral during a forward/backpedal flip instead of snapping.
+   */
+  get stepDir(): number {
+    return this.dir;
+  }
 
   constructor(
     private readonly walk: AnimationGroup | null,

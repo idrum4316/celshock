@@ -329,7 +329,12 @@ export class GlbSoldier {
     // 1c. Lower/upper-body split: hips yaw toward the velocity direction
     // (clamped) so a strafe walks sideways instead of gliding; the spine
     // counter-rotates in step 2 to keep the torso and rifle on the camera.
+    // Backpedal plays the clip in reverse, so the feet step BACKWARD in hip
+    // space and the yaw must mirror — keyed off the clip's smoothed playback
+    // direction, which eases the hips through neutral on a fwd/back flip
+    // and inherits the backpedal hysteresis for pure strafes.
     const up = Vector3.UpReadOnly;
+    const stepDir = this.clips?.stepDir ?? 1;
     let hipsYawTarget = 0;
     if (moveW > 0.01 && p.airBlend < 0.5) {
       const lat = p.localVelX;
@@ -337,6 +342,7 @@ export class GlbSoldier {
       if (lat * lat + fwdAbs * fwdAbs > 0.09) {
         hipsYawTarget =
           clamp(Math.atan2(lat, fwdAbs), -HIP_YAW_MAX, HIP_YAW_MAX) *
+          stepDir *
           moveW *
           (1 - p.airBlend);
       }
