@@ -1,19 +1,24 @@
 /**
  * CelShader.ts — The look: custom cel ShaderMaterial (banded directional key +
  * up to MAX_POINT_LIGHTS=16 dynamic point lights + ambient, fog, ground mist,
- * rim) and CelMaterialFactory, the cache every lit material comes from.
- * Invariants: the scene has NO Babylon lights — light arrives only via these
+ * rim, hard stepped shadows) and CelMaterialFactory, the cache every lit
+ * material comes from.
+ * Invariants: the scene's ONLY Babylon light is ShadowSystem's shadow-camera
+ * DirectionalLight, which no material reads — light arrives via these
  * uniforms, uploaded by LightingSystem once per frame. Flat/faceted shading is
  * recovered in the fragment shader from screen-space derivatives — NEVER call
  * convertToFlatShadedMesh(). Output is display-ready color, which is why
  * pipeline.imageProcessingEnabled must stay false. Materials are cached/shared
  * per color — don't create per-mesh materials. addOutline() skips meshes with
- * metadata.noOutline; effect meshes use getEmissive() (unlit StandardMaterial).
+ * metadata.noOutline, tints the ink from the mesh's own cel colour, and
+ * registers the mesh for updateOutlineScales() (distance thinning, prunes
+ * disposed meshes). Effect meshes use getEmissive() (unlit StandardMaterial).
  */
 import {
   type BaseTexture,
   Color3,
   Effect,
+  Matrix,
   Mesh,
   Scene,
   ShaderMaterial,
@@ -21,6 +26,7 @@ import {
   Vector2,
   Vector3,
 } from "@babylonjs/core";
+import { CONFIG } from "../config";
 // The bone includes self-register in the IncludesShadersStore; import them
 // explicitly so the cel vertex shader's #include<bones...> can never be
 // tree-shaken away. Their contents are guarded internally by
@@ -35,12 +41,15 @@ import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
  * atmosphere blended in the fragment shader.
  * Outlines are drawn with Babylon's outline renderer (inverted hull).
  *
- * Lighting has three parts, all banded so the toon look survives:
- * - a directional key light (moon/sun) quantized into 4 hard bands,
+ * Lighting has four parts, all banded so the toon look survives:
+ * - a directional key light (moon/sun) quantized into 4 hard bands and gated
+ *   by a hard two-level shadow term (ShadowSystem's depth map — lit or not,
+ *   never a soft penumbra),
  * - up to `MAX_POINT_LIGHTS` dynamic point lights (torches, neon, muzzle
  *   flashes) quantized into 3 bands with a smooth radial falloff, and
  * - a flat ambient term that sets how black the unlit side goes — the main
- *   dial for the horror mood.
+ *   dial for the horror mood. Point lights deliberately ignore the shadow
+ *   map, so a lantern still warms ground the moon can't reach.
  *
  * Atmosphere is distance fog plus a separate height-based ground mist, so
  * arenas fade into darkness and the floor sits in a low-lying haze.
@@ -136,6 +145,13 @@ uniform vec3 pointColor[MAX_POINT_LIGHTS]; // rgb premultiplied by intensity
 uniform float pointRange[MAX_POINT_LIGHTS];
 uniform float pointCount;
 
+// Stepped directional shadows. lightMatrix is the ShadowGenerator's
+// view*projection (no [0,1] bias baked in — the UV/depth remap below mirrors
+// Babylon's own computeShadow: uv = clip.xy*0.5+0.5, depth = (clip.z+1)*0.5).
+uniform mat4 lightMatrix;
+uniform sampler2D shadowMap;
+uniform vec3 shadowParams; // x = depth bias, y = darkness, z = normal offset
+
 // Geometric (per-triangle) normal from the world position's screen-space
 // derivatives. The cross product's sign depends on triangle winding and
 // viewing direction, so it is flipped to agree with the interpolated normal.
@@ -151,12 +167,27 @@ float band(float ndl, float steps) {
   return min((floor(x) + smoothstep(0.35, 0.65, fract(x))) / steps, 1.0);
 }
 
+// Hard two-level shadow: lit or not, nothing in between — a soft penumbra
+// would fight the flat bands. The sample point is pushed off the facet along
+// its normal so a flat face never tests against its own depth (acne).
+float shadowVisibility(vec3 n) {
+  vec4 sc4 = lightMatrix * vec4(vPosW + n * shadowParams.z, 1.0);
+  vec3 sc = sc4.xyz / sc4.w;
+  vec2 uv = sc.xy * 0.5 + 0.5;
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
+  if (sc.z < -1.0 || sc.z > 1.0) return 1.0;
+  float depth = (sc.z + 1.0) * 0.5 - shadowParams.x;
+  float lit = step(depth, texture2D(shadowMap, uv).x);
+  return mix(shadowParams.y, 1.0, lit);
+}
+
 void main() {
   vec3 n = facetNormal();
 
-  // --- directional key light (4 bands) ---
+  // --- directional key light (4 bands), gated by the stepped shadow ---
   vec3 light = ambientColor;
-  light += lightColor * band(max(dot(n, -lightDir), 0.0), 4.0);
+  light += lightColor * band(max(dot(n, -lightDir), 0.0), 4.0)
+    * shadowVisibility(n);
 
   // --- point lights (3 bands, smooth inverse-square-ish falloff) ---
   for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
@@ -254,7 +285,11 @@ export class CelMaterialFactory {
     "pointColor",
     "pointRange",
     "pointCount",
+    "lightMatrix",
+    "shadowParams",
   ];
+  /** Every cel material samples the shadow map, whatever its albedo path. */
+  private static readonly SAMPLERS = ["shadowMap"];
 
   private cache = new Map<string, ShaderMaterial>();
   private emissiveCache = new Map<string, StandardMaterial>();
@@ -275,6 +310,11 @@ export class CelMaterialFactory {
   private pointRange = new Float32Array(MAX_POINT_LIGHTS);
   private pointCount = 0;
 
+  // Shadow-map state, pushed onto every cel material as it is created.
+  private shadowMap: BaseTexture | null = null;
+  private shadowMatrix = Matrix.Identity();
+  private shadowParams = new Vector3(0.0025, 0.15, 0.06);
+
   constructor(private scene: Scene) {}
 
   /** Returns the shared cel material for a hex color, creating it on demand. */
@@ -288,12 +328,14 @@ export class CelMaterialFactory {
         {
           attributes: ["position", "normal"],
           uniforms: [...CelMaterialFactory.UNIFORMS],
+          samplers: [...CelMaterialFactory.SAMPLERS],
         },
       );
       mat.setColor3("baseColor", Color3.FromHexString(hex));
       mat.setVector3("camPos", Vector3.Zero());
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
+      this.applyShadow(mat);
       this.cache.set(hex, mat);
     }
     return mat;
@@ -317,7 +359,7 @@ export class CelMaterialFactory {
         {
           attributes: ["position", "normal", "uv"],
           uniforms: [...CelMaterialFactory.UNIFORMS],
-          samplers: ["baseColorTex"],
+          samplers: ["baseColorTex", ...CelMaterialFactory.SAMPLERS],
           defines: ["#define CEL_TEXTURED"],
         },
       );
@@ -325,6 +367,7 @@ export class CelMaterialFactory {
       mat.setVector3("camPos", Vector3.Zero());
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
+      this.applyShadow(mat);
       this.cache.set(CelMaterialFactory.SKINNED_KEY, mat);
     }
     return mat;
@@ -354,7 +397,7 @@ export class CelMaterialFactory {
         {
           attributes: ["position", "normal"],
           uniforms: [...CelMaterialFactory.UNIFORMS, "texScale"],
-          samplers: ["baseColorTex"],
+          samplers: ["baseColorTex", ...CelMaterialFactory.SAMPLERS],
           defines: ["#define CEL_GROUND_TEX"],
         },
       );
@@ -363,6 +406,7 @@ export class CelMaterialFactory {
       mat.setVector3("camPos", Vector3.Zero());
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
+      this.applyShadow(mat);
       this.cache.set(cacheKey, mat);
     }
     return mat;
@@ -432,6 +476,27 @@ export class CelMaterialFactory {
     this.cache.forEach((mat) => mat.setVector3("camPos", camPos));
   }
 
+  /**
+   * Binds the ShadowSystem's depth map to every cel material. Called once at
+   * startup — the texture object is stable even though its contents re-render.
+   */
+  setShadowMap(map: BaseTexture): void {
+    this.shadowMap = map;
+    this.cache.forEach((mat) => mat.setTexture("shadowMap", map));
+  }
+
+  /** The light's view*projection; re-uploaded when the shadow camera moves. */
+  setShadowMatrix(matrix: Matrix): void {
+    this.shadowMatrix = matrix;
+    this.cache.forEach((mat) => mat.setMatrix("lightMatrix", matrix));
+  }
+
+  /** Depth bias, in-shadow darkness, facet-normal offset. */
+  setShadowParams(bias: number, darkness: number, normalBias: number): void {
+    this.shadowParams.set(bias, darkness, normalBias);
+    this.cache.forEach((mat) => mat.setVector3("shadowParams", this.shadowParams));
+  }
+
   private applyEnvironment(mat: ShaderMaterial): void {
     mat.setVector3("lightDir", this.lightDir);
     mat.setColor3("lightColor", this.lightColor);
@@ -450,21 +515,82 @@ export class CelMaterialFactory {
     mat.setFloats("pointRange", this.pointRange as unknown as number[]);
     mat.setFloat("pointCount", this.pointCount);
   }
+
+  private applyShadow(mat: ShaderMaterial): void {
+    if (this.shadowMap) mat.setTexture("shadowMap", this.shadowMap);
+    mat.setMatrix("lightMatrix", this.shadowMatrix);
+    mat.setVector3("shadowParams", this.shadowParams);
+  }
 }
 
 /**
- * Enables bold black outlines on a mesh and all of its children.
- * Meshes tagged `metadata.noOutline` (glows, holo reticles) are skipped.
+ * Outlined meshes and the width they were authored at, so
+ * updateOutlineScales() can thin the ink with distance. Entries for disposed
+ * meshes (the map is rebuilt every round) are pruned lazily on the next pass.
+ */
+const outlineEntries: { mesh: Mesh; width: number }[] = [];
+
+/**
+ * Ink for a mesh: a darkened take on its own cel colour, so outlines read as
+ * coloured line work instead of a uniform black cut-out. The factory names
+ * flat materials `cel-#rrggbb`, which is how the colour is recovered here;
+ * textured/skinned materials get the palette-neutral fallback ink.
+ */
+function outlineInkFor(mesh: Mesh): Color3 {
+  const o = CONFIG.graphics.outlines;
+  const name = mesh.material?.name ?? "";
+  if (name.startsWith("cel-#")) {
+    return Color3.FromHexString(name.slice(4)).scale(o.tintFactor);
+  }
+  return Color3.FromHexString(o.fallbackColor);
+}
+
+/**
+ * Enables bold outlines on a mesh and all of its children — coloured ink that
+ * updateOutlineScales() thins with distance. Meshes tagged
+ * `metadata.noOutline` (glows, holo reticles) are skipped.
  */
 export function addOutline(mesh: Mesh, width = 0.045): void {
   const apply = (m: Mesh) => {
     if (m.metadata && m.metadata.noOutline === true) return;
     m.renderOutline = true;
-    m.outlineColor = Color3.Black();
+    m.outlineColor = outlineInkFor(m);
     m.outlineWidth = width;
+    outlineEntries.push({ mesh: m, width });
   };
   apply(mesh);
   for (const child of mesh.getChildMeshes()) {
     if (child instanceof Mesh) apply(child);
+  }
+}
+
+/**
+ * Re-scales every registered outline for the camera's current position: full
+ * width up close, thinning to `outlines.minScale` at the fog wall, so distant
+ * silhouettes stay shaped instead of filling in. Meshes whose outlines were
+ * LOD-dropped (bots past `lodOutlineDistance` — `renderOutline` false) are
+ * left alone; their authored width returns when the LOD flips them back on.
+ * Called once per frame from Game.
+ */
+export function updateOutlineScales(camPos: Vector3): void {
+  const o = CONFIG.graphics.outlines;
+  for (let i = outlineEntries.length - 1; i >= 0; i--) {
+    const e = outlineEntries[i];
+    if (e.mesh.isDisposed()) {
+      outlineEntries[i] = outlineEntries[outlineEntries.length - 1];
+      outlineEntries.pop();
+      continue;
+    }
+    if (!e.mesh.renderOutline) continue;
+    const sphere = e.mesh.getBoundingInfo().boundingSphere;
+    const d = Math.max(
+      0,
+      Vector3.Distance(sphere.centerWorld, camPos) - sphere.radiusWorld,
+    );
+    const t = Math.min(
+      1,
+      Math.max(0, (d - o.fullDistance) / (o.farDistance - o.fullDistance)),
+    );
+    e.mesh.outlineWidth = e.width * (1 - t * (1 - o.minScale));
   }
 }

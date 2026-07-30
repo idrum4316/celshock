@@ -382,6 +382,50 @@ export const CONFIG = {
     /** Peak red edge flash when the player is hit, and how fast it decays. */
     damageFlash: 1.0,
     damageFlashDecay: 2.6,
+    /**
+     * Hard-edged directional shadows from the key light (the moon), plus a
+     * soft contact blob under every combatant. The shadow camera follows the
+     * player inside a fixed ortho window — the fog wall at 78 m hides the
+     * edge of the coverage.
+     */
+    shadows: {
+      /** Shadow map resolution (square). 110 m / 2048 ≈ 5.4 cm texels. */
+      mapSize: 2048,
+      /** Width/height of the light's fixed ortho window, in metres. */
+      frustumSize: 110,
+      /** Light camera distance behind the focus, along the light direction. */
+      distance: 90,
+      /** Depth range of the ortho volume — must span valley floor to roofs. */
+      depthRange: 180,
+      /** Fraction of the key light that survives inside shadow. */
+      darkness: 0.15,
+      /**
+       * Consumer-side depth bias and facet-normal offset (metres). The
+       * faceted shader shades whole triangles at once, so the offset pushes
+       * each triangle's sample off its own plane — flat faces never
+       * self-shadow (acne) and cast shadows stay put.
+       */
+      bias: 0.0025,
+      normalBias: 0.06,
+      /** Soft contact disc under each combatant. */
+      blobRadius: 0.6,
+      blobOpacity: 0.55,
+    },
+    /**
+     * Outlines are coloured ink (a darkened take on the mesh's own palette
+     * colour) that thins out with distance, so far buildings stop reading as
+     * black cut-outs against the fog.
+     */
+    outlines: {
+      /** Full width this near; shrinks to minScale by farDistance. */
+      fullDistance: 14,
+      farDistance: 60,
+      minScale: 0.3,
+      /** Outline colour = the mesh's base colour scaled by this. */
+      tintFactor: 0.3,
+      /** Fallback ink for materials with no flat base colour to darken. */
+      fallbackColor: "#12141a",
+    },
   },
 
   /**

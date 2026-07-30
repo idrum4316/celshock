@@ -219,6 +219,8 @@ export class MapBuilder {
     }
 
     for (const merged of mergeByMaterial(roadParts, "roads")) {
+      // Flat ground sheets receive shadows, never cast them.
+      merged.metadata = { ...(merged.metadata ?? {}), noShadowCaster: true };
       if (!merged.metadata?.noOutline) addOutline(merged, 0.05);
       visuals.push(merged);
     }
@@ -271,6 +273,8 @@ export class MapBuilder {
     );
     ground.position.y = -0.5;
     ground.material = this.mats.get(env.floorColor);
+    // Receiver only: a flat sheet casting into the shadow map is pure acne.
+    ground.metadata = { noShadowCaster: true };
     visuals.push(ground);
     colliders.push(
       this.collider("ground-col", { w: size, h: 1, d: size, x: 0, y: -0.5, z: 0 }),

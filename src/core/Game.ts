@@ -10,6 +10,7 @@
  * flag ownership). Muzzle-flash light budget is spent here
  * (spendMuzzleLightBudget) — new per-bot transient lights need the same treatment.
  * Also owns: GlowLayer scan (construction-time only; metadata.noGlow contract),
+ * ShadowSystem wiring (casters re-registered per round from map.visuals),
  * pipeline.imageProcessingEnabled === false, window.__celshock debug handle.
  */
 import {
@@ -21,7 +22,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import { CelMaterialFactory } from "../shaders/CelShader";
+import { CelMaterialFactory, updateOutlineScales } from "../shaders/CelShader";
 import { HorrorPost } from "../shaders/HorrorPost";
 import { Bot } from "../entities/Bot";
 import type { Combatant, Team } from "../entities/Combatant";
@@ -33,6 +34,7 @@ import { CombatSystem } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
 import { GrassSystem } from "../systems/GrassSystem";
 import { LightingSystem } from "../systems/LightingSystem";
+import { ShadowSystem } from "../systems/ShadowSystem";
 import { Sky } from "../systems/Sky";
 import { WaterSystem } from "../systems/WaterSystem";
 import { applyEnvironment } from "../world/environment";
@@ -74,6 +76,7 @@ export class Game {
   private battle: BattleSystem;
   private conquest: ConquestSystem;
   private lighting: LightingSystem;
+  private shadows: ShadowSystem;
   private atmosphere: Atmosphere;
   private sky: Sky;
   private water: WaterSystem;
@@ -87,6 +90,8 @@ export class Game {
   private overlayT = 0;
   /** Reused each frame: the player plus every bot, for objective occupancy. */
   private readonly combatants: Combatant[] = [];
+  /** Scratch for the shadow focus point — no per-frame allocation. */
+  private readonly shadowFocus = new Vector3();
   /** Counts down while the player is waiting to redeploy. */
   private respawnT = 0;
   /** Round scoreboard: kills and losses per team, plus the player's own line. */
@@ -104,6 +109,9 @@ export class Game {
     // key/ambient/point-light uniforms (fed by the LightingSystem) and every
     // effect material is unlit emissive.
     this.mats = new CelMaterialFactory(this.scene);
+    // Stepped moon shadows + contact blobs. Must exist before any cel
+    // material is created so the shadow map binds on creation.
+    this.shadows = new ShadowSystem(this.scene, this.mats);
     this.input = new InputManager(canvas);
     this.cameraSys = new CameraSystem(this.scene);
 
@@ -247,6 +255,14 @@ export class Game {
     applyEnvironment(this.scene, HollowmereEnvironment, this.mats);
     this.sky.apply(HollowmereEnvironment);
     this.map = this.mapBuilder.build();
+    // The shadow camera follows the environment's key light, and its casters
+    // are the fresh map's visuals — last round's meshes are now disposed.
+    this.shadows.setLightDirection(HollowmereEnvironment.lighting.direction);
+    this.shadows.setFogRange(
+      HollowmereEnvironment.fogStart,
+      HollowmereEnvironment.fogEnd,
+    );
+    this.shadows.setCasters(this.map.visuals);
     this.atmosphere.apply(
       HollowmereEnvironment.particles,
       this.map.size,
@@ -394,8 +410,9 @@ export class Game {
    * Camera & rendering support. This tail order is LOAD-BEARING: light slot
    * selection, the shader's fog, and audio panning all key off the camera
    * position, so anything that moves the camera must run before them:
-   * aim assist -> camera update -> mats.updateCamera() -> carried lights ->
-   * lighting.update() -> water.update() -> grass.update() -> sfx.setListener().
+   * aim assist -> camera update -> mats.updateCamera() -> shadows (window,
+   * blobs, outline thinning) -> carried lights -> lighting.update() ->
+   * water.update() -> grass.update() -> sfx.setListener().
    * Nothing after this method may move the camera.
    */
   private updateCameraAndLighting(dt: number): void {
@@ -413,6 +430,18 @@ export class Game {
     );
     this.cameraSys.update(dt, this.input, this.player.position, assist);
     this.mats.updateCamera(this.cameraSys.camera.position);
+    // Shadows follow the player (biased a little along the view so the
+    // window covers what's ahead); outline ink thins with the same camera.
+    this.shadowFocus
+      .copyFrom(this.player.position)
+      .addInPlace(this.cameraSys.forward.scale(8));
+    this.shadows.update(this.shadowFocus, this.mats);
+    this.shadows.updateBlobs(
+      this.player,
+      this.battle.bots,
+      this.cameraSys.camera.position,
+    );
+    updateOutlineScales(this.cameraSys.camera.position);
     const lc = CONFIG.lighting;
     this.lighting.setCarried(
       "player-lamp",

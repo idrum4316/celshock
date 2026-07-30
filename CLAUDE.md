@@ -97,6 +97,7 @@ src/
     CombatSystem.ts         # Hitscan + pooled tracers and sparks
     AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
+    ShadowSystem.ts         # Moon shadow map (stepped shadows) + blob shadows
     Atmosphere.ts           # Drifting ash particle field
     Sky.ts                  # Generated sky dome (gradient/stars/halo), moon, clouds
     WaterSystem.ts          # Water surfaces from map WaterRects
@@ -151,9 +152,9 @@ camera must run before them.
 `ConquestSystem.update` runs *before* `BattleSystem.update`, so a bot's think
 tick sees this frame's flag ownership rather than last frame's.
 
-### The scene has no Babylon lights
+### The scene has (almost) no Babylon lights
 
-Not one. Cel materials carry their own `lightDir`/`lightColor`/`ambientColor` and
+Cel materials carry their own `lightDir`/`lightColor`/`ambientColor` and
 a packed array of up to `MAX_POINT_LIGHTS` (16) point lights as uniforms;
 `LightingSystem` is the sole owner of dynamic light and uploads the winning slots
 via `CelMaterialFactory.setPointLights()` once per frame. Adding a
@@ -161,6 +162,15 @@ via `CelMaterialFactory.setPointLights()` once per frame. Adding a
 Effect meshes (tracers, sparks, neon, reticles) use unlit emissive
 `StandardMaterial`s from `mats.getEmissive()` and are unaffected by lighting
 entirely.
+
+The one exception is `ShadowSystem`'s `DirectionalLight`, which no material
+reads — it exists only to define the shadow camera for its `ShadowGenerator`.
+The cel fragment shader samples that depth map as a hard two-level term gating
+the key light. The shadow window follows the player (texel-snapped, re-rendered
+only when the snapped focus moves), casters are the map's merged static meshes
+re-registered every round via `shadows.setCasters(map.visuals)` (skip anything
+flat with `metadata.noShadowCaster`), and characters get blob-shadow discs
+instead of casting — the rigs are far too many meshes for the depth pass.
 
 Lights come in three flavors: static fixtures (`lighting.add()`, registered by
 `MapBuilder` from a builder's `LocalLight` list or a scatter prop's entry in
@@ -219,14 +229,17 @@ other path is invisible to navigation.
 
 ### Mesh metadata is a contract
 
-Three flags, all read elsewhere; new geometry that omits them misbehaves silently:
+Four flags, all read elsewhere; new geometry that omits them misbehaves silently:
 
 - `solid: true` — collider proxies only (see above). Unmarked geometry is shot
   through, seen through, and walked through.
 - `noOutline: true` — skipped by `addOutline()`. Every emissive part (eyes,
-  flames, signs, reticle) needs it.
+  flames, signs, reticle) needs it. Outlines are coloured ink (a darkened take
+  on the mesh's own cel colour) thinned with distance by `updateOutlineScales()`.
 - `noGlow: true` — excluded from the `GlowLayer` in the `Game` constructor. Only
   meshes existing at construction time are scanned.
+- `noShadowCaster: true` — excluded from `ShadowSystem.setCasters()`. Flat
+  receivers (ground, roads) need it: casting from them is pure shadow acne.
 
 ### Navigation
 
