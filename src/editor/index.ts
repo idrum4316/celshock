@@ -200,6 +200,11 @@ export class EditorSession {
         if (this.mode !== "terrain") return;
         this.brush.resize(e.code === "BracketRight" ? 1 : -1);
         this.showBrushStatus();
+      } else if (e.code === "KeyF") {
+        if (this.mode !== "terrain") return;
+        this.brush.setTool(this.brush.activeTool === "level" ? "sculpt" : "level");
+        this.panel.setTerrainTool(this.brush.activeTool);
+        this.showBrushStatus();
       } else if (e.code === "KeyL") {
         this.workLight = !this.workLight;
         this.applyLighting();
@@ -221,7 +226,12 @@ export class EditorSession {
       if (e.button !== 0 || document.pointerLockElement) return;
       if ((e.target as HTMLElement)?.closest("#editor-panel")) return;
       if (this.mode === "terrain") {
+        // Hover first: entering terrain mode and clicking without moving the
+        // mouse would otherwise begin nothing, because the brush has never
+        // been told where the pointer is.
+        this.brush.hover(e.clientX, e.clientY);
         this.brush.begin(e.clientY);
+        this.showBrushStatus();
         return;
       }
       // A click that started on a gizmo handle is a drag, not a reselect.
@@ -232,7 +242,7 @@ export class EditorSession {
     // brush, and drag to sculpt. Object mode wants none of it.
     const onPointerMove = (e: PointerEvent) => {
       if (this.mode !== "terrain" || document.pointerLockElement) return;
-      if (this.brush.isDragging) this.brush.drag(e.clientY);
+      if (this.brush.isDragging) this.brush.drag(e.clientX, e.clientY);
       else this.brush.hover(e.clientX, e.clientY);
       this.showBrushStatus();
     };
@@ -268,8 +278,12 @@ export class EditorSession {
     if (mode === this.mode) return;
     this.mode = mode;
     if (mode === "terrain") this.select(null);
+    // Pointer-up is gated on terrain mode, so a stroke still running when the
+    // mode changes would never be ended. Roll it back rather than leave it.
+    else this.brush.cancel();
     this.brush.setVisible(mode === "terrain");
     this.panel.setMode(mode);
+    this.panel.setTerrainTool(this.brush.activeTool);
     if (mode === "terrain") this.showBrushStatus();
     else this.panel.setStatus(this.dirty ? "unsaved edits" : "ready", "idle");
   }
@@ -283,8 +297,13 @@ export class EditorSession {
     if (this.mode !== "terrain") return;
     const grade = this.brush.gradeUnderBrush();
     const h = this.brush.heightUnderBrush();
+    // Mid-level-stroke the sampled height is the whole state of the tool, and
+    // nothing else on screen says what it is.
+    const target = this.brush.levelTarget;
+    const tool = this.brush.activeTool === "level" ? "level" : "sculpt";
+    const at = target === null ? `${h.toFixed(2)} m` : `${h.toFixed(2)} → ${target.toFixed(2)} m`;
     const text =
-      `terrain · brush ${this.brush.size} · ${h.toFixed(2)} m · ` +
+      `terrain · ${tool} · brush ${this.brush.size} · ${at} · ` +
       `slope ${grade.toFixed(2)}/${MAX_WALKABLE_GRADE.toFixed(2)}`;
     this.panel.setStatus(text, grade > MAX_WALKABLE_GRADE ? "error" : "idle");
   }

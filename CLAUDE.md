@@ -354,19 +354,44 @@ construction: in terrain mode only the ground answers, and in object mode terrai
 is not in the pick at all.
 
 In terrain mode the cursor highlights the grid cells it covers, `[`/`]` resize
-the brush, and dragging the left button up or down raises or lowers those cells
-with a linear falloff from the inner half outward. A hard-edged brush would make
-a cliff on its first click, which the nav graph then refuses to walk across; the
-status line shows the steepest gradient under the cursor against
-`MAX_WALKABLE_GRADE` and turns red past it.
+the brush, and the left button draws with one of **two tools**, swapped with `F`:
+
+- **sculpt** — drag up or down to raise or lower the cells under a brush that
+  stays where it was pressed.
+- **level** — the click samples the height under it, and from then on the brush
+  paints, pulling everything it is dragged over to that one height. Free-hand
+  sculpting cannot produce a flat basin floor or a pad that meets the ground
+  around it: every pass lands somewhere slightly different, and the nav grid's
+  slope limit and a building's footings are exactly what "slightly different"
+  ruins.
+
+Both apply a linear falloff from the inner half outward. A hard-edged brush
+would make a cliff on its first click, which the nav graph then refuses to walk
+across; for the level tool the same falloff is what blends a levelled pad into
+the ground around it. The status line shows the steepest gradient under the
+cursor against `MAX_WALKABLE_GRADE` and turns red past it, and names the armed
+tool — which also recolours the brush and the panel, for the same reason the
+mode itself does.
 
 A stroke is **absolute, not incremental**: the affected vertices are snapshotted
 when the drag starts and every mouse move re-derives from that snapshot, so the
-result cannot depend on frame rate or mouse speed. During the stroke only the
-floor's *visual* blocks are re-tessellated (`TerrainBrush.reapply`, sub-ms);
-colliders, navigation and everything whose `y` rides the ground are stale until
-release, which schedules the ordinary debounced geometry rebuild. That split is
-the whole reason it feels immediate — nothing walks on the ground mid-drag.
+result cannot depend on frame rate or mouse speed. Painting makes the same rule
+do more work — a vertex remembers the height it had when the stroke *first*
+touched it and the *strongest* weight any pass has given it, so dragging back
+and forth over the same ground settles instead of creeping toward the target one
+pass at a time. Pointer moves are sampled rather than continuous, so the gap
+between two of them is filled in with stamps half a brush apart; without that a
+quick drag leaves a dotted line of untouched cells, which on a level stroke is
+precisely the "nearly flat" it exists to eliminate.
+
+During the stroke only the floor's *visual* blocks are re-tessellated
+(`TerrainBrush.reapply`, sub-ms); colliders, navigation and everything whose `y`
+rides the ground are stale until release, which schedules the ordinary debounced
+geometry rebuild. That split is the whole reason it feels immediate — nothing
+walks on the ground mid-drag. It is also why the brush picks against the floor's
+**visual** blocks rather than its `solid` collider clones: the two carry the same
+vertices except mid-stroke, and a painting brush that followed the stale collider
+would drift away from the ground being levelled under it.
 
 **Proxies and gizmos work in world space; the layout stores heights above the
 local floor.** `originOf` adds the terrain height and `applyTransform` subtracts

@@ -51,6 +51,8 @@ export class EditorPanel {
   private navEl: HTMLElement;
   private statusEl: HTMLElement;
   private terrainHelpEl: HTMLElement;
+  private toolEl: HTMLElement;
+  private toolHintEl: HTMLElement;
   private overlayEl: HTMLElement;
   private findingsEl: HTMLElement;
   private inspector: HTMLElement;
@@ -100,7 +102,10 @@ export class EditorPanel {
         <div><b>Del</b> delete selection &nbsp; <b>Ctrl+S</b> save</div>
         <div><b>N</b> nav overlay &nbsp; <b>L</b> work light</div>
         <div><b>T</b> terrain mode &nbsp; <b>[ ]</b> brush size</div>
-        <div class="ed-terrain-help"><b>LMB drag</b> &uarr;&darr; raise / lower ground</div>
+        <div class="ed-terrain-help">
+          <div><b>F</b> tool: <span id="ed-tool">sculpt</span></div>
+          <div id="ed-tool-hint"><b>LMB drag</b> &uarr;&darr; raise / lower ground</div>
+        </div>
         <div><b>F2</b> back to the game (discards unsaved)</div>
       </div>
     `;
@@ -111,6 +116,8 @@ export class EditorPanel {
     this.navEl = this.root.querySelector("#ed-nav")!;
     this.statusEl = this.root.querySelector("#ed-status")!;
     this.terrainHelpEl = this.root.querySelector(".ed-terrain-help")!;
+    this.toolEl = this.root.querySelector("#ed-tool")!;
+    this.toolHintEl = this.root.querySelector("#ed-tool-hint")!;
     this.setMode("object");
     this.overlayEl = this.root.querySelector("#ed-overlay")!;
     this.findingsEl = this.root.querySelector("#ed-findings")!;
@@ -317,6 +324,20 @@ export class EditorPanel {
     const on = mode === "terrain";
     this.root.classList.toggle("ed-mode-terrain", on);
     this.terrainHelpEl.style.display = on ? "" : "none";
+  }
+
+  /**
+   * Which terrain tool the left button draws. Same reasoning as the mode
+   * itself, one level down: sculpt and level both answer a left drag and do
+   * entirely different things with it, so the armed one has to be legible.
+   */
+  setTerrainTool(tool: "sculpt" | "level"): void {
+    const level = tool === "level";
+    this.root.classList.toggle("ed-tool-level", level);
+    this.toolEl.textContent = level ? "level" : "sculpt";
+    this.toolHintEl.innerHTML = level
+      ? "<b>LMB</b> click a height, drag to spread it"
+      : "<b>LMB drag</b> &uarr;&darr; raise / lower ground";
   }
 
   setStatus(text: string, tone: "idle" | "busy" | "ok" | "error"): void {

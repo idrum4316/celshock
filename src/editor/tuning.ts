@@ -59,6 +59,9 @@ export const EDITOR = {
     water: "#4fb8ff",
     grass: "#7fd66a",
     terrain: "#c58cff",
+    /** The level brush. Distinct from the sculpt violet: which tool is armed
+     *  changes what a drag does, so it has to be readable at the cursor. */
+    terrainLevel: "#ff9ad5",
     navWalkable: "#4fd06a",
     navIsland: "#ff5a4f",
     navUnrouted: "#ffc46b",

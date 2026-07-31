@@ -446,6 +446,16 @@
         border-color: #c58cff;
         box-shadow: 0 0 0 1px rgba(197, 140, 255, 0.5);
       }
+      /* And one level down: sculpt and level both answer a left drag and do
+         different things with it, so the panel carries the armed tool's colour
+         the same way the brush itself does. */
+      #editor-panel.ed-mode-terrain.ed-tool-level {
+        border-color: #ff9ad5;
+        box-shadow: 0 0 0 1px rgba(255, 154, 213, 0.5);
+      }
+      #editor-panel.ed-mode-terrain.ed-tool-level #ed-tool {
+        color: #ff9ad5;
+      }
       #editor-panel h2 {
         font-size: 12px;
         font-weight: 800;
