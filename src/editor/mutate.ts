@@ -14,18 +14,29 @@
  * - **Navigation** — NavGrid plus all seven flow fields, and ObstacleField.
  *   ~45 ms, so it runs when a drag ends, not during it.
  *
- * What is deliberately NOT handled here: changing `params` or `kind` alters
- * the geometry itself and can change how many colliders an item emits, which
- * shifts every later index in `colliderBoxes`. That needs a full rebuild, and
- * a full rebuild is the caller's decision — it disposes the map the caller is
- * holding.
+ * Editing a param, changing a kind, and adding or deleting an entry are the
+ * third tier and are NOT handled here: they alter the geometry itself and can
+ * change how many colliders an item emits, which shifts every later index in
+ * `colliderBoxes` and invalidates the whole editor index. This file writes the
+ * layout for them (`setField` / `addItem` / `deleteItem`) and reports which
+ * tier the caller owes with `tierFor`; performing the rebuild is the caller's
+ * decision, because it disposes the map the caller is holding.
  */
 import { Vector3 } from "@babylonjs/core";
+import type { BuilderKind } from "../world/BuildingKit";
 import type { MapLayout } from "../world/layout";
 import { repositionItem, type GameMap } from "../world/MapBuilder";
 import { NavGrid } from "../world/NavGrid";
 import { ObstacleField } from "../world/ObstacleField";
-import type { SelectionRef } from "./selection";
+import {
+  isAngleKey,
+  isIntegerKey,
+  isOptionalKey,
+  toRadians,
+  type FieldValue,
+} from "./fields";
+import { PARAMS, paramKeys, SCATTER_DEFAULTS } from "./params";
+import type { SelectionList, SelectionRef } from "./selection";
 
 /** Where a selected item currently sits, for the gizmo to attach to. */
 export function originOf(layout: MapLayout, ref: SelectionRef): Vector3 | null {
@@ -173,6 +184,270 @@ export function applyTransform(
       return;
     }
   }
+}
+
+/**
+ * How much has to be rebuilt after a structural change to one of these lists.
+ *
+ * Placements, scatter, water and grass all feed geometry the builder produces,
+ * so they need a full rebuild. Control points and spawns produce no geometry
+ * at all — they are proxy meshes plus one flow field each, so navigation is
+ * the whole cost.
+ */
+export type Tier = "geometry" | "navigation";
+
+export function tierFor(list: SelectionList): Tier {
+  return list === "controlPoints" || list === "spawns" ? "navigation" : "geometry";
+}
+
+/** Anything that can be added or deleted — which is every list. */
+export type EntryRecord = Record<string, unknown>;
+
+/**
+ * The layout array behind a selection list. The list names are the layout's
+ * own key names, which is what makes this generic pass safe.
+ */
+function arrayFor(layout: MapLayout, list: SelectionList): EntryRecord[] | undefined {
+  const v = (layout as unknown as Record<string, unknown>)[list];
+  return Array.isArray(v) ? (v as EntryRecord[]) : undefined;
+}
+
+function entryFor(layout: MapLayout, ref: SelectionRef): EntryRecord | undefined {
+  return arrayFor(layout, ref.list)?.[ref.index];
+}
+
+/** Rounds a value the way the field it belongs to should be stored. */
+function quantizeField(key: string, v: number): number {
+  if (isAngleKey(key)) return qAngle(toRadians(v));
+  if (isIntegerKey(key)) return Math.max(0, Math.round(v));
+  return q(v);
+}
+
+/**
+ * Writes one value, or removes the field when the value is the absent one.
+ *
+ * "Absent" is not the same as "zero" everywhere, which is why this is a rule
+ * and not an assignment: `y` absent means on the ground, `rotY` absent means
+ * unrotated, and a non-blocking scatter region simply has no `blocking` key.
+ * Writing those explicitly would add a field to every line the editor touches
+ * and drift the file away from how it is authored.
+ */
+function put(target: EntryRecord, key: string, value: FieldValue): void {
+  if (value === null || value === "") {
+    delete target[key];
+    return;
+  }
+  if (typeof value === "boolean") {
+    if (!value && isOptionalKey(key)) delete target[key];
+    else target[key] = value;
+    return;
+  }
+  if (typeof value === "string") {
+    target[key] = value;
+    return;
+  }
+  const n = quantizeField(key, value);
+  if (n === 0 && isOptionalKey(key)) delete target[key];
+  else target[key] = n;
+}
+
+/** A placement's kind changed: keep only the params the new builder reads. */
+function setKind(entry: EntryRecord, kind: string): void {
+  if (!(kind in PARAMS)) return;
+  entry.kind = kind;
+  const params = entry.params as EntryRecord | undefined;
+  if (!params) return;
+  const allowed = paramKeys(kind as BuilderKind);
+  for (const k of Object.keys(params)) {
+    if (!allowed.has(k)) delete params[k];
+  }
+  if (!Object.keys(params).length) delete entry.params;
+}
+
+/**
+ * One params field. A value equal to the builder's own default is REMOVED
+ * rather than written, so `{ kind: "cottage", x, z }` stays that short instead
+ * of accumulating every field the inspector happened to show.
+ */
+function setParam(entry: EntryRecord, key: string, value: FieldValue): void {
+  const specs = PARAMS[entry.kind as BuilderKind] ?? [];
+  const spec = specs.find((s) => s.key === key);
+  const bag = (entry.params as EntryRecord | undefined) ?? {};
+
+  let next = value;
+  if (spec?.type === "choice" && spec.numeric && typeof next === "string") {
+    next = Number(next);
+  }
+  const isDefault =
+    spec !== undefined &&
+    next !== null &&
+    (spec.type === "choice"
+      ? String(next) === spec.def
+      : spec.type === "number"
+        ? typeof next === "number" && quantizeField(key, next) === spec.def
+        : next === spec.def);
+
+  if (isDefault) delete bag[key];
+  else put(bag, key, next);
+
+  if (Object.keys(bag).length) entry.params = bag;
+  else delete entry.params;
+}
+
+/** A `[min, max]` scale pair, dropped entirely when it is back at 1..1. */
+function setScale(entry: EntryRecord, index: number, value: FieldValue): void {
+  const current = entry.scale as [number, number] | undefined;
+  const next: [number, number] = [current?.[0] ?? 1, current?.[1] ?? 1];
+  next[index] = value === null || value === "" ? 1 : q(Number(value));
+  if (next[0] === 1 && next[1] === 1) delete entry.scale;
+  else entry.scale = next;
+}
+
+/**
+ * A spawn's owner. `team` and `controlPoint` are one decision spelled as two
+ * fields, so they are always written together — a spawn carrying both, or
+ * neither, is a state ConquestSystem has no reading for.
+ */
+function setOwner(entry: EntryRecord, owner: string): void {
+  if (owner.startsWith("team:")) {
+    entry.team = Number(owner.slice(5)) === 1 ? 1 : 0;
+    delete entry.controlPoint;
+  } else {
+    entry.team = null;
+    entry.controlPoint = owner.slice(3);
+  }
+}
+
+/**
+ * Applies one inspector field to the layout. `key` is the dotted path the
+ * field was built with (see `fields.ts`); the two compound keys — `kind` and
+ * `owner` — write more than one field each.
+ *
+ * The layout entry is mutated in place, and Vector3s are written component-wise
+ * rather than replaced: `controlPoints[i].pos` is shared by reference into
+ * GameMap and ConquestSystem.
+ */
+export function setField(
+  layout: MapLayout,
+  ref: SelectionRef,
+  key: string,
+  value: FieldValue,
+): void {
+  const entry = entryFor(layout, ref);
+  if (!entry) return;
+
+  const dot = key.indexOf(".");
+  const head = dot < 0 ? key : key.slice(0, dot);
+  const tail = dot < 0 ? "" : key.slice(dot + 1);
+
+  if (key === "kind") return setKind(entry, String(value));
+  if (key === "owner") return setOwner(entry, String(value));
+  if (head === "params") return setParam(entry, tail, value);
+  if (head === "scale") return setScale(entry, Number(tail), value);
+  if (head === "pos") {
+    const pos = entry.pos as Vector3 | undefined;
+    if (!pos || typeof value !== "number") return;
+    if (tail === "x") pos.x = q(value);
+    else if (tail === "y") pos.y = q(value);
+    else if (tail === "z") pos.z = q(value);
+    return;
+  }
+  put(entry, key, value);
+}
+
+/**
+ * Appends a new entry to one of the layout's lists and returns a ref to it.
+ *
+ * `choice` names the builder kind or the scatter prop and is ignored by the
+ * lists that have neither. New entries carry as few fields as they can get
+ * away with — a placement is `{ kind, x, z }` and picks up its dimensions from
+ * the builder — because that is how the file is written by hand.
+ */
+export function addItem(
+  layout: MapLayout,
+  list: SelectionList,
+  choice: string,
+  at: Vector3,
+): SelectionRef | null {
+  const array = arrayFor(layout, list);
+  if (!array) return null;
+  const x = q(at.x);
+  const y = q(at.y);
+  const z = q(at.z);
+
+  switch (list) {
+    case "placements": {
+      if (!(choice in PARAMS)) return null;
+      array.push({ kind: choice, x, z, ...(y === 0 ? {} : { y }) });
+      break;
+    }
+    case "scatter": {
+      const defaults = SCATTER_DEFAULTS[choice as keyof typeof SCATTER_DEFAULTS];
+      if (!defaults) return null;
+      array.push({ prop: choice, x, z, ...(y === 0 ? {} : { y }), ...defaults });
+      break;
+    }
+    case "controlPoints": {
+      const id = nextFlagId(layout);
+      if (!id) return null;
+      array.push({ id, name: `Point ${id}`, pos: new Vector3(x, y, z), radius: 12 });
+      break;
+    }
+    case "spawns": {
+      // A new spawn belongs to the nearest flag by default: home spawns are
+      // decided by the map's shape, flag spawns by where you dropped it.
+      const near = nearestFlag(layout, x, z);
+      array.push({
+        team: near ? null : 0,
+        ...(near ? { controlPoint: near } : {}),
+        pos: new Vector3(x, y, z),
+        yaw: 0,
+      });
+      break;
+    }
+    case "water":
+      array.push({ x, z, width: 12, depth: 12, ...(y === 0 ? {} : { y }) });
+      break;
+    case "grass":
+      array.push({ x, z, width: 14, depth: 14, ...(y === 0 ? {} : { y }) });
+      break;
+  }
+  return { list, index: array.length - 1 };
+}
+
+/** The first unused single-letter flag id, or null when all 26 are taken. */
+function nextFlagId(layout: MapLayout): string | null {
+  const used = new Set(layout.controlPoints.map((cp) => cp.id));
+  for (let i = 0; i < 26; i++) {
+    const id = String.fromCharCode(65 + i);
+    if (!used.has(id)) return id;
+  }
+  return null;
+}
+
+function nearestFlag(layout: MapLayout, x: number, z: number): string | null {
+  let best: string | null = null;
+  let bestD = Infinity;
+  for (const cp of layout.controlPoints) {
+    const d = (cp.pos.x - x) ** 2 + (cp.pos.z - z) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      best = cp.id;
+    }
+  }
+  return best;
+}
+
+/**
+ * Removes an entry. Every ref pointing past it in the same list now names the
+ * wrong entry, so the caller must drop its selection and rebuild rather than
+ * trying to fix them up.
+ */
+export function deleteItem(layout: MapLayout, ref: SelectionRef): boolean {
+  const array = arrayFor(layout, ref.list);
+  if (!array || ref.index < 0 || ref.index >= array.length) return false;
+  array.splice(ref.index, 1);
+  return true;
 }
 
 /**

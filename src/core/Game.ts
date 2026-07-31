@@ -318,17 +318,7 @@ export class Game {
     if (this.editor) return;
 
     this.state = "editor";
-    // Rebuild per-item: the shipped block merge collapses neighbouring
-    // structures into one mesh, which is exactly what makes an individual
-    // placement unselectable.
-    this.map?.dispose();
-    this.combat.clearTransient();
-    this.map = this.mapBuilder.build(HollowmereLayout, HollowmereEnvironment, {
-      editor: true,
-    });
-    this.shadows.setCasters(this.map.visuals);
-    this.water.build(this.map.water, HollowmereEnvironment);
-    this.grass.build(this.map.grass, HollowmereEnvironment, this.map.colliderBoxes);
+    const map = this.buildEditorMap();
     this.hud.hideOverlay();
     this.hud.setEditing(true);
     this.deployScreen.hide();
@@ -342,7 +332,8 @@ export class Game {
       input: this.input,
       scene: this.scene,
       glow: this.glow,
-      map: this.map,
+      map,
+      rebuildMap: () => this.buildEditorMap(),
       layout: HollowmereLayout,
       environment: HollowmereEnvironment,
       fixtures: this.lighting.fixtures,
@@ -355,6 +346,34 @@ export class Game {
       this.cameraSys.aimYaw,
       this.cameraSys.aimPitch,
     );
+  }
+
+  /**
+   * Builds the map the editor works on, from whatever the layout currently
+   * says, and re-points everything here that caches it.
+   *
+   * Per-item rather than block-merged: the shipped merge collapses neighbouring
+   * structures into one mesh, which is exactly what makes an individual
+   * placement unselectable. It costs ~10x the draw calls, which is why the
+   * editor panel says never to judge performance there.
+   *
+   * Called on entry and again whenever the editor changes something the
+   * builders read — a param, a kind, an added or deleted entry. Deliberately
+   * does NOT touch battle/conquest/minimap: those keep pointing at a map that
+   * is now disposed, which is safe only because leaving the editor always runs
+   * `startRound` and re-points them at a fresh, properly merged build.
+   */
+  private buildEditorMap(): GameMap {
+    this.map?.dispose();
+    this.combat.clearTransient();
+    const map = this.mapBuilder.build(HollowmereLayout, HollowmereEnvironment, {
+      editor: true,
+    });
+    this.map = map;
+    this.shadows.setCasters(map.visuals);
+    this.water.build(map.water, HollowmereEnvironment);
+    this.grass.build(map.grass, HollowmereEnvironment, map.colliderBoxes);
+    return map;
   }
 
   /**

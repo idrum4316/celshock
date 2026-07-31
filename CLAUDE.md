@@ -109,7 +109,9 @@ src/
     selection.ts            #   SelectionRef, predicate pick, highlight
     proxies.ts              #   Stand-ins for flags/spawns/scatter/water/grass
     gizmos.ts               #   Move + Y-rotate handles, snapping
-    mutate.ts               #   Layout writes + scene reposition + nav rebuild
+    mutate.ts               #   Layout writes: transform, fields, add/delete
+    fields.ts               #   FieldSpec + the key conventions the inspector,
+                            #   the panel and mutate all have to agree on
     inspect.ts / params.ts  #   Inspector read model + per-kind param table
     sourceScan.ts           #   layout.ts as text: regions, entries, tokens
     serialize.ts / save.ts  #   Minimal-diff emit + POST to the dev server
@@ -258,12 +260,12 @@ Layout gotchas that have already cost time:
 ### The map editor (dev only)
 
 `F2` in a dev build opens `src/editor/` — free-fly the real scene, click to
-select, drag gizmos, inspect params. Everything under `src/editor/` is reached
-through **one dynamic `import()` inside a `import.meta.env.DEV` branch in
-`Game.toggleEditor`**, and the *whole method body* is behind that gate, not just
-the keybind. That is what makes the import unreachable under `vite build` so
-Rollup drops the chunk instead of emitting an orphan. Never import
-`src/editor/` statically from anywhere.
+select, drag gizmos, edit properties, add and delete entries. Everything under
+`src/editor/` is reached through **one dynamic `import()` inside a
+`import.meta.env.DEV` branch in `Game.toggleEditor`**, and the *whole method
+body* is behind that gate, not just the keybind. That is what makes the import
+unreachable under `vite build` so Rollup drops the chunk instead of emitting an
+orphan. Never import `src/editor/` statically from anywhere.
 
 Things it deliberately does not do:
 
@@ -275,10 +277,40 @@ Things it deliberately does not do:
   `colliderBoxes` — `MapBuilder.collider()` is still the sole collider factory.
 - **It does not re-run builders to move things.** A builder assembles at the
   origin and `MapBuilder` transforms the result, so `repositionItem()` moves the
-  visuals, the collider proxies and the `WorldBox`es directly. Measured: a full
-  editor build is ~570 ms, `NavGrid` + all 7 flow fields ~45 ms, one builder
-  call ~0.9 ms. So dragging repositions every frame and rebuilds navigation only
-  when the drag ends.
+  visuals, the collider proxies and the `WorldBox`es directly.
+
+**Three rebuild tiers, and which one you owe is decided by what changed.**
+Measured: a full editor build is ~570 ms, `NavGrid` + all 7 flow fields ~45 ms,
+one builder call ~0.9 ms.
+
+| change | tier | cost |
+| --- | --- | --- |
+| dragging a gizmo | move that item's meshes and `WorldBox`es | sub-ms, every frame |
+| drag released, flag/spawn edited | `NavGrid` + 7 flow fields + `ObstacleField` | ~45 ms |
+| param, kind, add, delete | `Game.buildEditorMap()` — the whole map | ~570 ms |
+
+The third tier is not laziness. Changing a param changes how many colliders an
+item emits, which shifts every later index in `colliderBoxes` and invalidates
+the per-item editor index wholesale; there is no correct patch, only a rebuild.
+It is debounced by `EDITOR.rebuildDelay` so holding a spinner does not queue
+thirty builds, and *not* debounced for add/delete, which are single deliberate
+actions. Anything the editor holds that points at geometry — the highlight, the
+gizmo anchor, the selection — is re-derived after it rather than patched.
+
+**A `SelectionRef` is a list plus an index, so deleting invalidates every ref
+after it in that list.** The editor drops its selection on delete rather than
+trying to fix them up; the same reasoning is why `applyStructural` runs the
+rebuild immediately instead of leaving stale indices addressable.
+
+Property editing is driven by three files that must agree on what a field key
+means: `fields.ts` declares the vocabulary (dotted paths like `params.width`,
+plus the two compound keys `kind` and `owner` that write more than one field),
+`inspect.ts` produces the controls, `mutate.setField` applies them. Two rules
+there keep the layout terse: **a value equal to the builder's own default is
+removed, not written**, and absent-means-default fields (`y`, `rotY`,
+`blocking`, `clearance`, `density`, `scale`) disappear when cleared rather than
+being written as an explicit zero. Angles are edited in degrees and stored in
+radians so `Math.PI / 2` survives — see `qAngle`.
 
 **Saving (`Ctrl+S`) patches `layout.ts`'s text; it does not regenerate it.**
 The file is authored — the ASCII village map, the district commentary, and
@@ -293,6 +325,17 @@ editor rewrites only the lines that changed:
   and `Math.PI / 2` survive on a line that was rewritten. Comparison is against
   a deep snapshot taken when the editor opened, so nothing here ever has to
   evaluate those expressions.
+- A **deleted** entry's line goes with it and nothing around it moves; an
+  **added** entry is written fresh at the end of its array, which is where the
+  editor appended it too.
+
+Add and delete work because entries are matched to source lines by **object
+identity**, not by position — a `WeakMap` from the live layout entry to
+`{ line, values }`, bound when the editor opens and rebound after each save
+(`Baseline` in `serialize.ts`). Positional matching would go wrong the instant
+anything ahead of an entry was deleted. Rebinding after a save is also what
+lets an entry added earlier in the session be edited again: it now has a line
+of its own, so the second save rewrites it instead of appending a duplicate.
 
 Gizmo output is quantised before it reaches the layout (`mutate.ts`), and
 positions and angles are quantised **differently** on purpose. Positions round
@@ -326,6 +369,17 @@ cannot distinguish a boathouse deck from a large flat collider top, so a
 handful survive on Hollowmere while it plays perfectly well. Read that number
 as a **delta**: note it, move a wall, look again. `makeIslandTest` is shared
 with the overlay so the red cells on screen are exactly the reported findings.
+
+The `structure()` checks exist only because entries can be deleted: a duplicate
+flag id silently merges two flags' flow fields (they are keyed by id), a spawn
+naming a flag that no longer exists is skipped by `ConquestSystem` without
+saying so, and a team with no home spawn deploys at the origin. None of these
+can happen by dragging something, and all of them are errors.
+
+**There is no undo.** The escape hatch is that leaving the editor rebuilds from
+the layout module, so F2 (which asks first when there are unsaved edits) throws
+away everything since the last save. Deleting the wrong building costs you the
+work since that save, not the file.
 
 `vite.config.ts` holds the dev-only write endpoint. It is deliberately outside
 `tsconfig.json`'s `include` (`@types/node` is not installed), so it stays

@@ -21,6 +21,11 @@
  * Newly written values are formatted, and only then does a substitution table
  * apply — scoped per field, because an unscoped `2 -> TERRACE_H` would happily
  * corrupt `params: { length: 2 }`.
+ *
+ * Added and deleted entries fit that rule rather than bending it. Entries are
+ * matched to source lines by OBJECT IDENTITY (see `Baseline`), so a deleted
+ * entry's line is dropped, an added entry is written fresh at the end of its
+ * array, and every line in between is still copied byte for byte.
  */
 import { Vector3 } from "@babylonjs/core";
 import type { MapLayout } from "../world/layout";
@@ -104,7 +109,10 @@ function angle(v: number): string {
 
 /** Formats a value as source, at the given field path. */
 function format(value: unknown, path: string): string {
-  if (value === null || value === undefined) return "undefined";
+  if (value === undefined) return "undefined";
+  // null is a VALUE here, not an absence: `team: null` is how the layout
+  // spells a spawn that belongs to a flag rather than to a side.
+  if (value === null) return "null";
   if (typeof value === "boolean") return String(value);
 
   if (typeof value === "number") {
@@ -122,7 +130,10 @@ function format(value: unknown, path: string): string {
   }
 
   if (value instanceof Vector3) {
-    return `new Vector3(${num(value.x)}, ${num(value.y)}, ${num(value.z)})`;
+    // The y goes back through `format` so a flag standing on the terrace is
+    // written `new Vector3(-60, TERRACE_H, 76)` like its neighbours, rather
+    // than with a bare 2 nobody would recognise later.
+    return `new Vector3(${num(value.x)}, ${format(value.y, `${path}.y`)}, ${num(value.z)})`;
   }
 
   if (Array.isArray(value)) {
@@ -227,6 +238,23 @@ function tokenFor(
   return equal(before, after) ? field.source : format(after, path);
 }
 
+/** A brand-new entry, formatted from nothing. Added entries only. */
+function emitFresh(
+  entry: Record<string, unknown>,
+  region: string,
+  indent: string,
+): string {
+  const canonical = KEY_ORDER[region] ?? [];
+  const rest = Object.keys(entry).filter((k) => !canonical.includes(k));
+  const out: string[] = [];
+  for (const key of [...canonical, ...rest]) {
+    const v = entry[key];
+    if (v === undefined) continue;
+    out.push(`${key}: ${format(v, key)}`);
+  }
+  return `${indent}{ ${out.join(", ")} },`;
+}
+
 /** The entries of one region, as plain records, from a layout. */
 function entriesOf(layout: MapLayout, name: string): Record<string, unknown>[] {
   const v = (layout as unknown as Record<string, unknown>)[name];
@@ -234,52 +262,119 @@ function entriesOf(layout: MapLayout, name: string): Record<string, unknown>[] {
 }
 
 /**
+ * What one live layout entry looked like when the editor opened, and which
+ * source line it came from.
+ *
+ * Identity is the ENTRY OBJECT itself, not its position in the array. That is
+ * what lets entries be added and deleted: an entry that was spliced out simply
+ * never turns up while walking the source, and an entry with no baseline is
+ * one the editor created and has to be written from scratch. Positional
+ * matching would go wrong the moment anything ahead of it was deleted.
+ */
+export interface Baseline {
+  line: ItemLine;
+  values: Record<string, unknown>;
+}
+
+export type Baselines = WeakMap<object, Baseline>;
+
+/**
+ * Associates each live entry with the source line it was parsed from.
+ *
+ * Positional here, and correctly so: this runs against a file the layout was
+ * just loaded from (or just written to), where the two are in step by
+ * construction. Everything afterwards works off object identity.
+ */
+export function bindBaselines(scan: Scan, layout: MapLayout): Baselines {
+  const map: Baselines = new WeakMap();
+  for (const region of scan.regions) {
+    const items = itemsOf(region);
+    const entries = entriesOf(layout, region.name);
+    if (items.length !== entries.length) {
+      throw new SerializeError(
+        `${region.name}: source has ${items.length} entries, layout has ` +
+          `${entries.length}. Reload the editor.`,
+      );
+    }
+    for (const [i, entry] of entries.entries()) {
+      map.set(entry, { line: items[i], values: snapshot(entry) });
+    }
+  }
+  return map;
+}
+
+export interface SerializeResult {
+  source: string;
+  /**
+   * Entries that changed but could not be rewritten because their source line
+   * did not tokenize. Reported rather than thrown: one unparseable line must
+   * not block a save of twenty good edits, but silently dropping the edit
+   * would be worse than either.
+   */
+  skipped: string[];
+}
+
+/**
  * Produces the new contents of layout.ts.
  *
- * Throws when an array's length no longer matches the source it was scanned
- * from. The editor cannot add or remove entries yet, so that can only mean the
- * file changed underneath the session — and writing then would clobber it.
+ * Walks the source, not the layout: every line comes out in the order the file
+ * already had it, and the layout only decides whether each one survives, gets
+ * rewritten, or is joined by new lines at the end of its array. Comments and
+ * blank lines are `raw` and are copied wherever they sit, so district headers
+ * stay attached to the district they introduce.
  */
 export function serializeLayout(
   scan: Scan,
-  original: MapLayout,
+  baselines: Baselines,
   current: MapLayout,
-): string {
+): SerializeResult {
   const out: string[] = [];
+  const skipped: string[] = [];
   let cursor = 0;
 
   for (const region of scan.regions) {
     for (; cursor <= region.start; cursor++) out.push(scan.lines[cursor]);
 
-    const before = entriesOf(original, region.name);
-    const after = entriesOf(current, region.name);
-    const items = itemsOf(region);
-    if (items.length !== before.length || before.length !== after.length) {
-      throw new SerializeError(
-        `${region.name}: source has ${items.length} entries, layout has ` +
-          `${after.length} (loaded with ${before.length}). Reload the editor.`,
-      );
+    const entries = entriesOf(current, region.name);
+    // Which live entry, if any, still owns each source line.
+    const owner = new Map<ItemLine, Record<string, unknown>>();
+    const fresh: Record<string, unknown>[] = [];
+    for (const entry of entries) {
+      const base = baselines.get(entry);
+      if (base && !owner.has(base.line)) owner.set(base.line, entry);
+      else fresh.push(entry);
     }
 
-    let n = 0;
     for (const line of region.body) {
       if (line.kind === "raw") {
         out.push(line.source);
         continue;
       }
-      const i = n++;
+      const entry = owner.get(line);
+      if (!entry) continue; // deleted — the line goes with it
+      const base = baselines.get(entry)!;
       // The whole point: an untouched entry is copied, not regenerated.
-      out.push(
-        equal(before[i], after[i])
-          ? line.source
-          : emitItem(line, before[i], after[i], region.name),
-      );
+      if (equal(base.values, entry)) {
+        out.push(line.source);
+        continue;
+      }
+      if (!line.fields) skipped.push(line.source.trim());
+      out.push(emitItem(line, base.values, entry, region.name));
+    }
+
+    // Added entries land at the end of their array, which is also where the
+    // editor appended them, so the file and the data stay in the same order.
+    if (fresh.length) {
+      const indent = itemsOf(region)[0]?.indent ?? "  ";
+      for (const entry of fresh) {
+        out.push(emitFresh(entry, region.name, indent));
+      }
     }
     cursor = region.end;
   }
 
   for (; cursor < scan.lines.length; cursor++) out.push(scan.lines[cursor]);
-  return out.join("\n");
+  return { source: out.join("\n"), skipped };
 }
 
 /** Regions the scanner must have found for a save to be considered safe. */

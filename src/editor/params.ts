@@ -17,12 +17,25 @@
  */
 import type { BuilderKind } from "../world/BuildingKit";
 import type { BuildParams } from "../world/kit/core";
+import type { ScatterSpec } from "../world/layout";
 
 /** One editable field. `step` is the drag/nudge granularity for numbers. */
 export type ParamSpec =
   | { key: keyof BuildParams; type: "number"; label: string; def: number; min: number; max: number; step: number }
   | { key: keyof BuildParams; type: "boolean"; label: string; def: boolean }
-  | { key: keyof BuildParams; type: "choice"; label: string; def: string; options: string[] };
+  | {
+      key: keyof BuildParams;
+      type: "choice";
+      label: string;
+      def: string;
+      options: string[];
+      /**
+       * The stored value is a number, not the option string. `rampSide` is
+       * `-1 | 1`; writing "-1" into the layout would typecheck nowhere and
+       * would reach the builder as a string.
+       */
+      numeric?: boolean;
+    };
 
 const num = (
   key: keyof BuildParams,
@@ -84,7 +97,14 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
     num("depth", "depth", 26, 4, 80, 1),
     num("height", "height", 2, 0.5, 8, 0.25),
     // -1 / +1 rather than a number box: it names a face, not a distance.
-    { key: "rampSide", type: "choice", label: "ramp side", def: "-1", options: ["-1", "1"] },
+    {
+      key: "rampSide",
+      type: "choice",
+      label: "ramp side",
+      def: "-1",
+      options: ["-1", "1"],
+      numeric: true,
+    },
   ],
   ramp: [
     num("width", "width", 5, 1.5, 20),
@@ -121,3 +141,48 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
 export function isStructural(kind: BuilderKind): boolean {
   return kind !== "cart" && kind !== "crates" && kind !== "woodpile";
 }
+
+/**
+ * Every builder kind, alphabetically — the add menu and the kind picker.
+ *
+ * Derived from PARAMS rather than listed again, so a builder added to
+ * BuildingKit and to the table above cannot be missing from the menu.
+ */
+export const BUILDER_KINDS: readonly BuilderKind[] = (
+  Object.keys(PARAMS) as BuilderKind[]
+).sort();
+
+/** The params one kind reads, as a set, for pruning after a kind change. */
+export function paramKeys(kind: BuilderKind): Set<string> {
+  return new Set(PARAMS[kind].map((s) => s.key as string));
+}
+
+type ScatterProp = ScatterSpec["prop"];
+
+/** What a fresh scatter region of each prop starts as. */
+type ScatterDefaults = Omit<ScatterSpec, "prop" | "x" | "z">;
+
+/**
+ * Starting values for a newly added scatter region, per prop.
+ *
+ * Read off the regions Hollowmere already uses rather than invented: a boulder
+ * field wants 1.0 m of clearance and a gravestone 0.6, and a bramble patch is
+ * non-blocking on purpose — you walk through brambles. Getting these wrong
+ * would not corrupt anything, but every new region would need the same four
+ * corrections by hand.
+ *
+ * A Record over the prop union, so a new scatter prop is a compile error here.
+ */
+export const SCATTER_DEFAULTS: Record<ScatterProp, ScatterDefaults> = {
+  deadTree: { radius: 11, count: 10, scale: [0.8, 1.4], blocking: true, clearance: 0.55 },
+  gravestone: { radius: 5, count: 8, scale: [0.8, 1.3], blocking: true, clearance: 0.6 },
+  log: { radius: 12, count: 5, scale: [0.8, 1.2], blocking: true, clearance: 1.4 },
+  fungus: { radius: 14, count: 5, scale: [0.8, 1.4] },
+  rubble: { radius: 8, count: 4, scale: [0.8, 1.2], blocking: true, clearance: 1.1 },
+  fireDrum: { radius: 2, count: 1, blocking: true, clearance: 0.6 },
+  boulder: { radius: 10, count: 5, scale: [0.8, 1.3], blocking: true, clearance: 1.0 },
+  bramble: { radius: 12, count: 7, scale: [0.8, 1.4] },
+  barrel: { radius: 6, count: 3, blocking: true, clearance: 0.55 },
+};
+
+export const SCATTER_PROPS = Object.keys(SCATTER_DEFAULTS).sort() as ScatterProp[];

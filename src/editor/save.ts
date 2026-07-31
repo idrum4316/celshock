@@ -11,9 +11,10 @@
 import layoutSource from "../world/hollowmere/layout.ts?raw";
 import type { MapLayout } from "../world/layout";
 import {
+  bindBaselines,
   serializeLayout,
-  snapshot,
   validateScan,
+  type Baselines,
   type SerializeError,
 } from "./serialize";
 import { scanLayout, type Scan } from "./sourceScan";
@@ -29,18 +30,20 @@ export interface SaveResult {
 export class LayoutSaver {
   private scan: Scan;
   /**
-   * The layout as it was when the editor opened. Every "has this changed?"
-   * question is answered against this, which is what lets untouched entries
-   * be copied from source rather than regenerated.
+   * Each live layout entry, tied to the source line it came from and to the
+   * values it had then. Every "has this changed?" question is answered against
+   * this, which is what lets untouched entries be copied from source rather
+   * than regenerated — and, because it is keyed by object identity, what lets
+   * entries be added and deleted without the rest of the file shifting.
    */
-  private original: MapLayout;
+  private baselines: Baselines = new WeakMap();
   private scanError: string | null = null;
 
   constructor(current: MapLayout) {
     this.scan = scanLayout(layoutSource);
-    this.original = snapshot(current);
     try {
       validateScan(this.scan);
+      this.baselines = bindBaselines(this.scan, current);
     } catch (err) {
       this.scanError = String((err as SerializeError).message ?? err);
     }
@@ -53,15 +56,16 @@ export class LayoutSaver {
 
   /** The file contents a save would write, without writing them. */
   preview(current: MapLayout): string {
-    return serializeLayout(this.scan, this.original, current);
+    return serializeLayout(this.scan, this.baselines, current).source;
   }
 
   async save(current: MapLayout): Promise<SaveResult> {
     if (this.scanError) return { ok: false, message: this.scanError };
 
     let source: string;
+    let skipped: string[];
     try {
-      source = serializeLayout(this.scan, this.original, current);
+      ({ source, skipped } = serializeLayout(this.scan, this.baselines, current));
     } catch (err) {
       return { ok: false, message: String((err as Error).message ?? err) };
     }
@@ -78,10 +82,19 @@ export class LayoutSaver {
       }
       // The file on disk is now what we just sent, so subsequent saves must
       // diff against it — otherwise the second save would re-apply the first
-      // one's edits on top of stale text.
+      // one's edits on top of stale text. Re-binding here is also what gives
+      // entries added in this session a source line of their own, so editing
+      // one again rewrites its line instead of appending a second copy.
       this.scan = scanLayout(source);
-      this.original = snapshot(current);
-      return { ok: true, message: "saved to layout.ts" };
+      this.baselines = bindBaselines(this.scan, current);
+      return {
+        ok: true,
+        message: skipped.length
+          ? `saved — ${skipped.length} unparseable ${
+              skipped.length > 1 ? "entries" : "entry"
+            } left as-is`
+          : "saved to layout.ts",
+      };
     } catch (err) {
       return { ok: false, message: `dev server unreachable: ${String(err)}` };
     }

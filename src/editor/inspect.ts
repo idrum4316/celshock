@@ -1,77 +1,121 @@
 /**
- * editor/inspect.ts — Turns a selection into the inspector's title and rows.
- * Owns: the read model. Writes nothing.
+ * editor/inspect.ts — Turns a selection into the inspector's title and its
+ * editable fields.
+ * Owns: the read model. Writes nothing — every control it describes is applied
+ * by `mutate.setField`, keyed by the same `key` string this file puts on it.
  *
  * Params are shown through the PARAMS descriptor table rather than by dumping
  * the params bag, because BuildParams is one flat union shared by 30 builders:
  * a bag may legitimately carry a field the selected builder ignores, and
  * showing it would suggest an effect that isn't there. Fields the layout left
- * unset are shown at the builder's own default, marked so, since that is what
- * the geometry in front of you was actually built from.
+ * unset are shown empty with the builder's own default as the placeholder,
+ * since that is what the geometry in front of you was actually built from —
+ * and leaving them unset is what keeps the layout line short.
  */
+import { CONFIG } from "../config";
 import type { MapLayout } from "../world/layout";
-import type { InspectorRow } from "./EditorPanel";
-import { PARAMS } from "./params";
+import {
+  boolean,
+  choice,
+  note,
+  number,
+  text,
+  toDegrees,
+  type ChoiceOption,
+  type FieldSpec,
+} from "./fields";
+import { BUILDER_KINDS, PARAMS, SCATTER_PROPS } from "./params";
 import type { SelectionRef } from "./selection";
 
-const n = (v: number): string => {
-  const r = Math.round(v * 1000) / 1000;
-  return Object.is(r, -0) ? "0" : String(r);
-};
-
-/** Radians as a readable multiple of pi, since layouts are authored that way. */
-function angle(rad: number): string {
-  const turns = rad / Math.PI;
-  const q = Math.round(turns * 4) / 4;
-  if (Math.abs(turns - q) > 1e-6 || q === 0) return `${n(rad)} rad`;
-  if (q === 1) return "pi";
-  if (q === -1) return "-pi";
-  return `${n(q)} pi`;
-}
+/** Half the map, less a margin — the same bound the ridge check uses. */
+const REACH = CONFIG.map.size / 2;
 
 export interface Inspection {
   title: string;
-  rows: InspectorRow[];
+  fields: FieldSpec[];
+  /** False for a stale ref, so the panel offers no delete button. */
+  deletable: boolean;
+}
+
+const EMPTY: Inspection = { title: "", fields: [], deletable: false };
+
+const options = (values: readonly string[]): ChoiceOption[] =>
+  values.map((v) => ({ value: v, label: v }));
+
+/** x / y / z, shared by everything that sits somewhere. */
+function place(
+  x: number,
+  y: number | null,
+  z: number,
+  yOptional: boolean,
+  prefix = "",
+): FieldSpec[] {
+  return [
+    number(`${prefix}x`, "x", x, -REACH, REACH),
+    number(`${prefix}z`, "z", z, -REACH, REACH),
+    number(`${prefix}y`, "y", y, -8, 48, 0.25, yOptional ? 0 : undefined),
+  ];
 }
 
 /** The three fields water and grass rects share. */
-function rectRows(r: {
-  x: number;
-  z: number;
-  y?: number;
-  width: number;
-  depth: number;
-}): InspectorRow[] {
+function rect(r: { x: number; z: number; y?: number; width: number; depth: number }): FieldSpec[] {
   return [
-    { label: "x / z", value: `${n(r.x)}, ${n(r.z)}` },
-    { label: "y", value: n(r.y ?? 0) },
-    { label: "size", value: `${n(r.width)} x ${n(r.depth)}` },
+    ...place(r.x, r.y ?? null, r.z, true),
+    number("width", "width", r.width, 1, 200, 1),
+    number("depth", "depth", r.depth, 1, 200, 1),
   ];
 }
 
 export function inspect(layout: MapLayout, ref: SelectionRef | null): Inspection {
-  if (!ref) return { title: "", rows: [] };
+  if (!ref) return EMPTY;
 
   switch (ref.list) {
     case "placements": {
       const p = layout.placements[ref.index];
       if (!p) break;
-      const rows: InspectorRow[] = [
-        { label: "x / z", value: `${n(p.x)}, ${n(p.z)}` },
-        { label: "y", value: n(p.y ?? 0) },
-        { label: "rotY", value: angle(p.rotY ?? 0) },
+      const fields: FieldSpec[] = [
+        choice("kind", "kind", p.kind, options(BUILDER_KINDS)),
+        ...place(p.x, p.y ?? null, p.z, true),
+        // Empty rather than a solid 0 when unrotated, matching `y`: both are
+        // absent from the data, and the placeholder says what absent means.
+        number(
+          "rotY",
+          "rotY°",
+          p.rotY === undefined ? null : toDegrees(p.rotY),
+          -360,
+          360,
+          15,
+          0,
+        ),
       ];
       const specs = PARAMS[p.kind];
       if (!specs.length) {
-        rows.push({ label: "params", value: "none" });
-      } else {
-        for (const s of specs) {
-          const set = p.params?.[s.key];
-          const value = set === undefined ? `${s.def} (default)` : String(set);
-          rows.push({ label: s.label, value });
+        fields.push(note("params", "none — placed as built"));
+      }
+      for (const s of specs) {
+        const key = `params.${s.key}`;
+        const set = p.params?.[s.key];
+        if (s.type === "number") {
+          fields.push(
+            number(
+              key,
+              s.label,
+              typeof set === "number" ? set : null,
+              s.min,
+              s.max,
+              s.step,
+              s.def,
+            ),
+          );
+        } else if (s.type === "boolean") {
+          fields.push(boolean(key, s.label, set === undefined ? s.def : set === true));
+        } else {
+          fields.push(
+            choice(key, s.label, set === undefined ? s.def : String(set), options(s.options)),
+          );
         }
       }
-      return { title: `${p.kind} #${ref.index}`, rows };
+      return { title: `${p.kind} #${ref.index}`, fields, deletable: true };
     }
 
     case "scatter": {
@@ -79,13 +123,16 @@ export function inspect(layout: MapLayout, ref: SelectionRef | null): Inspection
       if (!s) break;
       return {
         title: `${s.prop} field #${ref.index}`,
-        rows: [
-          { label: "x / z", value: `${n(s.x)}, ${n(s.z)}` },
-          { label: "y", value: n(s.y ?? 0) },
-          { label: "radius", value: n(s.radius) },
-          { label: "count", value: String(s.count) },
-          { label: "scale", value: s.scale ? `${n(s.scale[0])}–${n(s.scale[1])}` : "1" },
-          { label: "blocking", value: s.blocking ? `yes (${n(s.clearance ?? 0.8)} m)` : "no" },
+        deletable: true,
+        fields: [
+          choice("prop", "prop", s.prop, options(SCATTER_PROPS)),
+          ...place(s.x, s.y ?? null, s.z, true),
+          number("radius", "radius", s.radius, 1, 60, 0.5),
+          number("count", "count", s.count, 0, 120, 1),
+          number("scale.0", "scale min", s.scale?.[0] ?? null, 0.2, 4, 0.1, 1),
+          number("scale.1", "scale max", s.scale?.[1] ?? null, 0.2, 4, 0.1, 1),
+          boolean("blocking", "blocking", s.blocking === true),
+          number("clearance", "clearance", s.clearance ?? null, 0.1, 4, 0.05, 0.8),
         ],
       };
     }
@@ -94,11 +141,13 @@ export function inspect(layout: MapLayout, ref: SelectionRef | null): Inspection
       const cp = layout.controlPoints[ref.index];
       if (!cp) break;
       return {
-        title: `flag ${cp.id} — ${cp.name}`,
-        rows: [
-          { label: "x / z", value: `${n(cp.pos.x)}, ${n(cp.pos.z)}` },
-          { label: "y", value: n(cp.pos.y) },
-          { label: "radius", value: n(cp.radius) },
+        title: `flag ${cp.id}`,
+        deletable: true,
+        fields: [
+          text("id", "id", cp.id),
+          text("name", "name", cp.name),
+          ...place(cp.pos.x, cp.pos.y, cp.pos.z, false, "pos."),
+          number("radius", "radius", cp.radius, 3, 40, 0.5),
         ],
       };
     }
@@ -106,15 +155,25 @@ export function inspect(layout: MapLayout, ref: SelectionRef | null): Inspection
     case "spawns": {
       const s = layout.spawns[ref.index];
       if (!s) break;
-      const owner =
-        s.team === null ? `flag ${s.controlPoint ?? "?"}` : `team ${s.team}`;
+      // team and controlPoint are one decision, not two: a spawn is either a
+      // home spawn or a flag spawn. Offering them as separate controls invites
+      // the two states nothing in ConquestSystem knows how to read.
+      const owners: ChoiceOption[] = [
+        { value: "team:0", label: "team 0 — home" },
+        { value: "team:1", label: "team 1 — home" },
+        ...layout.controlPoints.map((cp) => ({
+          value: `cp:${cp.id}`,
+          label: `flag ${cp.id} — ${cp.name}`,
+        })),
+      ];
+      const owner = s.team === null ? `cp:${s.controlPoint ?? ""}` : `team:${s.team}`;
       return {
         title: `spawn #${ref.index}`,
-        rows: [
-          { label: "owner", value: owner },
-          { label: "x / z", value: `${n(s.pos.x)}, ${n(s.pos.z)}` },
-          { label: "y", value: n(s.pos.y) },
-          { label: "yaw", value: angle(s.yaw) },
+        deletable: true,
+        fields: [
+          choice("owner", "owner", owner, owners),
+          ...place(s.pos.x, s.pos.y, s.pos.z, false, "pos."),
+          number("yaw", "yaw°", toDegrees(s.yaw), -360, 360, 15, 0),
         ],
       };
     }
@@ -122,7 +181,7 @@ export function inspect(layout: MapLayout, ref: SelectionRef | null): Inspection
     case "water": {
       const r = layout.water?.[ref.index];
       if (!r) break;
-      return { title: `water rect #${ref.index}`, rows: rectRows(r) };
+      return { title: `water rect #${ref.index}`, fields: rect(r), deletable: true };
     }
 
     case "grass": {
@@ -130,17 +189,23 @@ export function inspect(layout: MapLayout, ref: SelectionRef | null): Inspection
       if (!r) break;
       return {
         title: `grass rect #${ref.index}`,
-        rows: [
-          ...rectRows(r),
-          {
-            label: "density",
-            value: r.density === undefined ? "default" : n(r.density),
-          },
+        deletable: true,
+        fields: [
+          ...rect(r),
+          number(
+            "density",
+            "density",
+            r.density ?? null,
+            0.02,
+            4,
+            0.05,
+            CONFIG.grass.density,
+          ),
         ],
       };
     }
   }
 
   // A stale ref — the layout changed under the selection.
-  return { title: "", rows: [] };
+  return EMPTY;
 }

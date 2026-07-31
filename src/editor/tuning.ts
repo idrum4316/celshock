@@ -32,6 +32,16 @@ export const EDITOR = {
     damping: 14,
   },
 
+  /**
+   * How long a param edit waits before the map is rebuilt, in milliseconds.
+   *
+   * A rebuild is the whole map (~570 ms measured headless, far less on real
+   * hardware), and a number spinner held down emits a change per repeat. Long
+   * enough to swallow a burst of keystrokes, short enough that letting go and
+   * looking up shows the result.
+   */
+  rebuildDelay: 200,
+
   snap: {
     /** Position snap in metres. */
     position: 0.5,

@@ -164,6 +164,9 @@ export function validate(
   // 6. Cheap static hygiene that needs no navigation at all.
   out.push(...hygiene(layout, map.size));
 
+  // 7. The bookkeeping that only breaks once entries can be added and deleted.
+  out.push(...structure(layout));
+
   // Errors first: the ones that make part of the map unplayable.
   const rank: Record<Severity, number> = { error: 0, warning: 1, info: 2 };
   return out.sort((a, b) => rank[a.severity] - rank[b.severity]);
@@ -296,6 +299,63 @@ function islands(snap: ReturnType<GameMap["nav"]["debugSnapshot"]>): Finding[] {
   }
 
   return found.sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0)).slice(0, 8);
+}
+
+/**
+ * Whether the layout still describes a playable round at all.
+ *
+ * None of these can happen by dragging something: they are the failure modes
+ * that arrive with add and delete. A flag id is the key its flow field is
+ * stored under and the key spawns refer to it by, so a duplicate silently
+ * merges two flags' routing, and a spawn naming a flag that no longer exists
+ * is skipped by ConquestSystem — quietly, for the rest of the round.
+ */
+function structure(layout: MapLayout): Finding[] {
+  const out: Finding[] = [];
+  const seen = new Map<string, number>();
+
+  for (const [i, cp] of layout.controlPoints.entries()) {
+    const first = seen.get(cp.id);
+    if (first !== undefined) {
+      out.push({
+        severity: "error",
+        text: `two flags share the id "${cp.id}" (#${first} and #${i})`,
+        at: cp.pos.clone(),
+        ref: { list: "controlPoints", index: i },
+      });
+    } else {
+      seen.set(cp.id, i);
+    }
+  }
+
+  if (!layout.controlPoints.length) {
+    out.push({
+      severity: "error",
+      text: "no control points — the round can never end",
+    });
+  }
+
+  for (const [i, s] of layout.spawns.entries()) {
+    if (s.team === null && !seen.has(s.controlPoint ?? "")) {
+      out.push({
+        severity: "error",
+        text: `spawn #${i} belongs to flag "${s.controlPoint ?? "?"}", which does not exist`,
+        at: s.pos.clone(),
+        ref: { list: "spawns", index: i },
+      });
+    }
+  }
+
+  for (const team of [0, 1] as const) {
+    if (!layout.spawns.some((s) => s.team === team)) {
+      out.push({
+        severity: "error",
+        text: `team ${team} has no home spawn — it deploys at the origin`,
+      });
+    }
+  }
+
+  return out;
 }
 
 /** Checks that need only the layout — no navigation, no geometry. */
