@@ -25,6 +25,7 @@ import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
 import { buildRifle, RifleParts } from "./RifleModel";
 import { GlbSoldier } from "./GlbSoldier";
+import { TerrainField } from "../world/TerrainField";
 import type { Combatant, Team } from "./Combatant";
 
 /** Run-scoped stat modifiers granted by loot. */
@@ -124,6 +125,8 @@ export class Player implements Combatant {
   /** Reused so the per-frame ground probe allocates nothing. */
   private readonly probeRay = new Ray(new Vector3(), new Vector3(0, -1, 0), 1);
   private scene: Scene;
+  /** The map's floor, for the probe's miss case. Flat until a map is built. */
+  private terrain: TerrainField = new TerrainField();
 
   constructor(scene: Scene, mats: CelMaterialFactory) {
     const p = CONFIG.player;
@@ -282,7 +285,16 @@ export class Player implements Combatant {
       this.probeRay,
       (m) => !!m.metadata && m.metadata.solid === true,
     );
-    return hit?.hit && hit.pickedPoint ? hit.pickedPoint.y : 0;
+    if (hit?.hit && hit.pickedPoint) return hit.pickedPoint.y;
+    // A miss means the probe outran the floor — off the map, or falling into
+    // something deeper than it reaches. The terrain field is the floor's own
+    // answer, and on a flat map it is the 0 this used to return outright.
+    return this.terrain.heightAt(pos.x, pos.z);
+  }
+
+  /** Points the ground probe's miss case at the current map's floor. */
+  setTerrain(terrain: TerrainField): void {
+    this.terrain = terrain;
   }
 
   update(dt: number, input: InputManager, cam: CameraSystem): boolean {

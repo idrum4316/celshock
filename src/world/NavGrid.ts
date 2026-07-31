@@ -6,8 +6,10 @@
  * creek floor + bridge deck (MAX_SURFACES=3). Surface heights come from the
  * collider's top-face PLANE at the cell centre, not its AABB: half-thickness
  * is h/2/cos(rotX), slope is tan(rotX) — the h/2*cos / -tan sign error makes
- * every ramp silently unwalkable. Reachability is a flood fill from open
- * ground, which is what keeps bots off rooftops. Links crossing a solid box
+ * every ramp silently unwalkable. The base surface in every cell comes from
+ * the TerrainField, NOT from a hardcoded zero — that constant was what made
+ * the floor unable to be anything but flat. Reachability is a flood fill from
+ * open ground, which is what keeps bots off rooftops. Links crossing a solid box
  * are severed (severLinks) — without it every wall thinner than a cell is
  * invisible to the graph and bots walk into fences forever. stepHeight must
  * match ObstacleField. Too coarse to be the only collision test — see
@@ -16,6 +18,7 @@
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { WorldBox } from "./MapBuilder";
+import type { TerrainField } from "./TerrainField";
 
 /**
  * Navigation for Hollowmere: a uniform grid of walkable surfaces plus one
@@ -92,18 +95,21 @@ export class NavGrid {
 
   private readonly fields = new Map<string, FlowField>();
 
-  constructor(size: number, boxes: WorldBox[]) {
+  constructor(size: number, boxes: WorldBox[], terrain: TerrainField) {
     this.cellSize = CONFIG.nav.cellSize;
     this.dim = Math.ceil(size / this.cellSize);
     this.origin = -size / 2;
 
     const cells = this.dim * this.dim;
+    // -1 pads the slots no surface ever fills. It is NOT "below ground": every
+    // read walks `counts[cell]`, which is what lets a sunken floor hold a
+    // perfectly ordinary negative height.
     this.heights = new Float32Array(cells * MAX_SURFACES).fill(-1);
     this.counts = new Uint8Array(cells);
     this.walkable = new Uint8Array(cells * MAX_SURFACES);
     this.links = new Int32Array(cells * MAX_SURFACES * NEIGHBOURS.length).fill(-1);
 
-    this.rasterize(boxes);
+    this.rasterize(boxes, terrain);
     this.link(boxes);
   }
 
@@ -168,16 +174,23 @@ export class NavGrid {
    * against 300 colliders is a handful of milliseconds, where 25,600
    * `pickWithRay` calls would be seconds.
    */
-  private rasterize(boxes: WorldBox[]): void {
-    // The valley floor is standable everywhere by default.
+  private rasterize(boxes: WorldBox[], terrain: TerrainField): void {
+    // The valley floor is standable everywhere by default, at whatever height
+    // the terrain field puts it. This used to be a hardcoded 0, which is why
+    // the floor could never be anything but flat: the free surface in every
+    // cell overrode any collider trying to dig below it.
     for (let i = 0; i < this.dim * this.dim; i++) {
-      this.heights[i * MAX_SURFACES] = 0;
+      const cx = i % this.dim;
+      const cz = (i - cx) / this.dim;
+      this.heights[i * MAX_SURFACES] = terrain.heightAt(
+        this.toWorld(cx),
+        this.toWorld(cz),
+      );
       this.counts[i] = 1;
     }
 
     for (const box of boxes) {
-      // Skip the ground plane and the ridge: the floor is already the default,
-      // and the ridge is pure boundary.
+      // Skip the ridge: it is pure boundary, and the floor is already in.
       if (box.w > 200 || box.d > 200) continue;
 
       const reach = (Math.abs(box.w) + Math.abs(box.d)) / 2 + box.h;
@@ -227,6 +240,12 @@ export class NavGrid {
    * The flood fill is what keeps bots off rooftops: a roof is a perfectly good
    * standable surface, but nothing adjacent to it is within a step, so it is
    * never reached and never becomes walkable.
+   *
+   * The `<= step` test below is also the map's slope limit, and terrain leans
+   * on it: with cellSize 1.5 and stepHeight 0.6 a graded bank is walkable up to
+   * a gradient of 0.4 (~22 deg) and severs itself above that. Nothing else
+   * enforces it, which is why the editor validates a terrain rect's skirt
+   * against the same ratio.
    */
   private link(boxes: WorldBox[]): void {
     const step = CONFIG.nav.stepHeight;

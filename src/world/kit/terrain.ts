@@ -77,12 +77,17 @@ export function buildRamp(
 }
 
 /**
- * Flat road surface. Visual only — it sits on the ground plane, so nothing
- * ever stands on the slab itself: feet rest at y = 0 from the ground probe
- * and the nav grid. The slab is therefore sunk so its top sits only a
- * centimetre proud — enough to avoid z-fighting the ground plane, but not
- * enough to swallow a character's ankles. Cobblestone by default;
- * `surface: "dirt"` gives the old flat track for farm lanes.
+ * Flat road surface. Visual only — it sits on the ground, so nothing ever
+ * stands on the slab itself: feet rest on the floor from the ground probe and
+ * the nav grid. The slab is therefore sunk so its top sits only a centimetre
+ * proud — enough to avoid z-fighting the floor, but not enough to swallow a
+ * character's ankles. Cobblestone by default; `surface: "dirt"` gives the old
+ * flat track for farm lanes.
+ *
+ * The slab is FLAT, and MapBuilder only lifts it to the terrain height at its
+ * own centre. A road laid across a TerrainRect's skirt therefore floats at one
+ * end and buries itself at the other — run roads along level ground, or split
+ * them at the bank. The editor warns about it.
  */
 export function buildRoad(
   scene: Scene,

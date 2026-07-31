@@ -39,6 +39,7 @@ import {
   type Tier,
 } from "./mutate";
 import { NavOverlay } from "./navOverlay";
+import { MAX_WALKABLE_GRADE, TerrainBrush } from "./terrainBrush";
 import { BUILDER_KINDS, SCATTER_PROPS } from "./params";
 import { ProxyLayer } from "./proxies";
 import { LayoutSaver } from "./save";
@@ -126,6 +127,14 @@ export class EditorSession {
   private saver: LayoutSaver;
   private saving = false;
   private navOverlay: NavOverlay;
+  private brush: TerrainBrush;
+  /**
+   * What the pointer is for. The ground is *under* everything, so a terrain
+   * annotation and the water rect sitting on it compete for the same click and
+   * whichever is on top wins. A mode settles it: in terrain mode only the
+   * ground answers, in object mode terrain is not in the pick at all.
+   */
+  private mode: "object" | "terrain" = "object";
   private findings: Finding[] = [];
   private readonly detach: () => void;
   /**
@@ -146,7 +155,7 @@ export class EditorSession {
     this.panel.setAddMenu(ADD_GROUPS, (list, choice) => this.onAdd(list, choice));
     this.proxies = new ProxyLayer(deps.scene, deps.glow);
     this.proxies.build(this.map);
-    this.proxies.buildScatter(deps.layout.scatter);
+    this.proxies.buildScatter(deps.layout.scatter, this.map.terrain);
     this.gizmos = new EditorGizmos(deps.scene, {
       onChange: (at, rotY) => this.onDrag(at, rotY),
       onCommit: () => this.onDragEnd(),
@@ -157,6 +166,7 @@ export class EditorSession {
     this.select(null);
 
     this.navOverlay = new NavOverlay(deps.scene, deps.glow);
+    this.brush = new TerrainBrush(deps.scene, deps.glow, this.map);
     this.revalidate();
     this.saver = new LayoutSaver(deps.layout);
     if (this.saver.blocked) {
@@ -184,11 +194,18 @@ export class EditorSession {
         this.onDelete();
         return;
       }
-      if (e.code === "KeyL") {
+      if (e.code === "KeyT") {
+        this.setMode(this.mode === "terrain" ? "object" : "terrain");
+      } else if (e.code === "BracketLeft" || e.code === "BracketRight") {
+        if (this.mode !== "terrain") return;
+        this.brush.resize(e.code === "BracketRight" ? 1 : -1);
+        this.showBrushStatus();
+      } else if (e.code === "KeyL") {
         this.workLight = !this.workLight;
         this.applyLighting();
       } else if (e.code === "Escape") {
-        this.select(null);
+        if (this.mode === "terrain") this.setMode("object");
+        else this.select(null);
       } else if (e.code === "KeyN") {
         // Building the overlay is the expensive half, so it is only built the
         // first time it is asked for, then kept in step with navigation.
@@ -203,16 +220,73 @@ export class EditorSession {
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || document.pointerLockElement) return;
       if ((e.target as HTMLElement)?.closest("#editor-panel")) return;
+      if (this.mode === "terrain") {
+        this.brush.begin(e.clientY);
+        return;
+      }
       // A click that started on a gizmo handle is a drag, not a reselect.
       if (this.gizmos.isDragging) return;
       this.select(pickRef(this.deps.scene, e.clientX, e.clientY));
     };
+    // Terrain mode needs the pointer wherever it goes: hover to place the
+    // brush, and drag to sculpt. Object mode wants none of it.
+    const onPointerMove = (e: PointerEvent) => {
+      if (this.mode !== "terrain" || document.pointerLockElement) return;
+      if (this.brush.isDragging) this.brush.drag(e.clientY);
+      else this.brush.hover(e.clientX, e.clientY);
+      this.showBrushStatus();
+    };
+    const onPointerUp = () => {
+      if (this.mode !== "terrain" || !this.brush.isDragging) return;
+      // A stroke changes the floor's shape, so colliders, navigation and
+      // everything whose y rides the ground are all stale. Debounced, so a run
+      // of quick strokes coalesces into one rebuild.
+      // `end` reports whether the ground actually moved, so a bare click in
+      // terrain mode neither marks the map dirty nor buys a rebuild.
+      if (!this.brush.end()) return;
+      this.dirty = true;
+      this.schedule("geometry");
+    };
     document.addEventListener("keydown", onKeyDown);
     this.deps.canvas.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", onPointerUp);
     this.detach = () => {
       document.removeEventListener("keydown", onKeyDown);
       this.deps.canvas.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
     };
+  }
+
+  /**
+   * Switches what the pointer does. Leaving terrain mode drops the brush;
+   * entering it drops the selection, so the gizmo handles are never left
+   * hanging over ground that is about to move under them.
+   */
+  private setMode(mode: "object" | "terrain"): void {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    if (mode === "terrain") this.select(null);
+    this.brush.setVisible(mode === "terrain");
+    this.panel.setMode(mode);
+    if (mode === "terrain") this.showBrushStatus();
+    else this.panel.setStatus(this.dirty ? "unsaved edits" : "ready", "idle");
+  }
+
+  /**
+   * The brush readout. The gradient is the number that matters: past
+   * MAX_WALKABLE_GRADE the nav graph stops linking across the slope, and that
+   * is invisible in the viewport until you notice bots refusing to go there.
+   */
+  private showBrushStatus(): void {
+    if (this.mode !== "terrain") return;
+    const grade = this.brush.gradeUnderBrush();
+    const h = this.brush.heightUnderBrush();
+    const text =
+      `terrain · brush ${this.brush.size} · ${h.toFixed(2)} m · ` +
+      `slope ${grade.toFixed(2)}/${MAX_WALKABLE_GRADE.toFixed(2)}`;
+    this.panel.setStatus(text, grade > MAX_WALKABLE_GRADE ? "error" : "idle");
   }
 
   /** The current selection, or null. */
@@ -228,7 +302,7 @@ export class EditorSession {
     if (ref) {
       this.gizmos.setRotatable(isRotatable(ref));
       this.gizmos.attachTo(
-        originOf(this.deps.layout, ref),
+        originOf(this.deps.layout, ref, this.map.terrain),
         rotationOf(this.deps.layout, ref),
       );
     } else {
@@ -265,7 +339,7 @@ export class EditorSession {
     // Typing a coordinate has to move the handles too, or the next drag snaps
     // the item back to where the gizmo still thinks it is.
     this.gizmos.attachTo(
-      originOf(this.deps.layout, ref),
+      originOf(this.deps.layout, ref, this.map.terrain),
       rotationOf(this.deps.layout, ref),
     );
     this.schedule(tierFor(ref.list));
@@ -274,7 +348,13 @@ export class EditorSession {
   /** Appends a new entry at the view centre and selects it. */
   private onAdd(list: string, choice: string): void {
     const at = this.placementPoint();
-    const ref = addItem(this.deps.layout, list as SelectionList, choice, at);
+    const ref = addItem(
+      this.deps.layout,
+      list as SelectionList,
+      choice,
+      at,
+      this.map.terrain,
+    );
     if (!ref) {
       this.panel.setStatus(`cannot add to ${list}`, "error");
       return;
@@ -366,6 +446,7 @@ export class EditorSession {
     this.highlight.clear();
     this.selected = null;
     this.map = this.deps.rebuildMap();
+    this.brush.setMap(this.map);
     this.rebuildProxies();
     this.deps.invalidateShadows();
     this.select(select);
@@ -405,7 +486,7 @@ export class EditorSession {
     if (!ref) return;
     // Quantise once, then use the same numbers for the data and the geometry.
     const { at, rotY } = quantize(raw, rawRotY);
-    applyTransform(this.deps.layout, ref, at, rotY);
+    applyTransform(this.deps.layout, ref, at, rotY, this.map.terrain);
     repositionScene(this.map, ref, at, rotY);
     if (ref.list !== "placements" && ref.list !== "scatter") {
       // Proxies carry their own geometry; rebuild the cheap layer wholesale
@@ -464,7 +545,7 @@ export class EditorSession {
   private rebuildProxies(): void {
     this.proxies.dispose();
     this.proxies.build(this.map);
-    this.proxies.buildScatter(this.deps.layout.scatter);
+    this.proxies.buildScatter(this.deps.layout.scatter, this.map.terrain);
     // The highlight held meshes that have just been disposed.
     this.highlight.show(this.meshesFor(this.selected));
   }
@@ -538,6 +619,7 @@ export class EditorSession {
     this.pending = null;
     this.detach();
     this.navOverlay.dispose();
+    this.brush.dispose();
     this.gizmos.dispose();
     this.highlight.clear();
     this.proxies.dispose();

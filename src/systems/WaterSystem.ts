@@ -5,6 +5,8 @@
  * metadata.solid — ray tests must not see them. update() runs after the camera
  * and LightingSystem updates (shares the same 16 light slots). Meshes are
  * frozen; textures loaded once and reused across rebuilds.
+ * A rect without its own `y` floats ankle-deep above the TERRAIN under it, not
+ * above absolute zero — that is what lets a pool sit recessed in a dug bed.
  */
 import {
   Color3,
@@ -18,11 +20,12 @@ import {
   Vector3,
   Vector4,
 } from "@babylonjs/core";
-import { CONFIG } from "../config";
+
 import { MAX_POINT_LIGHTS, type PointLightData } from "../shaders/CelShader";
 import { createWaterMaterial } from "../shaders/WaterShader";
 import type { EnvironmentSpec } from "../world/environment";
 import type { WaterRect } from "../world/MapBuilder";
+import { waterY, type TerrainField } from "../world/TerrainField";
 import foamUrl from "../../textures/water-foam.png?url";
 import normalUrl from "../../textures/water-normal.png?url";
 
@@ -61,7 +64,7 @@ export class WaterSystem {
    * Rebuilds the water bodies for a round. No-ops to a dry map when the
    * layout has no water rects or the environment has no water palette.
    */
-  build(rects: WaterRect[], env: EnvironmentSpec): void {
+  build(rects: WaterRect[], env: EnvironmentSpec, terrain: TerrainField): void {
     this.dispose();
     if (rects.length === 0 || !env.water) return;
 
@@ -78,7 +81,11 @@ export class WaterSystem {
         { width: r.width, height: r.depth },
         this.scene,
       );
-      mesh.position.set(r.x, r.y ?? CONFIG.water.surfaceY, r.z);
+      // Ankle-deep over the bed, not over absolute zero. Dig a basin under a
+      // pool and the surface drops with it, so the water reads as sitting IN
+      // the ground with a bank around it rather than hovering over a flat
+      // plane. On a flat map the bed is 0 and this is the old behaviour.
+      mesh.position.set(r.x, waterY(r, terrain), r.z);
       mesh.isPickable = false;
       mesh.checkCollisions = false;
       mesh.metadata = { noGlow: true, noOutline: true };

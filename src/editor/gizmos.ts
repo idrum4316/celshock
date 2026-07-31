@@ -88,6 +88,7 @@ export class EditorGizmos {
     this.applySnap();
   }
 
+
   private applySnap(): void {
     const s = EDITOR.snap;
     const pos = this.free ? 0 : s.position;

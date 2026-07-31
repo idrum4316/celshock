@@ -23,9 +23,11 @@
  * decision, because it disposes the map the caller is holding.
  */
 import { Vector3 } from "@babylonjs/core";
+import { CONFIG } from "../config";
 import type { BuilderKind } from "../world/BuildingKit";
 import type { MapLayout } from "../world/layout";
 import { repositionItem, type GameMap } from "../world/MapBuilder";
+import { waterY, type TerrainField } from "../world/TerrainField";
 import { NavGrid } from "../world/NavGrid";
 import { ObstacleField } from "../world/ObstacleField";
 import {
@@ -38,16 +40,32 @@ import {
 import { PARAMS, paramKeys, SCATTER_DEFAULTS } from "./params";
 import type { SelectionList, SelectionRef } from "./selection";
 
-/** Where a selected item currently sits, for the gizmo to attach to. */
-export function originOf(layout: MapLayout, ref: SelectionRef): Vector3 | null {
+/**
+ * Where a selected item currently sits **in the world**, for the gizmo to
+ * attach to and for `repositionScene` to move geometry to.
+ *
+ * This is not the same as what the layout stores. A placement's, scatter
+ * region's or grass rect's `y` is an offset above the local floor, so the
+ * terrain height has to be added back to find the thing on screen — otherwise
+ * the handle hangs in the air over anything standing in a basin. Control
+ * points and spawns are authored absolute and need no adjustment.
+ */
+export function originOf(
+  layout: MapLayout,
+  ref: SelectionRef,
+  terrain: TerrainField,
+): Vector3 | null {
+  const lift = (x: number, y: number, z: number) =>
+    new Vector3(x, y + terrain.heightAt(x, z), z);
+
   switch (ref.list) {
     case "placements": {
       const p = layout.placements[ref.index];
-      return p ? new Vector3(p.x, p.y ?? 0, p.z) : null;
+      return p ? lift(p.x, p.y ?? 0, p.z) : null;
     }
     case "scatter": {
       const s = layout.scatter[ref.index];
-      return s ? new Vector3(s.x, s.y ?? 0, s.z) : null;
+      return s ? lift(s.x, s.y ?? 0, s.z) : null;
     }
     case "controlPoints":
       return layout.controlPoints[ref.index]?.pos.clone() ?? null;
@@ -55,11 +73,11 @@ export function originOf(layout: MapLayout, ref: SelectionRef): Vector3 | null {
       return layout.spawns[ref.index]?.pos.clone() ?? null;
     case "water": {
       const r = layout.water?.[ref.index];
-      return r ? new Vector3(r.x, r.y ?? 0, r.z) : null;
+      return r ? new Vector3(r.x, waterY(r, terrain), r.z) : null;
     }
     case "grass": {
       const r = layout.grass?.[ref.index];
-      return r ? new Vector3(r.x, r.y ?? 0, r.z) : null;
+      return r ? lift(r.x, r.y ?? 0, r.z) : null;
     }
   }
 }
@@ -134,9 +152,15 @@ export function applyTransform(
   ref: SelectionRef,
   position: Vector3,
   rotation: number,
+  terrain: TerrainField,
 ): void {
   const at = new Vector3(q(position.x), q(position.y), q(position.z));
   const rotY = qAngle(rotation);
+  // The gizmo works in world space; the layout stores a height above the local
+  // floor. Convert on the way in, so dragging something sideways across a bank
+  // keeps its relationship to the ground rather than to sea level.
+  const rel = q(at.y - terrain.heightAt(at.x, at.z));
+
   switch (ref.list) {
     case "placements": {
       const p = layout.placements[ref.index];
@@ -145,8 +169,8 @@ export function applyTransform(
       p.z = at.z;
       // y is optional in the data and absent means "on the ground". Keep it
       // that way rather than writing a zero into every layout line.
-      if (at.y === 0) delete p.y;
-      else p.y = at.y;
+      if (rel === 0) delete p.y;
+      else p.y = rel;
       if (rotY === 0) delete p.rotY;
       else p.rotY = rotY;
       return;
@@ -156,8 +180,8 @@ export function applyTransform(
       if (!s) return;
       s.x = at.x;
       s.z = at.z;
-      if (at.y === 0) delete s.y;
-      else s.y = at.y;
+      if (rel === 0) delete s.y;
+      else s.y = rel;
       return;
     }
     case "controlPoints": {
@@ -173,14 +197,26 @@ export function applyTransform(
       s.yaw = rotY;
       return;
     }
-    case "water":
-    case "grass": {
-      const r = (ref.list === "water" ? layout.water : layout.grass)?.[ref.index];
+    case "water": {
+      const r = layout.water?.[ref.index];
       if (!r) return;
       r.x = at.x;
       r.z = at.z;
-      if (at.y === 0) delete r.y;
+      // A pool's surface is absolute — it is level whatever its bed does — so
+      // this stores the world height, and drops it when the rect is back at
+      // ankle-deep over its own bed.
+      const def = q(terrain.heightAt(at.x, at.z) + CONFIG.water.surfaceY);
+      if (at.y === def) delete r.y;
       else r.y = at.y;
+      return;
+    }
+    case "grass": {
+      const r = layout.grass?.[ref.index];
+      if (!r) return;
+      r.x = at.x;
+      r.z = at.z;
+      if (rel === 0) delete r.y;
+      else r.y = rel;
       return;
     }
   }
@@ -231,10 +267,14 @@ function quantizeField(key: string, v: number): number {
  * unrotated, and a non-blocking scatter region simply has no `blocking` key.
  * Writing those explicitly would add a field to every line the editor touches
  * and drift the file away from how it is authored.
+ *
+ * A field that is NOT optional keeps whatever it had when the control is
+ * cleared, rather than losing the key: the panel re-syncs from the layout on
+ * the next frame, and a rect that has lost its `width` builds as NaN.
  */
 function put(target: EntryRecord, key: string, value: FieldValue): void {
   if (value === null || value === "") {
-    delete target[key];
+    if (isOptionalKey(key)) delete target[key];
     return;
   }
   if (typeof value === "boolean") {
@@ -284,10 +324,14 @@ function setParam(entry: EntryRecord, key: string, value: FieldValue): void {
     (spec.type === "choice"
       ? String(next) === spec.def
       : spec.type === "number"
-        ? typeof next === "number" && quantizeField(key, next) === spec.def
+        ? typeof next === "number" &&
+          quantizeField(key, next) === spec.def
         : next === spec.def);
 
-  if (isDefault) delete bag[key];
+  // Every param is optional by construction — absent means the builder's own
+  // default — so clearing one removes it, which is not what `put` does for a
+  // required top-level field.
+  if (isDefault || next === null || next === "") delete bag[key];
   else put(bag, key, next);
 
   if (Object.keys(bag).length) entry.params = bag;
@@ -368,12 +412,17 @@ export function addItem(
   list: SelectionList,
   choice: string,
   at: Vector3,
+  terrain: TerrainField,
 ): SelectionRef | null {
   const array = arrayFor(layout, list);
   if (!array) return null;
   const x = q(at.x);
-  const y = q(at.y);
   const z = q(at.z);
+  // `at` is a world point snapped to the nav surface. Flags and spawns store
+  // that as-is; everything else stores a height above the local floor, which
+  // is zero for anything dropped straight onto the ground.
+  const world = q(at.y);
+  const y = q(at.y - terrain.heightAt(x, z));
 
   switch (list) {
     case "placements": {
@@ -390,7 +439,12 @@ export function addItem(
     case "controlPoints": {
       const id = nextFlagId(layout);
       if (!id) return null;
-      array.push({ id, name: `Point ${id}`, pos: new Vector3(x, y, z), radius: 12 });
+      array.push({
+        id,
+        name: `Point ${id}`,
+        pos: new Vector3(x, world, z),
+        radius: 12,
+      });
       break;
     }
     case "spawns": {
@@ -400,13 +454,14 @@ export function addItem(
       array.push({
         team: near ? null : 0,
         ...(near ? { controlPoint: near } : {}),
-        pos: new Vector3(x, y, z),
+        pos: new Vector3(x, world, z),
         yaw: 0,
       });
       break;
     }
     case "water":
-      array.push({ x, z, width: 12, depth: 12, ...(y === 0 ? {} : { y }) });
+      // No `y`: a fresh pool is ankle-deep over whatever bed it lands on.
+      array.push({ x, z, width: 12, depth: 12 });
       break;
     case "grass":
       array.push({ x, z, width: 14, depth: 14, ...(y === 0 ? {} : { y }) });
@@ -481,7 +536,10 @@ export function rebuildNavigation(
   map: GameMap,
   layout: MapLayout,
 ): { nav: NavGrid; obstacles: ObstacleField } {
-  const nav = new NavGrid(map.size, map.colliderBoxes);
+  // The map's own terrain field, not a fresh one off the layout: a terrain
+  // edit is a "geometry" tier change and rebuilds the whole map anyway, so the
+  // field here is always the one the current geometry was built from.
+  const nav = new NavGrid(map.size, map.colliderBoxes, map.terrain);
   for (const cp of layout.controlPoints) {
     nav.buildField(cp.id, cp.pos, cp.radius * 0.6);
   }

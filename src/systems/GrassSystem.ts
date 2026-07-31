@@ -28,6 +28,7 @@ import { MAX_POINT_LIGHTS, type PointLightData } from "../shaders/CelShader";
 import { createGrassMaterial } from "../shaders/GrassShader";
 import type { EnvironmentSpec } from "../world/environment";
 import type { GrassRect, WorldBox } from "../world/MapBuilder";
+import type { TerrainField } from "../world/TerrainField";
 import { mulberry32 } from "../world/rng";
 
 const MAX_PUSHERS = CONFIG.grass.maxPushers;
@@ -128,6 +129,7 @@ export class GrassSystem {
     rects: readonly GrassRect[],
     env: EnvironmentSpec,
     boxes: readonly WorldBox[],
+    terrain: TerrainField,
   ): void {
     this.dispose();
     if (rects.length === 0 || !env.grass) return;
@@ -137,7 +139,7 @@ export class GrassSystem {
     const mesh = new Mesh("grass", this.scene);
     buildTuftVertexData(rng).applyToMesh(mesh);
 
-    const matrices = this.scatter(rects, boxes, rng);
+    const matrices = this.scatter(rects, boxes, terrain, rng);
     mesh.thinInstanceSetBuffer("matrix", matrices, 16, true);
     mesh.thinInstanceRefreshBoundingInfo(true);
 
@@ -247,6 +249,7 @@ export class GrassSystem {
   private scatter(
     rects: readonly GrassRect[],
     boxes: readonly WorldBox[],
+    terrain: TerrainField,
     rng: () => number,
   ): Float32Array {
     const g = CONFIG.grass;
@@ -264,10 +267,13 @@ export class GrassSystem {
     let n = 0;
     for (const r of rects) {
       const count = Math.floor(r.width * r.depth * (r.density ?? g.density));
-      const y = (r.y ?? 0) - 0.02; // sink roots a touch into the surface
+      const base = (r.y ?? 0) - 0.02; // sink roots a touch into the surface
       for (let i = 0; i < count; i++) {
         const x = r.x + (rng() - 0.5) * r.width;
         const z = r.z + (rng() - 0.5) * r.depth;
+        // Per tuft, not per rect: a field running over a bank has to follow it,
+        // or half of it grows in mid-air and the other half is buried.
+        const y = base + terrain.heightAt(x, z);
         if (insideCollider(x, y, z, boxes)) continue;
         scale.set(
           0.7 + rng() * 0.6,
@@ -303,8 +309,8 @@ function insideCollider(
     let halfH = b.h / 2;
     if (b.rotX !== 0) halfH += (Math.abs(Math.sin(b.rotX)) * b.d) / 2;
     // The 0.05 tolerance matters: a collider whose top sits within 5 cm of
-    // the tuft's base IS the ground it stands on (the ground slab's top is
-    // exactly y=0) — without it every tuft on open ground rejects itself.
+    // the tuft's base IS the ground it stands on — a terrace top or a jetty
+    // deck. Without it every tuft standing on one rejects itself.
     if (topY <= b.cy - halfH + 0.05 || y >= b.cy + halfH - 0.05) continue;
     let lx = x - b.cx;
     let lz = z - b.cz;

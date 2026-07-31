@@ -14,6 +14,12 @@
  * arguments precisely so nothing here can reach for a named one.
  * Scatter runs off the layout's seeded RNG, never Math.random: blocking props
  * emit colliders, and colliders decide navigation.
+ * The floor comes from a TerrainField, not a flat box, and every authored `y`
+ * in the layout is an offset ABOVE it — so a building dropped into a basin
+ * needs no bookkeeping. The floor mesh is the one place a visual and a
+ * collider share vertices (an invisible clone per block); a heightfield has no
+ * box to stand in for it, and splitting it per block is what keeps ray picks
+ * rejecting it as cheaply as the old flat box did.
  * `build(..., { editor: true })` keeps geometry per layout item, tags it with
  * metadata.editorRef and indexes it — at the cost of the BlockMerge pass and
  * roughly 10x the draw calls. Authoring only; never measure frame cost there.
@@ -25,6 +31,7 @@ import type { LightingSystem } from "../systems/LightingSystem";
 import { BUILDERS, type BoxSpec, type Structure } from "./BuildingKit";
 import type { EnvironmentSpec } from "./environment";
 import type { MapLayout, ScatterSpec } from "./layout";
+import { TerrainField, terrainPatches } from "./TerrainField";
 import { NavGrid } from "./NavGrid";
 import { ObstacleField } from "./ObstacleField";
 import { mulberry32 } from "./rng";
@@ -171,6 +178,11 @@ export interface GameMap {
   water: WaterRect[];
   /** Grass fields from the layout; empty when the map is bald. */
   grass: GrassRect[];
+  /**
+   * The floor's height, for everything that used to assume zero. Flat when the
+   * layout declares no terrain, which is the whole of the old behaviour.
+   */
+  terrain: TerrainField;
   /** Per-item geometry. Editor builds only — undefined in play. */
   editor?: EditorIndex;
   dispose(): void;
@@ -268,7 +280,8 @@ export class MapBuilder {
       : undefined;
     this.item = null;
 
-    this.buildValley(size, env, visuals, colliders);
+    const terrain = new TerrainField(layout.terrain);
+    this.buildValley(size, env, terrain, visuals, colliders);
 
     // --- authored structures ---
     // Roads are merged into one draw call per material so overlapping junctions
@@ -280,7 +293,13 @@ export class MapBuilder {
       this.item = item;
       const builder = BUILDERS[p.kind];
       const s: Structure = builder(this.scene, this.mats, p.params ?? {});
-      const origin = new Vector3(p.x, p.y ?? 0, p.z);
+      // An authored y is an offset above the local floor, not an absolute
+      // height, so a placement keeps its meaning when the ground under it moves.
+      const origin = new Vector3(
+        p.x,
+        (p.y ?? 0) + terrain.heightAt(p.x, p.z),
+        p.z,
+      );
       const rotY = p.rotY ?? 0;
       const isRoad = p.kind === "road";
 
@@ -336,7 +355,7 @@ export class MapBuilder {
     for (const [i, spec] of layout.scatter.entries()) {
       const item = index ? newItem(index.scatter) : null;
       this.item = item;
-      this.scatterRegion(spec, rng, blocks, colliders, item, i);
+      this.scatterRegion(spec, terrain, rng, blocks, colliders, item, i);
       if (item) for (const m of item.visuals) visuals.push(m);
     }
     this.item = null;
@@ -352,7 +371,7 @@ export class MapBuilder {
     // Navigation is derived from the finished collider set, then a flow field
     // is precomputed per objective: five flags plus both home spawns. The map
     // is static, so this is the only time any of it is computed.
-    const nav = new NavGrid(size, this.boxes);
+    const nav = new NavGrid(size, this.boxes, terrain);
     for (const cp of layout.controlPoints) {
       nav.buildField(cp.id, cp.pos, cp.radius * 0.6);
     }
@@ -372,6 +391,7 @@ export class MapBuilder {
       visuals,
       water: layout.water ?? [],
       grass: layout.grass ?? [],
+      terrain,
       editor: index,
       dispose: () => {
         for (const m of visuals) m.dispose();
@@ -381,26 +401,38 @@ export class MapBuilder {
     };
   }
 
-  /** Ground plane plus the valley ridge that bounds play. */
+  /** The valley floor plus the ridge that bounds play. */
   private buildValley(
     size: number,
     env: EnvironmentSpec,
+    terrain: TerrainField,
     visuals: Mesh[],
     colliders: Mesh[],
   ): void {
-    const ground = MeshBuilder.CreateBox(
-      "ground",
-      { width: size, height: 1, depth: size },
-      this.scene,
-    );
-    ground.position.y = -0.5;
-    ground.material = this.mats.get(env.floorColor);
-    // Receiver only: a flat sheet casting into the shadow map is pure acne.
-    ground.metadata = { noShadowCaster: true };
-    visuals.push(ground);
-    colliders.push(
-      this.collider("ground-col", { w: size, h: 1, d: size, x: 0, y: -0.5, z: 0 }),
-    );
+    const floorMat = this.mats.get(env.floorColor);
+    for (const patch of terrainPatches(terrain, size, BLOCK_SIZE)) {
+      const ground = new Mesh(`terrain-${patch.key}`, this.scene);
+      patch.data.applyToMesh(ground);
+      ground.material = floorMat;
+      // Receiver only: a floor casting into its own depth map is pure acne.
+      ground.metadata = { noShadowCaster: true };
+      visuals.push(ground);
+
+      // The floor is the one place a collider shares the visual's vertices.
+      // `collider()` builds boxes and records a WorldBox for the nav grid, and
+      // a heightfield is neither — NavGrid reads the TerrainField directly
+      // instead, so this deliberately bypasses it.
+      const col = new Mesh(`terrain-${patch.key}-col`, this.scene);
+      patch.data.applyToMesh(col);
+      col.isVisible = false;
+      col.isPickable = true;
+      // Vertical placement is the ground probe's job and bots never touch the
+      // collidable list, so the floor stays out of moveWithCollisions.
+      col.checkCollisions = false;
+      col.metadata = { solid: true };
+      col.freezeWorldMatrix();
+      colliders.push(col);
+    }
 
     // The ridge is tall enough that it never reads as a skybox edge through fog.
     const h = 20;
@@ -442,6 +474,7 @@ export class MapBuilder {
    */
   private scatterRegion(
     spec: ScatterSpec,
+    terrain: TerrainField,
     rng: () => number,
     blocks: BlockMerge,
     colliders: Mesh[],
@@ -461,11 +494,15 @@ export class MapBuilder {
       if (!spot) continue;
       placed.push({ ...spot, r: clearance });
 
+      // Sampled per prop, not per region: a stand of trees straddling a bank
+      // should follow the bank rather than share one height and float.
+      const base = (spec.y ?? 0) + terrain.heightAt(spot.x, spot.z);
+
       const prop = build(this.scene, this.mats, rng);
       prop.scaling.setAll(scale);
       prop.position.x = spot.x;
       prop.position.z = spot.z;
-      prop.position.y = prop.position.y * scale + (spec.y ?? 0);
+      prop.position.y = prop.position.y * scale + base;
       prop.rotation.y = rng() * Math.PI * 2;
       // Bake the placement into the vertices, then hand the flattened
       // hierarchy to the merge — the same identity-transform trick the
@@ -474,7 +511,7 @@ export class MapBuilder {
 
       if (light) {
         this.lighting.add(
-          new Vector3(spot.x, (spec.y ?? 0) + light.y * scale, spot.z),
+          new Vector3(spot.x, base + light.y * scale, spot.z),
           light.color,
           light.range * scale,
           light.intensity,
@@ -491,7 +528,7 @@ export class MapBuilder {
             h,
             d: clearance * 2,
             x: spot.x,
-            y: (spec.y ?? 0) + h / 2,
+            y: base + h / 2,
             z: spot.z,
           }),
         );
@@ -711,7 +748,7 @@ function tag(mesh: Mesh, ref: EditorRef): void {
  * draws, fine enough that frustum culling still throws away most of the map.
  * Well under the 78 m fog wall, so a block is never half-visible for long.
  */
-const BLOCK_SIZE = 48;
+export const BLOCK_SIZE = 48;
 
 /**
  * The second merge pass: collapses every structure and scatter field into one

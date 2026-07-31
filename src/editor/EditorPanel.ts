@@ -50,6 +50,7 @@ export class EditorPanel {
   private workLightEl: HTMLElement;
   private navEl: HTMLElement;
   private statusEl: HTMLElement;
+  private terrainHelpEl: HTMLElement;
   private overlayEl: HTMLElement;
   private findingsEl: HTMLElement;
   private inspector: HTMLElement;
@@ -98,6 +99,8 @@ export class EditorPanel {
         <div><b>Alt</b> hold to place off-grid</div>
         <div><b>Del</b> delete selection &nbsp; <b>Ctrl+S</b> save</div>
         <div><b>N</b> nav overlay &nbsp; <b>L</b> work light</div>
+        <div><b>T</b> terrain mode &nbsp; <b>[ ]</b> brush size</div>
+        <div class="ed-terrain-help"><b>LMB drag</b> &uarr;&darr; raise / lower ground</div>
         <div><b>F2</b> back to the game (discards unsaved)</div>
       </div>
     `;
@@ -107,6 +110,8 @@ export class EditorPanel {
     this.workLightEl = this.root.querySelector("#ed-worklight")!;
     this.navEl = this.root.querySelector("#ed-nav")!;
     this.statusEl = this.root.querySelector("#ed-status")!;
+    this.terrainHelpEl = this.root.querySelector(".ed-terrain-help")!;
+    this.setMode("object");
     this.overlayEl = this.root.querySelector("#ed-overlay")!;
     this.findingsEl = this.root.querySelector("#ed-findings")!;
     this.inspector = this.root.querySelector("#ed-inspector")!;
@@ -303,6 +308,17 @@ export class EditorPanel {
   }
 
   /** Save/scan feedback. `tone` colours it; the text is shown verbatim. */
+  /**
+   * Terrain mode owns the pointer, so the panel says so plainly and shows the
+   * one extra binding that only exists there. A mode you cannot see you are in
+   * is a mode that makes every click feel broken.
+   */
+  setMode(mode: "object" | "terrain"): void {
+    const on = mode === "terrain";
+    this.root.classList.toggle("ed-mode-terrain", on);
+    this.terrainHelpEl.style.display = on ? "" : "none";
+  }
+
   setStatus(text: string, tone: "idle" | "busy" | "ok" | "error"): void {
     this.statusEl.textContent = text;
     this.statusEl.className = `ed-status ${tone}`;

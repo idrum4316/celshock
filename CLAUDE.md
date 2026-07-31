@@ -114,11 +114,15 @@ src/
                             #   the panel and mutate all have to agree on
     inspect.ts / params.ts  #   Inspector read model + per-kind param table
     sourceScan.ts           #   layout.ts as text: regions, entries, tokens
+    terrainBrush.ts         #   Terrain mode: hover highlight + sculpt stroke
     serialize.ts / save.ts  #   Minimal-diff emit + POST to the dev server
     tuning.ts               #   Tool constants (NOT config.ts — not gameplay).
   world/
-    layout.ts               # Placement/ScatterSpec/MapLayout — the map-data
-                            # vocabulary, map-agnostic
+    layout.ts               # Placement/ScatterSpec/Heightfield/MapLayout —
+                            # the map-data vocabulary, map-agnostic
+    TerrainField.ts         # The floor's height, and the ONLY place that knows
+                            # it: heightfield -> heightAt() + the per-block
+                            # VertexData MapBuilder hangs ground meshes on
     rng.ts                  # mulberry32 — the seeded PRNG world-building uses
     MapBuilder.ts           # Builds the map; merges visuals, emits colliders
     BuildingKit.ts          # Facade: shared types + BUILDERS registry
@@ -138,7 +142,8 @@ src/
     textures.ts             # Generated canvas textures (cobblestone etc.)
     environment.ts          # EnvironmentSpec + applyEnvironment
     hollowmere/
-      layout.ts             # THE MAP — every placement, flag, and spawn
+      layout.ts             # THE MAP — every placement, flag and spawn
+      heights.ts            # GENERATED floor heights (editor terrain mode)
       environment.ts        # Hollowmere's palette, fog, mist, particles
   ui/
     HUD.ts                  # DOM overlay: tickets, flags, killfeed, scoreboard
@@ -211,14 +216,71 @@ per-bot transient light needs the same treatment.
 ### The map is data, not code
 
 `src/world/hollowmere/layout.ts` is the entire level: a list of placements
-(`{ kind, x, z, rotY, params }`), scatter regions, control points, and spawns.
-`BuildingKit` supplies the parametric pieces and `MapBuilder` consumes the
-layout; neither special-cases Hollowmere, so **a second map is one new layout
-file plus an `EnvironmentSpec`**. The vocabulary those files are written in
-(`Placement`, `ScatterSpec`, `MapLayout`) lives in `src/world/layout.ts`, not
-beside Hollowmere's data — a new map must not import its types from its
-predecessor. `MapBuilder.build(layout, env)` takes both as arguments for the
-same reason.
+(`{ kind, x, z, rotY, params }`), scatter regions, control points, spawns, and
+the water/grass/terrain rects. `BuildingKit` supplies the parametric pieces and
+`MapBuilder` consumes the layout; neither special-cases Hollowmere, so **a
+second map is one new layout file plus an `EnvironmentSpec`**. The vocabulary
+those files are written in (`Placement`, `ScatterSpec`, `TerrainRect`,
+`MapLayout`) lives in `src/world/layout.ts`, not beside Hollowmere's data — a new
+map must not import its types from its predecessor. `MapBuilder.build(layout,
+env)` takes both as arguments for the same reason.
+
+**The floor is a height field, not a flat plane.** A `Heightfield` in the layout
+feeds a `TerrainField` (`src/world/TerrainField.ts`), and that field is the one
+place the ground's height is decided. It used to be the literal number `0`,
+asserted independently in `MapBuilder.buildValley`, `NavGrid.rasterize`,
+`Player.probeGround`, `ShadowSystem.groundYUnder` and `GrassSystem` — five
+hardcodings of the same constant, which is why the floor could not be anything
+but level. The grid is 80x80 cells of 3 m, sampled bilinearly, and it is
+authored with the editor's terrain mode rather than written by hand.
+
+**The heights live in their own generated file** (`hollowmere/heights.ts`),
+imported by the layout. That split is the point: `layout.ts` is authored — an
+ASCII village map, district commentary, `BANK_H`/`TERRACE_H` in place of bare
+numbers — and the editor patches it one line at a time to preserve all of that.
+Several thousand bare numbers would drown it. `heights.ts` is the opposite: pure
+generated data with nothing to preserve, so it is rewritten wholesale, one grid
+row per line so a diff shows which strips of the map moved.
+
+Two rules follow, and both are load-bearing:
+
+- **`Placement.y`, `ScatterSpec.y` and `GrassRect.y` are offsets above the local
+  floor**, not absolute heights, so dressing rides the ground when it moves.
+  Control points and spawns stay absolute — the editor snaps their height to the
+  nav surface for you. A `WaterRect` with no `y` floats `CONFIG.water.surfaceY`
+  above **its own bed**, which is what makes a pool read as recessed instead of
+  hovering: Hollowmere's bog bed is at -0.6 and its surface lands at -0.28,
+  below the bank around it.
+- **`NavGrid.link` is the slope limit.** It links neighbouring surfaces only
+  within `stepHeight`, so at `cellSize` 1.5 a bank is walkable up to a gradient
+  of 0.4 (~22 deg) and severs itself above that — `MAX_WALKABLE_GRADE`. On a 3 m
+  terrain cell that is a 1.2 m single-cell step. Nothing else enforces it: the
+  brush reports the gradient under the cursor live, and `validate.ts` scans every
+  grid edge for it.
+
+The terrain mesh is one quad per cell, emitted per 48 m block, with two fast
+paths that keep a mostly-level map cheap: a map with no heightfield at all is a
+single quad — the same two triangles the old flat ground box drew — and a block
+whose vertices are all one height collapses to a quad too. Hollowmere is 25
+blocks and **3,110 triangles**, because only the four holding the pools carry
+real geometry.
+
+**Babylon defaults to a LEFT-handed system** (`scene.useRightHandedSystem` is
+false), so a front face is *clockwise* seen from the front. Hand-built
+`VertexData` wound the right-handed way — the order you get if you work the
+cross product out on paper — fails in the worst possible manner: the meshes
+build, the shaders compile, the console is clean, nav and picking are unaffected
+(Babylon's triangle picking is two-sided), and the only symptom is that
+`ComputeNormals` derives downward normals, so the floor is back-face culled and
+lit from below. The world looks like it has no ground at all, and every number
+you can check still reads correct. `assertFacesUp` throws on it in dev builds;
+if you touch the winding, trust that over your own derivation. It is emitted **per 48 m block**,
+and each block gets an invisible clone marked `solid`. That clone is the one
+place a collider shares a visual's vertices: a heightfield has no box to stand in
+for it, so `MapBuilder.collider()` (which exists to record `WorldBox`es) is
+deliberately bypassed and `NavGrid` reads the field directly. The block split is
+not just for culling — `CameraSystem` picks every frame and `CombatSystem` every
+shot, and one map-wide floor mesh would defeat bounding-box rejection.
 
 **Scatter placement is seeded** (`layout.seed`, via `src/world/rng.ts`). This is
 not cosmetic: blocking scatter emits colliders, colliders feed `NavGrid` and
@@ -256,6 +318,9 @@ Layout gotchas that have already cost time:
   run genuinely routes bots the long way round — or seals a plot outright.
   Enclosures like the burying ground need a gap of a couple of cells, and the
   corners left open help more than a wider gate.
+- A `road` is a flat slab lifted to the terrain height at its own centre, so one
+  laid across a terrain skirt floats at one end and buries itself at the other.
+  Run roads along level ground or split them at the bank; the editor warns.
 
 ### The map editor (dev only)
 
@@ -273,11 +338,44 @@ Things it deliberately does not do:
   when a pick supplies a predicate, so the editor picks on
   `metadata.editorRef` and the visual/collider table below stands unchanged.
 - **It does not build colliders.** Proxy meshes for flags, spawns, scatter
-  regions and water/grass rects are visual only, and never enter
+  regions and water/grass/terrain rects are visual only, and never enter
   `colliderBoxes` — `MapBuilder.collider()` is still the sole collider factory.
 - **It does not re-run builders to move things.** A builder assembles at the
   origin and `MapBuilder` transforms the result, so `repositionItem()` moves the
   visuals, the collider proxies and the `WorldBox`es directly.
+
+**There are two pointer modes, and that is the fix for a real problem rather
+than a flourish.** `T` toggles terrain mode; the panel turns violet, because a
+mode you forget you are in makes every click feel broken. The ground is *under*
+everything, so a terrain annotation is a flat sheet competing for the same click
+as the water rect, the grass rect and the jetty standing on it — whichever
+happens to be on top wins and the rest become unselectable. A mode settles it by
+construction: in terrain mode only the ground answers, and in object mode terrain
+is not in the pick at all.
+
+In terrain mode the cursor highlights the grid cells it covers, `[`/`]` resize
+the brush, and dragging the left button up or down raises or lowers those cells
+with a linear falloff from the inner half outward. A hard-edged brush would make
+a cliff on its first click, which the nav graph then refuses to walk across; the
+status line shows the steepest gradient under the cursor against
+`MAX_WALKABLE_GRADE` and turns red past it.
+
+A stroke is **absolute, not incremental**: the affected vertices are snapshotted
+when the drag starts and every mouse move re-derives from that snapshot, so the
+result cannot depend on frame rate or mouse speed. During the stroke only the
+floor's *visual* blocks are re-tessellated (`TerrainBrush.reapply`, sub-ms);
+colliders, navigation and everything whose `y` rides the ground are stale until
+release, which schedules the ordinary debounced geometry rebuild. That split is
+the whole reason it feels immediate — nothing walks on the ground mid-drag.
+
+**Proxies and gizmos work in world space; the layout stores heights above the
+local floor.** `originOf` adds the terrain height and `applyTransform` subtracts
+it again, so a rect in a basin draws where it actually is and a round-trip drag
+writes back the same relative offset it started with. Getting this wrong is not
+subtle: a translucent proxy sheet left at the raw layout `y` hangs over a dug
+basin and washes the whole thing flat, which reads as the ground having
+disappeared. `waterY()` lives in `TerrainField.ts` for the same reason — it is
+shared by `WaterSystem` and the proxy so the two cannot disagree.
 
 **Three rebuild tiers, and which one you owe is decided by what changed.**
 Measured: a full editor build is ~570 ms, `NavGrid` + all 7 flow fields ~45 ms,
@@ -287,7 +385,7 @@ one builder call ~0.9 ms.
 | --- | --- | --- |
 | dragging a gizmo | move that item's meshes and `WorldBox`es | sub-ms, every frame |
 | drag released, flag/spawn edited | `NavGrid` + 7 flow fields + `ObstacleField` | ~45 ms |
-| param, kind, add, delete | `Game.buildEditorMap()` — the whole map | ~570 ms |
+| param, kind, add, delete, brush stroke released | `Game.buildEditorMap()` — the whole map | ~570 ms |
 
 The third tier is not laziness. Changing a param changes how many colliders an
 item emits, which shifts every later index in `colliderBoxes` and invalidates
@@ -370,6 +468,15 @@ handful survive on Hollowmere while it plays perfectly well. Read that number
 as a **delta**: note it, move a wall, look again. `makeIslandTest` is shared
 with the overlay so the red cells on screen are exactly the reported findings.
 
+That flatness filter is also why terrain is checked directly by `terrainGrade`
+rather than left to `islands()`. A sculpting brush is a machine for producing
+unreachable ground, but a flat pit floor looks exactly like the top of a boulder
+to the island heuristic, so the one finding worth having is the one it
+suppresses. `terrainGrade` scans every edge of the height grid against
+`MAX_WALKABLE_GRADE` instead, and reports a count with the worst offender's
+location — one finding per cell would bury everything else, since a single
+stroke can steepen hundreds at once.
+
 The `structure()` checks exist only because entries can be deleted: a duplicate
 flag id silently merges two flags' flow fields (they are keyed by id), a spawn
 naming a flag that no longer exists is skipped by `ConquestSystem` without
@@ -412,6 +519,15 @@ off the visible geometry. `MapBuilder.collider()` is the only place that creates
 them, and it also records a `WorldBox` for the nav grid — geometry added by any
 other path is invisible to navigation.
 
+**The floor is the one documented exception**, and it proves the rule rather than
+bending it: the terrain heightfield has no box that could stand in for it, so
+each block's collider is an invisible *clone of the visual's vertex data* — same
+shape, still two separate meshes, still only the clone marked `solid`. It emits
+no `WorldBox` (there is no box to emit) and `NavGrid` reads `TerrainField`
+directly instead. It is also the only `solid` mesh with `checkCollisions = false`:
+`moveWithCollisions` is horizontal-only, vertical placement is the ground probe's
+job, and bots never touch the collidable list at all.
+
 ### Mesh metadata is a contract
 
 Four flags, all read elsewhere; new geometry that omits them misbehaves silently:
@@ -433,16 +549,27 @@ a **surface** — a (cell, height) pair — not a cell, because one cell can hol
 creek floor and the bridge deck above it, or the barn floor and its hayloft.
 `MAX_SURFACES` is 3.
 
-Surface heights come from evaluating each collider's top-face *plane* at the cell
-centre, not from its bounding box. That is deliberate: a pitched ramp's AABB
-reports its peak across the whole footprint and would read as a wall. If you
-touch `topFaceHeight`, note that the half-thickness is `h/2/cos(rotX)` and the
-slope is `tan(rotX)` — writing it as `h/2*cos` and `-tan` is the easy sign error,
-and it silently makes every ramp unwalkable.
+Every cell's *base* surface comes from `TerrainField.heightAt` at the cell
+centre. This was a hardcoded `0`, and that constant — applied before any collider
+was read — is what made the floor unable to be anything but flat: a free surface
+at zero in every cell overrode anything trying to dig below it. Heights above the
+base come from evaluating each collider's top-face *plane* at the cell centre,
+not from its bounding box. That is deliberate: a pitched ramp's AABB reports its
+peak across the whole footprint and would read as a wall. If you touch
+`topFaceHeight`, note that the half-thickness is `h/2/cos(rotX)` and the slope is
+`tan(rotX)` — writing it as `h/2*cos` and `-tan` is the easy sign error, and it
+silently makes every ramp unwalkable.
+
+`heights` is `.fill(-1)` to pad the slots no surface uses, but that is **not** a
+"below ground" sentinel — every read walks `counts[cell]`, which is what lets
+sunken terrain hold ordinary negative heights. Any new consumer must bound on
+`counts` rather than testing `y < 0`.
 
 Reachability is a flood fill from the map's outer ring. That is what keeps bots
 off rooftops: a roof is a perfectly good standable surface, but nothing beside it
-is within a step, so it is never reached.
+is within a step, so it is never reached. It also assumes that ring is open
+ground, which is why a terrain patch putting a *wall* edge out at the ridge is
+flagged.
 
 **A link is cut when the segment between two cell centres crosses a solid box**
 (`severLinks`). Sampling one column per cell centre means a wall thinner than a

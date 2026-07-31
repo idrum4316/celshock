@@ -22,6 +22,7 @@ import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { MapLayout } from "../world/layout";
 import type { GameMap } from "../world/MapBuilder";
+import { MAX_WALKABLE_GRADE } from "../world/TerrainField";
 import type { SelectionRef } from "./selection";
 
 export type Severity = "error" | "warning" | "info";
@@ -383,7 +384,68 @@ function hygiene(layout: MapLayout, size: number): Finding[] {
       });
     }
   }
+
+  out.push(...terrainGrade(layout));
   return out;
+}
+
+/**
+ * Terrain the nav graph will refuse to walk.
+ *
+ * `NavGrid.link` joins neighbouring surfaces only within `stepHeight`, so a
+ * slope past `MAX_WALKABLE_GRADE` severs its own links and strands whatever is
+ * beyond it. Said here rather than left to `islands()`, which filters flat
+ * surfaces out on purpose: a flat pit floor looks exactly like the top of a
+ * boulder to that heuristic, so the one finding worth having is the one it
+ * suppresses.
+ *
+ * Reported as a count with the worst offender's location, the same way the
+ * island check does it — a brush stroke can make hundreds of steep cells at
+ * once and one finding per cell would bury everything else.
+ */
+function terrainGrade(layout: MapLayout): Finding[] {
+  const f = layout.terrain;
+  if (!f) return [];
+
+  const row = f.size + 1;
+  let steep = 0;
+  let worst = 0;
+  let at: Vector3 | undefined;
+  const half = CONFIG.map.size / 2;
+
+  for (let j = 0; j <= f.size; j++) {
+    for (let i = 0; i <= f.size; i++) {
+      const h = f.heights[j * row + i];
+      // Only +X and +Z, so each edge is measured once.
+      for (const [di, dj] of [
+        [1, 0],
+        [0, 1],
+      ]) {
+        const ni = i + di;
+        const nj = j + dj;
+        if (ni > f.size || nj > f.size) continue;
+        const grade = Math.abs(f.heights[nj * row + ni] - h) / f.cell;
+        if (grade <= MAX_WALKABLE_GRADE + 1e-6) continue;
+        steep++;
+        if (grade > worst) {
+          worst = grade;
+          at = new Vector3(-half + i * f.cell, h, -half + j * f.cell);
+        }
+      }
+    }
+  }
+
+  if (steep === 0) return [];
+  return [
+    {
+      severity: "warning",
+      weight: steep,
+      text:
+        `${steep} terrain edges are too steep to walk (worst ${worst.toFixed(2)}, ` +
+        `limit ${MAX_WALKABLE_GRADE.toFixed(2)}) — bots cannot cross them`,
+      at,
+    },
+  ];
 }
 
 /** Fixture-cluster check, split out so it can take the lighting system. */

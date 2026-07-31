@@ -439,6 +439,13 @@
         pointer-events: auto;
         font-size: 12px;
       }
+      /* Terrain mode owns the pointer, so it has to be unmistakable from the
+         corner of the eye — a mode you forget you are in makes every click in
+         the viewport feel broken. */
+      #editor-panel.ed-mode-terrain {
+        border-color: #c58cff;
+        box-shadow: 0 0 0 1px rgba(197, 140, 255, 0.5);
+      }
       #editor-panel h2 {
         font-size: 12px;
         font-weight: 800;

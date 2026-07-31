@@ -1,5 +1,6 @@
 /**
- * layout.ts — The map-data vocabulary: Placement, ScatterSpec, MapLayout.
+ * layout.ts — The map-data vocabulary: Placement, ScatterSpec, TerrainRect,
+ * MapLayout.
  * Owns: the shape a level file must take, and nothing about any level.
  *
  * These live here rather than beside Hollowmere's data so that "a second map is
@@ -27,7 +28,11 @@ export interface Placement {
   kind: BuilderKind;
   x: number;
   z: number;
-  /** Base height — set when a structure stands on a terrace or embankment. */
+  /**
+   * Height above the ground beneath it — set when a structure stands on a
+   * terrace or embankment. Terrain the placement sits in is added on top, so
+   * this stays meaningful when the floor under it moves.
+   */
   y?: number;
   rotY?: number;
   params?: BuildParams;
@@ -58,6 +63,37 @@ export interface ScatterSpec {
   clearance?: number;
 }
 
+/**
+ * The shape of the valley floor: a regular grid of vertex heights.
+ *
+ * Unlike a `terrace` placement — a solid box standing ON the floor, which can
+ * only ever go up — this *is* the floor, so it digs below zero as happily as it
+ * rises. That is what lets a pool sit in the ground with a bank around it
+ * instead of hovering over a flat plane.
+ *
+ * Authored by the editor's terrain mode and written to its own generated file,
+ * NOT into the hand-written layout: a grid of several thousand numbers has no
+ * business sitting next to the ASCII village map. The layout imports it.
+ *
+ * Placements, scatter and grass rects read their `y` as an offset ABOVE the
+ * terrain, so dropping a building into a basin needs no bookkeeping. Control
+ * points and spawns stay absolute: they are single authored points, and the
+ * editor snaps their height to the nav surface, which the terrain feeds. Water
+ * is absolute too — a pool's surface is level whatever its bed does — but a
+ * rect with no `y` defaults to ankle-deep over its own bed.
+ */
+export interface Heightfield {
+  /** Cells per side. There are `(size + 1) ^ 2` vertices. */
+  size: number;
+  /** Metres per cell. `size * cell` must equal `CONFIG.map.size`. */
+  cell: number;
+  /**
+   * Vertex heights in metres, row-major from the -X/-Z corner: index
+   * `j * (size + 1) + i` is the vertex at `(-half + i * cell, -half + j * cell)`.
+   */
+  heights: number[];
+}
+
 export interface MapLayout {
   placements: Placement[];
   scatter: ScatterSpec[];
@@ -65,6 +101,8 @@ export interface MapLayout {
   spawns: SpawnPointDef[];
   water?: WaterRect[];
   grass?: GrassRect[];
+  /** The floor's shape. Absent means a level valley floor. */
+  terrain?: Heightfield;
   /**
    * Seed for scatter placement. Fixed per map so the dressing — and therefore
    * the colliders blocking scatter emits, and therefore the nav graph — is

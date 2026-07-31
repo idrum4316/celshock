@@ -58,6 +58,7 @@ export const EDITOR = {
     spawnEnemy: "#ff5a4f",
     water: "#4fb8ff",
     grass: "#7fd66a",
+    terrain: "#c58cff",
     navWalkable: "#4fd06a",
     navIsland: "#ff5a4f",
     navUnrouted: "#ffc46b",

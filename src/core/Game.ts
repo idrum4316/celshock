@@ -371,8 +371,14 @@ export class Game {
     });
     this.map = map;
     this.shadows.setCasters(map.visuals);
-    this.water.build(map.water, HollowmereEnvironment);
-    this.grass.build(map.grass, HollowmereEnvironment, map.colliderBoxes);
+    this.water.build(map.water, HollowmereEnvironment, map.terrain);
+    this.grass.build(
+      map.grass,
+      HollowmereEnvironment,
+      map.colliderBoxes,
+      map.terrain,
+    );
+    this.player.setTerrain(map.terrain);
     return map;
   }
 
@@ -414,8 +420,14 @@ export class Game {
       this.map.size,
       this.map.size,
     );
-    this.water.build(this.map.water, HollowmereEnvironment);
-    this.grass.build(this.map.grass, HollowmereEnvironment, this.map.colliderBoxes);
+    this.water.build(this.map.water, HollowmereEnvironment, this.map.terrain);
+    this.grass.build(
+      this.map.grass,
+      HollowmereEnvironment,
+      this.map.colliderBoxes,
+      this.map.terrain,
+    );
+    this.player.setTerrain(this.map.terrain);
 
     this.battle.setMap(this.map);
     this.battle.reset();

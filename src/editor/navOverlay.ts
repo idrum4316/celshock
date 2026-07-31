@@ -74,12 +74,16 @@ export class NavOverlay {
     };
 
     for (let cell = 0; cell < dim * dim; cell++) {
-      const x = origin + (Math.floor(cell / dim) + 0.5) * cellSize;
-      const z = origin + ((cell % dim) + 0.5) * cellSize;
+      // NavGrid indexes as `cz * dim + cx`, so X is the remainder and Z the
+      // quotient. Taking them the other way round transposes the whole overlay.
+      const x = origin + ((cell % dim) + 0.5) * cellSize;
+      const z = origin + (Math.floor(cell / dim) + 0.5) * cellSize;
       for (let si = 0; si < counts[cell] && si < maxSurfaces; si++) {
         const s = cell * maxSurfaces + si;
         const y = heights[s];
-        if (y < 0 || blocked[s]) continue;
+        // No `y < 0` test: -1 pads unused slots, but the loop already bounds on
+        // `counts`, and sunken terrain makes negative heights ordinary.
+        if (blocked[s]) continue;
 
         let bucket: Bucket;
         if (!walkable[s]) {

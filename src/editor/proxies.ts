@@ -27,6 +27,7 @@ import {
   type GlowLayer,
 } from "@babylonjs/core";
 import type { GameMap } from "../world/MapBuilder";
+import { waterY, type TerrainField } from "../world/TerrainField";
 import type { SelectionRef } from "./selection";
 import { EDITOR } from "./tuning";
 
@@ -62,28 +63,37 @@ export class ProxyLayer {
       this.pole(s.pos, 3, hex, ref);
     });
 
+    // Water and grass sit on the TERRAIN, not on absolute zero. A proxy drawn
+    // at the raw layout y hangs over a dug basin and — being a translucent
+    // sheet — flattens the whole thing into one colour, which reads exactly
+    // like the ground having vanished.
     map.water.forEach((r, i) => {
-      this.rect(r.x, r.y ?? 0, r.z, r.width, r.depth, c.water, {
+      this.rect(r.x, waterY(r, map.terrain), r.z, r.width, r.depth, c.water, {
         list: "water",
         index: i,
       });
     });
 
     map.grass.forEach((r, i) => {
-      this.rect(r.x, r.y ?? 0, r.z, r.width, r.depth, c.grass, {
+      const y = (r.y ?? 0) + map.terrain.heightAt(r.x, r.z);
+      this.rect(r.x, y, r.z, r.width, r.depth, c.grass, {
         list: "grass",
         index: i,
       });
     });
+
   }
 
   /**
    * Scatter regions are drawn separately because they come from the layout,
    * not from the built map — `GameMap` keeps no record of them.
    */
-  buildScatter(regions: readonly { x: number; z: number; y?: number; radius: number }[]): void {
+  buildScatter(
+    regions: readonly { x: number; z: number; y?: number; radius: number }[],
+    terrain: TerrainField,
+  ): void {
     regions.forEach((s, i) => {
-      const at = new Vector3(s.x, s.y ?? 0, s.z);
+      const at = new Vector3(s.x, (s.y ?? 0) + terrain.heightAt(s.x, s.z), s.z);
       this.ring(at, s.radius, EDITOR.colors.scatter, { list: "scatter", index: i });
     });
   }
@@ -173,6 +183,7 @@ export class ProxyLayer {
     m.position.set(x, y + LIFT, z);
     this.adopt(m, ref, hex, 0.18);
   }
+
 
   dispose(): void {
     for (const m of this.meshes) m.dispose();

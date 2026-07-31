@@ -13,12 +13,25 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 
-/** The one file the editor may write. Compared, never used to build a path. */
-const LAYOUT_REL = "src/world/hollowmere/layout.ts";
+/**
+ * The only files the editor may write. Compared, never used to build a path.
+ * `layout.ts` is patched line by line and must look like a layout; `heights.ts`
+ * is regenerated wholesale by terrain mode and must look like a heightfield.
+ */
+const WRITABLE = {
+  "src/world/hollowmere/layout.ts": {
+    min: 4000,
+    marker: "export const HollowmereLayout",
+  },
+  "src/world/hollowmere/heights.ts": {
+    min: 500,
+    marker: "export const HollowmereHeights",
+  },
+};
 
 function layoutWriter(): Plugin {
-  const layoutAbs = resolve(process.cwd(), LAYOUT_REL);
-  let selfWrite = false;
+  const absOf = (rel: string) => resolve(process.cwd(), rel);
+  const selfWritten = new Set();
 
   return {
     name: "hollowmere-layout-writer",
@@ -39,24 +52,27 @@ function layoutWriter(): Plugin {
           try {
             const { path, source } = JSON.parse(body);
             // Path safety by construction: the client's path is only ever
-            // COMPARED against a literal. It never reaches the filesystem, so
-            // traversal is not possible regardless of what was sent.
-            if (path !== LAYOUT_REL) {
+            // LOOKED UP in a literal table. It never reaches the filesystem as
+            // given, so traversal is not possible regardless of what was sent.
+            const rule = Object.prototype.hasOwnProperty.call(WRITABLE, path)
+              ? WRITABLE[path]
+              : null;
+            if (!rule) {
               throw new Error(`refusing to write ${path}`);
             }
             // Cheap sanity gates against writing a truncated or wrong file.
-            if (typeof source !== "string" || source.length < 4000) {
-              throw new Error("payload too small to be the layout");
+            if (typeof source !== "string" || source.length < rule.min) {
+              throw new Error(`payload too small to be ${path}`);
             }
-            if (!source.includes("export const HollowmereLayout")) {
-              throw new Error("payload is missing the layout export");
+            if (!source.includes(rule.marker)) {
+              throw new Error(`payload is missing ${rule.marker}`);
             }
-            selfWrite = true;
-            writeFileSync(layoutAbs, source, "utf8");
+            const abs = absOf(path);
+            selfWritten.add(abs);
+            writeFileSync(abs, source, "utf8");
             res.statusCode = 200;
             res.end(JSON.stringify({ ok: true, bytes: source.length }));
           } catch (err) {
-            selfWrite = false;
             res.statusCode = 400;
             res.end(JSON.stringify({ ok: false, error: String(err) }));
           }
@@ -65,13 +81,13 @@ function layoutWriter(): Plugin {
     },
 
     handleHotUpdate(ctx) {
-      // layout.ts has no import.meta.hot.accept, so an update propagates all
+      // Neither file has import.meta.hot.accept, so an update propagates all
       // the way to main.ts, finds no accepting module, and full-reloads the
       // page — losing the camera, the selection, and the editing session, on
       // every save. Swallow the editor's OWN writes. A manual edit in the
       // editor of your choice still reloads, which is what you want.
-      if (ctx.file === layoutAbs && selfWrite) {
-        selfWrite = false;
+      if (selfWritten.has(ctx.file)) {
+        selfWritten.delete(ctx.file);
         return [];
       }
     },

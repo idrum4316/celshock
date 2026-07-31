@@ -204,6 +204,7 @@ export function inspect(layout: MapLayout, ref: SelectionRef | null): Inspection
         ],
       };
     }
+
   }
 
   // A stale ref — the layout changed under the selection.
