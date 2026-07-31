@@ -93,19 +93,18 @@ const placements: Placement[] = [
   { kind: "road", x: 0, z: 0, params: { length: 130, width: 9 } },
   { kind: "road", x: 1, z: 0, rotY: Math.PI / 2, params: { length: 128, width: 9 } },
   // North to the chapel terrace — ends at the ramp foot.
-  { kind: "road", x: -60, z: 45.5, params: { length: 11, width: 8 } },
-  { kind: "road", x: -30, z: 40, rotY: Math.PI / 2, params: { length: 64, width: 7 } },
+  { kind: "road", x: -60, z: 44, params: { length: 15, width: 8 } },
+  { kind: "road", x: -51, z: 40, rotY: Math.PI / 2, params: { length: 100, width: 7 } },
   // East to the farmstead — ends at the barn's west wall, under the loft ramp.
   { kind: "road", x: 46, z: 30, rotY: Math.PI / 2, params: { length: 54, width: 8 } },
   // South to the bog docks — ends at the boathouse ramp foot.
   { kind: "road", x: 40, z: -48.5, params: { length: 41, width: 8 } },
   { kind: "road", x: 20, z: -30, rotY: Math.PI / 2, params: { length: 44, width: 7 } },
   { kind: "road", x: -30, z: -20, rotY: Math.PI / 2, params: { length: 64, width: 7 } },
-  { kind: "road", x: -80, z: 104, rotY: Math.PI / 2, params: { length: 46, width: 8 } },
-  { kind: "road", x: 86, z: -104, rotY: Math.PI / 2, params: { length: 44, width: 8 } },
+  { kind: "road", x: 95, z: -104, rotY: Math.PI / 2, params: { length: 25, width: 8, surface: "dirt" } },
   // Short stubs through the gatehouse arches — the barricades flank these.
-  { kind: "road", x: -100, z: 101, params: { length: 18, width: 6.5 } },
-  { kind: "road", x: 105, z: -101, params: { length: 18, width: 6.5 } },
+  { kind: "road", x: -100, z: 76.5, params: { length: 80, width: 6.5 } },
+  { kind: "road", x: 105, z: -106, params: { length: 12, width: 6.5, surface: "dirt" } },
 
   // ===== C — the square ========================================================
   { kind: "well", x: 0, z: 0 },
@@ -172,10 +171,6 @@ const placements: Placement[] = [
   { kind: "bridge", x: -85, z: -44, y: BANK_H + 0.15, rotY: Math.PI / 2, params: { length: 26 } },
   // Ramps in and out of the lane. A 1.5 m trench is right at the edge of a
   // standing jump, so without these the creek is a one-way trap for bots.
-  { kind: "ramp", x: -84, z: 0, rotY: Math.PI / 2, params: { length: 8, width: 5, height: BANK_H } },
-  { kind: "ramp", x: -84, z: -30, rotY: Math.PI / 2, params: { length: 8, width: 5, height: BANK_H } },
-  { kind: "ramp", x: -92, z: 6, rotY: -Math.PI / 2, params: { length: 8, width: 5, height: BANK_H } },
-  { kind: "ramp", x: -92, z: -26, rotY: -Math.PI / 2, params: { length: 8, width: 5, height: BANK_H } },
   { kind: "lamp", x: -73, z: -22, y: BANK_H },
   { kind: "cottage", x: -58, z: -38, params: { ruined: true } },
   { kind: "cottage", x: -60, z: 32, params: { width: 8 } },
@@ -384,7 +379,7 @@ const scatter: ScatterSpec[] = [
   // Creek bed: fallen logs in the lane, clear of the ramps and the B spawn.
   { prop: "log", x: -85, z: 12, radius: 12, count: 5, scale: [0.8, 1.2], blocking: true, clearance: 1.4 },
   { prop: "log", x: -85, z: -14, radius: 12, count: 5, scale: [0.8, 1.2], blocking: true, clearance: 1.4 },
-  { prop: "fungus", x: -85, z: -20, radius: 26, count: 5, scale: [0.7, 1.2] },
+  { prop: "fungus", x: -85, z: -20, radius: 20, count: 5, scale: [0.7, 1.2] },
   // The bog: corpse-fungus is the only light down there.
   { prop: "fungus", x: 32, z: -88, radius: 16, count: 7, scale: [0.8, 1.4] },
   { prop: "log", x: 36, z: -93, radius: 7, count: 6, scale: [0.8, 1.2], blocking: true, clearance: 1.4 },
@@ -446,7 +441,7 @@ const scatter: ScatterSpec[] = [
 
 const controlPoints: ControlPointDef[] = [
   { id: "A", name: "The Chapel", pos: new Vector3(-60, TERRACE_H, 76), radius: 14 },
-  { id: "B", name: "The Mill", pos: new Vector3(-85, 0, -20), radius: 12 },
+  { id: "B", name: "The Mill", pos: new Vector3(-97, TERRACE_H, -28), radius: 13 },
   // Just south of the well: standing the flag *on* the well would put its
   // centre inside a collider, where nothing can stand.
   { id: "C", name: "The Square", pos: new Vector3(0, 0, -4), radius: 14 },
@@ -470,7 +465,7 @@ const spawns: SpawnPointDef[] = [
   { team: 1, pos: new Vector3(99, 0, -96), yaw: 0 },
   { team: 1, pos: new Vector3(111, 0, -96), yaw: 0 },
   { team: null, controlPoint: "A", pos: new Vector3(-60, TERRACE_H, 62), yaw: Math.PI },
-  { team: null, controlPoint: "B", pos: new Vector3(-85, 0, -36), yaw: Math.PI },
+  { team: null, controlPoint: "B", pos: new Vector3(-99, BANK_H, -24.5), yaw: Math.PI },
   { team: null, controlPoint: "C", pos: new Vector3(-2, 0, -18), yaw: Math.PI },
   { team: null, controlPoint: "D", pos: new Vector3(80, 0, 14), yaw: Math.PI },
   { team: null, controlPoint: "E", pos: new Vector3(40, 0, -66), yaw: 0 },
@@ -512,8 +507,8 @@ const grass: GrassRect[] = [
   // The field west of the square, between the north road and the chapel road.
   { x: -13, z: 27, width: 16, depth: 18, density: 0.6 },
   // The farmstead paddocks — tall grass over the open sightlines at D.
-  { x: 68, z: 16, width: 18, depth: 15 },
-  { x: 93, z: 44, width: 16, depth: 14 },
+  { x: 68, z: 16, width: 18, depth: 15, density: 3 },
+  { x: 93, z: 44, width: 16, depth: 14, density: 3 },
   // The bog: the pool's shallows grow reeds around the jetties.
   { x: 40, z: -88, width: 36, depth: 20, density: 0.8 },
   // The dead woods in the north-east corner, sparse under the trees.
