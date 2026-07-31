@@ -106,12 +106,17 @@ src/
     BuildingKit.ts          # Facade: shared types + BUILDERS registry
     kit/
       core.ts               # Build accumulator, palette, builder contract
-      buildings.ts          # cottage, chapel, barn, mill, boathouse, gatehouse
-      structures.ts         # silo, well, stall, fence, bridge, haystack, lamp
+      buildings.ts          # cottage, townhouse, tavern, smithy, ruin,
+                            # watchtower, chapel, barn, mill, boathouse,
+                            # gatehouse
+      structures.ts         # silo, well, stall, fence, stoneWall, bridge,
+                            # haystack, lamp, cart, crates, woodpile, shed,
+                            # trough, shrine, kiln
       terrain.ts            # terrace, ramp, road, jetty
     NavGrid.ts              # Walkable-surface graph + precomputed flow fields
     ObstacleField.ts        # Sub-cell collision push-out for thin props
-    Props.ts                # Scatter props: trees, graves, rubble, braziers
+    Props.ts                # Scatter props: trees, graves, rubble, braziers,
+                            # boulders, brambles, barrels
     textures.ts             # Generated canvas textures (cobblestone etc.)
     environment.ts          # EnvironmentSpec + applyEnvironment
     hollowmere/
@@ -199,6 +204,15 @@ merges the meshes per colour and then transforms all three into place. Building
 at identity is what makes the merge safe — `MergeMeshes` bakes world matrices and
 returns an identity-transform mesh, the same trick `RifleModel.buildRifle` uses.
 
+A **second merge pass** (`BlockMerge`) then collapses neighbouring structures
+and scatter fields into one mesh per (48 m map block, material). The village is
+~230 structures and the outline pass draws every mesh twice, so without it the
+map alone costs ~670 draws; with it, ~150, and frustum culling still throws away
+most of the map because a block is well inside the 78 m fog wall. Merging across
+placements is safe for the same reason it is safe within one, and outlines still
+trace each building because `renderOutline` expands vertices along their own
+normals.
+
 Layout gotchas that have already cost time:
 
 - A collider's top face must stay within `CONFIG.nav.stepHeight` (0.6) of the
@@ -208,6 +222,11 @@ Layout gotchas that have already cost time:
   -1 there. Flag C was originally centred on the well.
 - Ramps need `rotX` on the **collider**, not just the visual box, or the player
   walks into an invisible flat slab.
+- A run of fence or dry-stone wall must be split wherever a road, ramp or gate
+  crosses it. The nav graph honours thin walls (`severLinks`), so an unbroken
+  run genuinely routes bots the long way round — or seals a plot outright.
+  Enclosures like the burying ground need a gap of a couple of cells, and the
+  corners left open help more than a wider gate.
 
 ### Visual meshes and collider proxies are separate things
 
@@ -258,6 +277,18 @@ and it silently makes every ramp unwalkable.
 Reachability is a flood fill from the map's outer ring. That is what keeps bots
 off rooftops: a roof is a perfectly good standable surface, but nothing beside it
 is within a step, so it is never reached.
+
+**A link is cut when the segment between two cell centres crosses a solid box**
+(`severLinks`). Sampling one column per cell centre means a wall thinner than a
+cell — every fence, dry-stone field wall, ruin wall and gravestone — can sit
+*between* centres, leaving the cells either side both standable and linked. The
+flow field then points straight through the wall and the bot walks into it for
+the rest of the round; `ObstacleField` keeps the body out of the stone but
+cannot change where the field says to go. Testing the segment rather than
+blocking whole cells is what keeps the 1.6 m cottage doorways passable. A box
+only counts as a barrier where it stands more than `stepHeight` above both ends
+of the link, so decks, kerbs and the terrace's own top face don't cut the links
+leading onto themselves.
 
 One flow field per objective (5 flags + 2 home spawns) is precomputed at load;
 the map is static so nothing is ever recomputed. Bots read `nav.steer()` and

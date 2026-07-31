@@ -92,8 +92,14 @@ export const THATCH = "#5c5340";
 export const IRON = "#2f3338";
 export const PLANK = "#4a4034";
 export const DIRT = "#4a4438";
+/** Fired clay: chimney stacks, the forge, the charcoal kiln. */
+export const BRICK = "#5b4038";
+/** Lichened field stone — the dry walls and roadside shrines. */
+export const MOSS_STONE = "#4f574c";
 
 export const FLAME = "#ffbe63";
+/** Forge/kiln mouth — hotter and redder than a lantern's FLAME. */
+export const EMBER = "#ff7a2a";
 
 /**
  * Accumulator handed to each builder. Keeps the builders declarative — they

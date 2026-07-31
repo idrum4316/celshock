@@ -1,7 +1,8 @@
 /**
- * kit/buildings.ts — The big enterable/landmark buildings: cottage, chapel,
- * barn, mill, boathouse, gatehouse. All follow the contract in kit/core.ts
- * (origin-local geometry, no solid/pickable/collisions metadata).
+ * kit/buildings.ts — The big enterable/landmark buildings: cottage, townhouse,
+ * tavern, smithy, ruin, watchtower, chapel, barn, mill, boathouse, gatehouse.
+ * All follow the contract in kit/core.ts (origin-local geometry, no
+ * solid/pickable/collisions metadata).
  */
 import { Scene } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../../shaders/CelShader";
@@ -9,8 +10,12 @@ import {
   Build,
   type BuildParams,
   type Structure,
+  BRICK,
   DARK_STONE,
+  EMBER,
   FLAME,
+  IRON,
+  MOSS_STONE,
   PLANK,
   PLASTER,
   SLATE,
@@ -72,6 +77,294 @@ export function buildCottage(
     for (const sx of [-1, 1]) {
       b.glow(0.7, 0.8, 0.06, (sx * w) / 4, h * 0.55, -d / 2 - t / 2, "#ffb257");
     }
+  }
+  return b;
+}
+
+/**
+ * Two-storey townhouse: a jettied upper floor oversailing the ground floor,
+ * close-studded timber framing, steep slate roof, brick stack.
+ *
+ * The cottage is a village silhouette; this is a *street* silhouette — taller
+ * than it is wide, so a row of them walls a lane in and gives the square an
+ * actual skyline. `enterable` hollows the ground floor only; the upper storey
+ * is the ceiling.
+ */
+export function buildTownhouse(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  p: BuildParams = {},
+): Structure {
+  const b = new Build(scene, mats, "townhouse");
+  const w = p.width ?? 6.5;
+  const d = p.depth ?? 6.5;
+  const h = p.height ?? 6.8;
+  const t = 0.35;
+  const g = 3.3; // ground-floor ceiling
+  const up = h - g; // upper storey
+  const jut = 0.45; // how far the upper floor oversails
+
+  b.box(w + 0.5, 0.3, d + 0.5, 0, 0.15, 0, DARK_STONE); // plinth
+  if (p.enterable) {
+    b.box(w, 0.2, d, 0, 0.2, 0, PLANK);
+    b.doorWall(w, g, t, 0, g / 2, -d / 2, PLASTER, 1.6, 2.3);
+    b.wall(w, g, t, 0, g / 2, d / 2, PLASTER);
+    b.wall(t, g, d, -w / 2, g / 2, 0, PLASTER);
+    b.wall(t, g, d, w / 2, g / 2, 0, PLASTER);
+    // The upper floor doubles as the ceiling slab.
+    b.wall(w + jut * 2, up, d + jut * 2, 0, g + up / 2, 0, PLASTER);
+  } else {
+    b.box(w, g, d, 0, g / 2, 0, PLASTER);
+    b.block({ w, h: g, d, x: 0, y: g / 2, z: 0 });
+    b.box(w + jut * 2, up, d + jut * 2, 0, g + up / 2, 0, PLASTER);
+    b.block({ w: w + jut * 2, h: up, d: d + jut * 2, x: 0, y: g + up / 2, z: 0 });
+  }
+
+  // Bressumer beam under the overhang, then close studding above it — the
+  // vertical rhythm is what separates a townhouse from a taller cottage.
+  b.box(w + jut * 2 + 0.2, 0.34, d + jut * 2 + 0.2, 0, g + 0.17, 0, TIMBER);
+  const studs = Math.max(2, Math.round(w / 1.3));
+  for (let i = 0; i <= studs; i++) {
+    const x = -(w / 2) + (i / studs) * w;
+    for (const sz of [-1, 1]) {
+      b.box(0.2, up, 0.2, x, g + up / 2, sz * (d / 2 + jut), TIMBER);
+    }
+  }
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      b.box(0.28, g, 0.28, (sx * w) / 2, g / 2, (sz * d) / 2, TIMBER);
+      b.box(0.26, up, 0.26, sx * (w / 2 + jut), g + up / 2, sz * (d / 2 + jut), TIMBER);
+    }
+  }
+
+  b.gableRoof(w + jut * 2, d + jut * 2, 2.1, 0, h, 0, SLATE, 0.4);
+
+  // Brick stack, kept inside the footprint so it needs no collider of its own.
+  const ch = h + 2.6;
+  b.box(1.0, ch, 1.0, w / 2 - 0.6, ch / 2, d / 2 - 1.4, BRICK);
+  b.box(1.3, 0.24, 1.3, w / 2 - 0.6, ch, d / 2 - 1.4, DARK_STONE);
+
+  if (p.litWindows) {
+    for (const sx of [-1, 1]) {
+      b.glow(0.75, 0.9, 0.06, (sx * w) / 4, g * 0.55, -d / 2 - t / 2, "#ffb257");
+      b.glow(0.7, 0.85, 0.06, (sx * w) / 4, g + up * 0.5, -(d / 2 + jut) - 0.05, "#ffb257");
+    }
+  }
+  return b;
+}
+
+/**
+ * The tavern: the biggest house in the village and the only one with its
+ * lights still on. Two storeys, a covered porch on the -Z face, and a hanging
+ * sign. Always enterable — a taproom you can brawl in is the whole point.
+ */
+export function buildTavern(scene: Scene, mats: CelMaterialFactory): Structure {
+  const b = new Build(scene, mats, "tavern");
+  const w = 13;
+  const d = 10;
+  const g = 3.6;
+  const up = 3.4;
+  const h = g + up;
+  const t = 0.4;
+  const jut = 0.5;
+
+  b.box(w + 0.6, 0.3, d + 0.6, 0, 0.15, 0, DARK_STONE);
+  b.box(w, 0.2, d, 0, 0.2, 0, PLANK);
+  b.doorWall(w, g, t, 0, g / 2, -d / 2, PLASTER, 2.2, 2.6);
+  b.doorWall(w, g, t, 0, g / 2, d / 2, PLASTER, 1.8, 2.3); // yard door
+  b.wall(t, g, d, -w / 2, g / 2, 0, STONE);
+  b.wall(t, g, d, w / 2, g / 2, 0, STONE);
+  b.wall(w + jut * 2, up, d + jut * 2, 0, g + up / 2, 0, PLASTER);
+
+  b.box(w + jut * 2 + 0.2, 0.36, d + jut * 2 + 0.2, 0, g + 0.18, 0, TIMBER);
+  for (let i = -3; i <= 3; i++) {
+    for (const sz of [-1, 1]) {
+      b.box(0.22, up, 0.22, i * 1.9, g + up / 2, sz * (d / 2 + jut), TIMBER);
+    }
+  }
+  b.gableRoof(w + jut * 2, d + jut * 2, 2.4, 0, h, 0, THATCH, 0.5);
+
+  // Porch: four posts under a lean-to, deep enough to stand a fight in.
+  const px = 3.2;
+  const pz = -d / 2 - 2.2;
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      b.box(0.24, 2.7, 0.24, sx * px, 1.35, pz + sz * 1.6, TIMBER);
+    }
+  }
+  b.box(px * 2 + 1.2, 0.16, 4.4, 0, 2.85, pz, THATCH, { x: -0.16 });
+  b.box(px * 2 + 1.2, 0.24, 0.24, 0, 2.7, pz - 1.6, TIMBER);
+
+  // Hanging sign — the landmark read from down the road.
+  b.box(0.16, 0.16, 1.8, w / 2 - 1.4, g + 0.9, -d / 2 - 0.9, IRON);
+  b.box(1.4, 1.0, 0.1, w / 2 - 1.4, g + 0.3, -d / 2 - 1.6, PLANK);
+  b.glow(0.9, 0.5, 0.04, w / 2 - 1.4, g + 0.3, -d / 2 - 1.68, "#c9a15e");
+
+  // Chimneys at both gable ends.
+  for (const sx of [-1, 1]) {
+    const ch = h + 2.4;
+    b.box(1.1, ch, 1.2, (sx * w) / 2 - sx * 0.8, ch / 2, 0.6, BRICK);
+    b.box(1.4, 0.24, 1.5, (sx * w) / 2 - sx * 0.8, ch, 0.6, DARK_STONE);
+  }
+
+  for (const sx of [-1, 1]) {
+    b.glow(1.0, 1.0, 0.06, sx * 4.2, g * 0.55, -d / 2 - t / 2, "#ffb257");
+    b.glow(0.8, 0.9, 0.06, sx * 2.4, g + up * 0.5, -(d / 2 + jut) - 0.05, "#ffb257");
+  }
+  b.light("#ffb257", 24, 2.1, 0.22, 0, 2.6, pz);
+  return b;
+}
+
+/**
+ * The smithy: three stone walls open to the street, a brick forge still
+ * banked, and a stack taller than the roof. The open front makes it a piece
+ * of cover you fight *through* rather than around.
+ */
+export function buildSmithy(scene: Scene, mats: CelMaterialFactory): Structure {
+  const b = new Build(scene, mats, "smithy");
+  const w = 9;
+  const d = 8;
+  const h = 4.4;
+  const t = 0.5;
+
+  b.box(w, 0.2, d, 0, 0.1, 0, DARK_STONE);
+  b.wall(w, h, t, 0, h / 2, d / 2, STONE);
+  b.wall(t, h, d, -w / 2, h / 2, 0, STONE);
+  b.wall(t, h, d, w / 2, h / 2, 0, STONE);
+  // Open front: jambs and a lintel only.
+  b.doorWall(w, h, t, 0, h / 2, -d / 2, STONE, 5.0, 3.2);
+  for (const sx of [-1, 1]) {
+    b.box(0.3, h, 0.3, (sx * w) / 2, h / 2, -d / 2, TIMBER);
+  }
+  b.gableRoof(w, d, 1.8, 0, h, 0, SLATE);
+
+  // Forge and stack against the back wall.
+  b.wall(3.0, 1.5, 1.6, -1.6, 0.75, d / 2 - 1.3, BRICK);
+  // The coals sit *on* the forge bed rather than on its face: a glow plate
+  // hung off the front reads as a floating light box from the street. The
+  // flame above them is what stops the bed reading as a lamp — and the fixture
+  // light sits in front of and above the bed, so the brickwork under it is lit
+  // instead of being the one dark thing in the room.
+  b.glow(2.2, 0.24, 0.9, -1.6, 1.56, d / 2 - 1.3, EMBER);
+  b.glow(1.1, 0.55, 0.5, -1.6, 1.9, d / 2 - 1.3, FLAME);
+  const ch = h + 3.4;
+  b.box(1.8, ch, 1.6, -1.6, ch / 2, d / 2 - 1.2, BRICK);
+  b.box(2.1, 0.26, 1.9, -1.6, ch, d / 2 - 1.2, DARK_STONE);
+  b.light(EMBER, 20, 2.3, 0.45, -1.6, 2.1, d / 2 - 2.3);
+
+  // Anvil on its stump, and a quench barrel.
+  b.cyl(0.9, 1.1, 1.2, 8, 2.0, 0.45, 0.4, TIMBER);
+  b.box(1.2, 0.35, 0.45, 2.0, 1.05, 0.4, IRON);
+  b.cyl(0.4, 0.3, 0.45, 6, 2.7, 1.15, 0.4, IRON);
+  b.block({ w: 1.4, h: 1.3, d: 0.9, x: 2.0, y: 0.65, z: 0.4 });
+  b.cyl(1.1, 0.9, 1.0, 8, 3.2, 0.55, -1.8, PLANK);
+  b.cyl(0.12, 1.04, 1.04, 8, 3.2, 0.9, -1.8, IRON);
+  b.block({ w: 1.1, h: 1.1, d: 1.1, x: 3.2, y: 0.55, z: -1.8 });
+  return b;
+}
+
+/**
+ * A roofless stone shell: chest-high walls, one corner still carrying its
+ * chimney breast. Fills ground that would otherwise be empty with somewhere
+ * to *fight*, which a solid building never does — every wall here is cover on
+ * both sides and none of them reaches the eaves.
+ */
+export function buildRuin(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  p: BuildParams = {},
+): Structure {
+  const b = new Build(scene, mats, "ruin");
+  const w = p.width ?? 10;
+  const d = p.depth ?? 8;
+  const t = 0.5;
+
+  b.box(w, 0.2, d, 0, 0.1, 0, DARK_STONE);
+  // North wall: mostly standing, broken down at one end.
+  b.wall(w * 0.62, 3.4, t, -w * 0.19, 1.7, d / 2, MOSS_STONE);
+  b.wall(w * 0.38, 1.8, t, w * 0.31, 0.9, d / 2, MOSS_STONE);
+  // East wall standing tall, west wall down to a stub.
+  b.wall(t, 2.7, d * 0.72, w / 2, 1.35, d * 0.14, MOSS_STONE);
+  b.wall(t, 1.2, d * 0.5, -w / 2, 0.6, -d * 0.1, MOSS_STONE);
+  // South wall: two jambs either side of where the door was.
+  for (const sx of [-1, 1]) {
+    b.wall(w * 0.3, 1.5, t, sx * w * 0.35, 0.75, -d / 2, MOSS_STONE);
+  }
+  // The chimney breast — the bit of a burnt cottage that always survives.
+  b.wall(2.0, 5.2, 1.4, -w / 2 + 1.4, 2.6, d / 2 - 0.9, BRICK);
+  b.box(2.4, 0.24, 1.7, -w / 2 + 1.4, 5.2, d / 2 - 0.9, DARK_STONE);
+  // A fallen roof beam and the heap it came down in.
+  b.box(0.4, 0.4, d * 0.8, w * 0.1, 1.0, 0, TIMBER, { x: 0.5, z: 0.2 });
+  b.wall(2.4, 0.7, 2.0, w * 0.22, 0.35, -d * 0.2, DARK_STONE);
+  b.wall(1.8, 0.6, 1.6, -w * 0.28, 0.3, d * 0.22, DARK_STONE);
+  return b;
+}
+
+/**
+ * Timber watchtower: a railed platform 4.6 m up, reached by an external ramp.
+ * The only piece of verticality outside the barn loft and the chapel tower,
+ * and deliberately exposed on the way up.
+ *
+ * The ramp collider carries `rotX` and its top meets the platform within a
+ * step — get either wrong and the nav flood fill treats the whole thing as a
+ * wall.
+ */
+export function buildWatchtower(
+  scene: Scene,
+  mats: CelMaterialFactory,
+): Structure {
+  const b = new Build(scene, mats, "watchtower");
+  const legs = 1.9;
+  const deckY = 4.6;
+  const deck = 5.0;
+
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      b.box(0.34, deckY, 0.34, sx * legs, deckY / 2, sz * legs, TIMBER);
+      b.block({ w: 0.5, h: deckY, d: 0.5, x: sx * legs, y: deckY / 2, z: sz * legs });
+      // Cross-bracing, the diagonal that reads as scaffolding at distance.
+      b.box(0.2, 0.2, legs * 2.9, sx * legs, deckY * 0.45, 0, TIMBER, { x: 0.62 });
+    }
+  }
+  for (const sz of [-1, 1]) {
+    b.box(legs * 2.6, 0.2, 0.2, 0, deckY * 0.55, sz * legs, TIMBER, { z: 0.6 });
+  }
+
+  b.box(deck, 0.3, deck, 0, deckY, 0, PLANK);
+  b.block({ w: deck, h: 0.3, d: deck, x: 0, y: deckY, z: 0 });
+  // Railings on three sides; the -Z side is where the ramp arrives.
+  for (const sx of [-1, 1]) {
+    b.box(0.16, 1.1, deck, (sx * deck) / 2, deckY + 0.7, 0, TIMBER);
+  }
+  b.box(deck, 1.1, 0.16, 0, deckY + 0.7, deck / 2, TIMBER);
+  for (const sx of [-1, 1]) {
+    b.box(1.4, 1.1, 0.16, sx * (deck / 2 - 0.7), deckY + 0.7, -deck / 2, TIMBER);
+  }
+
+  // Canopy on four short posts — the silhouette that says "someone watched".
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      b.box(0.22, 2.4, 0.22, sx * 2.1, deckY + 1.35, sz * 2.1, TIMBER);
+    }
+  }
+  b.gableRoof(deck + 0.6, deck + 0.6, 1.1, 0, deckY + 2.55, 0, PLANK, 0.4);
+
+  // Signal brazier, still lit.
+  b.cyl(0.9, 0.85, 0.7, 8, 1.4, deckY + 0.6, 1.4, IRON);
+  b.glow(0.55, 0.5, 0.55, 1.4, deckY + 1.05, 1.4, EMBER);
+  b.light(EMBER, 22, 2.0, 0.4, 1.4, deckY + 1.1, 1.4);
+
+  // Access ramp, running up from -Z to the deck's south edge.
+  const rampLen = 12;
+  const rampW = 3;
+  const pitch = Math.atan2(deckY, rampLen);
+  const rz = -(deck / 2 + rampLen / 2);
+  b.box(rampW, 0.3, rampLen, 0, deckY / 2, rz, PLANK, { x: -pitch });
+  b.block({ w: rampW, h: 0.3, d: rampLen, x: 0, y: deckY / 2, z: rz, rotX: -pitch });
+  for (const sx of [-1, 1]) {
+    b.box(0.16, 1.0, rampLen, (sx * rampW) / 2, deckY / 2 + 0.6, rz, TIMBER, {
+      x: -pitch,
+    });
   }
   return b;
 }

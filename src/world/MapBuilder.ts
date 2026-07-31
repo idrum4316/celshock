@@ -1,7 +1,8 @@
 /**
  * MapBuilder.ts — Turns layout data into a GameMap: merges visual meshes per
- * material (frozen, unpickable), emits collider proxies, registers fixture
- * lights, builds NavGrid + ObstacleField.
+ * material (frozen, unpickable) and then again per map block (BlockMerge —
+ * neighbouring structures share a draw call), emits collider proxies,
+ * registers fixture lights, builds NavGrid + ObstacleField.
  * Invariants: collider() is the ONLY place colliders are created — invisible,
  * pickable, checkCollisions, metadata.solid === true, never merged — and it
  * records the WorldBox for navigation. Geometry added by any other path is
@@ -21,6 +22,9 @@ import { HollowmereLayout, type ScatterSpec } from "./hollowmere/layout";
 import { NavGrid } from "./NavGrid";
 import { ObstacleField } from "./ObstacleField";
 import {
+  buildBarrel,
+  buildBoulder,
+  buildBramble,
   buildDeadTree,
   buildFireDrum,
   buildFungus,
@@ -127,6 +131,9 @@ const SCATTER_BUILDERS = {
   fungus: buildFungus,
   rubble: buildRubble,
   fireDrum: buildFireDrum,
+  boulder: buildBoulder,
+  bramble: buildBramble,
+  barrel: buildBarrel,
 } as const;
 
 /** Lights carried by scatter props. Kept sparse — every one costs a shader slot. */
@@ -145,6 +152,9 @@ const PROP_HEIGHTS: Record<ScatterSpec["prop"], number> = {
   fungus: 1.1,
   rubble: 1.5,
   fireDrum: 2.1,
+  boulder: 1.4,
+  bramble: 1.6,
+  barrel: 1.3,
 };
 
 /**
@@ -192,6 +202,7 @@ export class MapBuilder {
     // Roads are merged into one draw call per material so overlapping junctions
     // (the central cross, etc.) don't z-fight between separate meshes.
     const roadParts: Mesh[] = [];
+    const blocks = new BlockMerge();
     for (const p of layout.placements) {
       const builder = BUILDERS[p.kind];
       const s: Structure = builder(this.scene, this.mats, p.params ?? {});
@@ -202,12 +213,8 @@ export class MapBuilder {
       for (const merged of mergeByMaterial(s.meshes, p.kind)) {
         merged.rotation.y = rotY;
         merged.position.addInPlace(origin);
-        if (isRoad) {
-          roadParts.push(merged);
-        } else {
-          if (!merged.metadata?.noOutline) addOutline(merged, 0.05);
-          visuals.push(merged);
-        }
+        if (isRoad) roadParts.push(merged);
+        else blocks.add(p.x, p.z, merged);
       }
       for (const box of s.colliders) {
         colliders.push(this.collider(`${p.kind}-col`, box, origin, rotY));
@@ -227,7 +234,13 @@ export class MapBuilder {
 
     // --- scattered dressing ---
     for (const spec of layout.scatter) {
-      this.scatterRegion(spec, visuals, colliders);
+      this.scatterRegion(spec, blocks, colliders);
+    }
+
+    // One more merge across neighbouring structures — see BlockMerge.
+    for (const merged of blocks.finish()) {
+      if (!merged.metadata?.noOutline) addOutline(merged, 0.05);
+      visuals.push(merged);
     }
 
     for (const m of visuals) this.markVisual(m);
@@ -320,7 +333,7 @@ export class MapBuilder {
    */
   private scatterRegion(
     spec: ScatterSpec,
-    visuals: Mesh[],
+    blocks: BlockMerge,
     colliders: Mesh[],
   ): void {
     const build = SCATTER_BUILDERS[spec.prop];
@@ -374,8 +387,7 @@ export class MapBuilder {
     }
 
     for (const merged of mergeByMaterial(parts, `${spec.prop}-field`)) {
-      if (!merged.metadata?.noOutline) addOutline(merged, 0.045);
-      visuals.push(merged);
+      blocks.add(spec.x, spec.z, merged);
     }
   }
 
@@ -500,6 +512,50 @@ export class MapBuilder {
     mesh.metadata = { solid: true };
     mesh.freezeWorldMatrix();
     return mesh;
+  }
+}
+
+/**
+ * Side of a merge block, in metres. 48 m over a 240 m map gives a 5x5 grid of
+ * blocks — coarse enough that the whole village collapses into a few dozen
+ * draws, fine enough that frustum culling still throws away most of the map.
+ * Well under the 78 m fog wall, so a block is never half-visible for long.
+ */
+const BLOCK_SIZE = 48;
+
+/**
+ * The second merge pass: collapses every structure and scatter field into one
+ * mesh per (map block, material).
+ *
+ * The per-structure merge in `mergeByMaterial` already turns a cottage into
+ * four meshes, but a dense village is ~200 structures and the outline pass
+ * draws each mesh twice. Grouping neighbours by block takes the map from ~670
+ * draws to ~150 without giving up culling: buildings are static, so the extra
+ * vertices cost nothing that the draw calls weren't already costing more of.
+ *
+ * Merging across placements is safe for the same reason it is safe within one:
+ * `MergeMeshes` bakes world matrices. Outlines still trace each building,
+ * because `renderOutline` expands vertices along their own normals and the
+ * buildings in a block are disjoint.
+ */
+class BlockMerge {
+  private blocks = new Map<string, Mesh[]>();
+
+  /** Files a positioned, per-material merged mesh under its map block. */
+  add(x: number, z: number, mesh: Mesh): void {
+    const key = `${Math.floor(x / BLOCK_SIZE)},${Math.floor(z / BLOCK_SIZE)}`;
+    const group = this.blocks.get(key);
+    if (group) group.push(mesh);
+    else this.blocks.set(key, [mesh]);
+  }
+
+  /** Merges each block and returns the meshes the caller should draw. */
+  finish(): Mesh[] {
+    const out: Mesh[] = [];
+    for (const [key, group] of this.blocks) {
+      out.push(...mergeByMaterial(group, `block${key}`));
+    }
+    return out;
   }
 }
 

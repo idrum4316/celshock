@@ -1,6 +1,7 @@
 /**
  * Props.ts — Scatter prop factories (trees, gravestones, lanterns, fungus,
- * logs, fire drums, rubble). Pure mesh builders: each assembles at the origin
+ * logs, fire drums, rubble, boulders, brambles, barrels). Pure mesh builders:
+ * each assembles at the origin
  * and returns a hierarchy; placement/merging/colliders are the caller's job.
  * Invariants: emissive parts (lantern glow, fire, fungus) MUST set
  * metadata.noOutline (and noGlow where they shouldn't feed the GlowLayer).
@@ -241,6 +242,95 @@ export function buildFireDrum(scene: Scene, mats: CelMaterialFactory): Mesh {
   fire.material = mats.getEmissive("#ff8a2a");
   fire.metadata = { noOutline: true };
   return drum;
+}
+
+/** Glacial boulder — hard cover in the fields and the woods. */
+export function buildBoulder(scene: Scene, mats: CelMaterialFactory): Mesh {
+  const rock = MeshBuilder.CreatePolyhedron(
+    "boulder",
+    { type: 1, size: 0.8 },
+    scene,
+  );
+  rock.position.y = 0.6;
+  rock.scaling.set(1.3 + Math.random() * 0.4, 0.85 + Math.random() * 0.3, 1.2);
+  rock.rotation.set(Math.random() * 0.4, Math.random() * Math.PI, 0.12);
+  rock.material = mats.get("#565d59");
+
+  // A shoulder stone, so the silhouette isn't a single tidy lump.
+  const chip = MeshBuilder.CreatePolyhedron(
+    "boulder-chip",
+    { type: 0, size: 0.42 },
+    scene,
+  );
+  chip.parent = rock;
+  chip.position.set(0.7, -0.35, 0.4);
+  chip.rotation.set(Math.random(), Math.random(), Math.random());
+  chip.material = mats.get("#474e4a");
+  return rock;
+}
+
+/**
+ * Dead bramble thicket. Non-blocking on purpose: it is visual undergrowth that
+ * fills bare ground without adding another thing for a bot to get wedged in.
+ */
+export function buildBramble(scene: Scene, mats: CelMaterialFactory): Mesh {
+  const wood = mats.get(DEAD_BARK);
+  const base = MeshBuilder.CreateCylinder(
+    "bramble",
+    { height: 0.4, diameterTop: 0.5, diameterBottom: 0.7, tessellation: 5 },
+    scene,
+  );
+  base.position.y = 0.2;
+  base.material = wood;
+
+  const canes = 6 + Math.floor(Math.random() * 4);
+  for (let i = 0; i < canes; i++) {
+    const a = (i / canes) * Math.PI * 2 + Math.random() * 0.5;
+    const h = 0.8 + Math.random() * 0.9;
+    const cane = MeshBuilder.CreateCylinder(
+      `cane${i}`,
+      { height: h, diameterTop: 0.03, diameterBottom: 0.09, tessellation: 4 },
+      scene,
+    );
+    cane.parent = base;
+    cane.position.set(Math.cos(a) * 0.22, h / 2, Math.sin(a) * 0.22);
+    cane.rotation.z = -Math.cos(a) * (0.5 + Math.random() * 0.6);
+    cane.rotation.x = Math.sin(a) * (0.5 + Math.random() * 0.6);
+    cane.material = wood;
+  }
+  return base;
+}
+
+/** Abandoned barrel — small hard cover, and the village's loose change. */
+export function buildBarrel(scene: Scene, mats: CelMaterialFactory): Mesh {
+  const barrel = MeshBuilder.CreateCylinder(
+    "barrel",
+    { height: 1.2, diameterTop: 0.8, diameterBottom: 0.9, tessellation: 8 },
+    scene,
+  );
+  barrel.position.y = 0.6;
+  barrel.material = mats.get("#4a4034");
+
+  for (const y of [-0.32, 0.3]) {
+    const hoop = MeshBuilder.CreateCylinder(
+      `hoop${y}`,
+      { height: 0.1, diameter: 0.96, tessellation: 8 },
+      scene,
+    );
+    hoop.parent = barrel;
+    hoop.position.y = y;
+    hoop.material = mats.get(DARK_METAL);
+  }
+
+  const lid = MeshBuilder.CreateCylinder(
+    "barrel-lid",
+    { height: 0.08, diameter: 0.72, tessellation: 8 },
+    scene,
+  );
+  lid.parent = barrel;
+  lid.position.y = 0.62;
+  lid.material = mats.get(BARK);
+  return barrel;
 }
 
 /** Collapsed masonry with rebar poking out — waist-high cover. */

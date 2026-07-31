@@ -22,23 +22,30 @@ import type { ControlPointDef, GrassRect, SpawnPointDef, WaterRect } from "../Ma
  * ```
  *                             N
  *    +---------------------------------------------------+
- *    |  * WARDEN GATEHOUSE                                |
- *    |        (-100,+110)                                 |
- *    |                                                    |
+ *    |  * WARDEN GATEHOUSE          ~ ASHWOOD ~           |
+ *    |        (-100,+110)         logging camp, kilns,    |
+ *    |                            watchtower (+34,+75)    |
  *    |     [A] CHAPEL              [D] FARMSTEAD          |
  *    |       (-60,+80)                (+80,+30)           |
- *    |       on a terrace             barn + hayloft      |
- *    |                                                    |
- *    |  [B] MILL          [C] SQUARE                      |
- *    |    (-85,-20)          (0,0)                        |
- *    |    sunken creek       the well                     |
- *    |                                                    |
- *    |                      [E] BOG DOCKS                 |
- *    |                          (+40,-85)                 |
+ *    |       on a terrace   ~ NORTH   barn + hayloft      |
+ *    |                       CROFTS ~                     |
+ *    |  [B] MILL          [C] SQUARE          ~ EAST      |
+ *    |    (-85,-20)          (0,0)              HOLDINGS ~|
+ *    |    sunken creek    tavern, smithy,      silo, lane |
+ *    |                    townhouse rows       (+86,-50)  |
+ *    |   ~ THE MOOR ~      ~ BURYING                      |
+ *    |  mire (-56,-96)       GROUND ~      [E] BOG DOCKS  |
+ *    |  crofts, kilns       (-24,-52)          (+40,-85)  |
  *    |                                    * BLIGHT CAMP   |
  *    |                                      (+105,-110)   |
  *    +---------------------------------------------------+
  * ```
+ *
+ * The village is deliberately *dense*: the districts above exist so that no
+ * approach to a flag is a walk across open ground. When adding to a region,
+ * check it against the emptiness it is meant to fill rather than dropping
+ * another cottage next to the last one — the ground between districts is what
+ * makes flanking readable.
  *
  * Design intent per flag:
  * - **A Chapel** — raised terrace, one ramp, enclosed nave. Easy to hold, slow
@@ -77,7 +84,16 @@ export interface Placement {
 
 /** Loose dressing sprinkled inside a circular region by rejection sampling. */
 export interface ScatterSpec {
-  prop: "deadTree" | "gravestone" | "log" | "fungus" | "rubble" | "fireDrum";
+  prop:
+    | "deadTree"
+    | "gravestone"
+    | "log"
+    | "fungus"
+    | "rubble"
+    | "fireDrum"
+    | "boulder"
+    | "bramble"
+    | "barrel";
   x: number;
   z: number;
   /** Region radius. */
@@ -149,6 +165,21 @@ const placements: Placement[] = [
   { kind: "cottage", x: -21, z: -9, rotY: -Math.PI / 2, params: { enterable: true } },
   { kind: "cottage", x: 9, z: -21, rotY: Math.PI, params: { ruined: true } },
   { kind: "cottage", x: -9, z: 23, params: { width: 9, enterable: true, litWindows: true } },
+  // The two trades that make the square a town rather than a crossroads. The
+  // tavern's porch and the smithy's open front both face the road, so each is
+  // a piece of cover you fight *through*.
+  { kind: "tavern", x: -30, z: 14, rotY: -Math.PI / 2 },
+  { kind: "smithy", x: -16, z: -31, rotY: Math.PI },
+  // Townhouses: taller than they are wide, jettied over the lane. A row of
+  // them is what gives the square a skyline instead of a ring of sheds.
+  { kind: "townhouse", x: -11, z: 8, params: { enterable: true, litWindows: true } },
+  { kind: "townhouse", x: 13, z: -14, params: { litWindows: true } },
+  // Market clutter — chest-high, so C keeps its "no cover taller than a
+  // stall" character while no longer being a car park.
+  { kind: "cart", x: -13, z: 3 },
+  { kind: "cart", x: 5, z: 11, rotY: Math.PI / 2, params: { ruined: true } },
+  { kind: "crates", x: 12, z: -3 },
+  { kind: "trough", x: -3, z: -11 },
 
   // ===== A — the chapel ========================================================
   // Terrace first: the chapel and its graveyard stand on top of it.
@@ -205,6 +236,140 @@ const placements: Placement[] = [
   { kind: "lamp", x: -46, z: -14 },
   { kind: "lamp", x: 40, z: 20 },
   { kind: "haystack", x: -40, z: 46 },
+
+  // ===== the west street: C -> B =============================================
+  // The old road out to the mill, built up on both sides so the crossing is a
+  // street fight rather than sixty metres of nothing.
+  { kind: "townhouse", x: -40, z: 7, params: { litWindows: true } },
+  { kind: "townhouse", x: -52, z: -6 },
+  { kind: "shed", x: -46, z: 2 },
+  { kind: "woodpile", x: -34, z: 4, rotY: Math.PI / 2, params: { length: 6 } },
+  { kind: "cart", x: -25, z: -8 },
+  { kind: "stoneWall", x: -50, z: 12, params: { length: 14 } },
+  { kind: "ruin", x: -53, z: 28, params: { width: 9, depth: 7 } },
+  { kind: "trough", x: -32, z: -6 },
+
+  // ===== the north crofts: C -> A ============================================
+  // Smallholdings on the road north, walled into paddocks. The stone walls
+  // matter more than the buildings: they break the sightline from the square
+  // to the chapel terrace, which used to be one unbroken lane.
+  { kind: "shrine", x: 4, z: 40 },
+  { kind: "townhouse", x: 9, z: 30, params: { width: 7 } },
+  { kind: "townhouse", x: -10, z: 31, params: { litWindows: true } },
+  { kind: "townhouse", x: 10, z: 44 },
+  { kind: "cottage", x: 9, z: 52, params: { width: 8, litWindows: true } },
+  { kind: "ruin", x: 2, z: 74 },
+  { kind: "shed", x: 14, z: 58 },
+  { kind: "woodpile", x: -6, z: 60, rotY: Math.PI / 2 },
+  { kind: "haystack", x: 17, z: 48 },
+  { kind: "cart", x: -4, z: 47 },
+  { kind: "stoneWall", x: 8, z: 66, params: { length: 20 } },
+  { kind: "stoneWall", x: -8, z: 52, rotY: Math.PI / 2, params: { length: 16 } },
+
+  // ===== ASHWOOD — the logging camp (north-east) =============================
+  // Dirt lanes off the farmstead road into the felled woods: charcoal kilns,
+  // stacked cordwood, and the Wardens' watchtower looking north.
+  { kind: "road", x: 34, z: 60, params: { length: 60, width: 7, surface: "dirt" } },
+  { kind: "road", x: 28, z: 90, rotY: Math.PI / 2, params: { length: 30, width: 7, surface: "dirt" } },
+  { kind: "watchtower", x: 20, z: 82 },
+  { kind: "kiln", x: 44, z: 68 },
+  { kind: "kiln", x: 22, z: 100 },
+  { kind: "shed", x: 41, z: 56 },
+  { kind: "shed", x: 45, z: 60, rotY: Math.PI / 2 },
+  { kind: "woodpile", x: 27, z: 66, params: { length: 6 } },
+  { kind: "woodpile", x: 40, z: 80, rotY: Math.PI / 2, params: { length: 7 } },
+  { kind: "woodpile", x: 52, z: 92, params: { length: 6 } },
+  { kind: "ruin", x: 56, z: 62, params: { width: 9, depth: 8 } },
+  { kind: "ruin", x: 34, z: 104, params: { width: 8, depth: 7 } },
+  { kind: "cart", x: 30, z: 76 },
+  { kind: "cart", x: 47, z: 98, params: { ruined: true } },
+  { kind: "crates", x: 38, z: 97 },
+  { kind: "trough", x: 44, z: 62 },
+  // Field walls, split where the lane runs through — a sealed run is a wall
+  // the flow field routes bots all the way around.
+  { kind: "stoneWall", x: 24, z: 72, params: { length: 12 } },
+  { kind: "stoneWall", x: 44, z: 72, params: { length: 12 } },
+  { kind: "stoneWall", x: 50, z: 84, rotY: Math.PI / 2, params: { length: 18 } },
+  { kind: "lamp", x: 29, z: 85 },
+  { kind: "shrine", x: 37, z: 46 },
+
+  // ===== the north-east fields: D -> ASHWOOD =================================
+  { kind: "ruin", x: 68, z: 76, params: { width: 10, depth: 8 } },
+  { kind: "stoneWall", x: 76, z: 64, params: { length: 22 } },
+  { kind: "woodpile", x: 60, z: 72, rotY: Math.PI / 2 },
+  { kind: "shed", x: 84, z: 72 },
+  { kind: "cart", x: 88, z: 62, params: { ruined: true } },
+
+  // ===== the east holdings ===================================================
+  // A dirt lane from the Blight gatehouse up the map's east side, with the
+  // outbuildings that give their approach cover it never had.
+  { kind: "road", x: 86, z: -50, params: { length: 100, width: 7, surface: "dirt" } },
+  { kind: "watchtower", x: 104, z: -30 },
+  { kind: "silo", x: 96, z: -8 },
+  { kind: "cottage", x: 100, z: 0, params: { width: 8, ruined: true } },
+  { kind: "shed", x: 92, z: -20 },
+  { kind: "shed", x: 96, z: -25, rotY: Math.PI / 2 },
+  { kind: "shed", x: 74, z: -50 },
+  { kind: "ruin", x: 72, z: -28, params: { width: 10, depth: 8 } },
+  { kind: "ruin", x: 72, z: -66, params: { width: 8, depth: 7 } },
+  { kind: "kiln", x: 66, z: -44 },
+  { kind: "stoneWall", x: 76, z: -12, rotY: Math.PI / 2, params: { length: 22 } },
+  { kind: "stoneWall", x: 98, z: -46, params: { length: 14 } },
+  { kind: "woodpile", x: 70, z: -6, rotY: Math.PI / 2 },
+  { kind: "cart", x: 79, z: -18 },
+  { kind: "cart", x: 92, z: -70 },
+  { kind: "crates", x: 92, z: -44 },
+  { kind: "crates", x: 78, z: -84 },
+  { kind: "trough", x: 92, z: -12 },
+  { kind: "shrine", x: 80, z: -60 },
+
+  // ===== THE BURYING GROUND (south of the square) ===========================
+  // A walled churchyard on the moor road. Walls are split at the corners and
+  // the gate is 7 m wide: enclosed ground has to stay reachable or the flood
+  // fill writes the whole plot off.
+  { kind: "road", x: -45, z: -70, rotY: Math.PI / 2, params: { length: 80, width: 7, surface: "dirt" } },
+  { kind: "road", x: 0, z: -76, params: { length: 24, width: 7, surface: "dirt" } },
+  { kind: "stoneWall", x: -24, z: -42, params: { length: 22 } },
+  { kind: "stoneWall", x: -35, z: -52, rotY: Math.PI / 2, params: { length: 18 } },
+  { kind: "stoneWall", x: -13, z: -52, rotY: Math.PI / 2, params: { length: 18 } },
+  { kind: "stoneWall", x: -31, z: -62, params: { length: 7 } },
+  { kind: "stoneWall", x: -17, z: -62, params: { length: 7 } },
+  { kind: "ruin", x: -29, z: -50, params: { width: 8, depth: 6 } },
+  { kind: "shrine", x: -24, z: -65 },
+  { kind: "lamp", x: -20, z: -44 },
+
+  // ===== the moor road (C -> E, C -> the mire) ==============================
+  { kind: "cottage", x: 9, z: -48, params: { width: 8, ruined: true } },
+  { kind: "townhouse", x: -11, z: -58 },
+  { kind: "ruin", x: 10, z: -66, params: { width: 9, depth: 7 } },
+  { kind: "ruin", x: -20, z: -80, params: { width: 9, depth: 7 } },
+  { kind: "shed", x: -6, z: -80 },
+  { kind: "kiln", x: 8, z: -84 },
+  { kind: "cart", x: -8, z: -68, params: { ruined: true } },
+  { kind: "stoneWall", x: -12, z: -88, params: { length: 18 } },
+  { kind: "haystack", x: -14, z: -34 },
+  { kind: "cottage", x: -22, z: -28, params: { width: 8 } },
+  { kind: "ruin", x: -32, z: -34, params: { width: 8, depth: 6 } },
+  { kind: "woodpile", x: -6, z: -46 },
+
+  // ===== THE MOOR and THE MIRE (south-west) =================================
+  // Flooded crofts around a second pool of standing water, with a jetty out
+  // into it. The far south-west used to be seventy metres of bare ground.
+  { kind: "road", x: -85, z: -61, params: { length: 24, width: 7, surface: "dirt" } },
+  { kind: "cottage", x: -52, z: -60, params: { ruined: true } },
+  { kind: "ruin", x: -64, z: -78, params: { width: 10, depth: 8 } },
+  { kind: "ruin", x: -90, z: -100, params: { width: 10, depth: 8 } },
+  { kind: "jetty", x: -56, z: -92, params: { length: 14 } },
+  { kind: "watchtower", x: -96, z: -70 },
+  { kind: "kiln", x: -70, z: -62 },
+  { kind: "shed", x: -44, z: -80 },
+  { kind: "shed", x: -78, z: -104 },
+  { kind: "woodpile", x: -56, z: -52, params: { length: 6 } },
+  { kind: "cart", x: -40, z: -60 },
+  { kind: "crates", x: -49, z: -76 },
+  { kind: "stoneWall", x: -56, z: -44, params: { length: 20 } },
+  { kind: "stoneWall", x: -82, z: -92, params: { length: 16 } },
+  { kind: "lamp", x: -60, z: -66 },
 
   // ===== D — the farmstead ====================================================
   { kind: "barn", x: 80, z: 34, rotY: Math.PI },
@@ -267,6 +432,49 @@ const scatter: ScatterSpec[] = [
   { prop: "rubble", x: -34, z: 92, radius: 8, count: 4, scale: [0.8, 1.2], blocking: true, clearance: 1.1 },
   { prop: "rubble", x: 22, z: -62, radius: 9, count: 4, scale: [0.8, 1.2], blocking: true, clearance: 1.1 },
   { prop: "rubble", x: -58, z: -38, radius: 9, count: 4, scale: [0.8, 1.2], blocking: true, clearance: 1.1 },
+  // Ashwood: what the loggers left standing, and the boulders they worked
+  // around. Brambles are non-blocking on purpose — undergrowth that fills bare
+  // ground without adding another thing for a bot to wedge itself in.
+  { prop: "deadTree", x: 40, z: 88, radius: 14, count: 12, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
+  { prop: "deadTree", x: 58, z: 104, radius: 12, count: 10, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
+  { prop: "bramble", x: 30, z: 70, radius: 16, count: 12, scale: [0.8, 1.4] },
+  { prop: "boulder", x: 52, z: 78, radius: 12, count: 6, scale: [0.8, 1.3], blocking: true, clearance: 1.0 },
+  { prop: "barrel", x: 42, z: 66, radius: 6, count: 4, blocking: true, clearance: 0.55 },
+  { prop: "bramble", x: 62, z: 46, radius: 14, count: 9, scale: [0.8, 1.4] },
+  // The north crofts.
+  { prop: "bramble", x: 4, z: 64, radius: 12, count: 8, scale: [0.8, 1.4] },
+  { prop: "boulder", x: -6, z: 72, radius: 9, count: 4, scale: [0.8, 1.3], blocking: true, clearance: 1.0 },
+  { prop: "bramble", x: -46, z: 34, radius: 14, count: 9, scale: [0.8, 1.4] },
+  // The strip between the creek's west bank and the valley ridge.
+  { prop: "deadTree", x: -113, z: -14, radius: 14, count: 9, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
+  { prop: "bramble", x: -112, z: 14, radius: 12, count: 7, scale: [0.8, 1.4] },
+  // The burying ground, inside its walls.
+  { prop: "gravestone", x: -18, z: -56, radius: 6, count: 12, scale: [0.8, 1.3], blocking: true, clearance: 0.6 },
+  { prop: "gravestone", x: -30, z: -58, radius: 5, count: 8, scale: [0.8, 1.3], blocking: true, clearance: 0.6 },
+  { prop: "deadTree", x: -24, z: -48, radius: 6, count: 3, scale: [1.0, 1.6], blocking: true, clearance: 0.55 },
+  // The moor south of the village.
+  { prop: "bramble", x: -30, z: -84, radius: 18, count: 14, scale: [0.8, 1.4] },
+  { prop: "boulder", x: -14, z: -94, radius: 14, count: 7, scale: [0.8, 1.3], blocking: true, clearance: 1.0 },
+  { prop: "deadTree", x: -6, z: -100, radius: 12, count: 10, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
+  { prop: "rubble", x: -20, z: -80, radius: 8, count: 4, scale: [0.8, 1.2], blocking: true, clearance: 1.1 },
+  // The mire and the crofts drowned around it.
+  { prop: "fungus", x: -56, z: -94, radius: 14, count: 5, scale: [0.8, 1.4] },
+  { prop: "log", x: -50, z: -90, radius: 8, count: 4, scale: [0.8, 1.2], blocking: true, clearance: 1.4 },
+  { prop: "deadTree", x: -70, z: -104, radius: 12, count: 9, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
+  { prop: "bramble", x: -66, z: -88, radius: 12, count: 8, scale: [0.8, 1.4] },
+  { prop: "rubble", x: -64, z: -78, radius: 8, count: 4, scale: [0.8, 1.2], blocking: true, clearance: 1.1 },
+  { prop: "barrel", x: -46, z: -80, radius: 6, count: 3, blocking: true, clearance: 0.55 },
+  { prop: "boulder", x: -84, z: -58, radius: 12, count: 6, scale: [0.8, 1.3], blocking: true, clearance: 1.0 },
+  // The east holdings, along the Blight's lane.
+  { prop: "boulder", x: 98, z: -30, radius: 13, count: 7, scale: [0.8, 1.3], blocking: true, clearance: 1.0 },
+  { prop: "bramble", x: 78, z: -40, radius: 14, count: 10, scale: [0.8, 1.4] },
+  { prop: "deadTree", x: 106, z: -16, radius: 12, count: 8, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
+  { prop: "barrel", x: 90, z: -46, radius: 6, count: 3, blocking: true, clearance: 0.55 },
+  { prop: "bramble", x: 100, z: 24, radius: 14, count: 10, scale: [0.8, 1.4] },
+  { prop: "boulder", x: 108, z: 44, radius: 10, count: 5, scale: [0.8, 1.3], blocking: true, clearance: 1.0 },
+  // Market spill in the square itself.
+  { prop: "barrel", x: 9, z: -12, radius: 7, count: 5, blocking: true, clearance: 0.55 },
+  { prop: "barrel", x: -14, z: 6, radius: 7, count: 4, blocking: true, clearance: 0.55 },
   // Braziers the defenders left burning. Sparse — each one costs a light slot.
   { prop: "fireDrum", x: -8, z: -14, radius: 3, count: 1, blocking: true, clearance: 0.6 },
   { prop: "fireDrum", x: 82, z: 22, radius: 4, count: 1, blocking: true, clearance: 0.6 },
@@ -319,6 +527,9 @@ const water: WaterRect[] = [
   // The bog: the pool the boathouse and jetties stand in. Stops short of the
   // boathouse ramp foot in the north and the Blight road in the east.
   { x: 37, z: -95, width: 50, depth: 42 },
+  // The mire: the moor's own pool, out where the south-west crofts drowned.
+  // One jetty runs into it; everything else around it is ruin.
+  { x: -56, z: -96, width: 34, depth: 26 },
 ];
 
 /**
@@ -345,6 +556,18 @@ const grass: GrassRect[] = [
   { x: 40, z: -88, width: 36, depth: 20, density: 0.8 },
   // The dead woods in the north-east corner, sparse under the trees.
   { x: 98, z: 88, width: 30, depth: 30, density: 0.5 },
+  // Ashwood's clearing, east of the logging lane.
+  { x: 48, z: 80, width: 16, depth: 20, density: 0.5 },
+  // The north crofts' paddock, east of the road out of the square.
+  { x: 12, z: 60, width: 14, depth: 16, density: 0.7 },
+  // The burying ground, inside its walls.
+  { x: -24, z: -52, width: 20, depth: 16, density: 0.6 },
+  // The moor, between the churchyard and the southern woods.
+  { x: -30, z: -84, width: 40, depth: 20, density: 0.55 },
+  // The mire's shallows — reeds, same trick as the bog.
+  { x: -56, z: -94, width: 30, depth: 20, density: 0.8 },
+  // The east holdings' rough grazing, east of the Blight lane.
+  { x: 98, z: -20, width: 16, depth: 26, density: 0.5 },
 ];
 
 export const HollowmereLayout: MapLayout = {

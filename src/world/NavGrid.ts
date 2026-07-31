@@ -7,8 +7,11 @@
  * collider's top-face PLANE at the cell centre, not its AABB: half-thickness
  * is h/2/cos(rotX), slope is tan(rotX) — the h/2*cos / -tan sign error makes
  * every ramp silently unwalkable. Reachability is a flood fill from open
- * ground, which is what keeps bots off rooftops. stepHeight must match
- * ObstacleField. Too coarse to be the only collision test — see ObstacleField.
+ * ground, which is what keeps bots off rooftops. Links crossing a solid box
+ * are severed (severLinks) — without it every wall thinner than a cell is
+ * invisible to the graph and bots walk into fences forever. stepHeight must
+ * match ObstacleField. Too coarse to be the only collision test — see
+ * ObstacleField.
  */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -60,6 +63,8 @@ const NEIGHBOURS: [number, number][] = [
   [-1, 1],
   [-1, -1],
 ];
+/** Index of the NEIGHBOURS entry pointing the other way. Keep in step. */
+const OPPOSITE = [1, 0, 3, 2, 7, 6, 5, 4];
 
 /** A precomputed route to one goal: per-surface step count, lower is closer. */
 export class FlowField {
@@ -214,6 +219,9 @@ export class NavGrid {
       }
     }
 
+    // Links that pass straight through a wall thinner than a cell.
+    this.severLinks(boxes);
+
     // Anything with a solid box sitting on top of it is not standable.
     this.clearBlocked(boxes);
 
@@ -240,6 +248,76 @@ export class NavGrid {
         if (next < 0 || this.walkable[next] || this.blocked[next]) continue;
         this.walkable[next] = 1;
         queue.push(next);
+      }
+    }
+  }
+
+  /**
+   * Cuts every link whose path between two cell centres runs through a solid
+   * box.
+   *
+   * The rasteriser samples one column per cell *centre*, so anything thinner
+   * than a cell — every fence, field wall, ruin wall and gravestone — can sit
+   * between two centres and leave the cells either side both standable and
+   * linked. The flow field then points straight through the wall, and the bot
+   * walks into it for the rest of the round: `ObstacleField` keeps its body out
+   * of the stone but cannot change where the field says to go. This was already
+   * true of the chapel's graveyard fence and got much louder once the village
+   * grew walls everywhere.
+   *
+   * Testing the *segment between the two centres* fixes it without sealing
+   * doorways the way blocking whole cells would: a 1.6 m cottage door still has
+   * links running through the gap, while a 0.5 m wall cuts every link crossing
+   * it.
+   *
+   * A box only counts as a barrier where it stands more than a step above both
+   * ends of the link. Otherwise a bridge deck, a kerb or the terrace's own top
+   * face would cut the links leading onto itself.
+   */
+  private severLinks(boxes: WorldBox[]): void {
+    const linkStride = NEIGHBOURS.length;
+    const step = CONFIG.nav.stepHeight;
+    for (const box of boxes) {
+      if (box.w > 200 || box.d > 200) continue;
+      // Ramps are surfaces to walk up, never barriers.
+      if (box.rotX !== 0) continue;
+      const top = box.cy + box.h / 2;
+      const bottom = box.cy - box.h / 2;
+      const reach = (Math.abs(box.w) + Math.abs(box.d)) / 2 + this.cellSize * 2;
+      const minX = Math.max(0, this.toCell(box.cx - reach));
+      const maxX = Math.min(this.dim - 1, this.toCell(box.cx + reach));
+      const minZ = Math.max(0, this.toCell(box.cz - reach));
+      const maxZ = Math.min(this.dim - 1, this.toCell(box.cz + reach));
+
+      for (let cx = minX; cx <= maxX; cx++) {
+        for (let cz = minZ; cz <= maxZ; cz++) {
+          const cell = cz * this.dim + cx;
+          if (this.counts[cell] === 0) continue;
+          const wx = this.toWorld(cx);
+          const wz = this.toWorld(cz);
+          for (let n = 0; n < linkStride; n++) {
+            const [dx, dz] = NEIGHBOURS[n];
+            const nx = cx + dx;
+            const nz = cz + dz;
+            if (nx < 0 || nz < 0 || nx >= this.dim || nz >= this.dim) continue;
+            if (!segmentHitsBox(box, wx, wz, this.toWorld(nx), this.toWorld(nz))) {
+              continue;
+            }
+            for (let si = 0; si < this.counts[cell]; si++) {
+              const surface = cell * MAX_SURFACES + si;
+              const other = this.links[surface * linkStride + n];
+              if (other < 0) continue;
+              const y = Math.max(this.heights[surface], this.heights[other]);
+              // Low enough to step over, or high enough to walk under.
+              if (top <= y + step || bottom > y + HEADROOM) continue;
+              this.links[surface * linkStride + n] = -1;
+              const back = OPPOSITE[n];
+              if (this.links[other * linkStride + back] === surface) {
+                this.links[other * linkStride + back] = -1;
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -438,6 +516,53 @@ function verticalSpan(
   // A slab tilted by theta is h/cos(theta) thick measured vertically.
   const cx = Math.max(Math.abs(Math.cos(box.rotX)), 1e-4);
   return { bottom: top - box.h / cx, top };
+}
+
+/**
+ * True when the XZ segment from (x0,z0) to (x1,z1) crosses the box's footprint.
+ * Slab test in the box's own frame, so a rotated wall is handled without
+ * inflating it to an AABB. Callers must exclude pitched boxes — a ramp's
+ * footprint is not its slab.
+ */
+function segmentHitsBox(
+  box: WorldBox,
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+): boolean {
+  const c = Math.cos(-box.rotY);
+  const s = Math.sin(-box.rotY);
+  const dx0 = x0 - box.cx;
+  const dz0 = z0 - box.cz;
+  const dx1 = x1 - box.cx;
+  const dz1 = z1 - box.cz;
+  const ax = dx0 * c + dz0 * s;
+  const az = -dx0 * s + dz0 * c;
+  const bx = dx1 * c + dz1 * s;
+  const bz = -dx1 * s + dz1 * c;
+
+  let t0 = 0;
+  let t1 = 1;
+  const half: [number, number] = [box.w / 2, box.d / 2];
+  const from: [number, number] = [ax, az];
+  const dir: [number, number] = [bx - ax, bz - az];
+  for (let axis = 0; axis < 2; axis++) {
+    const d = dir[axis];
+    const p = from[axis];
+    const h = half[axis];
+    if (Math.abs(d) < 1e-9) {
+      if (Math.abs(p) > h) return false;
+      continue;
+    }
+    let near = (-h - p) / d;
+    let far = (h - p) / d;
+    if (near > far) [near, far] = [far, near];
+    if (near > t0) t0 = near;
+    if (far < t1) t1 = far;
+    if (t0 > t1) return false;
+  }
+  return true;
 }
 
 /**

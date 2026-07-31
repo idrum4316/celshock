@@ -14,6 +14,11 @@ export type { BoxSpec, BuildParams, LocalLight, Structure } from "./kit/core";
 
 import {
   buildCottage,
+  buildTownhouse,
+  buildTavern,
+  buildSmithy,
+  buildRuin,
+  buildWatchtower,
   buildChapel,
   buildBarn,
   buildMill,
@@ -25,15 +30,28 @@ import {
   buildWell,
   buildStall,
   buildFence,
+  buildStoneWall,
   buildBridge,
   buildHaystack,
   buildLampPost,
+  buildCart,
+  buildCrates,
+  buildWoodpile,
+  buildShed,
+  buildTrough,
+  buildShrine,
+  buildKiln,
 } from "./kit/structures";
 import { buildTerrace, buildRamp, buildRoad, buildJetty } from "./kit/terrain";
 
 /** Every builder, keyed by the name the layout data uses. */
 export const BUILDERS = {
   cottage: buildCottage,
+  townhouse: buildTownhouse,
+  tavern: buildTavern,
+  smithy: buildSmithy,
+  ruin: buildRuin,
+  watchtower: buildWatchtower,
   chapel: buildChapel,
   barn: buildBarn,
   silo: buildSilo,
@@ -43,6 +61,7 @@ export const BUILDERS = {
   well: buildWell,
   stall: buildStall,
   fence: buildFence,
+  stoneWall: buildStoneWall,
   bridge: buildBridge,
   terrace: buildTerrace,
   ramp: buildRamp,
@@ -50,6 +69,13 @@ export const BUILDERS = {
   jetty: buildJetty,
   haystack: buildHaystack,
   lamp: buildLampPost,
+  cart: buildCart,
+  crates: buildCrates,
+  woodpile: buildWoodpile,
+  shed: buildShed,
+  trough: buildTrough,
+  shrine: buildShrine,
+  kiln: buildKiln,
 } as const;
 
 export type BuilderKind = keyof typeof BUILDERS;
