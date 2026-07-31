@@ -118,6 +118,48 @@ export class NavGrid {
     return n;
   }
 
+  /**
+   * Raw internals, for the map editor's overlay and validation passes.
+   *
+   * Returns LIVE references, not copies — the arrays total ~600 KB and copying
+   * them per redraw would cost more than everything the caller does with them.
+   * The grid is built once and read-only from then on (see the header), so
+   * sharing them is safe as long as callers treat them that way: **read,
+   * never write**.
+   *
+   * `walkable` is what the flood fill reached; a surface with `counts > 0`
+   * that is neither `blocked` nor `walkable` is standable ground nothing can
+   * get to — a sealed courtyard or a deck out of step range, which is exactly
+   * what the editor wants to draw in red.
+   */
+  debugSnapshot(): {
+    dim: number;
+    cellSize: number;
+    origin: number;
+    maxSurfaces: number;
+    stepHeight: number;
+    heights: Float32Array;
+    counts: Uint8Array;
+    walkable: Uint8Array;
+    blocked: Uint8Array;
+    links: Int32Array;
+    neighbours: readonly [number, number][];
+  } {
+    return {
+      dim: this.dim,
+      cellSize: this.cellSize,
+      origin: this.origin,
+      maxSurfaces: MAX_SURFACES,
+      stepHeight: CONFIG.nav.stepHeight,
+      heights: this.heights,
+      counts: this.counts,
+      walkable: this.walkable,
+      blocked: this.blocked,
+      links: this.links,
+      neighbours: NEIGHBOURS,
+    };
+  }
+
   // --- construction --------------------------------------------------------
 
   /**

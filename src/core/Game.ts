@@ -38,7 +38,9 @@ import { ShadowSystem } from "../systems/ShadowSystem";
 import { Sky } from "../systems/Sky";
 import { WaterSystem } from "../systems/WaterSystem";
 import { applyEnvironment } from "../world/environment";
+import type { EditorSession } from "../editor";
 import { HollowmereEnvironment } from "../world/hollowmere/environment";
+import { HollowmereLayout } from "../world/hollowmere/layout";
 import { MapBuilder, type GameMap } from "../world/MapBuilder";
 import { DeployScreen } from "../ui/DeployScreen";
 import { HUD } from "../ui/HUD";
@@ -50,8 +52,16 @@ import { Sfx } from "./Sfx";
 /**
  * `menu` -> `deploy` -> `playing`, with `deploy` re-entered on every death,
  * and `roundover` when one side runs out of tickets.
+ *
+ * `editor` sits outside that cycle: it is a dev-only side state reachable from
+ * anywhere with F2, and leaving it always restarts the round rather than
+ * resuming, because the systems that cache the GameMap cannot be handed a map
+ * that was rebuilt underneath them.
  */
-type GameState = "menu" | "deploy" | "playing" | "roundover";
+type GameState = "menu" | "deploy" | "playing" | "roundover" | "editor";
+
+/** Grass bends around combatants; in the editor there are none. */
+const EMPTY_PUSHERS: readonly Combatant[] = [];
 
 /**
  * Top-level orchestrator: owns the engine/scene, all systems, the game state
@@ -83,6 +93,15 @@ export class Game {
   private grass: GrassSystem;
   private post: HorrorPost;
   private player: Player;
+  private canvas: HTMLCanvasElement;
+  /**
+   * Kept as a field, not a constructor local: the exclusion scan in the
+   * constructor runs once, so anything created later (the editor's proxies and
+   * overlays) has to exclude itself by hand and needs the layer to do it.
+   */
+  private glow: GlowLayer;
+  /** Non-null only while the state is "editor". Dev builds only. */
+  private editor: EditorSession | null = null;
 
   private state: GameState = "menu";
   private map: GameMap | null = null;
@@ -101,6 +120,7 @@ export class Game {
   private playerDeaths = 0;
 
   constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
     this.engine = new Engine(canvas, true, { stencil: true });
     this.scene = new Scene(this.engine);
     this.scene.collisionsEnabled = true;
@@ -131,6 +151,7 @@ export class Game {
       blurKernelSize: g.glowKernel,
     });
     glow.intensity = g.glowIntensity;
+    this.glow = glow;
     // Vignette/grain/aberration go last, over the finished frame.
     this.post = new HorrorPost(this.scene, this.cameraSys.camera);
     this.sfx = new Sfx();
@@ -210,6 +231,17 @@ export class Game {
     window.addEventListener("keydown", () => this.sfx.unlock(), { once: true });
     window.addEventListener("resize", () => this.engine.resize());
 
+    // The map editor is a development tool: the whole of src/editor is behind
+    // a dynamic import so none of it reaches a production bundle.
+    if (import.meta.env.DEV) {
+      window.addEventListener("keydown", (e) => {
+        if (e.code === "F2") {
+          e.preventDefault();
+          void this.toggleEditor();
+        }
+      });
+    }
+
     this.hud.showMenu();
     // Debug/test handle (used by automated smoke tests).
     (window as unknown as { __celshock: Game }).__celshock = this;
@@ -238,12 +270,107 @@ export class Game {
       case "playing":
         this.updateGameplay(dt);
         break;
+      case "editor":
+        this.updateEditor(dt);
+        break;
     }
 
     this.hud.update(dt);
     this.post.update(dt);
     this.sky.update(dt);
     this.scene.render();
+  }
+
+  /**
+   * Enters or leaves the map editor. Dev-only, and the import is dynamic so
+   * `src/editor` never reaches a production bundle.
+   *
+   * Leaving always restarts the round rather than resuming. BattleSystem,
+   * ConquestSystem, Minimap and DeployScreen all cache the GameMap they were
+   * handed, so the only safe way back from a session that may have rebuilt the
+   * map is to build a fresh one and re-point all of them — which is exactly
+   * what `startRound` does.
+   */
+  private async toggleEditor(): Promise<void> {
+    // Gating the whole body, not just the keybind: this is what makes the
+    // dynamic import unreachable under `vite build`, so Rollup drops the
+    // editor chunk entirely rather than emitting an orphan nobody fetches.
+    if (!import.meta.env.DEV) return;
+    if (this.editor) {
+      // Leaving rebuilds the map from the layout module, so anything edited
+      // and not written to disk is gone. Until the editor can save, that is
+      // every edit — ask before throwing the work away.
+      if (
+        this.editor.hasUnsavedChanges &&
+        !window.confirm("Discard unsaved map edits and return to the game?")
+      ) {
+        return;
+      }
+      this.editor.dispose();
+      this.editor = null;
+      this.hud.setEditing(false);
+      this.startRound();
+      return;
+    }
+
+    const { createEditor } = await import("../editor");
+    // A pending F2 while the module loaded, or a round change underneath it.
+    if (this.editor) return;
+
+    this.state = "editor";
+    // Rebuild per-item: the shipped block merge collapses neighbouring
+    // structures into one mesh, which is exactly what makes an individual
+    // placement unselectable.
+    this.map?.dispose();
+    this.combat.clearTransient();
+    this.map = this.mapBuilder.build(HollowmereLayout, HollowmereEnvironment, {
+      editor: true,
+    });
+    this.shadows.setCasters(this.map.visuals);
+    this.water.build(this.map.water, HollowmereEnvironment);
+    this.grass.build(this.map.grass, HollowmereEnvironment, this.map.colliderBoxes);
+    this.hud.hideOverlay();
+    this.hud.setEditing(true);
+    this.deployScreen.hide();
+    this.minimap.setVisible(false);
+    this.player.setBodyHidden(true);
+    if (document.pointerLockElement) document.exitPointerLock();
+
+    this.editor = createEditor({
+      canvas: this.canvas,
+      camera: this.cameraSys.camera,
+      input: this.input,
+      scene: this.scene,
+      glow: this.glow,
+      map: this.map,
+      layout: HollowmereLayout,
+      environment: HollowmereEnvironment,
+      fixtures: this.lighting.fixtures,
+      applyEnvironment: (env) => applyEnvironment(this.scene, env, this.mats),
+      invalidateShadows: () => this.shadows.invalidate(),
+    });
+    // Open where the player was standing, looking the way they were looking.
+    this.editor.warpTo(
+      this.cameraSys.camera.position.clone(),
+      this.cameraSys.aimYaw,
+      this.cameraSys.aimPitch,
+    );
+  }
+
+  /**
+   * The editor frame. Same tail as gameplay minus the player: no aim assist,
+   * no blob shadows, no carried lamp, no grass pushers.
+   */
+  private updateEditor(dt: number): void {
+    const editor = this.editor;
+    if (!editor) return;
+    editor.update(dt);
+    // The shadow window follows the camera itself here — there is no player to
+    // centre it on, and the same forward bias keeps what's ahead covered.
+    this.shadowFocus
+      .copyFrom(this.cameraSys.camera.position)
+      .addInPlace(editor.forward.scale(8));
+    this.updateSceneForCamera(dt, this.shadowFocus, null, EMPTY_PUSHERS);
   }
 
   private startRound(): void {
@@ -254,7 +381,7 @@ export class Game {
 
     applyEnvironment(this.scene, HollowmereEnvironment, this.mats);
     this.sky.apply(HollowmereEnvironment);
-    this.map = this.mapBuilder.build();
+    this.map = this.mapBuilder.build(HollowmereLayout, HollowmereEnvironment);
     // The shadow camera follows the environment's key light, and its casters
     // are the fresh map's visuals — last round's meshes are now disposed.
     this.shadows.setLightDirection(HollowmereEnvironment.lighting.direction);
@@ -429,27 +556,51 @@ export class Game {
       this.battle.hittablesAgainst(this.player.team),
     );
     this.cameraSys.update(dt, this.input, this.player.position, assist);
-    this.mats.updateCamera(this.cameraSys.camera.position);
     // Shadows follow the player (biased a little along the view so the
     // window covers what's ahead); outline ink thins with the same camera.
     this.shadowFocus
       .copyFrom(this.player.position)
       .addInPlace(this.cameraSys.forward.scale(8));
-    this.shadows.update(this.shadowFocus, this.mats);
-    this.shadows.updateBlobs(
-      this.player,
-      this.battle.bots,
-      this.cameraSys.camera.position,
-    );
+    this.updateSceneForCamera(dt, this.shadowFocus, this.player, this.combatants);
+  }
+
+  /**
+   * The half of the tail that needs only a posed camera — shared with the map
+   * editor, which has no player, no bots and no aim assist but still has to
+   * keep fog, shadows, outlines, lights, water, grass and audio agreeing about
+   * where the viewer is.
+   *
+   * The order here is the load-bearing part of the sequence above and must not
+   * be rearranged. `player` is null in the editor: it gates exactly the two
+   * steps that need a body — blob shadows and the carried shoulder lamp — and
+   * gating them in place is what keeps both callers on one ordering.
+   */
+  private updateSceneForCamera(
+    dt: number,
+    shadowFocus: Vector3,
+    player: Player | null,
+    pushers: readonly Combatant[],
+  ): void {
+    this.mats.updateCamera(this.cameraSys.camera.position);
+    this.shadows.update(shadowFocus, this.mats);
+    if (player) {
+      this.shadows.updateBlobs(
+        player,
+        this.battle.bots,
+        this.cameraSys.camera.position,
+      );
+    }
     updateOutlineScales(this.cameraSys.camera.position);
-    const lc = CONFIG.lighting;
-    this.lighting.setCarried(
-      "player-lamp",
-      this.player.position.add(new Vector3(0, lc.lampHeight, 0)),
-      lc.lampColor,
-      lc.lampRange,
-      lc.lampIntensity,
-    );
+    if (player) {
+      const lc = CONFIG.lighting;
+      this.lighting.setCarried(
+        "player-lamp",
+        player.position.add(new Vector3(0, lc.lampHeight, 0)),
+        lc.lampColor,
+        lc.lampRange,
+        lc.lampIntensity,
+      );
+    }
     this.lighting.update(dt, this.cameraSys.camera.position, this.mats);
     // Water reads the same camera and the same winning light set, so it
     // updates here too — before anything later can move the camera.
@@ -465,7 +616,7 @@ export class Game {
       dt,
       this.cameraSys.camera.position,
       this.lighting.activeLights,
-      this.combatants,
+      pushers,
     );
     // Same rule as the lights and the fog: this has to follow the camera.
     this.sfx.setListener(this.cameraSys.camera.position, this.cameraSys.forward);

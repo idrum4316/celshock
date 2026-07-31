@@ -10,17 +10,24 @@
  * stand in for (sparks land on colliders). Visuals must never be pickable or
  * solid. Builders arrive at identity transform; merging then transforming is
  * what makes MergeMeshes safe. Must NOT special-case Hollowmere — a second map
- * is one new layout file.
+ * is one new layout file, and build() takes the layout and environment as
+ * arguments precisely so nothing here can reach for a named one.
+ * Scatter runs off the layout's seeded RNG, never Math.random: blocking props
+ * emit colliders, and colliders decide navigation.
+ * `build(..., { editor: true })` keeps geometry per layout item, tags it with
+ * metadata.editorRef and indexes it — at the cost of the BlockMerge pass and
+ * roughly 10x the draw calls. Authoring only; never measure frame cost there.
  */
 import { Material, Mesh, MeshBuilder, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
 import type { LightingSystem } from "../systems/LightingSystem";
 import { BUILDERS, type BoxSpec, type Structure } from "./BuildingKit";
-import { HollowmereEnvironment } from "./hollowmere/environment";
-import { HollowmereLayout, type ScatterSpec } from "./hollowmere/layout";
+import type { EnvironmentSpec } from "./environment";
+import type { MapLayout, ScatterSpec } from "./layout";
 import { NavGrid } from "./NavGrid";
 import { ObstacleField } from "./ObstacleField";
+import { mulberry32 } from "./rng";
 import {
   buildBarrel,
   buildBoulder,
@@ -101,6 +108,50 @@ export interface WorldBox {
   rotY: number;
 }
 
+/**
+ * Which layout item a mesh came from. Present in `metadata.editorRef` only on
+ * editor builds — the shipped path merges across placements, so a mesh there
+ * belongs to a whole map block rather than to any one item.
+ */
+export interface EditorRef {
+  list: "placements" | "scatter";
+  index: number;
+}
+
+/** One layout item's geometry, so the editor can move or rebuild it alone. */
+export interface EditorItem {
+  visuals: Mesh[];
+  colliders: Mesh[];
+  /** Positions in `GameMap.colliderBoxes` of this item's boxes. */
+  boxes: number[];
+  /**
+   * The builder's own collider specs, in the structure's local space, in the
+   * same order as `colliders`/`boxes`. Kept so a move or rotate can be
+   * recomputed exactly — `repositionItem` needs the pre-transform boxes, and
+   * the world-space ones have already had the placement baked into them.
+   */
+  localBoxes: BoxSpec[];
+}
+
+/**
+ * Per-item geometry index. Built only when `build()` is given `editor: true`;
+ * that mode also skips the BlockMerge pass, because merging across placements
+ * is exactly what makes a single placement unrecoverable afterwards.
+ */
+export interface EditorIndex {
+  placements: EditorItem[];
+  scatter: EditorItem[];
+}
+
+/** Opt-in build behaviour. Absent in the shipped path. */
+export interface BuildOptions {
+  /**
+   * Keep geometry per layout item and tag it, at the cost of the block merge:
+   * ~1740 draws against ~150. Fine for authoring, never for play.
+   */
+  editor?: boolean;
+}
+
 /** The built world: geometry is in the scene, this is the queryable part. */
 export interface GameMap {
   size: number;
@@ -120,6 +171,8 @@ export interface GameMap {
   water: WaterRect[];
   /** Grass fields from the layout; empty when the map is bald. */
   grass: GrassRect[];
+  /** Per-item geometry. Editor builds only — undefined in play. */
+  editor?: EditorIndex;
   dispose(): void;
 }
 
@@ -189,21 +242,42 @@ export class MapBuilder {
   /** World-space collider boxes, accumulated by `collider()` during a build. */
   private boxes: WorldBox[] = [];
 
-  build(): GameMap {
+  /**
+   * The layout item currently being built, on editor builds only. `collider()`
+   * files its box index here so the editor can find one item's boxes again
+   * without re-deriving them. Null in the shipped path and between items.
+   */
+  private item: EditorItem | null = null;
+
+  /**
+   * Builds a map. The layout and environment are arguments, not imports: a
+   * second map is a second layout file and nothing here changes.
+   */
+  build(layout: MapLayout, env: EnvironmentSpec, opts?: BuildOptions): GameMap {
     const size = CONFIG.map.size;
-    const layout = HollowmereLayout;
     const visuals: Mesh[] = [];
     const colliders: Mesh[] = [];
     this.boxes = [];
+    // One stream for the whole build, so scatter regions stay reproducible in
+    // authored order. Seeding per region would be stabler under editing but
+    // would let two regions with the same seed sample identically.
+    const rng = mulberry32(layout.seed ?? 0x484c);
+    const forEditor = opts?.editor === true;
+    const index: EditorIndex | undefined = forEditor
+      ? { placements: [], scatter: [] }
+      : undefined;
+    this.item = null;
 
-    this.buildValley(size, visuals, colliders);
+    this.buildValley(size, env, visuals, colliders);
 
     // --- authored structures ---
     // Roads are merged into one draw call per material so overlapping junctions
     // (the central cross, etc.) don't z-fight between separate meshes.
     const roadParts: Mesh[] = [];
     const blocks = new BlockMerge();
-    for (const p of layout.placements) {
+    for (const [i, p] of layout.placements.entries()) {
+      const item = index ? newItem(index.placements) : null;
+      this.item = item;
       const builder = BUILDERS[p.kind];
       const s: Structure = builder(this.scene, this.mats, p.params ?? {});
       const origin = new Vector3(p.x, p.y ?? 0, p.z);
@@ -213,17 +287,43 @@ export class MapBuilder {
       for (const merged of mergeByMaterial(s.meshes, p.kind)) {
         merged.rotation.y = rotY;
         merged.position.addInPlace(origin);
-        if (isRoad) roadParts.push(merged);
-        else blocks.add(p.x, p.z, merged);
+        if (item) {
+          // The block merge is what makes a placement unrecoverable, so the
+          // editor takes the draw-call hit and keeps its meshes separate.
+          tag(merged, { list: "placements", index: i });
+          item.visuals.push(merged);
+          if (isRoad) {
+            merged.metadata.noShadowCaster = true;
+            // Roads are NOT outlined here. In play they are first merged into
+            // one mesh, so the outline traces the road network's outer edge
+            // once. Kept separate, each road's back-face shell is drawn over
+            // whatever it overlaps — and roads overlap by design at every
+            // junction, which paints a black patch across the crossing. The
+            // selection highlight shows a road's extent instead.
+          } else {
+            addOutline(merged, 0.05);
+          }
+          visuals.push(merged);
+        } else if (isRoad) {
+          roadParts.push(merged);
+        } else {
+          blocks.add(p.x, p.z, merged);
+        }
       }
       for (const box of s.colliders) {
-        colliders.push(this.collider(`${p.kind}-col`, box, origin, rotY));
+        const mesh = this.collider(`${p.kind}-col`, box, origin, rotY);
+        if (item) {
+          tag(mesh, { list: "placements", index: i });
+          item.localBoxes.push(box);
+        }
+        colliders.push(mesh);
       }
       for (const l of s.lights) {
         const at = rotateY(l.x, l.y, l.z, rotY).addInPlace(origin);
         this.lighting.add(at, l.color, l.range, l.intensity, l.flicker);
       }
     }
+    this.item = null;
 
     for (const merged of mergeByMaterial(roadParts, "roads")) {
       // Flat ground sheets receive shadows, never cast them.
@@ -233,9 +333,13 @@ export class MapBuilder {
     }
 
     // --- scattered dressing ---
-    for (const spec of layout.scatter) {
-      this.scatterRegion(spec, blocks, colliders);
+    for (const [i, spec] of layout.scatter.entries()) {
+      const item = index ? newItem(index.scatter) : null;
+      this.item = item;
+      this.scatterRegion(spec, rng, blocks, colliders, item, i);
+      if (item) for (const m of item.visuals) visuals.push(m);
     }
+    this.item = null;
 
     // One more merge across neighbouring structures — see BlockMerge.
     for (const merged of blocks.finish()) {
@@ -268,6 +372,7 @@ export class MapBuilder {
       visuals,
       water: layout.water ?? [],
       grass: layout.grass ?? [],
+      editor: index,
       dispose: () => {
         for (const m of visuals) m.dispose();
         for (const m of colliders) m.dispose();
@@ -277,8 +382,12 @@ export class MapBuilder {
   }
 
   /** Ground plane plus the valley ridge that bounds play. */
-  private buildValley(size: number, visuals: Mesh[], colliders: Mesh[]): void {
-    const env = HollowmereEnvironment;
+  private buildValley(
+    size: number,
+    env: EnvironmentSpec,
+    visuals: Mesh[],
+    colliders: Mesh[],
+  ): void {
     const ground = MeshBuilder.CreateBox(
       "ground",
       { width: size, height: 1, depth: size },
@@ -333,8 +442,11 @@ export class MapBuilder {
    */
   private scatterRegion(
     spec: ScatterSpec,
+    rng: () => number,
     blocks: BlockMerge,
     colliders: Mesh[],
+    item: EditorItem | null,
+    index: number,
   ): void {
     const build = SCATTER_BUILDERS[spec.prop];
     const light = SCATTER_LIGHTS[spec.prop];
@@ -343,18 +455,18 @@ export class MapBuilder {
     const parts: Mesh[] = [];
 
     for (let i = 0; i < spec.count; i++) {
-      const scale = minS + Math.random() * (maxS - minS);
+      const scale = minS + rng() * (maxS - minS);
       const clearance = (spec.clearance ?? 0.8) * scale;
-      const spot = this.findSpot(spec, clearance, placed);
+      const spot = this.findSpot(spec, clearance, placed, rng);
       if (!spot) continue;
       placed.push({ ...spot, r: clearance });
 
-      const prop = build(this.scene, this.mats);
+      const prop = build(this.scene, this.mats, rng);
       prop.scaling.setAll(scale);
       prop.position.x = spot.x;
       prop.position.z = spot.z;
       prop.position.y = prop.position.y * scale + (spec.y ?? 0);
-      prop.rotation.y = Math.random() * Math.PI * 2;
+      prop.rotation.y = rng() * Math.PI * 2;
       // Bake the placement into the vertices, then hand the flattened
       // hierarchy to the merge — the same identity-transform trick the
       // structures use, applied one level up.
@@ -387,7 +499,13 @@ export class MapBuilder {
     }
 
     for (const merged of mergeByMaterial(parts, `${spec.prop}-field`)) {
-      blocks.add(spec.x, spec.z, merged);
+      if (item) {
+        tag(merged, { list: "scatter", index });
+        addOutline(merged, 0.05);
+        item.visuals.push(merged);
+      } else {
+        blocks.add(spec.x, spec.z, merged);
+      }
     }
   }
 
@@ -400,11 +518,12 @@ export class MapBuilder {
     spec: ScatterSpec,
     clearance: number,
     placed: { x: number; z: number; r: number }[],
+    rng: () => number,
   ): { x: number; z: number } | null {
     for (let attempt = 0; attempt < 14; attempt++) {
       // sqrt keeps the distribution even rather than clumped at the centre.
-      const a = Math.random() * Math.PI * 2;
-      const r = Math.sqrt(Math.random()) * spec.radius;
+      const a = rng() * Math.PI * 2;
+      const r = Math.sqrt(rng()) * spec.radius;
       const x = spec.x + Math.cos(a) * r;
       const z = spec.z + Math.sin(a) * r;
 
@@ -496,6 +615,8 @@ export class MapBuilder {
     const rotY = (box.rotY ?? 0) + parentRotY;
     mesh.position.copyFrom(at);
     mesh.rotation.set(rotX, rotY, 0);
+    this.item?.boxes.push(this.boxes.length);
+    this.item?.colliders.push(mesh);
     this.boxes.push({
       w: box.w,
       h: box.h,
@@ -513,6 +634,75 @@ export class MapBuilder {
     mesh.freezeWorldMatrix();
     return mesh;
   }
+}
+
+/** Appends a fresh, empty item to an editor list and returns it. */
+function newItem(into: EditorItem[]): EditorItem {
+  const item: EditorItem = {
+    visuals: [],
+    colliders: [],
+    boxes: [],
+    localBoxes: [],
+  };
+  into.push(item);
+  return item;
+}
+
+/**
+ * Moves and rotates a built item to a new placement, in place — visuals,
+ * collider proxies, and the WorldBoxes the nav grid reads.
+ *
+ * No rebuild is needed for this: a builder assembles at the origin and
+ * MapBuilder transforms the result, so a placement's transform is the only
+ * thing that changes. Re-running the builder would give the same geometry at a
+ * different transform, one hundred times more slowly.
+ *
+ * Editor-only. It leaves `nav` and `obstacles` stale — they are derived from
+ * the boxes at build time and must be rebuilt by the caller when it wants
+ * navigation to agree with what is on screen again.
+ */
+export function repositionItem(
+  item: EditorItem,
+  boxes: WorldBox[],
+  origin: Vector3,
+  rotY: number,
+): void {
+  for (const m of item.visuals) {
+    m.unfreezeWorldMatrix();
+    m.position.copyFrom(origin);
+    m.rotation.y = rotY;
+    m.freezeWorldMatrix();
+  }
+  for (let i = 0; i < item.colliders.length; i++) {
+    const spec = item.localBoxes[i];
+    const mesh = item.colliders[i];
+    if (!spec || !mesh) continue;
+    const at = rotateY(spec.x, spec.y, spec.z, rotY).addInPlace(origin);
+    const rotX = spec.rotX ?? 0;
+    const ry = (spec.rotY ?? 0) + rotY;
+    mesh.unfreezeWorldMatrix();
+    mesh.position.copyFrom(at);
+    mesh.rotation.set(rotX, ry, 0);
+    mesh.freezeWorldMatrix();
+    const box = boxes[item.boxes[i]];
+    if (box) {
+      box.cx = at.x;
+      box.cy = at.y;
+      box.cz = at.z;
+      box.rotX = rotX;
+      box.rotY = ry;
+    }
+  }
+}
+
+/**
+ * Records which layout item a mesh belongs to. The editor picks with a
+ * predicate on this, which is why visuals can stay `isPickable = false`:
+ * Babylon skips the isPickable test entirely when a pick supplies a predicate,
+ * so the visual/collider split survives the editor untouched.
+ */
+function tag(mesh: Mesh, ref: EditorRef): void {
+  mesh.metadata = { ...(mesh.metadata ?? {}), editorRef: ref };
 }
 
 /**

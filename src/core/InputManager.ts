@@ -46,6 +46,12 @@ export class InputManager {
   pointerLocked = false;
   gamepadConnected = false;
   /**
+   * Held: the modifier key. No gameplay meaning — the map editor uses it to
+   * suspend grid snapping. Read per frame rather than latched so a keyup lost
+   * to a window blur cannot leave it stuck on (blur clears the key set).
+   */
+  altHeld = false;
+  /**
    * True this frame when any pad axis (past the deadzone) or button is
    * active. This is what lets aim assist tell "player is driving the pad"
    * apart from "pad is idle on the desk while the mouse does the aiming".
@@ -185,6 +191,7 @@ export class InputManager {
 
     this.sprint =
       this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.padSprintOn;
+    this.altHeld = this.keys.has("AltLeft") || this.keys.has("AltRight");
     // Back / View button (6 on the standard mapping is LT, 8 is Back).
     this.scoreboard = this.keys.has("Tab") || (pad ? buttonHeld(pad, 8, trig) : false);
 

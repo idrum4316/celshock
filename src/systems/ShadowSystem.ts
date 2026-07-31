@@ -147,6 +147,16 @@ export class ShadowSystem {
   }
 
   /**
+   * Forces the depth pass to re-render next frame even though the snapped
+   * focus has not moved. `update()` skips the render when the window has not
+   * shifted, which is right in play — the map is static — but wrong when a
+   * caster itself moves, as it does under the map editor's drag.
+   */
+  invalidate(): void {
+    this.generator.getShadowMap()?.resetRefreshCounter();
+  }
+
+  /**
    * Recentres the shadow window on the focus (the player, biased a little
    * along the camera's view) and re-uploads the light matrix. The recenter
    * is snapped to whole shadow-map texels in the light's own view basis:

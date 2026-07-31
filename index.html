@@ -414,6 +414,111 @@
         50% { opacity: 0.4; }
       }
 
+      /* --- map editor (dev only) --- */
+      /* The gameplay chrome is meaningless with no player, and the crosshair
+         actively gets in the way of clicking things. HUD.setEditing() puts
+         .editing on #hud; hiding here rather than per element means update()
+         can keep writing to those nodes without fighting the toggle. */
+      #hud.editing #ticket-bar,
+      #hud.editing #flag-strip,
+      #hud.editing #crosshair,
+      #hud.editing #hud-bottom,
+      #hud.editing #killfeed,
+      #hud.editing #lock-hint { display: none; }
+
+      /* Same opt-in as #deploy: #hud is pointer-events:none. */
+      #editor-panel {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        width: 240px;
+        padding: 12px 14px;
+        background: rgba(6, 8, 14, 0.9);
+        border: 2px solid #000;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
+        pointer-events: auto;
+        font-size: 12px;
+      }
+      #editor-panel h2 {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 4px;
+        color: #35f0ff;
+        margin-bottom: 10px;
+      }
+      #editor-panel .ed-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 2px 0;
+        font-variant-numeric: tabular-nums;
+      }
+      #editor-panel .ed-key {
+        color: #ffe680;
+        letter-spacing: 2px;
+        opacity: 0.75;
+      }
+      #editor-panel .ed-warn {
+        margin-top: 8px;
+        padding: 5px 7px;
+        border-left: 2px solid #ff5a4f;
+        background: rgba(255, 90, 79, 0.08);
+        font-size: 10px;
+        line-height: 1.4;
+        opacity: 0.65;
+      }
+      #editor-panel .ed-status {
+        margin-top: 8px;
+        padding: 4px 7px;
+        font-size: 11px;
+        letter-spacing: 1px;
+        border-left: 2px solid currentColor;
+      }
+      #editor-panel .ed-status.idle { color: #8a93a6; }
+      #editor-panel .ed-status.busy { color: #ffe680; }
+      #editor-panel .ed-status.ok { color: #7fd66a; }
+      #editor-panel .ed-status.error { color: #ff5a4f; }
+      #editor-panel .ed-inspector {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(255, 255, 255, 0.15);
+      }
+      #editor-panel .ed-title {
+        color: #35f0ff;
+        font-weight: 800;
+        letter-spacing: 2px;
+        margin-bottom: 6px;
+      }
+      #editor-panel .ed-findings {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(255, 255, 255, 0.15);
+        max-height: 34vh;
+        overflow-y: auto;
+      }
+      #editor-panel .ed-finding {
+        padding: 3px 6px;
+        margin-bottom: 3px;
+        font-size: 11px;
+        line-height: 1.35;
+        cursor: pointer;
+        border-left: 2px solid currentColor;
+        background: rgba(255, 255, 255, 0.04);
+      }
+      #editor-panel .ed-finding:hover { background: rgba(255, 255, 255, 0.12); }
+      #editor-panel .ed-finding.error { color: #ff5a4f; }
+      #editor-panel .ed-finding.warning { color: #ffc46b; }
+      #editor-panel .ed-finding.info { color: #8a93a6; }
+      #editor-panel .ed-ok { color: #7fd66a; font-size: 11px; letter-spacing: 1px; }
+      #editor-panel .ed-help {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(255, 255, 255, 0.15);
+        line-height: 1.7;
+        opacity: 0.6;
+      }
+      #editor-panel .ed-help b { color: #ffc46b; font-weight: 700; }
+
       .hidden { display: none !important; }
     </style>
   </head>

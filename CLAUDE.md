@@ -101,7 +101,23 @@ src/
     Atmosphere.ts           # Drifting ash particle field
     Sky.ts                  # Generated sky dome (gradient/stars/halo), moon, clouds
     WaterSystem.ts          # Water surfaces from map WaterRects
+  editor/                   # Dev-only map editor (F2). Dynamically imported —
+    index.ts                #   never statically imported from anywhere else,
+    EditorCamera.ts         #   or it lands in the production bundle.
+    EditorPanel.ts          #   Free-fly cam drives CameraSystem's own camera.
+    workLight.ts            #   Brightened EnvironmentSpec for authoring.
+    selection.ts            #   SelectionRef, predicate pick, highlight
+    proxies.ts              #   Stand-ins for flags/spawns/scatter/water/grass
+    gizmos.ts               #   Move + Y-rotate handles, snapping
+    mutate.ts               #   Layout writes + scene reposition + nav rebuild
+    inspect.ts / params.ts  #   Inspector read model + per-kind param table
+    sourceScan.ts           #   layout.ts as text: regions, entries, tokens
+    serialize.ts / save.ts  #   Minimal-diff emit + POST to the dev server
+    tuning.ts               #   Tool constants (NOT config.ts — not gameplay).
   world/
+    layout.ts               # Placement/ScatterSpec/MapLayout — the map-data
+                            # vocabulary, map-agnostic
+    rng.ts                  # mulberry32 — the seeded PRNG world-building uses
     MapBuilder.ts           # Builds the map; merges visuals, emits colliders
     BuildingKit.ts          # Facade: shared types + BUILDERS registry
     kit/
@@ -196,7 +212,18 @@ per-bot transient light needs the same treatment.
 (`{ kind, x, z, rotY, params }`), scatter regions, control points, and spawns.
 `BuildingKit` supplies the parametric pieces and `MapBuilder` consumes the
 layout; neither special-cases Hollowmere, so **a second map is one new layout
-file plus an `EnvironmentSpec`**.
+file plus an `EnvironmentSpec`**. The vocabulary those files are written in
+(`Placement`, `ScatterSpec`, `MapLayout`) lives in `src/world/layout.ts`, not
+beside Hollowmere's data — a new map must not import its types from its
+predecessor. `MapBuilder.build(layout, env)` takes both as arguments for the
+same reason.
+
+**Scatter placement is seeded** (`layout.seed`, via `src/world/rng.ts`). This is
+not cosmetic: blocking scatter emits colliders, colliders feed `NavGrid` and
+`ObstacleField`, so an unseeded scatter means the navigation graph differs
+between page loads and a bot wedged on a boulder is only reproducible on some
+boots. Never call `Math.random()` in world-building code. Changing the seed
+rerolls the whole dressing field, which is a visible change to the level.
 
 Builders assemble geometry **at the origin, unrotated**, and return three
 parallel lists (`meshes`, `colliders`, `lights`) in local space. `MapBuilder`
@@ -227,6 +254,91 @@ Layout gotchas that have already cost time:
   run genuinely routes bots the long way round — or seals a plot outright.
   Enclosures like the burying ground need a gap of a couple of cells, and the
   corners left open help more than a wider gate.
+
+### The map editor (dev only)
+
+`F2` in a dev build opens `src/editor/` — free-fly the real scene, click to
+select, drag gizmos, inspect params. Everything under `src/editor/` is reached
+through **one dynamic `import()` inside a `import.meta.env.DEV` branch in
+`Game.toggleEditor`**, and the *whole method body* is behind that gate, not just
+the keybind. That is what makes the import unreachable under `vite build` so
+Rollup drops the chunk instead of emitting an orphan. Never import
+`src/editor/` statically from anywhere.
+
+Things it deliberately does not do:
+
+- **It does not make visuals pickable.** Babylon skips the `isPickable` test
+  when a pick supplies a predicate, so the editor picks on
+  `metadata.editorRef` and the visual/collider table below stands unchanged.
+- **It does not build colliders.** Proxy meshes for flags, spawns, scatter
+  regions and water/grass rects are visual only, and never enter
+  `colliderBoxes` — `MapBuilder.collider()` is still the sole collider factory.
+- **It does not re-run builders to move things.** A builder assembles at the
+  origin and `MapBuilder` transforms the result, so `repositionItem()` moves the
+  visuals, the collider proxies and the `WorldBox`es directly. Measured: a full
+  editor build is ~570 ms, `NavGrid` + all 7 flow fields ~45 ms, one builder
+  call ~0.9 ms. So dragging repositions every frame and rebuilds navigation only
+  when the drag ends.
+
+**Saving (`Ctrl+S`) patches `layout.ts`'s text; it does not regenerate it.**
+The file is authored — the ASCII village map, the district commentary, and
+`BANK_H`/`TERRACE_H`/`WARDEN`/`BLIGHT` in place of bare numbers would all die on
+the first save of a code generator. So the source is authoritative and the
+editor rewrites only the lines that changed:
+
+- An entry nobody touched is re-emitted **byte for byte**. A no-op save is
+  verified to reproduce the file exactly.
+- An edited entry is rebuilt field by field, and each field still equal to what
+  was loaded re-emits its **original source token** — which is how `TERRACE_H`
+  and `Math.PI / 2` survive on a line that was rewritten. Comparison is against
+  a deep snapshot taken when the editor opened, so nothing here ever has to
+  evaluate those expressions.
+
+Gizmo output is quantised before it reaches the layout (`mutate.ts`), and
+positions and angles are quantised **differently** on purpose. Positions round
+to 3 dp, matching what the serializer writes. Angles must not: `Math.PI / 2`
+rounded to `1.571` is no longer a quarter turn to within the emitter's
+tolerance, so it would be written as a bare decimal and the file would drift
+off house style. Angles instead snap to the exact quarter turn when they are
+within a whisker of one, and keep 6 dp otherwise. Both then treat "close
+enough to zero" as zero, so a drag that returns something to where it started
+leaves no trace — without that, an un-rotated building picked up a redundant
+`rotY: 0`, because `1e-17 !== 0` survives the drop-optional-field test and then
+prints as `0`.
+
+This rests on two properties of `layout.ts` that `sourceScan.ts` re-checks
+every session: **every array entry is exactly one line**, and each array is
+delimited by its own `const name: Type = [` … `];`. Those declarations are the
+region anchors, so the file needs no marker comments. A line that fails to
+tokenize becomes `opaque` and is never rewritten — the failure mode is always
+"leave it alone". Multi-line entries are the one thing that would break this;
+if you add one by hand, the editor will treat it as a comment and refuse to
+touch it rather than corrupt it.
+
+**The validation list ranks honestly, and the ranking is the design.** Errors
+are things that are definitely broken and are zero on a healthy map: a control
+point whose centre is not standable (the Flag-C-on-the-well bug), and a flag or
+spawn unreachable from a home spawn. Warnings need a human: the biggest is
+"standable ground nothing can reach", which is *also* how a roof looks, and how
+the top of a boulder looks. `validate.ts` filters both out — roofs by height
+above adjacent walkable ground, prop stands by flatness — but the nav grid
+cannot distinguish a boathouse deck from a large flat collider top, so a
+handful survive on Hollowmere while it plays perfectly well. Read that number
+as a **delta**: note it, move a wall, look again. `makeIslandTest` is shared
+with the overlay so the red cells on screen are exactly the reported findings.
+
+`vite.config.ts` holds the dev-only write endpoint. It is deliberately outside
+`tsconfig.json`'s `include` (`@types/node` is not installed), so it stays
+trivial and the real logic lives in `src/editor/serialize.ts` under the
+typecheck. Its `handleHotUpdate` swallows the editor's own writes: `layout.ts`
+has no `import.meta.hot.accept`, so an update would propagate to `main.ts`,
+find no accepting module, and full-reload the page on every save.
+
+`build(layout, env, { editor: true })` skips `BlockMerge` so each placement
+keeps its own meshes — ~1740 draws against ~150. **Never judge frame cost from
+the editor.** Roads also go un-outlined there: in play they merge into one mesh
+first, and kept separate each road's outline shell paints a black patch over
+every junction it overlaps.
 
 ### Visual meshes and collider proxies are separate things
 

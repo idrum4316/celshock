@@ -230,6 +230,16 @@ export class HUD {
     `;
   }
 
+  /**
+   * Hides the gameplay chrome (tickets, flags, crosshair, health, ammo) while
+   * the map editor is open. One class on the root rather than a toggle per
+   * element — `update()` keeps writing to those nodes regardless, and CSS
+   * hiding survives that where a per-element flag would be overwritten.
+   */
+  setEditing(on: boolean): void {
+    this.root.classList.toggle("editing", on);
+  }
+
   setLockHint(visible: boolean): void {
     this.lockHint.classList.toggle("hidden", !visible);
   }

@@ -6,6 +6,9 @@
  * Invariants: emissive parts (lantern glow, fire, fungus) MUST set
  * metadata.noOutline (and noGlow where they shouldn't feed the GlowLayer).
  * Never set metadata.solid here — colliders come from MapBuilder only.
+ * Never call rng() here — the per-prop jitter that makes a stand of
+ * trees look like a stand of trees comes from the caller's seeded `rng`, so the
+ * same layout builds the same world on every boot (see world/rng.ts).
  */
 import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../shaders/CelShader";
@@ -13,12 +16,16 @@ import type { CelMaterialFactory } from "../shaders/CelShader";
 /**
  * Scatter props for Hollowmere — the loose dressing that fills space between
  * the authored buildings. Harvested from the retired room themes; each builder
- * takes `(scene, mats)`, assembles a parented primitive hierarchy at the
- * origin, and returns the root. Emissive children are tagged `noOutline` so
- * the outline shell doesn't swallow their glow.
+ * takes `(scene, mats)` — plus an `rng` where the prop is randomised —
+ * assembles a parented primitive hierarchy at the origin, and returns the root.
+ * Emissive children are tagged `noOutline` so the outline shell doesn't swallow
+ * their glow.
  *
  * Placement (position, rotation, scale) is the caller's business — unlike the
  * old `PropSpec`, these carry no counts and no transform of their own.
+ *
+ * `rng` defaults to `Math.random` so a one-off caller (a model viewer, a test)
+ * stays a two-argument call; MapBuilder always passes the map's seeded stream.
  */
 
 const BARK = "#4a4238";
@@ -34,7 +41,11 @@ const CONCRETE = "#4a4d54";
  * canopy — the silhouette is all splinters, and moonlight through them is
  * most of what the player sees at distance.
  */
-export function buildDeadTree(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildDeadTree(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
   const barkMat = mats.get(BARK);
   const trunk = MeshBuilder.CreateCylinder(
     "tree-trunk",
@@ -43,12 +54,12 @@ export function buildDeadTree(scene: Scene, mats: CelMaterialFactory): Mesh {
   );
   trunk.position.y = 2.6;
   trunk.material = barkMat;
-  trunk.rotation.z = (Math.random() - 0.5) * 0.18;
+  trunk.rotation.z = (rng() - 0.5) * 0.18;
 
-  const branches = 4 + Math.floor(Math.random() * 3);
+  const branches = 4 + Math.floor(rng() * 3);
   for (let i = 0; i < branches; i++) {
-    const a = (i / branches) * Math.PI * 2 + Math.random() * 0.6;
-    const h = 1.4 + Math.random() * 1.4;
+    const a = (i / branches) * Math.PI * 2 + rng() * 0.6;
+    const h = 1.4 + rng() * 1.4;
     const branch = MeshBuilder.CreateCylinder(
       `branch${i}`,
       { height: h, diameterTop: 0.04, diameterBottom: 0.2, tessellation: 5 },
@@ -57,18 +68,22 @@ export function buildDeadTree(scene: Scene, mats: CelMaterialFactory): Mesh {
     branch.parent = trunk;
     branch.position.set(
       Math.cos(a) * 0.25,
-      0.9 + Math.random() * 1.4,
+      0.9 + rng() * 1.4,
       Math.sin(a) * 0.25,
     );
-    branch.rotation.z = -Math.cos(a) * (0.7 + Math.random() * 0.5);
-    branch.rotation.x = Math.sin(a) * (0.7 + Math.random() * 0.5);
+    branch.rotation.z = -Math.cos(a) * (0.7 + rng() * 0.5);
+    branch.rotation.x = Math.sin(a) * (0.7 + rng() * 0.5);
     branch.material = mats.get(DEAD_BARK);
   }
   return trunk;
 }
 
 /** Leaning headstone with a cracked-off corner. */
-export function buildGravestone(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildGravestone(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
   const stone = mats.get(STONE);
   const slab = MeshBuilder.CreateBox(
     "grave-slab",
@@ -76,8 +91,8 @@ export function buildGravestone(scene: Scene, mats: CelMaterialFactory): Mesh {
     scene,
   );
   slab.position.y = 0.75;
-  slab.rotation.x = (Math.random() - 0.5) * 0.22;
-  slab.rotation.z = (Math.random() - 0.5) * 0.3;
+  slab.rotation.x = (rng() - 0.5) * 0.22;
+  slab.rotation.z = (rng() - 0.5) * 0.3;
   slab.material = stone;
 
   const cap = MeshBuilder.CreateCylinder(
@@ -151,7 +166,11 @@ export function buildLantern(scene: Scene, mats: CelMaterialFactory): Mesh {
 }
 
 /** Cluster of luminous corpse-fungus — small, cold, and everywhere. */
-export function buildFungus(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildFungus(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
   const stem = mats.get("#6a6f63");
   const glow = mats.getEmissive("#6effc0");
   const base = MeshBuilder.CreateCylinder(
@@ -163,9 +182,9 @@ export function buildFungus(scene: Scene, mats: CelMaterialFactory): Mesh {
   base.material = stem;
 
   for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * Math.PI * 2 + Math.random();
-    const r = 0.25 + Math.random() * 0.35;
-    const h = 0.3 + Math.random() * 0.4;
+    const a = (i / 4) * Math.PI * 2 + rng();
+    const r = 0.25 + rng() * 0.35;
+    const h = 0.3 + rng() * 0.4;
     const stalk = MeshBuilder.CreateCylinder(
       `fungus-stalk${i}`,
       { height: h, diameterTop: 0.07, diameterBottom: 0.1, tessellation: 5 },
@@ -177,7 +196,7 @@ export function buildFungus(scene: Scene, mats: CelMaterialFactory): Mesh {
 
     const cap = MeshBuilder.CreateSphere(
       `fungus-cap${i}`,
-      { diameter: 0.26 + Math.random() * 0.12, segments: 5 },
+      { diameter: 0.26 + rng() * 0.12, segments: 5 },
       scene,
     );
     cap.parent = stalk;
@@ -190,14 +209,18 @@ export function buildFungus(scene: Scene, mats: CelMaterialFactory): Mesh {
 }
 
 /** Fallen, half-rotted log. */
-export function buildLog(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildLog(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
   const log = MeshBuilder.CreateCylinder(
     "log",
     { height: 3.0, diameterTop: 0.55, diameterBottom: 0.7, tessellation: 6 },
     scene,
   );
   log.rotation.z = Math.PI / 2;
-  log.rotation.x = (Math.random() - 0.5) * 0.4;
+  log.rotation.x = (rng() - 0.5) * 0.4;
   log.position.y = 0.36;
   log.material = mats.get(DEAD_BARK);
 
@@ -245,15 +268,19 @@ export function buildFireDrum(scene: Scene, mats: CelMaterialFactory): Mesh {
 }
 
 /** Glacial boulder — hard cover in the fields and the woods. */
-export function buildBoulder(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildBoulder(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
   const rock = MeshBuilder.CreatePolyhedron(
     "boulder",
     { type: 1, size: 0.8 },
     scene,
   );
   rock.position.y = 0.6;
-  rock.scaling.set(1.3 + Math.random() * 0.4, 0.85 + Math.random() * 0.3, 1.2);
-  rock.rotation.set(Math.random() * 0.4, Math.random() * Math.PI, 0.12);
+  rock.scaling.set(1.3 + rng() * 0.4, 0.85 + rng() * 0.3, 1.2);
+  rock.rotation.set(rng() * 0.4, rng() * Math.PI, 0.12);
   rock.material = mats.get("#565d59");
 
   // A shoulder stone, so the silhouette isn't a single tidy lump.
@@ -264,7 +291,7 @@ export function buildBoulder(scene: Scene, mats: CelMaterialFactory): Mesh {
   );
   chip.parent = rock;
   chip.position.set(0.7, -0.35, 0.4);
-  chip.rotation.set(Math.random(), Math.random(), Math.random());
+  chip.rotation.set(rng(), rng(), rng());
   chip.material = mats.get("#474e4a");
   return rock;
 }
@@ -273,7 +300,11 @@ export function buildBoulder(scene: Scene, mats: CelMaterialFactory): Mesh {
  * Dead bramble thicket. Non-blocking on purpose: it is visual undergrowth that
  * fills bare ground without adding another thing for a bot to get wedged in.
  */
-export function buildBramble(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildBramble(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
   const wood = mats.get(DEAD_BARK);
   const base = MeshBuilder.CreateCylinder(
     "bramble",
@@ -283,10 +314,10 @@ export function buildBramble(scene: Scene, mats: CelMaterialFactory): Mesh {
   base.position.y = 0.2;
   base.material = wood;
 
-  const canes = 6 + Math.floor(Math.random() * 4);
+  const canes = 6 + Math.floor(rng() * 4);
   for (let i = 0; i < canes; i++) {
-    const a = (i / canes) * Math.PI * 2 + Math.random() * 0.5;
-    const h = 0.8 + Math.random() * 0.9;
+    const a = (i / canes) * Math.PI * 2 + rng() * 0.5;
+    const h = 0.8 + rng() * 0.9;
     const cane = MeshBuilder.CreateCylinder(
       `cane${i}`,
       { height: h, diameterTop: 0.03, diameterBottom: 0.09, tessellation: 4 },
@@ -294,8 +325,8 @@ export function buildBramble(scene: Scene, mats: CelMaterialFactory): Mesh {
     );
     cane.parent = base;
     cane.position.set(Math.cos(a) * 0.22, h / 2, Math.sin(a) * 0.22);
-    cane.rotation.z = -Math.cos(a) * (0.5 + Math.random() * 0.6);
-    cane.rotation.x = Math.sin(a) * (0.5 + Math.random() * 0.6);
+    cane.rotation.z = -Math.cos(a) * (0.5 + rng() * 0.6);
+    cane.rotation.x = Math.sin(a) * (0.5 + rng() * 0.6);
     cane.material = wood;
   }
   return base;
@@ -334,14 +365,18 @@ export function buildBarrel(scene: Scene, mats: CelMaterialFactory): Mesh {
 }
 
 /** Collapsed masonry with rebar poking out — waist-high cover. */
-export function buildRubble(scene: Scene, mats: CelMaterialFactory): Mesh {
+export function buildRubble(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
   const heap = MeshBuilder.CreateBox(
     "rubble",
     { width: 1.9, height: 0.6, depth: 1.6 },
     scene,
   );
   heap.position.y = 0.3;
-  heap.rotation.y = Math.random() * Math.PI;
+  heap.rotation.y = rng() * Math.PI;
   heap.material = mats.get(CONCRETE);
 
   for (let i = 0; i < 3; i++) {
@@ -352,11 +387,11 @@ export function buildRubble(scene: Scene, mats: CelMaterialFactory): Mesh {
     );
     chunk.parent = heap;
     chunk.position.set(
-      (Math.random() - 0.5) * 1.2,
+      (rng() - 0.5) * 1.2,
       0.4,
-      (Math.random() - 0.5) * 1.0,
+      (rng() - 0.5) * 1.0,
     );
-    chunk.rotation.set(Math.random(), Math.random(), Math.random());
+    chunk.rotation.set(rng(), rng(), rng());
     chunk.material = mats.get("#565a62");
   }
 

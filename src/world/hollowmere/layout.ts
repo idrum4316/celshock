@@ -9,8 +9,15 @@
  * one new file shaped like this plus an EnvironmentSpec.
  */
 import { Vector3 } from "@babylonjs/core";
-import type { BuildParams, BuilderKind } from "../BuildingKit";
-import type { ControlPointDef, GrassRect, SpawnPointDef, WaterRect } from "../MapBuilder";
+import type {
+  ControlPointDef,
+  GrassRect,
+  MapLayout,
+  Placement,
+  ScatterSpec,
+  SpawnPointDef,
+  WaterRect,
+} from "../layout";
 
 /**
  * HOLLOWMERE — the authored layout.
@@ -71,51 +78,6 @@ import type { ControlPointDef, GrassRect, SpawnPointDef, WaterRect } from "../Ma
  *   region that blankets a structure just wastes its count on rejects.
  */
 
-/** One placed structure. Built at the origin, then rotated and moved here. */
-export interface Placement {
-  kind: BuilderKind;
-  x: number;
-  z: number;
-  /** Base height — set when a structure stands on a terrace or embankment. */
-  y?: number;
-  rotY?: number;
-  params?: BuildParams;
-}
-
-/** Loose dressing sprinkled inside a circular region by rejection sampling. */
-export interface ScatterSpec {
-  prop:
-    | "deadTree"
-    | "gravestone"
-    | "log"
-    | "fungus"
-    | "rubble"
-    | "fireDrum"
-    | "boulder"
-    | "bramble"
-    | "barrel";
-  x: number;
-  z: number;
-  /** Region radius. */
-  radius: number;
-  count: number;
-  y?: number;
-  scale?: [number, number];
-  /** Blocking scatter gets a collider and punches a hole in the nav grid. */
-  blocking?: boolean;
-  /** Collider half-extent at scale 1. */
-  clearance?: number;
-}
-
-export interface MapLayout {
-  placements: Placement[];
-  scatter: ScatterSpec[];
-  controlPoints: ControlPointDef[];
-  spawns: SpawnPointDef[];
-  water?: WaterRect[];
-  grass?: GrassRect[];
-}
-
 const WARDEN = "#c9a15e";
 const BLIGHT = "#ff3b3b";
 
@@ -169,7 +131,7 @@ const placements: Placement[] = [
   // tavern's porch and the smithy's open front both face the road, so each is
   // a piece of cover you fight *through*.
   { kind: "tavern", x: -30, z: 14, rotY: -Math.PI / 2 },
-  { kind: "smithy", x: -16, z: -31, rotY: Math.PI },
+  { kind: "smithy", x: -10.5, z: -29, rotY: Math.PI },
   // Townhouses: taller than they are wide, jettied over the lane. A row of
   // them is what gives the square a skyline instead of a ring of sheds.
   { kind: "townhouse", x: -11, z: 8, params: { enterable: true, litWindows: true } },
@@ -230,9 +192,9 @@ const placements: Placement[] = [
   { kind: "cottage", x: 16, z: -40, params: { width: 8 } },
   { kind: "cottage", x: 31, z: -45, params: { ruined: true } },
   { kind: "fence", x: 26, z: -50, rotY: Math.PI / 2, params: { length: 26 } },
-  { kind: "cottage", x: -36, z: -12, rotY: Math.PI / 2, params: { enterable: true } },
+  { kind: "cottage", x: -36, z: -12, rotY: Math.PI, params: { enterable: true } },
   { kind: "cottage", x: -44, z: 20, params: { width: 8, ruined: true } },
-  { kind: "cottage", x: -30, z: 52, params: { litWindows: true } },
+  { kind: "cottage", x: -30, z: 47.52, params: { litWindows: true } },
   { kind: "lamp", x: -46, z: -14 },
   { kind: "lamp", x: 40, z: 20 },
   { kind: "haystack", x: -40, z: 46 },
@@ -350,7 +312,7 @@ const placements: Placement[] = [
   { kind: "haystack", x: -14, z: -34 },
   { kind: "cottage", x: -22, z: -28, params: { width: 8 } },
   { kind: "ruin", x: -32, z: -34, params: { width: 8, depth: 6 } },
-  { kind: "woodpile", x: -6, z: -46 },
+  { kind: "woodpile", x: -10, z: -49.5, rotY: Math.PI / 2 },
 
   // ===== THE MOOR and THE MIRE (south-west) =================================
   // Flooded crofts around a second pool of standing water, with a jetty out
@@ -577,4 +539,8 @@ export const HollowmereLayout: MapLayout = {
   spawns,
   water,
   grass,
+  // Fixed so the dressing — and the colliders blocking scatter emits, and so
+  // the nav graph — is identical on every boot. Changing it rerolls the whole
+  // scatter field, which is a visible change to the level: re-walk the flags.
+  seed: 0x484c,
 };
