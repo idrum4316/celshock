@@ -188,6 +188,8 @@ export function buildCart(
   }
   b.box(0.14, 0.75, 1.6, -1.6, bedY + 0.5, 0, PLANK, { z: tilt });
   // Wheels: flat discs on an axle, the cheapest thing that reads as a cart.
+  // The bed runs along X, so a wheel rolls along X and its axis lies along Z —
+  // that is `x: PI/2`, not `z`, which would stand the discs across the bed.
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
       const broken = p.ruined && sx < 0 && sz < 0;
@@ -200,11 +202,14 @@ export function buildCart(
         broken ? 0.25 : 0.6,
         sz * 0.9,
         TIMBER,
-        { z: Math.PI / 2, x: broken ? 0.9 : 0 },
+        { x: Math.PI / 2, z: broken ? 0.9 : 0 },
       );
     }
   }
-  b.cyl(2.0, 0.16, 0.16, 6, 0, 0.6, 0, IRON, { z: Math.PI / 2 });
+  // One axle per wheel pair, spanning the width to meet them.
+  for (const sx of [-1, 1]) {
+    b.cyl(2.0, 0.16, 0.16, 6, sx * 1.1, 0.6, 0, IRON, { x: Math.PI / 2 });
+  }
   // Shafts, raised as if the horse were unhitched in a hurry.
   for (const sz of [-1, 1]) {
     b.box(2.4, 0.14, 0.14, 2.5, bedY + 0.55, sz * 0.55, TIMBER, { z: 0.28 });
