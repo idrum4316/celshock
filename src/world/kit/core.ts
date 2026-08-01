@@ -22,8 +22,8 @@
  * - No Hollowmere special-casing; register new builders in
  *   BuildingKit.ts's BUILDERS.
  */
-import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
-import type { ShaderMaterial, VertexData } from "@babylonjs/core";
+import { Mesh, MeshBuilder, Scene, VertexData } from "@babylonjs/core";
+import type { ShaderMaterial } from "@babylonjs/core";
 import { CONFIG } from "../../config";
 import type { CelMaterialFactory } from "../../shaders/CelShader";
 import type { LightSpec } from "../environment";
@@ -331,6 +331,75 @@ export class Build implements Structure {
     }
   }
 
+  /**
+   * The triangular panel that closes off the end of a pitched roof: base
+   * corners at `±w / 2`, apex `rise` above them, `t` thick through Z, placed
+   * by the centre of its base.
+   *
+   * Vertices rather than a box because the silhouette is the entire point. A
+   * box here fills the roof's bounding rectangle, so its top corners stand
+   * proud of the slabs it is meant to close by nearly the whole rise, and the
+   * roof reads as a solid block with two diagonal strips laid across it rather
+   * than as a peak.
+   *
+   * Wound for Babylon's LEFT-handed default (`scene.useRightHandedSystem` is
+   * false), where a front face is clockwise seen from the front — the order
+   * you get from working the cross product out on paper is inverted here, and
+   * fails silently (see TerrainField's `assertFacesUp`).
+   */
+  gableEnd(
+    w: number,
+    rise: number,
+    t: number,
+    x: number,
+    y: number,
+    z: number,
+    color: string,
+  ): Mesh {
+    // Cross-section, counter-clockwise in XY. The +Z face walks it in order,
+    // the -Z face walks it reversed, and the quad bridging edge i is
+    // front[i], back[i], back[i+1], front[i+1].
+    const section = [
+      [-w / 2, 0],
+      [w / 2, 0],
+      [0, rise],
+    ];
+    const front = section.map((p) => [p[0], p[1], t / 2]);
+    const back = section.map((p) => [p[0], p[1], -t / 2]);
+
+    const positions: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+    // Each face carries its own vertices, so ComputeNormals returns true face
+    // normals — the same hard edges CreateBox gives every other piece here.
+    const tri = (a: number[], b: number[], c: number[]): void => {
+      for (const v of [a, b, c]) {
+        positions.push(v[0], v[1], v[2]);
+        uvs.push(v[0], v[1]);
+        indices.push(indices.length);
+      }
+    };
+    tri(front[0], front[1], front[2]);
+    tri(back[0], back[2], back[1]);
+    for (let i = 0; i < section.length; i++) {
+      const j = (i + 1) % section.length;
+      tri(front[i], back[i], back[j]);
+      tri(front[i], back[j], front[j]);
+    }
+
+    const data = new VertexData();
+    data.positions = positions;
+    data.uvs = uvs;
+    data.indices = indices;
+    const normals: number[] = [];
+    VertexData.ComputeNormals(positions, indices, normals);
+    data.normals = normals;
+
+    const m = this.surface(data, color);
+    m.position.set(x, y, z);
+    return m;
+  }
+
   /** A gabled roof: two slanted slabs meeting at a ridge. */
   gableRoof(
     w: number,
@@ -357,9 +426,13 @@ export class Build implements Structure {
         { z: -s * pitch },
       );
     }
-    // The gable ends, so you don't see straight into the roof void.
+    // The gable ends, so you don't see straight into the roof void. Spanning
+    // the slabs rather than the wall (`slopeW`, not `w / 2`) puts the panel's
+    // sloped edges on the roof planes themselves: cut to the wall it stops
+    // short of the eaves, and the wedge left over is a slit into the void at
+    // exactly the corner the panel exists to close.
     for (const s of [-1, 1]) {
-      this.box(w, rise, 0.16, x, y + rise / 2, z + (s * d) / 2, color);
+      this.gableEnd(slopeW * 2, rise, 0.16, x, y, z + (s * d) / 2, color);
     }
     // Roofs block bullets and sight, but the collider is a flat slab at the
     // eaves rather than two rotated planes — cheaper, and nothing walks up there.
