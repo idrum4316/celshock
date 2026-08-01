@@ -180,7 +180,8 @@ export class Game {
     // --- system wiring ---
     // Systems never import each other; every cross-system behaviour is a
     // callback installed here.
-    this.player.onDamaged = (_amount, died) => this.onPlayerDamaged(died);
+    this.player.onDamaged = (amount, died, from) =>
+      this.onPlayerDamaged(amount, died, from);
     this.battle.setPlayer(this.player);
     this.battle.onBotKilled = (bot, killer) => {
       this.sfx.enemyDie();
@@ -664,6 +665,9 @@ export class Game {
         Math.tan(this.cameraSys.camera.fov / 2)) *
       (window.innerHeight / 2);
     this.hud.setCrosshair(this.input.ads, spreadPx);
+    // Damage arcs are world-anchored, so they need this frame's aim yaw to be
+    // re-projected onto the screen — pushed here like every other HUD input.
+    this.hud.setViewYaw(this.cameraSys.aimYaw);
     this.hud.setTickets(
       [CONFIG.teams[0].name, CONFIG.teams[1].name],
       this.conquest.tickets,
@@ -698,6 +702,7 @@ export class Game {
   private enterDeploy(delay: number): void {
     this.respawnT = delay;
     this.minimap.setVisible(false);
+    this.hud.clearDamageDirections();
     this.hud.setScoreboard(false);
     if (this.map) this.deployScreen.show(this.map, this.conquest, this.player.team);
     this.deployScreen.update(this.respawnT);
@@ -709,6 +714,7 @@ export class Game {
     this.state = "roundover";
     this.deployScreen.hide();
     this.hud.setScoreboard(false);
+    this.hud.clearDamageDirections();
     // `updateGameplay` stops running here, so push the final state once more —
     // otherwise the ticket bar sits frozen a frame behind the result text.
     this.hud.setTickets(
@@ -731,9 +737,19 @@ export class Game {
   }
 
   /** Called from `Player.takeDamage`, whoever pulled the trigger. */
-  private onPlayerDamaged(died: boolean): void {
+  private onPlayerDamaged(amount: number, died: boolean, from?: Vector3): void {
     if (this.state !== "playing") return;
     this.hud.flashDamage();
+    // The vignette says "hit"; the arc says "from there". Bearing is taken
+    // once, in world space, from the shot's origin — the HUD re-projects it
+    // against the view every frame from then on.
+    if (from) {
+      const dx = from.x - this.player.position.x;
+      const dz = from.z - this.player.position.z;
+      if (dx * dx + dz * dz > 1e-6) {
+        this.hud.addDamageDirection(Math.atan2(dx, dz), amount);
+      }
+    }
     this.post.flashDamage();
     this.sfx.playerHurt();
     const haptic = CONFIG.rumble;

@@ -146,7 +146,8 @@ src/
       heights.ts            # GENERATED floor heights (editor terrain mode)
       environment.ts        # Hollowmere's palette, fog, mist, particles
   ui/
-    HUD.ts                  # DOM overlay: tickets, flags, killfeed, scoreboard
+    HUD.ts                  # DOM overlay: tickets, flags, killfeed, scoreboard,
+                            # world-anchored directional damage arcs
     DeployScreen.ts         # Clickable top-down deploy map
     Minimap.ts              # Corner minimap: flags, friendlies, firing enemies
   shaders/

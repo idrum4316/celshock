@@ -1,12 +1,82 @@
 /**
  * HUD.ts — In-game DOM overlay: health/ammo, tickets, flag strip, crosshair,
- * hitmarker, damage vignette, toasts, killfeed, scoreboard, menu/round-over.
- * Invariants: Game pushes state every frame (setHealth/setAmmo/setFlags/...) —
- * setting HUD state from anywhere else is overwritten next tick. Pure DOM
- * manipulation; reads ControlPoint data, never imports game systems beyond
- * types. Transient elements (toasts, killfeed) self-remove via setTimeout.
+ * hitmarker, damage vignette, directional damage arcs, toasts, killfeed,
+ * scoreboard, menu/round-over.
+ * Invariants: Game pushes state every frame (setHealth/setAmmo/setFlags/
+ * setViewYaw/...) — setting HUD state from anywhere else is overwritten next
+ * tick. Pure DOM manipulation; reads ControlPoint data, never imports game
+ * systems beyond types. Transient elements (toasts, killfeed) self-remove via
+ * setTimeout; the damage arcs are a fixed pool, never allocated per hit.
  */
+import { CONFIG } from "../config";
 import type { ControlPoint } from "../systems/ConquestSystem";
+
+/**
+ * Geometry of one damage arc, in the pixels of its own SVG box. Art constants,
+ * so they live here rather than in CONFIG — the timings that make it *feel*
+ * right are the tunables, and those are in `CONFIG.damageIndicator`.
+ */
+const ARC_BOX = 300;
+const ARC_RADIUS = 104;
+const ARC_HALF_SPAN_DEG = 29;
+const ARC_THICKNESS = 8;
+/** How far the tip juts past the outer edge, and how much of the span it eats. */
+const ARC_TIP = 5;
+const ARC_TIP_HALF_U = 0.1;
+
+/** One live directional damage arc, pointing at where a shot came from. */
+interface DamageArc {
+  el: HTMLElement;
+  /** World bearing to the shooter (radians, 0 = +Z), fixed at the hit. */
+  bearing: number;
+  /** Seconds of life left; <= 0 means the slot is free. */
+  t: number;
+  /** 0..1 from the damage that spawned it — drives opacity. */
+  strength: number;
+}
+
+/**
+ * The arc shape: an annulus sector whose thickness tapers to nothing at both
+ * ends, with a small tip at the apex jutting *outward* — away from the
+ * crosshair, along the bearing to the shooter. A constant-thickness band
+ * reads as a slice of a ring around the crosshair; the taper plus that tip is
+ * what makes it read as a pointer. The tip is on the outer edge only, so the
+ * inner edge stays a clean arc and the crosshair keeps its clearance. Built
+ * once as a path string and shared by every element in the pool.
+ */
+function damageArcMarkup(): string {
+  const c = ARC_BOX / 2;
+  // Even, and fine enough that the tip's straight sides don't read as steps.
+  const steps = 48;
+  const outer: string[] = [];
+  const inner: string[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const u = i / steps;
+    const ang = ((-ARC_HALF_SPAN_DEG + u * ARC_HALF_SPAN_DEG * 2) * Math.PI) / 180;
+    const taper = Math.pow(Math.max(0, Math.cos((u - 0.5) * Math.PI)), 0.7);
+    // Linear falloff either side of the apex: straight sides, so it reads as a
+    // point rather than a bulge. `steps` is even, so u = 0.5 is sampled exactly
+    // and the apex is a real vertex.
+    const tip = ARC_TIP * Math.max(0, 1 - Math.abs(u - 0.5) / ARC_TIP_HALF_U);
+    const ro = ARC_RADIUS + (ARC_THICKNESS / 2) * taper + tip;
+    const ri = ARC_RADIUS - (ARC_THICKNESS / 2) * taper;
+    const sin = Math.sin(ang);
+    const cos = Math.cos(ang);
+    outer.push(`${(c + ro * sin).toFixed(1)} ${(c - ro * cos).toFixed(1)}`);
+    inner.push(`${(c + ri * sin).toFixed(1)} ${(c - ri * cos).toFixed(1)}`);
+  }
+  inner.reverse();
+  const d = `M ${outer.join(" L ")} L ${inner.join(" L ")} Z`;
+  return `<svg viewBox="0 0 ${ARC_BOX} ${ARC_BOX}" width="${ARC_BOX}" height="${ARC_BOX}"><path d="${d}"/></svg>`;
+}
+
+/** Signed shortest angle from `a` to `b`, in radians. */
+function angleDelta(a: number, b: number): number {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
 
 /**
  * DOM-based HUD: health/ammo, the Conquest scoreboard (tickets and the flag
@@ -27,6 +97,7 @@ export class HUD {
   private crosshairRing: HTMLElement;
   private hitmarker: HTMLElement;
   private vignette: HTMLElement;
+  private damageDirs: HTMLElement;
   private message: HTMLElement;
   private toasts: HTMLElement;
   private overlay: HTMLElement;
@@ -37,6 +108,10 @@ export class HUD {
   private hitT = 0;
   private vignetteT = 0;
   private messageT = 0;
+  /** Fixed pool, grown to CONFIG.damageIndicator.maxArcs and never past it. */
+  private damageArcs: DamageArc[] = [];
+  /** The view yaw the arcs are projected against; pushed every frame. */
+  private viewYaw = 0;
 
   constructor() {
     this.root = document.getElementById("hud")!;
@@ -46,6 +121,7 @@ export class HUD {
       <div id="crosshair"><div class="dot"></div><span class="ring"></span></div>
       <div id="hitmarker" class="hidden">✕</div>
       <div id="vignette"></div>
+      <div id="damage-dirs"></div>
       <div id="message" class="hidden"></div>
       <div id="toasts"></div>
       <div id="killfeed"></div>
@@ -70,6 +146,7 @@ export class HUD {
     this.crosshairRing = this.crosshair.querySelector(".ring") as HTMLElement;
     this.hitmarker = document.getElementById("hitmarker")!;
     this.vignette = document.getElementById("vignette")!;
+    this.damageDirs = document.getElementById("damage-dirs")!;
     this.message = document.getElementById("message")!;
     this.toasts = document.getElementById("toasts")!;
     this.overlay = document.getElementById("overlay")!;
@@ -90,6 +167,92 @@ export class HUD {
     if (this.messageT > 0) {
       this.messageT -= dt;
       if (this.messageT <= 0) this.message.classList.add("hidden");
+    }
+    this.updateDamageArcs(dt);
+  }
+
+  /**
+   * The yaw the damage arcs are drawn against — the aim yaw, so an arc lines
+   * up with the crosshair you would have to put on the shooter.
+   */
+  setViewYaw(yaw: number): void {
+    this.viewYaw = yaw;
+  }
+
+  /**
+   * Records a hit from `bearing` (world radians, 0 = +Z), the way Battlefield
+   * does it: the direction is world-space and fixed at the moment of the hit,
+   * and it is the *view* that moves under it. Repeated hits from roughly the
+   * same place refresh one arc rather than stacking (see `mergeDegrees`).
+   */
+  addDamageDirection(bearing: number, amount: number): void {
+    const cfg = CONFIG.damageIndicator;
+    const strength = Math.max(0, Math.min(1, amount / cfg.fullDamage));
+    const merge = (cfg.mergeDegrees * Math.PI) / 180;
+
+    let slot: DamageArc | null = null;
+    for (const arc of this.damageArcs) {
+      if (arc.t > 0 && Math.abs(angleDelta(arc.bearing, bearing)) < merge) {
+        // The newest hit wins the bearing: a shooter who has moved should drag
+        // their arc with them rather than leave it where they opened up.
+        arc.bearing = bearing;
+        arc.t = cfg.life;
+        arc.strength = Math.max(arc.strength, strength);
+        return;
+      }
+      if (arc.t <= 0 && !slot) slot = arc;
+    }
+
+    if (!slot) {
+      if (this.damageArcs.length < cfg.maxArcs) {
+        const el = document.createElement("div");
+        el.className = "arc";
+        el.innerHTML = damageArcMarkup();
+        this.damageDirs.appendChild(el);
+        slot = { el, bearing, t: 0, strength };
+        this.damageArcs.push(slot);
+      } else {
+        // Pool full and all live: the arc closest to expiring is the least
+        // useful one, so recycle that rather than dropping the new threat.
+        slot = this.damageArcs.reduce((a, b) => (b.t < a.t ? b : a));
+      }
+    }
+    slot.bearing = bearing;
+    slot.t = cfg.life;
+    slot.strength = strength;
+    slot.el.style.display = "block";
+  }
+
+  /** Wipes the arcs — death, deploy, round end. Stale threats mean nothing. */
+  clearDamageDirections(): void {
+    for (const arc of this.damageArcs) {
+      arc.t = 0;
+      arc.el.style.display = "none";
+    }
+  }
+
+  private updateDamageArcs(dt: number): void {
+    const cfg = CONFIG.damageIndicator;
+    for (const arc of this.damageArcs) {
+      if (arc.t <= 0) continue;
+      arc.t -= dt;
+      if (arc.t <= 0) {
+        arc.el.style.display = "none";
+        continue;
+      }
+      // World yaw 0 faces +Z and grows clockwise seen from above, which is the
+      // same sense as a CSS rotation of an up-pointing shape — so the bearing
+      // minus the view yaw IS the screen angle, with no axis flip.
+      const rel = ((arc.bearing - this.viewYaw) * 180) / Math.PI;
+      const fade = Math.min(1, arc.t / cfg.fadeTime);
+      const opacity =
+        (cfg.minOpacity + (cfg.maxOpacity - cfg.minOpacity) * arc.strength) * fade;
+      // A brief pop outward on arrival: the arc has to catch the eye in a
+      // firefight where the screen is already flashing red.
+      const age = cfg.life - arc.t;
+      const punch = 1 + 0.09 * Math.max(0, 1 - age / 0.16);
+      arc.el.style.opacity = opacity.toFixed(3);
+      arc.el.style.transform = `rotate(${rel.toFixed(2)}deg) scale(${punch.toFixed(3)})`;
     }
   }
 

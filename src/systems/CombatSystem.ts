@@ -24,7 +24,8 @@ export interface Hittable {
   center: Vector3;
   hitRadius: number;
   invulnerable?: boolean;
-  takeDamage(amount: number): boolean;
+  /** `from` is where the shot started, for whoever wants to face the shooter. */
+  takeDamage(amount: number, from?: Vector3): boolean;
 }
 
 /** Outcome of one shot: who it hit, whether that killed them, and if it stopped on geometry. */
@@ -126,7 +127,7 @@ export class CombatSystem {
     const hitPoint = origin.add(dir.scale(hitDist));
     let killed = false;
     if (hitTarget) {
-      killed = hitTarget.takeDamage(damage);
+      killed = hitTarget.takeDamage(damage, origin);
       this.spawnSpark(hitPoint, "#ffe680");
     } else if (hitWall) {
       this.spawnSpark(hitPoint, "#c8c8c8");

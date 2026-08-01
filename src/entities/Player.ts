@@ -73,7 +73,7 @@ export class Player implements Combatant {
    * Wired by Game. Bots damage the player straight through `CombatSystem`, so
    * this is how the flash, the sound, and the death handling still happen.
    */
-  onDamaged: (amount: number, died: boolean) => void = () => {};
+  onDamaged: (amount: number, died: boolean, from?: Vector3) => void = () => {};
   private rifle!: RifleParts;
   private meshes: Mesh[] = [];
   /** The imported rigged body; null until the async GLB load resolves. */
@@ -547,13 +547,18 @@ export class Player implements Combatant {
     this.eyePos.set(p.x, p.y + CONFIG.camera.eyeHeight - this.groundY, p.z);
   }
 
-  takeDamage(amount: number): boolean {
+  /**
+   * `from` is the shooter's firing origin, forwarded straight back out through
+   * `onDamaged` — the player controller has no use for it, but the HUD's
+   * directional indicator does and this is the only path damage takes.
+   */
+  takeDamage(amount: number, from?: Vector3): boolean {
     if (!this.alive) return false;
     this.health = Math.max(0, this.health - amount);
     this.regenLockT = CONFIG.player.regenDelay;
     const died = this.health <= 0;
     if (died) this.alive = false;
-    this.onDamaged(amount, died);
+    this.onDamaged(amount, died, from);
     return died;
   }
 

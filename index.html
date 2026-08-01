@@ -318,6 +318,33 @@
         background: radial-gradient(ellipse at center, transparent 45%, rgba(255, 30, 30, 0.85) 100%);
       }
 
+      /* --- directional damage arcs ---
+         One pooled element per live arc, centred on the crosshair and rotated
+         by HUD.update() every frame; opacity and rotation are the only things
+         written per frame, so this stays a compositor-only change. */
+      #damage-dirs {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 0;
+        height: 0;
+      }
+      #damage-dirs .arc {
+        position: absolute;
+        top: -150px;
+        left: -150px;
+        width: 300px;
+        height: 300px;
+        display: none;
+        opacity: 0;
+        filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.9));
+      }
+      #damage-dirs .arc path {
+        fill: #a5120a;
+        stroke: rgba(0, 0, 0, 0.7);
+        stroke-width: 1.2;
+      }
+
       /* --- center message --- */
       #message {
         position: absolute;
@@ -422,6 +449,7 @@
       #hud.editing #ticket-bar,
       #hud.editing #flag-strip,
       #hud.editing #crosshair,
+      #hud.editing #damage-dirs,
       #hud.editing #hud-bottom,
       #hud.editing #killfeed,
       #hud.editing #lock-hint { display: none; }
