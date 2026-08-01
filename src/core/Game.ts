@@ -25,6 +25,7 @@ import { CONFIG } from "../config";
 import { CelMaterialFactory, updateOutlineScales } from "../shaders/CelShader";
 import { HorrorPost } from "../shaders/HorrorPost";
 import { Bot } from "../entities/Bot";
+import { difficultyNames } from "../entities/BotSkill";
 import type { Combatant, Team } from "../entities/Combatant";
 import { Player } from "../entities/Player";
 import { AimAssistSystem } from "../systems/AimAssistSystem";
@@ -62,6 +63,28 @@ type GameState = "menu" | "deploy" | "playing" | "roundover" | "editor";
 
 /** Grass bends around combatants; in the editor there are none. */
 const EMPTY_PUSHERS: readonly Combatant[] = [];
+
+/** Where the chosen enemy-skill tier is remembered between sessions. */
+const DIFFICULTY_KEY = "hollowmere.difficulty";
+
+function readDifficulty(): number {
+  try {
+    const raw = window.localStorage.getItem(DIFFICULTY_KEY);
+    const n = raw === null ? NaN : Number(raw);
+    if (Number.isFinite(n)) return n;
+  } catch {
+    // Private browsing and file:// both throw here. A default is fine.
+  }
+  return CONFIG.bots.skill.defaultDifficulty;
+}
+
+function writeDifficulty(tier: number): void {
+  try {
+    window.localStorage.setItem(DIFFICULTY_KEY, String(tier));
+  } catch {
+    // Not being able to remember the setting is not worth failing over.
+  }
+}
 
 /**
  * Top-level orchestrator: owns the engine/scene, all systems, the game state
@@ -107,6 +130,12 @@ export class Game {
   private map: GameMap | null = null;
   /** Small delay so overlay confirms aren't triggered by held buttons. */
   private overlayT = 0;
+  /**
+   * Selected enemy-skill tier, applied on every round start. Persisted, because
+   * re-picking it after each reload is exactly the friction that makes people
+   * leave a difficulty setting alone.
+   */
+  private difficulty = readDifficulty();
   /** Reused each frame: the player plus every bot, for objective occupancy. */
   private readonly combatants: Combatant[] = [];
   /** Scratch for the shadow focus point — no per-frame allocation. */
@@ -201,6 +230,13 @@ export class Game {
       // Gunfire gives an enemy away on the minimap for a couple of seconds.
       if (bot.team !== this.player.team) this.minimap.reveal(bot);
     };
+    // A bot reloading is a window the player can push into, so it has to be
+    // audible. Spatialised for the same reason bot fire is.
+    this.battle.onBotReloaded = (bot) => this.sfx.botReload(bot.position);
+    // A round cracking past is a cue, not a hit. CombatSystem finds these
+    // inside the target loop it already runs per shot, and has no business
+    // knowing what a bot is — so the routing happens here.
+    this.combat.onNearMiss = (near, from) => this.battle.suppress(near, from);
     this.battle.spawnPointFor = (bot) => this.spawnPointFor(bot.team);
     this.battle.objectiveFor = (bot) =>
       this.conquest.objectiveFor(bot.team, bot.squad, bot.position);
@@ -243,10 +279,34 @@ export class Game {
       });
     }
 
-    this.hud.showMenu();
+    this.hud.onDifficulty = (tier) => this.setDifficulty(tier);
+    this.showMenu();
     // Debug/test handle (used by automated smoke tests).
     (window as unknown as { __celshock: Game }).__celshock = this;
     this.engine.runRenderLoop(() => this.tick());
+  }
+
+  /**
+   * Redraws the menu overlay. The difficulty row is re-rendered rather than
+   * patched because `showMenu` writes the whole overlay anyway — and the round
+   * -over screen shares that overlay, so there is nothing to keep in sync.
+   */
+  private showMenu(): void {
+    this.hud.showMenu(difficultyNames(), this.difficulty);
+  }
+
+  /**
+   * Picks an enemy-skill tier. Applied at the next round start rather than
+   * immediately: `assignSkills` re-rolls the whole roster, and doing that
+   * mid-round would change the bots you are currently fighting.
+   */
+  private setDifficulty(tier: number): void {
+    const n = difficultyNames().length;
+    const next = tier < 0 ? 0 : tier >= n ? n - 1 : tier;
+    if (next === this.difficulty) return;
+    this.difficulty = next;
+    writeDifficulty(next);
+    if (this.state === "menu") this.showMenu();
   }
 
   private tick(): void {
@@ -257,6 +317,12 @@ export class Game {
       case "menu":
       case "roundover":
         this.overlayT += dt;
+        // Menu only: `roundover` shares the overlay element but shows the
+        // victory text, and redrawing the picker over it would wipe the result.
+        if (this.state === "menu") {
+          if (this.input.menuLeftPressed) this.setDifficulty(this.difficulty - 1);
+          if (this.input.menuRightPressed) this.setDifficulty(this.difficulty + 1);
+        }
         if (this.input.confirmPressed && this.overlayT > 0.5) {
           this.startRound();
         }
@@ -401,6 +467,9 @@ export class Game {
 
   private startRound(): void {
     this.hud.hideOverlay();
+    // Re-draw skills for the chosen tier. The rig pool is never disposed, so
+    // this is the only place the roster's difficulty can change.
+    this.battle.setDifficulty(this.difficulty);
 
     this.map?.dispose();
     this.combat.clearTransient();
@@ -501,6 +570,10 @@ export class Game {
         muzzle,
         this.battle.hittablesAgainst(this.player.team),
       );
+      // Bots hear the player's rifle the same way they hear each other's. This
+      // is the only place the player's own gunfire enters the world, so it is
+      // the only place that can say so.
+      this.battle.hearGunshot(muzzle, this.player.team);
       // Recoil: kick the aim up and off to a random side, softened while
       // braced in ADS. It decays on its own, so the burst climbs and settles.
       const rc = CONFIG.recoil;

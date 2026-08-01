@@ -407,11 +407,30 @@ export class HUD {
     this.lockHint.classList.toggle("hidden", !visible);
   }
 
-  showMenu(): void {
+  /**
+   * The main menu, including the difficulty picker.
+   *
+   * `#overlay` is inside a `pointer-events: none` HUD and does not opt back in
+   * (only `#deploy` does), so the difficulty row asks for pointer events on
+   * itself alone — the rest of the overlay stays inert and a stray click can
+   * never be mistaken for a UI action.
+   */
+  showMenu(difficulties: readonly string[], selected: number): void {
     this.overlay.classList.remove("hidden");
+    const tiers = difficulties
+      .map(
+        (name, i) =>
+          `<button class="tier${i === selected ? " on" : ""}" data-tier="${i}">${name}</button>`,
+      )
+      .join("");
     this.overlay.innerHTML = `
       <h1>HOLLOWMERE</h1>
       <p class="tagline">Conquest — take and hold five points against the Blight</p>
+      <div class="difficulty">
+        <span class="label">Enemy skill</span>
+        ${tiers}
+        <span class="hint">&larr; &rarr; or D-pad</span>
+      </div>
       <table class="controls">
         <tr><th></th><th>Gamepad</th><th>Keyboard / Mouse</th></tr>
         <tr><td>Move</td><td>Left stick</td><td>WASD</td></tr>
@@ -424,7 +443,15 @@ export class HUD {
       </table>
       <p class="prompt">Click, press Enter, or press Start to begin</p>
     `;
+    this.overlay
+      .querySelectorAll<HTMLElement>("button.tier")
+      .forEach((btn) => {
+        btn.onclick = () => this.onDifficulty(Number(btn.dataset.tier));
+      });
   }
+
+  /** Wired by Game: the player picked a difficulty tier from the menu. */
+  onDifficulty: (tier: number) => void = () => {};
 
   showRoundOver(
     winnerName: string,

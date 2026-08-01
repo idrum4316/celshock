@@ -151,6 +151,22 @@ export class Sfx {
     this.noise(0.035, 0.035, panner);
   }
 
+  /**
+   * A bot working its magazine. The player's own reload is flat and
+   * front-and-centre; this one is spatialised, because knowing *which* of the
+   * enemies in front of you has just gone dry is the point of hearing it — it
+   * is the cue to push.
+   */
+  botReload(at: Vector3): void {
+    const panner = this.panner(at);
+    if (!panner) return;
+    this.tone(430, 0.05, "square", 0.03, 1, panner);
+    setTimeout(() => {
+      const second = this.panner(at);
+      if (second) this.tone(560, 0.05, "square", 0.03, 1, second);
+    }, 120);
+  }
+
   // --- primitives ----------------------------------------------------------
 
   private buildNoiseBuffer(): void {

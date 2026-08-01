@@ -89,7 +89,11 @@ src/
       clipDriver.ts         #   locomotion clip selection/crossfade/speed
     RifleModel.ts           # Low-poly SCAR-pattern rifle + holo sight builder
     Combatant.ts            # Team + the shared shootable/shooter interface
-    Bot.ts                  # Bot FSM: advance / engage / reposition / capture
+    Bot.ts                  # Bot FSM: advance / hunt / engage / takeCover /
+                            #   suppressed / retreat / capture, + movement,
+                            #   aim tracking, magazine, peek cycle
+    BotMemory.ts            # One bot's decaying picture of the fight
+    BotSkill.ts             # skill scalar -> BotProfile; difficulty tiers
     SoldierModel.ts         # Cheap merged bot rig + procedural animation
   systems/
     BattleSystem.ts         # Bot pool, AI scheduling, LOS, distance LOD
@@ -137,6 +141,9 @@ src/
                             # trough, shrine, kiln
       terrain.ts            # terrace, ramp, road, jetty
     NavGrid.ts              # Walkable-surface graph + precomputed flow fields
+    CoverMap.ts             # Baked per-surface directional cover masks
+    boxGeometry.ts          # The analytic WorldBox primitives, shared by
+                            #   NavGrid / ObstacleField / CoverMap
     ObstacleField.ts        # Sub-cell collision push-out for thin props
     Props.ts                # Scatter props: trees, graves, rubble, braziers,
                             # boulders, brambles, barrels
@@ -693,12 +700,66 @@ calls or a permanent hitch:
 - **AI is staggered at `CONFIG.bots.thinkRate`**, round-robin across frames.
   `acquire()` gathers candidates by distance and ray-tests them in ascending
   order, returning the first visible one — testing all of them fires up to 30
-  picks per think.
+  picks per think. Two things keep that honest: the view cone rejects most
+  candidates *before* any ray, and `CONFIG.bots.acquireRayBudget` caps how many
+  survivors get tested. A dead bot must also not consume a think slot, or the
+  living half of a roster thinks at half the advertised rate.
 
 Bots hold a target until it dies, breaks LOS, or leaves range. Without that
 hysteresis, "nearest visible enemy" flips every tick in a crowd, which resets
 `aimT` and means bots essentially never finish their reaction wind-up and fire.
-This looked exactly like "bots don't shoot" and is worth remembering.
+This looked exactly like "bots don't shoot" and is worth remembering. It is also
+why losing a target does not simply null it: `BotMemory.lastAimed` outlives
+`target`, and re-acquiring the same enemy resumes at `profile.reacquireDelay`
+instead of from zero.
+
+### Bot perception, cover and skill
+
+**Everything a bot notices without seeing it is ray-free by construction**, and
+that is the constraint the whole design hangs off — the LOS budget is the one
+thing here that does not scale.
+
+- **Field of view.** `acquire()` gates on a cone around `Bot.facing` before it
+  ray-tests. Bots used to see 360° instantly out to 55 m. Two exemptions:
+  `peripheralRange`, and a widened cone while a threat cue is live. It gates
+  *acquisition* only — a bot faces its target once it has one, so you can flank
+  an unaware bot, never a fighting one.
+- **Damage direction is free and was being thrown away.** `CombatSystem.fire`
+  has always passed the shooter's origin into `takeDamage`; `Bot` ignored it.
+- **Hearing** is a squared-distance sweep inside `BattleSystem.botFire`, with a
+  jittered position so bots converge on the *sound*, not the shooter. `Game`
+  calls `hearGunshot` for the player's own fire.
+- **Near misses** ride the target loop `CombatSystem.fire` already runs: one
+  extra sphere test at `hitRadius + suppressRadius`, reported via `onNearMiss`.
+- **Lost line of sight costs no ray either.** `fire()` already pays for a wall
+  pick; a run of `losBrokenShots` blocked rounds drops the target.
+
+**Cover is baked, never probed** (`world/CoverMap.ts`): one bit per direction
+per surface, 16 directions, two masks. The map is static, so this is the same
+reasoning that makes `NavGrid` bake seven flow fields. The runtime cost of a
+cover query is a bit test. Three rules:
+
+- **Hard cover is 1.7 m — the hit sphere's top, not the 1.55 m eye height.** LOS
+  is tested from the eyes but hits are tested against the sphere
+  (`center.y + hitRadius` = 1.65). Bake at eye height and a bot behind a 1.6 m
+  wall is *visible but unhittable*, which reads as broken netcode.
+- **Soft cover (0.9 m) is a steering preference and nothing else.** The rig has
+  seven joints and no knees, so there is no crouch: a bot behind a waist-high
+  wall is exactly as shootable as one in the open. **Cover here means corners.**
+- **It is a preference, not a commitment** — the same rule as `ObstacleField`'s
+  push-out. A spot not reached within `cover.abandonTime` is dropped, and a
+  cooldown stops the search instantly re-picking it. A bot moving to cover still
+  shoots; only the tucked-in half of the peek cycle holds fire. Both of those
+  were learned the hard way: without them bots walked into walls holding fire
+  for the whole round.
+
+**Skill is one scalar per bot** (`BotSkill.profileFor`), resolved into a
+`BotProfile` once at assignment and never per frame — `CONFIG` is `as const`, so
+lerping at each use site would need an annotation everywhere. It is drawn **per
+squad** from a seeded generator, because an elite squad and a green squad is
+something a player can read, where salt-and-pepper skill inside a squad is noise.
+Difficulty tiers slide the distribution's centre and hold its width, so every
+tier still contains aces and rookies.
 
 ### Conquest rules
 

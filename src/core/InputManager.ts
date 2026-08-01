@@ -43,6 +43,12 @@ export class InputManager {
   scoreboard = false;
   /** Edge-triggered "confirm" (Enter / click / gamepad A / Start). */
   confirmPressed = false;
+  /**
+   * Edge-triggered menu navigation (arrow keys / gamepad D-pad). Menus only —
+   * nothing in gameplay reads these.
+   */
+  menuLeftPressed = false;
+  menuRightPressed = false;
   pointerLocked = false;
   gamepadConnected = false;
   /**
@@ -73,6 +79,8 @@ export class InputManager {
   private prevJump = false;
   private prevReload = false;
   private prevConfirm = false;
+  private prevMenuLeft = false;
+  private prevMenuRight = false;
   private prevPadSprint = false;
   /** Latched L3 sprint state — toggled on each L3 press, cleared on blur. */
   private padSprintOn = false;
@@ -211,6 +219,18 @@ export class InputManager {
       padStart;
     this.confirmPressed = confirmNow && !this.prevConfirm;
     this.prevConfirm = confirmNow;
+
+    // Menu navigation. D-pad left/right are buttons 14/15 on the standard
+    // mapping. Edge-triggered like everything else here, so holding the key
+    // steps one tier rather than scrolling through the whole list.
+    const leftNow =
+      this.keys.has("ArrowLeft") || (pad ? buttonHeld(pad, 14, trig) : false);
+    const rightNow =
+      this.keys.has("ArrowRight") || (pad ? buttonHeld(pad, 15, trig) : false);
+    this.menuLeftPressed = leftNow && !this.prevMenuLeft;
+    this.menuRightPressed = rightNow && !this.prevMenuRight;
+    this.prevMenuLeft = leftNow;
+    this.prevMenuRight = rightNow;
   }
 
   /**

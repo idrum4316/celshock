@@ -2,9 +2,14 @@
  * BattleSystem.ts — Bot roster: a fixed pool built once and NEVER disposed
  * (death hides a rig, respawn re-poses it — respawning is continuous), AI
  * scheduling, LOS, distance LOD.
- * Invariants: think ticks are staggered round-robin at CONFIG.bots.thinkRate —
- * target acquisition ray-tests candidates nearest-first and stops at the first
- * visible one. LOS rays filter metadata.solid === true. Bot muzzle flashes are
+ * Invariants: think ticks are staggered round-robin at CONFIG.bots.thinkRate,
+ * and a dead bot must not consume a budget slot or the living think slower than
+ * advertised. Target acquisition ray-tests candidates nearest-first, stops at
+ * the first visible one, and is capped at CONFIG.bots.acquireRayBudget — the
+ * view cone (Bot.facing) rejects most candidates before any ray is fired.
+ * Hearing, damage direction and near-miss suppression are all RAY-FREE by
+ * construction; keep them that way. LOS rays filter metadata.solid === true.
+ * Cover is a baked lookup (world/CoverMap), never a probe. Bot muzzle flashes are
  * NOT pulsed from here — this system only records flash positions and Game
  * spends CONFIG.lighting.muzzleBudgetPerFrame on the nearest few (16 shader
  * light slots are absolute). Runs AFTER ConquestSystem.update each frame.
@@ -14,8 +19,10 @@
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { Bot, type BattleCtx } from "../entities/Bot";
+import { assignSkills } from "../entities/BotSkill";
 import { OTHER_TEAM, type Combatant, type Team } from "../entities/Combatant";
 import type { CelMaterialFactory } from "../shaders/CelShader";
+import type { CoverMap } from "../world/CoverMap";
 import type { FlowField, NavGrid } from "../world/NavGrid";
 import type { GameMap } from "../world/MapBuilder";
 import type { ObstacleField } from "../world/ObstacleField";
@@ -53,6 +60,8 @@ export class BattleSystem {
   onBotKilled: (bot: Bot, killer: Team) => void = () => {};
   /** Wired by Game: a bot pulled the trigger, at this world position. */
   onBotFired: (bot: Bot, at: Vector3) => void = () => {};
+  /** Wired by Game: a bot ran its magazine dry and started reloading. */
+  onBotReloaded: (bot: Bot) => void = () => {};
   /** Wired by Game: where should this bot deploy? */
   spawnPointFor: (bot: Bot) => { pos: Vector3; yaw: number } | null = () => null;
   /** Wired by Game: which flag is this bot's squad heading for? */
@@ -61,6 +70,7 @@ export class BattleSystem {
   inCaptureZone: (bot: Bot) => boolean = () => false;
 
   private nav: NavGrid | null = null;
+  private cover: CoverMap | null = null;
   private obstacles: ObstacleField | null = null;
   private player: Combatant | null = null;
   private thinkCursor = 0;
@@ -87,6 +97,7 @@ export class BattleSystem {
           spec.eyeColor,
         );
         bot.squad = Math.floor(i / CONFIG.bots.squadSize);
+        bot.onReload = () => this.onBotReloaded(bot);
         this.bots.push(bot);
       }
     }
@@ -101,8 +112,21 @@ export class BattleSystem {
       },
       acquire: (bot) => this.acquire(bot),
       visible: (from, to) => this.visible(from, to),
-      fire: (bot, target, spread) => this.botFire(bot, target, spread),
+      fire: (bot, aimAt, spread) => this.botFire(bot, aimAt, spread),
       fieldFor: (bot) => this.fieldFor(bot),
+      homeFieldFor: (bot) => this.homeFieldFor(bot),
+      hasCover: (bot, tx, tz) => {
+        if (!this.cover || !this.nav) return false;
+        const s = this.nav.surfaceAt(bot.position.x, bot.position.y, bot.position.z);
+        return this.cover.coverAt(s, bot.position.x, bot.position.z, tx, tz);
+      },
+      findCover: (bot, tx, tz, into) =>
+        this.cover ? this.cover.findCover(bot.position, tx, tz, into) : false,
+      openness: (bot) => {
+        if (!this.cover || !this.nav) return 1;
+        const s = this.nav.surfaceAt(bot.position.x, bot.position.y, bot.position.z);
+        return this.cover.opennessAt(s);
+      },
       separation: (bot, out) => this.separation(bot, out),
       clearObstacles: (x, y, z, out) =>
         this.obstacles
@@ -113,11 +137,62 @@ export class BattleSystem {
 
   setMap(map: GameMap): void {
     this.nav = map.nav;
+    this.cover = map.cover;
     this.obstacles = map.obstacles;
   }
 
   setPlayer(player: Combatant): void {
     this.player = player;
+  }
+
+  /**
+   * A gun went off at `at`. Every bot near enough hears it.
+   *
+   * Push, not pull, and no rays: a squared-distance sweep over the roster, 16
+   * compares against ~90 shots a second. The position is jittered, so bots
+   * converge on the *sound* rather than snapping their attention onto the exact
+   * shooter — hearing that resolves to a precise position is indistinguishable
+   * from a wallhack.
+   *
+   * Called internally for bot fire and by `Game` for the player's.
+   */
+  hearGunshot(at: Vector3, shooter: Team): void {
+    const p = CONFIG.bots.perception;
+    const range2 = p.hearRange * p.hearRange;
+    for (const bot of this.bots) {
+      if (!bot.alive) continue;
+      const dx = bot.position.x - at.x;
+      const dz = bot.position.z - at.z;
+      if (dx * dx + dz * dz > range2) continue;
+      // Deterministic-ish jitter from the position itself rather than
+      // Math.random(), so the same shot is heard the same way by everyone and
+      // a replay of a fight is reproducible.
+      const j = p.hearJitter;
+      bot.memory.heardShot(
+        at,
+        bot.team !== shooter,
+        Math.sin(at.x * 12.9898 + at.z * 78.233) * j,
+        Math.cos(at.x * 39.3468 + at.z * 11.135) * j,
+      );
+    }
+  }
+
+  /**
+   * A round passed close to `near` without hitting it. Wired from `Game` off
+   * `CombatSystem.onNearMiss`, which rides the target loop every shot already
+   * walks — no new rays, no new iteration.
+   */
+  suppress(near: Hittable, from: Vector3): void {
+    if (near instanceof Bot && near.alive) near.memory.nearMiss(from);
+  }
+
+  /**
+   * Re-draws every bot's skill for the given difficulty tier. Called on round
+   * start, so a difficulty picked in the menu applies without rebuilding the
+   * (never-disposed) rig pool.
+   */
+  setDifficulty(tier: number): void {
+    assignSkills(this.bots, tier);
   }
 
   /** Kills everyone and hides every rig, without disposing the pool. */
@@ -169,12 +244,18 @@ export class BattleSystem {
     let budget = Math.floor(this.thinkDebt);
     this.thinkDebt -= budget;
     budget = Math.min(budget, this.bots.length);
-    for (let i = 0; i < budget; i++) {
+    // A dead bot used to consume a budget slot on its way past the cursor, so
+    // with half the roster respawning the living half thought at half the rate.
+    // Skipping without spending, bounded by one full pass so an all-dead roster
+    // still terminates, keeps the advertised rate honest.
+    let scanned = 0;
+    for (let done = 0; done < budget && scanned < this.bots.length; scanned++) {
       const bot = this.bots[this.thinkCursor];
       this.thinkCursor = (this.thinkCursor + 1) % this.bots.length;
       if (!bot.alive) continue;
       bot.objective = this.objectiveFor(bot);
       bot.think(this.ctx, this.inCaptureZone(bot));
+      done++;
     }
 
     // --- per-frame movement, with LOD ---
@@ -235,17 +316,55 @@ export class BattleSystem {
     const consider = (c: Combatant) => {
       if (!c.alive || c.team !== enemy) return;
       const d = Vector3.Distance(bot.position, c.position);
-      if (d < range) candidates.push({ c, d });
+      if (d < range && this.inView(bot, c)) candidates.push({ c, d });
     };
     for (const other of this.bots) consider(other);
     if (this.player) consider(this.player);
     if (candidates.length === 0) return null;
 
     candidates.sort((a, b) => a.d - b.d);
-    for (const { c } of candidates) {
+    // Bounded, not exhaustive. A bot in a crowded fight can have nine
+    // candidates in range, and testing them all is nine rays for a think tick
+    // that usually wants one — the cost this method's own comment was written
+    // to avoid. Stopping after the nearest few costs only that a bot may miss a
+    // distant enemy while three nearer ones are behind cover, and it will pick
+    // them up on the next tick 200 ms later.
+    const budget = Math.min(candidates.length, CONFIG.bots.acquireRayBudget);
+    for (let i = 0; i < budget; i++) {
+      const c = candidates[i].c;
       if (this.visible(bot.eyePos, c.eyePos)) return c;
     }
     return null;
+  }
+
+  /**
+   * Is `c` inside the bot's field of view?
+   *
+   * Bots used to see through a full 360 degrees, instantly, out to 55 m: one
+   * with its back turned acquired you the moment you rounded a corner, and
+   * there was no such thing as flanking. A cone fixes that, and it is *cheaper*
+   * than what it replaces — four flops per candidate, run before the ray test,
+   * so it shrinks the candidate list rather than adding to it.
+   *
+   * Two exemptions. Anything inside `peripheralRange` is noticed regardless of
+   * facing, because nobody misses a soldier at arm's length. And a live threat
+   * cue widens the cone: a bot that has just been shot at is looking harder.
+   *
+   * Note this gates *acquisition* only. Once a bot has a target it faces it, so
+   * a tracked enemy never falls out of the cone — you can flank an unaware bot,
+   * not one already fighting you. That asymmetry is the intended behaviour.
+   */
+  private inView(bot: Bot, c: Combatant): boolean {
+    const dx = c.position.x - bot.position.x;
+    const dz = c.position.z - bot.position.z;
+    const d2 = dx * dx + dz * dz;
+    const peripheral = bot.profile.peripheralRange;
+    if (d2 <= peripheral * peripheral) return true;
+    const d = Math.sqrt(d2);
+    if (d < 1e-4) return true;
+    // Bot yaw is atan2(x, z), so forward is (sin, cos) — see Bot's facing code.
+    const dot = (dx * Math.sin(bot.facing) + dz * Math.cos(bot.facing)) / d;
+    return dot >= (bot.alerted ? bot.profile.alertFovCos : bot.profile.fovCos);
   }
 
   /**
@@ -269,11 +388,20 @@ export class BattleSystem {
     return !hit?.hit;
   }
 
-  private botFire(bot: Bot, target: Combatant, spread: number): void {
+  /**
+   * A bot's shot, aimed at a world point rather than at a target.
+   *
+   * The point is the bot's own lagging aim point, which is what makes a
+   * strafing enemy hard to hit. Returns true when the round was stopped by
+   * geometry and found nobody — the caller reads that as a possible loss of
+   * line of sight, for free, off a wall pick `CombatSystem` was already paying
+   * for and discarding.
+   */
+  private botFire(bot: Bot, aimAt: Vector3, spread: number): boolean {
     const from = bot.eyePos;
-    const dir = target.eyePos.subtract(from);
+    const dir = aimAt.subtract(from);
     const len = dir.length();
-    if (len < 0.01) return;
+    if (len < 0.01) return false;
     dir.scaleInPlace(1 / len);
     const muzzle = bot.muzzleWorld();
     const shot = this.combat.fire(
@@ -287,16 +415,24 @@ export class BattleSystem {
     const at = muzzle.clone();
     this.muzzleFlashes.push(at);
     this.onBotFired(bot, at);
+    this.hearGunshot(at, bot.team);
     // The victim is whoever the ray actually found, which is often not the bot
     // that was being aimed at — a squadmate walks into the line all the time.
     if (shot.killed && shot.target instanceof Bot) {
       this.onBotKilled(shot.target, bot.team);
     }
+    return shot.hitWall && !shot.target;
   }
 
   private fieldFor(bot: Bot): FlowField | null {
     if (!this.nav || !bot.objective) return null;
     return this.nav.field(bot.objective) ?? null;
+  }
+
+  /** The route home, for a bot breaking contact. Built by MapBuilder per team. */
+  private homeFieldFor(bot: Bot): FlowField | null {
+    if (!this.nav) return null;
+    return this.nav.field(`home${bot.team}`) ?? null;
   }
 
   /**

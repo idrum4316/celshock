@@ -2,7 +2,7 @@
  * MapBuilder.ts — Turns layout data into a GameMap: merges visual meshes per
  * material (frozen, unpickable) and then again per map block (BlockMerge —
  * neighbouring structures share a draw call), emits collider proxies,
- * registers fixture lights, builds NavGrid + ObstacleField.
+ * registers fixture lights, builds NavGrid + CoverMap + ObstacleField.
  * Invariants: collider() is the ONLY place colliders are created — invisible,
  * pickable, checkCollisions, metadata.solid === true, never merged — and it
  * records the WorldBox for navigation. Geometry added by any other path is
@@ -33,6 +33,7 @@ import type { EnvironmentSpec } from "./environment";
 import type { MapLayout, ScatterSpec } from "./layout";
 import { TerrainField, terrainPatches } from "./TerrainField";
 import { NavGrid } from "./NavGrid";
+import { CoverMap } from "./CoverMap";
 import { ObstacleField } from "./ObstacleField";
 import { mulberry32 } from "./rng";
 import {
@@ -174,6 +175,8 @@ export interface GameMap {
   nav: NavGrid;
   /** Sub-cell collision the nav grid is too coarse to express. */
   obstacles: ObstacleField;
+  /** Baked directional cover over the nav graph, for the AI. */
+  cover: CoverMap;
   /** Shallow-water bodies from the layout; empty when the map is dry. */
   water: WaterRect[];
   /** Grass fields from the layout; empty when the map is bald. */
@@ -392,6 +395,9 @@ export class MapBuilder {
     return {
       size,
       nav,
+      // Cover needs the finished graph as well as the finished colliders, so it
+      // is built last. Baked once here and only read from then on.
+      cover: new CoverMap(nav, this.boxes),
       obstacles: new ObstacleField(size, this.boxes),
       controlPoints: layout.controlPoints,
       spawns: layout.spawns,

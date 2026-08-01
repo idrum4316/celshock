@@ -56,6 +56,16 @@ export class CombatSystem {
   private tracers: Tracer[] = [];
   private sparks: Spark[] = [];
 
+  /**
+   * Wired by Game: a round passed within `suppressRadius` of `near` without
+   * hitting it. `from` is the shooter's origin.
+   *
+   * A callback rather than a direct call because this system must not know
+   * about bots — it fires the player's rounds too, and the player is a
+   * perfectly good thing to suppress later.
+   */
+  onNearMiss: (near: Hittable, from: Vector3) => void = () => {};
+
   constructor(
     private scene: Scene,
     private mats: CelMaterialFactory,
@@ -113,14 +123,25 @@ export class CombatSystem {
     let hitDist = wallPick && wallPick.hit ? wallPick.distance : range;
     const hitWall = !!(wallPick && wallPick.hit);
 
-    // Nearest target sphere along the ray, if closer than the wall.
+    // Nearest target sphere along the ray, if closer than the wall. The same
+    // pass also notes anyone the round merely went *past*: the sphere test is
+    // already being paid for, so widening it by `suppressRadius` costs one
+    // extra compare per target and gives the AI a suppression signal that would
+    // otherwise need a system of its own.
     let hitTarget: Hittable | null = null;
+    const graze = CONFIG.bots.perception.suppressRadius;
     for (const target of targets) {
       if (target.invulnerable) continue;
       const d = raySphere(origin, dir, target.center, target.hitRadius);
       if (d !== null && d < hitDist) {
         hitDist = d;
         hitTarget = target;
+      } else if (d === null) {
+        const near = raySphere(origin, dir, target.center, target.hitRadius + graze);
+        // Only counts in front of the shooter and short of whatever stopped the
+        // round — a bullet that buried itself in a wall did not crack past
+        // someone standing beyond it.
+        if (near !== null && near < hitDist) this.onNearMiss(target, origin);
       }
     }
 

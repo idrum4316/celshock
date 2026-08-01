@@ -434,6 +434,44 @@
         border-bottom: 1px solid rgba(255, 255, 255, 0.15);
       }
       #overlay table.controls th { color: #ffe680; letter-spacing: 1px; }
+      /* The overlay itself stays pointer-events:none (inherited from #hud);
+         only this row opts back in, so a click anywhere else is still the
+         game's. */
+      #overlay .difficulty {
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      #overlay .difficulty .label,
+      #overlay .difficulty .hint {
+        font-size: 12px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        opacity: 0.6;
+      }
+      #overlay .difficulty button.tier {
+        font: inherit;
+        font-size: 13px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        padding: 6px 14px;
+        color: #cdd6e6;
+        background: rgba(255, 255, 255, 0.05);
+        border: 2px solid rgba(255, 255, 255, 0.18);
+        cursor: pointer;
+      }
+      #overlay .difficulty button.tier:hover {
+        border-color: rgba(255, 230, 128, 0.6);
+      }
+      #overlay .difficulty button.tier.on {
+        color: #12141a;
+        background: #ffe680;
+        border-color: #ffe680;
+        font-weight: 700;
+      }
       #overlay table.controls td:first-child { font-weight: 700; text-align: left; }
 
       @keyframes pulse {

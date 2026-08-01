@@ -4,9 +4,9 @@
  * collider set; runtime is read-only (bots call steer(), never pathfind).
  * Invariants: a graph node is a (cell, height) SURFACE — one cell can hold
  * creek floor + bridge deck (MAX_SURFACES=3). Surface heights come from the
- * collider's top-face PLANE at the cell centre, not its AABB: half-thickness
- * is h/2/cos(rotX), slope is tan(rotX) — the h/2*cos / -tan sign error makes
- * every ramp silently unwalkable. The base surface in every cell comes from
+ * collider's top-face PLANE at the cell centre, not its AABB — see
+ * boxGeometry.ts, which owns that (sign-sensitive) math for every caller.
+ * The base surface in every cell comes from
  * the TerrainField, NOT from a hardcoded zero — that constant was what made
  * the floor unable to be anything but flat. Reachability is a flood fill from
  * open ground, which is what keeps bots off rooftops. Links crossing a solid box
@@ -17,6 +17,7 @@
  */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
+import { segmentHitsBox, topFaceHeight, verticalSpan } from "./boxGeometry";
 import type { WorldBox } from "./MapBuilder";
 import type { TerrainField } from "./TerrainField";
 
@@ -543,108 +544,4 @@ export class NavGrid {
     const s = this.surfaceAt(pos.x, pos.y, pos.z);
     return s >= 0 && field.dist[s] !== Infinity;
   }
-}
-
-/**
- * Height of a box's top face directly above `(x, z)`, or null when the point
- * is outside the box's footprint.
- *
- * Handles the pitched ramps: the top face is a plane, so the height varies
- * across the footprint instead of being a single number. That is the whole
- * reason this is analytic rather than an axis-aligned bounds lookup — a ramp's
- * bounding box would report its peak everywhere and read as a wall.
- */
-function topFaceHeight(box: WorldBox, x: number, z: number): number | null {
-  const local = toLocalXZ(box, x, z);
-  if (!local) return null;
-  const cx = Math.cos(box.rotX);
-  if (Math.abs(cx) < 1e-4) return null;
-  // The top face is a plane through local (0, h/2, 0) tilted by rotX. Writing
-  // it against the *post*-rotation Z (which is what `toLocalXZ` returns) gives
-  // a half-thickness of h/2/cos and a slope of tan — not h/2*cos and -tan,
-  // which is the easy sign error here.
-  return box.cy + box.h / 2 / cx - local.lz * (Math.sin(box.rotX) / cx);
-}
-
-/** The vertical slab a box occupies above `(x, z)`, or null outside it. */
-function verticalSpan(
-  box: WorldBox,
-  x: number,
-  z: number,
-): { bottom: number; top: number } | null {
-  const top = topFaceHeight(box, x, z);
-  if (top === null) return null;
-  // A slab tilted by theta is h/cos(theta) thick measured vertically.
-  const cx = Math.max(Math.abs(Math.cos(box.rotX)), 1e-4);
-  return { bottom: top - box.h / cx, top };
-}
-
-/**
- * True when the XZ segment from (x0,z0) to (x1,z1) crosses the box's footprint.
- * Slab test in the box's own frame, so a rotated wall is handled without
- * inflating it to an AABB. Callers must exclude pitched boxes — a ramp's
- * footprint is not its slab.
- */
-function segmentHitsBox(
-  box: WorldBox,
-  x0: number,
-  z0: number,
-  x1: number,
-  z1: number,
-): boolean {
-  const c = Math.cos(-box.rotY);
-  const s = Math.sin(-box.rotY);
-  const dx0 = x0 - box.cx;
-  const dz0 = z0 - box.cz;
-  const dx1 = x1 - box.cx;
-  const dz1 = z1 - box.cz;
-  const ax = dx0 * c + dz0 * s;
-  const az = -dx0 * s + dz0 * c;
-  const bx = dx1 * c + dz1 * s;
-  const bz = -dx1 * s + dz1 * c;
-
-  let t0 = 0;
-  let t1 = 1;
-  const half: [number, number] = [box.w / 2, box.d / 2];
-  const from: [number, number] = [ax, az];
-  const dir: [number, number] = [bx - ax, bz - az];
-  for (let axis = 0; axis < 2; axis++) {
-    const d = dir[axis];
-    const p = from[axis];
-    const h = half[axis];
-    if (Math.abs(d) < 1e-9) {
-      if (Math.abs(p) > h) return false;
-      continue;
-    }
-    let near = (-h - p) / d;
-    let far = (h - p) / d;
-    if (near > far) [near, far] = [far, near];
-    if (near > t0) t0 = near;
-    if (far < t1) t1 = far;
-    if (t0 > t1) return false;
-  }
-  return true;
-}
-
-/**
- * Transforms a world XZ point into the box's local frame, returning null when
- * it falls outside the footprint. The Z extent grows with pitch, since a tilted
- * slab covers more ground than its depth.
- */
-function toLocalXZ(
-  box: WorldBox,
-  x: number,
-  z: number,
-): { lx: number; lz: number } | null {
-  const dx = x - box.cx;
-  const dz = z - box.cz;
-  const c = Math.cos(-box.rotY);
-  const s = Math.sin(-box.rotY);
-  const lx = dx * c + dz * s;
-  const lz = -dx * s + dz * c;
-  const halfD =
-    (box.d / 2) * Math.abs(Math.cos(box.rotX)) +
-    (box.h / 2) * Math.abs(Math.sin(box.rotX));
-  if (Math.abs(lx) > box.w / 2 || Math.abs(lz) > halfD) return null;
-  return { lx, lz };
 }

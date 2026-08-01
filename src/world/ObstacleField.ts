@@ -5,10 +5,12 @@
  * Invariants: the push-out is a PREFERENCE, never a veto — callers (Bot) keep
  * the overlapping position if the pushed-clear one isn't walkable; frozen is
  * worse than clipping. HEADROOM and CONFIG.nav.stepHeight must stay in sync
- * with NavGrid. Height tests use box planes so ramps push correctly.
+ * with NavGrid. Height tests use box planes (boxGeometry.ts, shared with
+ * NavGrid) so ramps push correctly.
  */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
+import { halfDepth, slabThickness, topFaceAtLocalZ } from "./boxGeometry";
 import type { WorldBox } from "./MapBuilder";
 
 /**
@@ -114,11 +116,9 @@ export class ObstacleField {
 
   /** One box against one body. Returns true when `out` was corrected. */
   private push(box: WorldBox, y: number, radius: number, out: Vector3): boolean {
-    const cos = Math.cos(box.rotX);
-    if (Math.abs(cos) < 1e-4) return false;
-
-    // Into the box's frame. The Z extent grows with pitch: a tilted slab covers
-    // more ground than its depth.
+    // Into the box's frame, inline rather than via `toLocalXZ`: this runs per
+    // bot per step and needs `lx`/`lz` even for a point outside the footprint,
+    // which is exactly the case that helper allocates a result to reject.
     const c = Math.cos(-box.rotY);
     const s = Math.sin(-box.rotY);
     const dx = out.x - box.cx;
@@ -126,21 +126,20 @@ export class ObstacleField {
     const lx = dx * c + dz * s;
     const lz = -dx * s + dz * c;
     const hw = box.w / 2;
-    const hd =
-      (box.d / 2) * Math.abs(cos) + (box.h / 2) * Math.abs(Math.sin(box.rotX));
+    const hd = halfDepth(box);
 
     const qx = clamp(lx, -hw, hw);
     const qz = clamp(lz, -hd, hd);
 
     // Height of the top face at the contact point, from the plane rather than
     // the bounding box — a ramp's peak must not be reported across its whole
-    // footprint. Half-thickness is h/2/cos and the slope is tan; writing it as
-    // h/2*cos and -tan is the easy sign error, and it makes ramps into walls.
-    const top = box.cy + box.h / 2 / cos - qz * (Math.sin(box.rotX) / cos);
+    // footprint. `boxGeometry` owns that math; NavGrid reads the same plane.
+    const top = topFaceAtLocalZ(box, qz);
+    if (top === null) return false;
     // Low enough to step onto, so it is floor rather than obstruction.
     if (top <= y + CONFIG.nav.stepHeight) return false;
     // High enough to walk under: a lintel, a hayloft, a bridge deck.
-    if (top - box.h / Math.abs(cos) >= y + HEADROOM) return false;
+    if (top - slabThickness(box) >= y + HEADROOM) return false;
 
     let nx: number;
     let nz: number;

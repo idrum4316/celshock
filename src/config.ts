@@ -60,14 +60,9 @@ export const CONFIG = {
      * every frame. At 5 Hz with 16 bots that is ~1.3 ray picks per frame.
      */
     thinkRate: 5,
-    /** Seconds between acquiring a target and the first shot. */
-    reactionTime: 0.35,
     /** 25 per hit against 100 HP = 4 shots to kill, matching the player. */
     damage: 25,
     fireRate: 5.5,
-    /** Rounds per burst, and the pause between bursts. */
-    burstSize: 5,
-    burstPause: 0.9,
     /**
      * Aim error half-angle (radians), lerped by distance / `engageRange`.
      *
@@ -78,6 +73,17 @@ export const CONFIG = {
      */
     spreadNear: 0.02,
     spreadFar: 0.045,
+    /**
+     * Most line-of-sight rays one target-acquisition tick may spend.
+     *
+     * Candidates are ray-tested nearest-first and the first visible one wins,
+     * so the common case is a single ray. But a bot in the middle of a crowded
+     * fight can have nine enemies in range with the nearest few behind cover,
+     * and testing all of them is exactly the "thousands of picks a second"
+     * blow-up the acquisition code was written to avoid. Missing a distant
+     * enemy for one 200 ms tick is not a behaviour anyone can see.
+     */
+    acquireRayBudget: 3,
     /** Bots will not open fire beyond this distance. */
     engageRange: 55,
     /** Below this, a bot backs off toward cover instead of closing. */
@@ -102,6 +108,321 @@ export const CONFIG = {
     lodFreezeDistance: 35,
     /** Distance past which outlines are dropped. */
     lodOutlineDistance: 20,
+
+    /**
+     * Fire discipline. Everything here is the same for every bot; anything that
+     * should separate an ace from a rookie lives in `skill` below.
+     */
+    combat: {
+      /**
+       * Rounds before a reload. Matched to the player's magazine so the rhythm
+       * of a firefight is symmetrical — and so the gap is a window the player
+       * can learn to push into, which is the whole point of bots reloading at
+       * all. Before this they had infinite ammo and only the burst pause.
+       */
+      magSize: 24,
+      /**
+       * Consecutive shots that hit geometry with no target found before the bot
+       * concludes it has lost line of sight and drops the target.
+       *
+       * Not one: at these spread angles a wide round hitting the wall behind a
+       * live target is ordinary, so a single blocked shot proves nothing. Three
+       * in a row does, and it costs no rays at all — `CombatSystem.fire` already
+       * pays for a wall pick per shot and the result was being thrown away.
+       * This is what stops a bot shooting through a wall for a whole think
+       * interval after the player breaks contact.
+       */
+      losBrokenShots: 3,
+      /**
+       * How long a hit disrupts a bot's aim, and how far off target it throws
+       * the aim point (metres, at the target). There is no flinch *pose* — the
+       * rig has 7 joints and 4 animation parameters — so "got hit" reads as a
+       * yaw snap toward the shooter plus a brief aim disruption, and that is
+       * the whole honest vocabulary for it.
+       */
+      flinchTime: 0.35,
+      flinchKick: 1.2,
+      /**
+       * Yaw slew multiplier while turning toward a shot the bot did not see
+       * coming. Fast, but not instant: snapping is what makes an aimbot read as
+       * an aimbot.
+       */
+      flinchTurnMult: 2.5,
+      /**
+       * Seconds a damage bearing stays worth acting on. Longer than a firefight
+       * exchange, shorter than a walk across the map.
+       */
+      threatMemory: 6,
+      /**
+       * Widening of the vision cone (radians, added to the half-angle) while a
+       * threat cue is live. A soldier who has just been shot at is looking
+       * harder than one on a quiet street.
+       */
+      alertFovBonus: 0.35,
+    },
+
+    /**
+     * What a bot notices without seeing it. All of this is free of raycasts by
+     * construction — hearing is a distance compare, damage direction and near
+     * misses ride results the combat system already computes. A bot that has to
+     * *look* to perceive is a bot that costs rays, and the LOS budget is the
+     * one thing that does not scale here.
+     */
+    perception: {
+      /**
+       * How far a gunshot is noticed. Deliberately under `audio.maxDistance`
+       * (70) so bots do not hear everything the player can — a bot reacting to
+       * a firefight it has no business knowing about reads as cheating, and
+       * the whole point of this is to make their knowledge legible.
+       */
+      hearRange: 45,
+      /**
+       * Metres of error on a heard position, so bots converge on the *sound*
+       * rather than teleport their attention onto the exact shooter. Without
+       * it, hearing is indistinguishable from wallhacks.
+       */
+      hearJitter: 4,
+      /**
+       * A friendly's gunfire is a weaker cue than an enemy's — it says "the
+       * fight is over there", not "someone is shooting at me". This is quietly
+       * how a squad converges on contact without any explicit coordination.
+       */
+      friendlyHearMult: 0.45,
+      /**
+       * Perpendicular distance within which a passing round counts as a near
+       * miss. Roughly an arm's length: close enough to hear crack past.
+       */
+      suppressRadius: 1.2,
+      /** Arousal added per near miss, and how fast both scalars bleed off. */
+      suppressPerMiss: 0.4,
+      suppressDecay: 0.5,
+      alertDecay: 0.3,
+      /**
+       * How close a hunting bot has to get to a remembered position before it
+       * counts as searched, and how long it sweeps there before giving up.
+       */
+      huntArriveRadius: 3.5,
+      huntSweepTime: 2.5,
+      /** Speed multiplier while hunting — a search is a walk, not a charge. */
+      huntSpeedMult: 0.75,
+    },
+
+    /**
+     * Cover. Baked once at map load into a per-surface direction mask; see
+     * `src/world/CoverMap.ts` for why it is baked rather than probed.
+     */
+    cover: {
+      /**
+       * How far along a bearing the bake looks for something to hide behind.
+       * Roughly three nav cells: far enough to find the wall of the building
+       * you are standing beside, short enough that "cover" still means cover
+       * *here* rather than somewhere down the street.
+       */
+      probeDistance: 4.5,
+      /**
+       * Height that actually stops a round — and this is the number people get
+       * wrong. Line of sight is tested from the eyes at 1.55 m, but hits are
+       * tested against the body sphere, whose top is `center.y + hitRadius` =
+       * 0.9 + 0.75 = 1.65 m. Bake cover at eye height and a bot behind a 1.6 m
+       * wall is *visible but unhittable*: the player sees a head, fires, and
+       * the rounds vanish into the wall pick. 1.7 clears the sphere.
+       */
+      hardHeight: 1.7,
+      /**
+       * Knee height. Marks geometry worth walking along rather than across open
+       * ground — and nothing more. The bot rig has no knees, so there is no
+       * crouch, and a bot behind a waist-high wall is exactly as shootable as
+       * one in the open. Never treat this as protection.
+       */
+      softHeight: 0.9,
+      /**
+       * How far above a standing surface a box may be footed and still count.
+       * Above this it is a lintel or a hayloft and the round passes underneath.
+       */
+      footTolerance: 0.4,
+      /** How far a bot will go looking for a covered spot. */
+      searchRadius: 7,
+      /** Close enough to a chosen cover spot to count as arrived. */
+      arriveRadius: 1.2,
+      /**
+       * How far a bot leans out from its anchor to shoot, and how long each
+       * half of the peek cycle lasts.
+       *
+       * The peek is what makes cover *readable*: a bot that reaches a corner
+       * and stays there is simply harder to kill, which is the wrong kind of
+       * difficulty. Stepping out to fire and pulling back gives the player a
+       * rhythm to shoot into. `outTime` is skill-scaled — aces expose
+       * themselves briefly, rookies stand there too long and get shot for it.
+       */
+      peekOffset: 1.3,
+      peekInTime: 0.9,
+      /**
+       * Suppression above this pins a bot at its cover instead of letting it
+       * keep trading, and below this it stops being pinned. Two thresholds
+       * rather than one, or a bot on the boundary flickers.
+       */
+      suppressEnter: 0.7,
+      suppressExit: 0.35,
+      /**
+       * How long the stuck watchdog may fire before a bot gives up on a cover
+       * spot it cannot reach and goes back to fighting where it stands.
+       */
+      abandonTime: 1.5,
+      /**
+       * After giving up on a spot, how long before the bot considers cover
+       * again. Without this the abandon is pointless: the next think re-runs
+       * the search, gets the same unreachable corner back, and the bot spends
+       * the round walking into a wall instead of fighting.
+       */
+      retryDelay: 4,
+    },
+
+    /**
+     * Minimum seconds in a state before the bot is allowed to drop to a
+     * lower-priority one. Transitions *up* the priority order are always
+     * allowed, so nothing here can delay a reaction to being shot at.
+     *
+     * This exists because the transition table is stateless and re-derived at
+     * `thinkRate`: without a floor, a bot on the edge of two conditions flips
+     * between them every 200 ms and vibrates in place instead of committing.
+     */
+    stateDwell: {
+      advance: 0,
+      capture: 0.4,
+      engage: 0.3,
+      hunt: 1.2,
+      retreat: 1.5,
+      /**
+       * Long enough to actually commit to reaching the corner. This is the
+       * difference between a bot that peeked deliberately and one that twitched
+       * back the instant line of sight reopened.
+       */
+      takeCover: 0.8,
+      suppressed: 0.6,
+    },
+
+    /**
+     * Per-bot skill. Every bot carries a `skill` in 0..1 and reads its concrete
+     * numbers from a lerp between these two ends, so a firefight has aces and
+     * rookies rather than sixteen identical shooters.
+     *
+     * Ends, not a single value plus a variance, because the interesting tuning
+     * question is always "what does the worst one do" and "what does the best
+     * one do" — a mean tells you neither.
+     */
+    skill: {
+      /**
+       * What every bot uses until per-squad assignment lands.
+       *
+       * Not 0.5: the bands are centred on "a spread of soldiers", not on the
+       * old flat constants, and a mid-table draw lands measurably *worse* than
+       * the pre-skill bot (a wider cone, a slower trigger, a shorter burst).
+       * 0.65 puts reaction, spread and burst back on the old numbers, so the
+       * only deliberate lethality changes are the ones with counterplay
+       * attached — the reload window and the lagging aim point.
+       */
+      defaultSkill: 0.65,
+      /**
+       * Difficulty tiers. Each slides the centre of the skill distribution;
+       * `spread` is the half-width of the band a squad is drawn from and stays
+       * constant, so **every** tier still contains aces and rookies. That is
+       * deliberate — a difficulty that only moves a mean produces sixteen
+       * identical shooters who are all slightly better, which is exactly the
+       * uniformity this whole system exists to break.
+       *
+       * Skill is drawn per *squad*, with a small jitter inside it: an elite
+       * squad and a green squad is something a player can read and respond to,
+       * where salt-and-pepper skill inside a squad just reads as noise.
+       */
+      difficulties: [
+        { name: "Recruit", centre: 0.25 },
+        { name: "Regular", centre: 0.5 },
+        { name: "Veteran", centre: 0.75 },
+        { name: "Elite", centre: 0.95 },
+      ],
+      /** Default tier index — `Regular`. */
+      defaultDifficulty: 1,
+      /** Half-width of the band a squad's centre is drawn from. */
+      squadSpread: 0.2,
+      /** Half-width of the per-bot jitter inside its squad's centre. */
+      botSpread: 0.12,
+      /**
+       * Seed for the skill draw. Seeded rather than `Math.random()` for the
+       * same reason world-building is: a round has to be reproducible, or
+       * tuning seven stages of new behaviour against it is guesswork.
+       */
+      seed: 0x5eed,
+      /** Seconds between acquiring a target and the first shot. */
+      reactionTime: { rookie: 0.55, ace: 0.18 },
+      /**
+       * Fraction of the reaction time still owed when a bot re-acquires an
+       * enemy it was already tracking.
+       *
+       * This exists because losing sight of a target has to null it, and a
+       * null-then-reacquire reads as a target *change*, which resets the
+       * wind-up — the exact failure that once made bots never fire at all. An
+       * ace keeps most of its wind-up across a lost second and punishes your
+       * second peek much faster than your first; a rookie starts over.
+       */
+      reacquireCredit: { rookie: 0.85, ace: 0.3 },
+      /** Multiplies `spreadNear`/`spreadFar`. */
+      spreadMult: { rookie: 1.6, ace: 0.7 },
+      /**
+       * How fast the aim point chases the target, per second.
+       *
+       * The most important number here. Bots used to aim at the target's exact
+       * eye position on every shot, so a strafing player was hit at the same
+       * rate as a stationary one and lateral movement bought nothing. A lagging
+       * aim point makes movement work, and makes an ace feel *different* from a
+       * rookie rather than merely luckier.
+       */
+      trackRate: { rookie: 4, ace: 14 },
+      /** Yaw slew, per second. Replaces a hardcoded `dt * 8`. */
+      turnRate: { rookie: 4.5, ace: 11 },
+      /** Rounds per burst, and the pause between bursts. */
+      burstSize: { rookie: 3, ace: 6 },
+      burstPause: { rookie: 1.3, ace: 0.6 },
+      /** Seconds spent reloading, once the magazine runs dry. */
+      reloadTime: { rookie: 2.8, ace: 1.7 },
+      /**
+       * Half-angle of the vision cone, radians. 0.85 is a ~97 deg cone, 1.15 a
+       * ~132 deg one — a useful human field of view, against the 360 deg
+       * omniscience bots had before, where one with its back turned acquired
+       * you the instant you rounded a corner.
+       *
+       * This only gates *initial* acquisition: a bot faces its target once it
+       * has one, so a tracked enemy never falls out of the cone. That is the
+       * intended behaviour — you can flank an unaware bot, not a fighting one.
+       */
+      fov: { rookie: 0.85, ace: 1.15 },
+      /**
+       * Inside this, an enemy is noticed regardless of facing. Nobody misses
+       * someone at arm's length, and without it a bot can be knifed by an enemy
+       * standing on its toes.
+       */
+      peripheralRange: { rookie: 5, ace: 9 },
+      /**
+       * Health fraction below which a bot under fire breaks contact instead of
+       * trading. Aces disengage while they still can; rookies die in place.
+       */
+      retreatHealthFrac: { rookie: 0.2, ace: 0.45 },
+      /**
+       * How readily a bot breaks for cover rather than standing and trading.
+       * Below `coverUseThreshold` it simply never does — which is the most
+       * legible skill tell available: rookies fight in the open and die there,
+       * where an ace is behind the corner before the second burst lands.
+       */
+      coverUse: { rookie: 0.1, ace: 1.0 },
+      /**
+       * Below this `coverUse`, a bot never breaks for cover at all. A hard
+       * floor rather than a probability so the difference is *legible*: the
+       * worst bots visibly fight in the open, every time, instead of doing it
+       * a bit less often than the good ones.
+       */
+      coverUseThreshold: 0.3,
+      /** Seconds a bot stays leaned out shooting before pulling back in. */
+      peekOutTime: { rookie: 1.5, ace: 0.55 },
+    },
   },
 
   /** Navigation grid covering the whole map. */
