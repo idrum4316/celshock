@@ -350,9 +350,9 @@ const placements: Placement[] = [
   { kind: "boathouse", x: 40, z: -80, rotY: Math.PI },
   // The deck stands 0.73 m over the mud — too tall to step onto, so the door
   // gets a ramp or the whole flag is unreachable.
-  { kind: "ramp", x: 40, z: -71, rotY: Math.PI, params: { length: 5, width: 4, height: 0.73 } },
-  { kind: "jetty", x: 26, z: -96, params: { length: 20 } },
-  { kind: "jetty", x: 54, z: -96, params: { length: 20 } },
+  { kind: "ramp", x: 40, z: -71, y: -0.346, rotY: Math.PI, params: { length: 5, width: 4, height: 0.73 } },
+  { kind: "jetty", x: 24.5, z: -83.5, y: 0.5, rotY: Math.PI / 2, params: { length: 20 } },
+  { kind: "jetty", x: 21.5, z: -95, y: 0.5, params: { length: 20 } },
   // Shore fence, split at the ramp — an unbroken fence here blocked the only
   // door the ramp serves.
   { kind: "fence", x: 31, z: -70, params: { length: 10 } },
@@ -499,7 +499,7 @@ const water: WaterRect[] = [
   { x: -85, z: -10, width: 6.6, depth: 76 },
   // The bog: the pool the boathouse and jetties stand in. Stops short of the
   // boathouse ramp foot in the north and the Blight road in the east.
-  { x: 37, z: -95, width: 50, depth: 42 },
+  { x: 37, z: -95, width: 55, depth: 50 },
   // The mire: the moor's own pool, out where the south-west crofts drowned.
   // One jetty runs into it; everything else around it is ruin.
   { x: -56, z: -96, width: 34, depth: 26 },
