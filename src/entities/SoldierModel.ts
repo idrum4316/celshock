@@ -1,7 +1,8 @@
 /**
  * SoldierModel.ts — The cheap bot rig: nine merged meshes (vs ~60 for the
  * player's GLB body) plus procedural animation (animateSoldier: walk cycle,
- * aim, death collapse — posed TransformNode joints, never clips).
+ * aim, upper-body twist, death collapse — posed TransformNode joints, never
+ * clips).
  * Invariants: merging per color is what keeps 16 bots affordable — the outline
  * pass draws every mesh twice. Do NOT "unify" this rig with the player's
  * detailed GLB body; the player keeps fidelity because it's the only character
@@ -218,13 +219,25 @@ export function buildSoldier(
  * @param phase  walk cycle phase, advanced by distance travelled
  * @param moving 0..1 blend between the idle and walk poses
  * @param aim    aim pitch in radians, applied at the spine
+ * @param twist  upper-body yaw relative to the feet, radians
  * @param dead   collapse blend, 0 alive .. 1 fully down
+ *
+ * `twist` is the only parameter that is not a pitch or a blend, and it is worth
+ * saying why it exists. The rig's `root` carries one yaw, so before it a bot
+ * pointed its whole body — feet included — at whatever it was looking at. A bot
+ * strafing across a doorway while tracking you walked visibly sideways, legs
+ * swinging along an axis it was not travelling on. Splitting the two lets the
+ * feet follow the direction of travel and the torso (with the head, arms and
+ * rifle hanging off it) turn to the target, which is most of what "soldier"
+ * looks like. It costs one extra `rotation.y` write and no geometry at all —
+ * `torso` was always a child of `body`, with the legs as its siblings.
  */
 export function animateSoldier(
   rig: SoldierRig,
   phase: number,
   moving: number,
   aim: number,
+  twist: number,
   dead: number,
 ): void {
   if (dead > 0) {
@@ -232,6 +245,7 @@ export function animateSoldier(
     rig.body.rotation.x = dead * 1.5;
     rig.body.position.y = -dead * 0.7;
     rig.torso.rotation.x = 0;
+    rig.torso.rotation.y = 0;
     rig.hipL.rotation.x = 0;
     rig.hipR.rotation.x = 0;
     return;
@@ -249,6 +263,10 @@ export function animateSoldier(
   rig.shoulderL.rotation.z = 0.2;
   // Lean into the run, and pitch the spine to wherever the bot is aiming.
   rig.torso.rotation.x = aim * 0.5 + moving * 0.1;
+  // Twist the upper body off the feet. The head takes a share of it on top, so
+  // the helmet leads the shoulders rather than being welded square to them.
+  rig.torso.rotation.y = twist;
+  rig.head.rotation.y = twist * 0.35;
   rig.head.rotation.x = aim * 0.5;
   rig.body.position.y = Math.abs(Math.sin(phase)) * 0.04 * moving;
 }

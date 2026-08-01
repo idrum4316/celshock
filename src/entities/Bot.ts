@@ -16,7 +16,9 @@
  * Bot per respawn. Animation is procedural and the rig has 7 joints and no
  * knees: there is no crouch, lean or flinch pose, so reactions are expressed in
  * speed, heading and facing only — and "cover" therefore means corners, never
- * ducking. Cover is a PREFERENCE: a spot that cannot be reached inside
+ * ducking. `yaw` is where the bot LOOKS (and is what the view cone reads);
+ * `bodyYaw` is where its feet point. Keeping them apart is what stops a
+ * strafing bot walking sideways, and the twist between them is clamped. Cover is a PREFERENCE: a spot that cannot be reached inside
  * cover.abandonTime is dropped (with a cooldown, or the search instantly
  * re-picks it) and the bot fights from where it stands. A bot moving to cover
  * still shoots; only the tucked-in half of the peek cycle holds fire.
@@ -118,6 +120,14 @@ export interface BattleCtx {
   clearObstacles(x: number, y: number, z: number, out: Vector3): boolean;
 }
 
+/** Shortest signed angle for `a`, in -PI..PI. */
+function wrapAngle(a: number): number {
+  let x = a;
+  while (x > Math.PI) x -= Math.PI * 2;
+  while (x < -Math.PI) x += Math.PI * 2;
+  return x;
+}
+
 // Module-scope scratch vectors. AI runs 16 times a frame and allocating a
 // handful of Vector3s per bot per frame was measurable churn in the old code.
 const _dir = new Vector3();
@@ -200,6 +210,14 @@ export class Bot implements Combatant {
   private headingSet = false;
   /** While positive, the bot is stopped looking at a corner it just reached. */
   private cornerT = 0;
+  /**
+   * Where the feet point. `yaw` is where the bot is *looking*; the difference
+   * between the two is the upper-body twist, and keeping them separate is what
+   * stops a strafing bot walking visibly sideways.
+   */
+  private bodyYaw = 0;
+  /** Cached twist, clamped, handed to the poser each frame. */
+  private torsoTwist = 0;
 
   /**
    * Where the bot is actually pointing — a lagging chase of the target's eyes
@@ -257,6 +275,8 @@ export class Bot implements Combatant {
     this.state = "advance";
     this.position.copyFrom(at);
     this.yaw = yaw;
+    this.bodyYaw = yaw;
+    this.torsoTwist = 0;
     this.target = null;
     this.memory.reset();
     this.stateT = 0;
@@ -291,7 +311,7 @@ export class Bot implements Combatant {
     // CONFIG.bots.lodFreezeDistance — without this a bot respawning beyond
     // it walks around buried to the helmet until the player closes in and
     // the pose unfreezes (the "submarine" pop-up).
-    animateSoldier(this.rig, 0, 0, 0, 0);
+    animateSoldier(this.rig, 0, 0, 0, 0, 0);
     this.setEnabled(true);
   }
 
@@ -359,7 +379,7 @@ export class Bot implements Combatant {
       // The collapse tween ignores the pose-freeze LOD: it is five property
       // writes, and a corpse that holds its mid-stride pose past
       // lodFreezeDistance and then vanishes reads as a pop, not a death.
-      animateSoldier(this.rig, 0, 0, 0, Math.min(1, this.deadT / 0.7));
+      animateSoldier(this.rig, 0, 0, 0, 0, Math.min(1, this.deadT / 0.7));
       if (this.deadT > 0.9) this.setEnabled(false);
       this.respawnT -= dt;
       return;
@@ -608,10 +628,7 @@ export class Bot implements Combatant {
       faceZ = _dir.z;
     }
     if (Math.abs(faceX) + Math.abs(faceZ) > 1e-3) {
-      const want = Math.atan2(faceX, faceZ);
-      let delta = want - this.yaw;
-      while (delta > Math.PI) delta -= Math.PI * 2;
-      while (delta < -Math.PI) delta += Math.PI * 2;
+      const delta = wrapAngle(Math.atan2(faceX, faceZ) - this.yaw);
       // Fast while flinching, so being shot reads as a snap round — but still a
       // slew, because instant is what makes an aimbot look like an aimbot.
       const rate =
@@ -620,11 +637,44 @@ export class Bot implements Combatant {
       this.yaw += delta * Math.min(1, dt * rate);
     }
 
+    // Feet follow travel, torso twists to the look direction.
+    //
+    // The rig hangs off a single root yaw, so before this a bot pointed its
+    // whole body at whatever it was looking at: one strafing across a doorway
+    // while tracking you walked visibly sideways, legs swinging along an axis
+    // it was not travelling on. Splitting the two also fixes the walk cycle for
+    // free, since the hips now swing along the direction of travel.
+    const mv = b.movement;
+    const travel = Math.hypot(_dir.x, _dir.z);
+    // Standing still, the feet come round to meet the eyes — nobody stands
+    // indefinitely with their body square and their head over one shoulder.
+    const wantBody = travel > 1e-3 ? Math.atan2(_dir.x, _dir.z) : this.yaw;
+    this.bodyYaw += wrapAngle(wantBody - this.bodyYaw) * Math.min(1, dt * mv.bodyTurnRate);
+    let twist = wrapAngle(this.yaw - this.bodyYaw);
+    // Past the limit the hips have to come round with it. Without the clamp a
+    // bot tracking something behind it ends up with its shoulders on backwards.
+    if (twist > mv.maxTorsoTwist) {
+      this.bodyYaw += twist - mv.maxTorsoTwist;
+      twist = mv.maxTorsoTwist;
+    } else if (twist < -mv.maxTorsoTwist) {
+      this.bodyYaw += twist + mv.maxTorsoTwist;
+      twist = -mv.maxTorsoTwist;
+    }
+    this.bodyYaw = wrapAngle(this.bodyYaw);
+    this.torsoTwist = twist;
+
     this.trackAim(dt);
     this.shoot(dt, ctx);
     this.syncTransform();
     if (animate) {
-      animateSoldier(this.rig, this.walkPhase, this.moveBlend, this.aimPitch(), 0);
+      animateSoldier(
+        this.rig,
+        this.walkPhase,
+        this.moveBlend,
+        this.aimPitch(),
+        this.torsoTwist,
+        0,
+      );
     }
   }
 
@@ -1102,7 +1152,7 @@ export class Bot implements Combatant {
   private syncTransform(): void {
     const c = this.rig.centerHeight;
     this.rig.root.position.set(this.position.x, this.position.y + c, this.position.z);
-    this.rig.root.rotation.y = this.yaw;
+    this.rig.root.rotation.y = this.bodyYaw;
     this.center.set(this.position.x, this.position.y + c, this.position.z);
     this.eyePos.set(this.position.x, this.position.y + 1.55, this.position.z);
   }

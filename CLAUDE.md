@@ -95,6 +95,7 @@ src/
     BotMemory.ts            # One bot's decaying picture of the fight
     BotSkill.ts             # skill scalar -> BotProfile; difficulty tiers
     SoldierModel.ts         # Cheap merged bot rig + procedural animation
+                            #   (walk cycle, aim pitch, torso twist, death)
   systems/
     BattleSystem.ts         # Bot pool, AI scheduling, LOS, distance LOD
     ConquestSystem.ts       # Flags, capture meters, tickets, bleed, spawns,
@@ -776,8 +777,8 @@ re-sorted the point list 80 times a second to do it.
   that hears a shot and walks off to investigate has abandoned the only thing it
   was there to do.
 
-**Movement texture is heading, speed and facing only** — the rig cannot express
-anything else. Two measured results worth keeping:
+**Movement texture is heading, speed and facing only** — with one exception,
+below. Two measured results worth keeping:
 
 - `NavGrid.steerAhead` plus heading smoothing cut mean path curvature by ~27%.
   `steer` returns the direction to the next 8-neighbour cell *centre*, which is
@@ -790,6 +791,28 @@ anything else. Two measured results worth keeping:
 Smoothing runs **before** separation and the stuck watchdog, deliberately: the
 watchdog's sidestep is what frees a bot wedged behind a tree, and smoothing
 applied after it would blunt exactly that.
+
+**`Bot.yaw` is where a bot LOOKS; `Bot.bodyYaw` is where its feet point.** The
+rig hangs off a single root yaw, so before the split a bot aimed its whole body
+at whatever it was tracking, and one strafing across a doorway walked visibly
+sideways with its legs swinging along an axis it was not travelling on.
+`animateSoldier` takes a `twist` for the difference, applied at `torso` with the
+head taking a share on top; the legs are `torso`'s siblings under `body`, so
+they are untouched. It costs one `rotation.y` write and no geometry, and it
+fixes the walk cycle for free — the hips now swing along the direction of
+travel.
+
+Three rules come with it:
+
+- The twist is **clamped** to `CONFIG.bots.movement.maxTorsoTwist`, and past it
+  the hips come round with it, or the shoulders end up on backwards.
+- A **stationary** bot's feet converge on its look direction. Nobody stands
+  indefinitely with their body square and their head over one shoulder.
+- **Perception reads `yaw`, never `bodyYaw`.** `BattleSystem.inView` keys off
+  `Bot.facing`, and where a bot points its feet must not change what it can see.
+
+This is still not a lean or a crouch. It is a yaw, and the rig has no joint that
+could sell either of those.
 
 **Skill is one scalar per bot** (`BotSkill.profileFor`), resolved into a
 `BotProfile` once at assignment and never per frame — `CONFIG` is `as const`, so

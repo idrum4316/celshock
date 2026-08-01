@@ -259,6 +259,23 @@ export const CONFIG = {
        * of the street it walks down.
        */
       wallHug: 0.35,
+      /**
+       * How far the upper body may turn off the feet, radians (~66 deg).
+       *
+       * The rig's root carries one yaw, so before the split a bot pointed its
+       * whole body at whatever it was looking at and a strafing bot walked
+       * visibly sideways. Now the feet follow travel and the torso twists to
+       * the look direction — but only so far. Past this the hips have to come
+       * round, which is both what a body does and what stops the shoulders
+       * ending up on backwards.
+       */
+      maxTorsoTwist: 1.15,
+      /**
+       * How fast the feet swing to a new heading, per second. Slower than the
+       * look slew (`skill.turnRate`) on purpose: the whole point is that the
+       * head and torso lead and the feet follow.
+       */
+      bodyTurnRate: 6,
     },
 
     /**
