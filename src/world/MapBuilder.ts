@@ -291,8 +291,6 @@ export class MapBuilder {
     for (const [i, p] of layout.placements.entries()) {
       const item = index ? newItem(index.placements) : null;
       this.item = item;
-      const builder = BUILDERS[p.kind];
-      const s: Structure = builder(this.scene, this.mats, p.params ?? {});
       // An authored y is an offset above the local floor, not an absolute
       // height, so a placement keeps its meaning when the ground under it moves.
       const origin = new Vector3(
@@ -302,6 +300,17 @@ export class MapBuilder {
       );
       const rotY = p.rotY ?? 0;
       const isRoad = p.kind === "road";
+      // Where it lands is settled before it is built, because a builder may
+      // need to read the ground under its footprint — one sample at the centre
+      // is not enough for 130 m of road. The result is still origin-local.
+      const builder = BUILDERS[p.kind];
+      const s: Structure = builder(this.scene, this.mats, p.params ?? {}, {
+        terrain,
+        x: p.x,
+        y: origin.y,
+        z: p.z,
+        rotY,
+      });
 
       for (const merged of mergeByMaterial(s.meshes, p.kind)) {
         merged.rotation.y = rotY;

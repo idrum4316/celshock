@@ -9,6 +9,10 @@
  *   meshes per colour and then transforms all three into place — building at
  *   identity is what makes MergeMeshes safe (same trick as
  *   RifleModel.buildRifle).
+ * - A builder may take a BuildCtx to read where it is about to end up (the
+ *   road bends onto the ground under it). That is a licence to SAMPLE the
+ *   world, not to build in it: the geometry returned is still origin-local,
+ *   because MapBuilder still rotates and translates it.
  * - Builders NEVER set metadata.solid, checkCollisions, or isPickable — the
  *   visual/collider split is MapBuilder's job; builders only declare where
  *   collider boxes go.
@@ -19,9 +23,11 @@
  *   BuildingKit.ts's BUILDERS.
  */
 import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
+import type { ShaderMaterial, VertexData } from "@babylonjs/core";
 import { CONFIG } from "../../config";
 import type { CelMaterialFactory } from "../../shaders/CelShader";
 import type { LightSpec } from "../environment";
+import type { TerrainField } from "../TerrainField";
 import {
   COBBLE_TEX_SCALE,
   getCobblestoneBumpTexture,
@@ -63,6 +69,20 @@ export interface BuildParams {
   teamColor?: string;
   /** Road: cobblestone street (default) or the old flat dirt track. */
   surface?: "cobble" | "dirt";
+}
+
+/**
+ * Where a placement is about to be put, for the builders whose shape depends on
+ * it. Only the ground-hugging ones take it — everything else is the same object
+ * wherever it stands, and declaring the parameter is the opt-in.
+ */
+export interface BuildCtx {
+  terrain: TerrainField;
+  x: number;
+  /** The world Y MapBuilder will translate by: the authored offset plus floor. */
+  y: number;
+  z: number;
+  rotY: number;
 }
 
 /** A fixture light in the structure's local space. */
@@ -161,9 +181,38 @@ export class Build implements Structure {
       this.scene,
     );
     m.position.set(x, y, z);
-    // Wet-stone sheen + per-sett bump: the street catches a hard streak
-    // looking moonward, and the light bands ripple over individual stones.
-    m.material = this.mats.getGroundTextured(
+    m.material = this.groundMaterial();
+    this.meshes.push(m);
+    return m;
+  }
+
+  /**
+   * A surface handed in as finished vertices rather than described as a
+   * primitive — a road tessellated to follow the ground under it. Takes the
+   * same two materials `box` and `groundBox` do: a palette colour, or the
+   * world-mapped cobblestone when `color` is omitted.
+   *
+   * Still origin-local: whoever built the vertices did so in the structure's
+   * own frame, because MapBuilder rotates and translates the result.
+   */
+  surface(data: VertexData, color?: string): Mesh {
+    const m = new Mesh(`${this.tag}-surface${this.meshes.length}`, this.scene);
+    data.applyToMesh(m);
+    m.material =
+      color === undefined ? this.groundMaterial() : this.mats.get(color);
+    this.meshes.push(m);
+    return m;
+  }
+
+  /**
+   * Wet-stone sheen + per-sett bump: the street catches a hard streak looking
+   * moonward, and the light bands ripple over individual stones. Shared by
+   * `groundBox` and `surface` so a flat road and a contoured one cannot end up
+   * on two different materials — they merge into one draw call only while they
+   * are on the same one.
+   */
+  private groundMaterial(): ShaderMaterial {
+    return this.mats.getGroundTextured(
       "cobble",
       getCobblestoneTexture(this.scene),
       COBBLE_TEX_SCALE,
@@ -173,8 +222,6 @@ export class Build implements Structure {
         bumpScale: CONFIG.graphics.cobbleBumpScale,
       },
     );
-    this.meshes.push(m);
-    return m;
   }
 
   /** A box that also blocks movement and stops bullets. */

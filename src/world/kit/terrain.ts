@@ -8,8 +8,10 @@
  */
 import { Scene } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../../shaders/CelShader";
+import { terrainSlab } from "../TerrainField";
 import {
   Build,
+  type BuildCtx,
   type BuildParams,
   type Structure,
   DARK_STONE,
@@ -77,31 +79,49 @@ export function buildRamp(
 }
 
 /**
- * Flat road surface. Visual only — it sits on the ground, so nothing ever
- * stands on the slab itself: feet rest on the floor from the ground probe and
- * the nav grid. The slab is therefore sunk so its top sits only a centimetre
- * proud — enough to avoid z-fighting the floor, but not enough to swallow a
- * character's ankles. Cobblestone by default; `surface: "dirt"` gives the old
- * flat track for farm lanes.
+ * Road surface. Visual only — it sits on the ground, so nothing ever stands on
+ * the slab itself: feet rest on the floor from the ground probe and the nav
+ * grid. The slab is therefore sunk so its top sits only a centimetre proud —
+ * enough to avoid z-fighting the floor, but not enough to swallow a
+ * character's ankles. Cobblestone by default; `surface: "dirt"` gives the flat
+ * track for farm lanes.
  *
- * The slab is FLAT, and MapBuilder only lifts it to the terrain height at its
- * own centre. A road laid across a TerrainRect's skirt therefore floats at one
- * end and buries itself at the other — run roads along level ground, or split
- * them at the bank. The editor warns about it.
+ * It is the one builder whose shape depends on where it is going. MapBuilder
+ * samples the floor once, at a placement's own centre, and translates the whole
+ * structure by it — fine for a cottage, wrong for 130 m of street, which used
+ * to float at one end and bury itself at the other over sculpted ground. So the
+ * slab is re-cut against the heightfield by `terrainSlab`, which returns null
+ * over level ground and leaves the single box the road has always been. That
+ * fast path is why a flat map costs exactly what it used to.
  */
 export function buildRoad(
   scene: Scene,
   mats: CelMaterialFactory,
   p: BuildParams = {},
+  ctx?: BuildCtx,
 ): Structure {
   const b = new Build(scene, mats, "road");
   const top = 0.01;
   const h = 0.08;
-  if (p.surface === "dirt") {
-    b.box(p.width ?? 8, h, p.length ?? 40, 0, top - h / 2, 0, DIRT);
-  } else {
-    b.groundBox(p.width ?? 8, h, p.length ?? 40, 0, top - h / 2, 0);
-  }
+  const w = p.width ?? 8;
+  const len = p.length ?? 40;
+  const dirt = p.surface === "dirt";
+
+  const contoured =
+    ctx &&
+    terrainSlab(ctx.terrain, {
+      w,
+      len,
+      x: ctx.x,
+      z: ctx.z,
+      rotY: ctx.rotY,
+      originY: ctx.y,
+      top,
+      thickness: h,
+    });
+  if (contoured) b.surface(contoured, dirt ? DIRT : undefined);
+  else if (dirt) b.box(w, h, len, 0, top - h / 2, 0, DIRT);
+  else b.groundBox(w, h, len, 0, top - h / 2, 0);
   return b;
 }
 

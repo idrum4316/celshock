@@ -17,6 +17,7 @@ import type { FreeCamera, GlowLayer, Mesh, Scene } from "@babylonjs/core";
 import { Vector3 } from "@babylonjs/core";
 import type { InputManager } from "../core/InputManager";
 import type { EnvironmentSpec } from "../world/environment";
+import { CONFORMS_TO_TERRAIN } from "../world/BuildingKit";
 import type { MapLayout } from "../world/layout";
 import type { GameMap } from "../world/MapBuilder";
 import { EditorCamera } from "./EditorCamera";
@@ -519,10 +520,26 @@ export class EditorSession {
 
   /** Drag finished: bring navigation back into agreement with the geometry. */
   private onDragEnd(): void {
+    // A road's vertices were cut against the ground it started on, so a move
+    // leaves it contoured to the wrong patch of floor — the one thing a
+    // translate cannot fix. Rebuilding covers navigation too, so it replaces
+    // the cheaper path rather than adding to it.
+    if (this.draggedConformingKind()) {
+      this.rebuildGeometry(this.selected);
+      return;
+    }
     const fresh = rebuildNavigation(this.map, this.deps.layout);
     this.map.nav = fresh.nav;
     this.map.obstacles = fresh.obstacles;
     this.afterNavigationChanged();
+  }
+
+  /** Whether the thing just dragged is one whose shape follows the floor. */
+  private draggedConformingKind(): boolean {
+    const ref = this.selected;
+    if (!ref || ref.list !== "placements") return false;
+    const p = this.deps.layout.placements[ref.index];
+    return p !== undefined && CONFORMS_TO_TERRAIN.has(p.kind);
   }
 
   /**

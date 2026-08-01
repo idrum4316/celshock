@@ -5,12 +5,20 @@
  * structures.ts, terrain.ts).
  * Invariants: builders assemble AT THE ORIGIN, UNROTATED and NEVER set
  * metadata.solid, checkCollisions, or isPickable — MapBuilder owns the
- * visual/collider split. Collider top faces must stay within
+ * visual/collider split. A builder may take a BuildCtx to read the world it is
+ * about to land in (the road bends onto the ground), but still returns
+ * origin-local geometry. Collider top faces must stay within
  * CONFIG.nav.stepHeight of adjacent ground; ramp colliders need rotX.
  * New builders: write them in the kit/ file they belong to, register here.
  * No Hollowmere special-casing.
  */
-export type { BoxSpec, BuildParams, LocalLight, Structure } from "./kit/core";
+export type {
+  BoxSpec,
+  BuildCtx,
+  BuildParams,
+  LocalLight,
+  Structure,
+} from "./kit/core";
 
 import {
   buildCottage,
@@ -79,3 +87,12 @@ export const BUILDERS = {
 } as const;
 
 export type BuilderKind = keyof typeof BUILDERS;
+
+/**
+ * Kinds whose geometry is a function of the ground under them, so moving one
+ * is a rebuild rather than a translate. The editor's drag path patches meshes
+ * in place, which is correct for everything else and stale for these.
+ */
+export const CONFORMS_TO_TERRAIN: ReadonlySet<BuilderKind> = new Set([
+  "road",
+] as const);

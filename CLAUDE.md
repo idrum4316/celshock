@@ -122,7 +122,8 @@ src/
                             # the map-data vocabulary, map-agnostic
     TerrainField.ts         # The floor's height, and the ONLY place that knows
                             # it: heightfield -> heightAt() + the per-block
-                            # VertexData MapBuilder hangs ground meshes on
+                            # VertexData MapBuilder hangs ground meshes on,
+                            # plus terrainSlab() which bends a road onto it
     rng.ts                  # mulberry32 — the seeded PRNG world-building uses
     MapBuilder.ts           # Builds the map; merges visuals, emits colliders
     BuildingKit.ts          # Facade: shared types + BUILDERS registry
@@ -266,6 +267,41 @@ whose vertices are all one height collapses to a quad too. Hollowmere is 25
 blocks and **3,110 triangles**, because only the four holding the pools carry
 real geometry.
 
+**A road is re-cut against that mesh, and the how is load-bearing.** One height
+sample at a placement's centre is right for a cottage and wrong for a 130 m
+street, which used to float at one end and bury itself at the other, so
+`terrainSlab` (in `TerrainField.ts`) tessellates the slab to follow the ground.
+It is a builder reading `BuildCtx` — where MapBuilder is about to put it — and
+still returning origin-local geometry, so the merge is unaffected. Three things
+make it work, and undoing any of them puts black holes in the cobbles:
+
+- **It samples `surfaceAt`, not `heightAt`.** The floor is *drawn* as flat
+  triangles across a bilinear field; the two differ by up to a quarter of a
+  cell's twist. Follow the smooth field and the road sinks under the mesh on
+  every twisted cell — and the symptom is not a sunken road, it is the road's
+  own outline shell showing through as black blobs, because the shell passes the
+  depth test where the surface it belongs to does not.
+- **Its cuts are the terrain's own grid lines, and nothing between them.** A
+  slab quad then coincides with a terrain quad, corner for corner, and the two
+  cannot cross. Subdividing finer is strictly *worse*: a mid-cell sample lands on
+  the wrong side of the terrain's diagonal. `surfaceAt(x, z, true)` — the upper
+  envelope of the cell's two triangle planes — covers the samples that can't be
+  on a grid line (the road's own edges); being convex, a triangle drawn between
+  three of its samples is guaranteed to clear the floor.
+- **An odd quarter turn flips the diagonal.** `rotY = ±π/2` maps the local
+  diagonal onto the world *anti*-diagonal, so the road would split every cell
+  the opposite way from the ground it lies on. The quad starts one corner along
+  in that case.
+
+A road over level ground still collapses to the single box it always was —
+`terrainSlab` returns null — so on the shipped map this costs exactly nothing:
+the two merged road meshes are still 108 and 96 triangles.
+
+Only `road` does this (`CONFORMS_TO_TERRAIN` in `BuildingKit.ts`). `terrace`,
+`ramp`, `jetty` and `bridge` carry walkable box colliders, and bending only
+their visuals would put the surface you see out of agreement with the surface
+bullets spark off.
+
 **Babylon defaults to a LEFT-handed system** (`scene.useRightHandedSystem` is
 false), so a front face is *clockwise* seen from the front. Hand-built
 `VertexData` wound the right-handed way — the order you get if you work the
@@ -319,9 +355,10 @@ Layout gotchas that have already cost time:
   run genuinely routes bots the long way round — or seals a plot outright.
   Enclosures like the burying ground need a gap of a couple of cells, and the
   corners left open help more than a wider gate.
-- A `road` is a flat slab lifted to the terrain height at its own centre, so one
-  laid across a terrain skirt floats at one end and buries itself at the other.
-  Run roads along level ground or split them at the bank; the editor warns.
+- A `road` may cross a bank, and is the **one placement whose geometry is a
+  function of the ground under it** — see below. Everything else is still lifted
+  rigidly by one height sample at its own centre, which is right for a building
+  and would be wrong for 130 m of street.
 
 ### The map editor (dev only)
 
@@ -411,11 +448,14 @@ one builder call ~0.9 ms.
 | --- | --- | --- |
 | dragging a gizmo | move that item's meshes and `WorldBox`es | sub-ms, every frame |
 | drag released, flag/spawn edited | `NavGrid` + 7 flow fields + `ObstacleField` | ~45 ms |
-| param, kind, add, delete, brush stroke released | `Game.buildEditorMap()` — the whole map | ~570 ms |
+| param, kind, add, delete, brush stroke released, **road drag released** | `Game.buildEditorMap()` — the whole map | ~570 ms |
 
 The third tier is not laziness. Changing a param changes how many colliders an
 item emits, which shifts every later index in `colliderBoxes` and invalidates
 the per-item editor index wholesale; there is no correct patch, only a rebuild.
+A road earns it for a different reason: its vertices were cut against the ground
+it started on, so a translate leaves it contoured to the wrong patch of floor —
+the one thing tier 1 cannot fix. `CONFORMS_TO_TERRAIN` is the list.
 It is debounced by `EDITOR.rebuildDelay` so holding a spinner does not queue
 thirty builds, and *not* debounced for add/delete, which are single deliberate
 actions. Anything the editor holds that points at geometry — the highlight, the

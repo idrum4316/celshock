@@ -1,7 +1,10 @@
 /**
  * TerrainField.ts — The valley floor's height, and the one place that knows it.
  * Owns: sampling a layout's Heightfield at any (x, z), editing it, and
- * tessellating it into per-block VertexData for MapBuilder to hang meshes on.
+ * tessellating it into per-block VertexData for MapBuilder to hang meshes on —
+ * plus `terrainSlab`, which bends a flat footprint (a road) onto that same
+ * surface, so ground-hugging dressing is cut against the floor by the one file
+ * that knows its shape.
  *
  * Before this file the floor was the literal number 0, asserted independently
  * in MapBuilder (a flat box), NavGrid (a free surface in every cell), the
@@ -26,6 +29,32 @@ export interface TerrainPatch {
   /** Map-block key, `${bx},${bz}` — the same convention BlockMerge uses. */
   key: string;
   data: VertexData;
+}
+
+/**
+ * How finely `terrainSlab` steps a footprint it cannot align to the grid, as a
+ * fraction of a terrain cell. An off-axis slab cuts across the floor's own
+ * triangles however it is sampled, so the only lever is quad size: the
+ * residual falls with the square of the step, and a quarter cell puts it under
+ * the centimetre a road is lifted by. Nothing on Hollowmere takes this path —
+ * `hygiene` already flags placements off the quarter turns.
+ */
+const SLAB_OFF_AXIS_STEP = 0.25;
+
+/** A flat rectangular footprint about to be bent onto the ground under it. */
+export interface SlabSpec {
+  /** Footprint in the placement's local frame: width along X, length along Z. */
+  w: number;
+  len: number;
+  /** Where MapBuilder is going to put it. */
+  x: number;
+  z: number;
+  rotY: number;
+  /** The origin Y MapBuilder will translate by; local Y is measured from it. */
+  originY: number;
+  /** How far the top face rides above the ground, and how far the skirt hangs. */
+  top: number;
+  thickness: number;
 }
 
 /** An empty, level heightfield at the given resolution. */
@@ -67,6 +96,51 @@ export class TerrainField {
     const c = h[(j0 + 1) * row + i0];
     const d = h[(j0 + 1) * row + i0 + 1];
     return (a + (b - a) * fx) * (1 - fz) + (c + (d - c) * fx) * fz;
+  }
+
+  /**
+   * The floor's height as it is DRAWN: the plane of the triangle
+   * `terrainPatches` emits under (x, z), rather than the smooth field
+   * `heightAt` interpolates.
+   *
+   * The two are the same on a level or untwisted cell and differ by up to a
+   * quarter of the cell's twist otherwise — bilinear is a curved surface and
+   * the mesh is two flat triangles cut across it. That is nothing to a ground
+   * probe and everything to a road lying a centimetre above the floor: sample
+   * the smooth field and the road sinks under the mesh in every twisted cell,
+   * which shows up as the ground eating holes in the cobbles. Gameplay wants
+   * the field; anything laid ON the floor wants this.
+   *
+   * `ceil` returns the higher of the cell's two triangle planes instead of the
+   * one actually under (x, z). That is the upper envelope of the pair, so it
+   * is convex within the cell, so a triangle drawn between three samples of it
+   * lies above it everywhere in between — which is exactly the guarantee a
+   * slab laid on the floor needs at the samples it cannot place on a grid
+   * vertex. It costs a few millimetres of float on a twisted cell and buys
+   * "never below the ground" outright.
+   */
+  surfaceAt(x: number, z: number, ceil = false): number {
+    const f = this.field;
+    if (!f) return 0;
+    const n = f.size;
+    const gx = clamp((x + this.half) / f.cell, 0, n);
+    const gz = clamp((z + this.half) / f.cell, 0, n);
+    const i = Math.min(Math.floor(gx), n - 1);
+    const j = Math.min(Math.floor(gz), n - 1);
+    const u = gx - i;
+    const v = gz - j;
+    const row = n + 1;
+    const h = f.heights;
+    // Corners in Accum.quad's order: -X/-Z, +X/-Z, +X/+Z, -X/+Z. Its diagonal
+    // runs a→c, so v <= u is the first triangle.
+    const a = h[j * row + i];
+    const b = h[j * row + i + 1];
+    const c = h[(j + 1) * row + i + 1];
+    const d = h[(j + 1) * row + i];
+    const lo = a + (b - a) * u + (c - b) * v;
+    const hi = a + (c - d) * u + (d - a) * v;
+    if (ceil) return lo > hi ? lo : hi;
+    return v <= u ? lo : hi;
   }
 
   /** World position of grid vertex (i, j). */
@@ -181,6 +255,171 @@ function uniformHeight(
   return first;
 }
 
+/**
+ * Re-tessellates a flat rectangular footprint so it follows the ground under
+ * it, in the placement's LOCAL frame — MapBuilder still rotates and translates
+ * the result, so the origin-local builder contract is untouched. The top face
+ * rides `top` above the field and a perimeter skirt hangs `thickness` below it,
+ * which is what keeps the slab silhouette `renderOutline` traces.
+ *
+ * Returns null when the ground under the footprint is level, so a road on flat
+ * ground stays the single box it has always been.
+ *
+ * Three things are what let this work at a centimetre of lift, and each of them
+ * is a bug that was there before it:
+ *
+ * - It samples `surfaceAt`, the floor as drawn, not `heightAt`, the smooth
+ *   field the floor is cut from. Follow the field and the slab sinks under the
+ *   mesh on every twisted cell.
+ * - Its cuts are the terrain's own grid lines and nothing between them, so on a
+ *   quarter turn a slab quad coincides with a terrain quad and the two surfaces
+ *   cannot cross. The `ceil` sampling covers the samples that cannot land on a
+ *   grid line — the footprint's own edges.
+ * - An odd quarter turn maps the local diagonal onto the world anti-diagonal,
+ *   so the quads are cut the other way round there.
+ *
+ * Off the quarter turns none of that alignment exists and the footprint is
+ * simply stepped fine enough (SLAB_OFF_AXIS_STEP) that what is left is smaller
+ * than the lift on any ground a falloff brush produces.
+ */
+export function terrainSlab(
+  terrain: TerrainField,
+  s: SlabSpec,
+): VertexData | null {
+  const f = terrain.field;
+  if (!f) return null;
+  const half = CONFIG.map.size / 2;
+
+  // Which world axis each local axis maps onto, on a quarter turn. rotateY
+  // sends local (lx, lz) to (lx*cos + lz*sin, -lx*sin + lz*cos), so at a
+  // multiple of 90 deg each local axis drives exactly one world axis: `base` is
+  // the world coordinate it runs from and `sign` its direction.
+  const cos = Math.cos(s.rotY);
+  const sin = Math.sin(s.rotY);
+  const quarter = Math.PI / 2;
+  const square =
+    Math.abs(s.rotY - Math.round(s.rotY / quarter) * quarter) < 1e-6;
+  const straight = Math.abs(cos) > 0.5; // local X on world X, else on world Z
+  const xs = slabCuts(
+    s.w / 2,
+    square ? { base: straight ? s.x : s.z, sign: straight ? cos : -sin } : null,
+    f.cell,
+    half,
+  );
+  const zs = slabCuts(
+    s.len / 2,
+    square ? { base: straight ? s.z : s.x, sign: straight ? cos : sin } : null,
+    f.cell,
+    half,
+  );
+
+  // Local Y at every sample, row-major over (zs, xs), plus the world XZ the
+  // ground shader would project the cobble from.
+  const nx = xs.length;
+  const ys: number[] = [];
+  const wxs: number[] = [];
+  const wzs: number[] = [];
+  let level = true;
+  for (const lz of zs) {
+    for (const lx of xs) {
+      const wx = s.x + lx * cos + lz * sin;
+      const wz = s.z - lx * sin + lz * cos;
+      const y = terrain.surfaceAt(wx, wz, true) + s.top - s.originY;
+      if (ys.length > 0 && Math.abs(y - ys[0]) > 1e-6) level = false;
+      ys.push(y);
+      wxs.push(wx);
+      wzs.push(wz);
+    }
+  }
+  if (level) return null;
+
+  const acc = new Accum();
+  const top: number[] = [];
+  for (let k = 0; k < ys.length; k++) {
+    const i = k % nx;
+    const j = (k - i) / nx;
+    top.push(acc.vertex(xs[i], ys[k], zs[j], wxs[k], wzs[k]));
+  }
+  // Which way to cut each quad. The floor splits its own cells from -X/-Z to
+  // +X/+Z in WORLD space, and an odd quarter turn maps the local diagonal onto
+  // the world anti-diagonal — so the road would split every cell the other way
+  // from the ground it is lying on and dive through it on each twist. Starting
+  // the quad one corner along flips the diagonal back; the corner order stays
+  // cyclic, so the winding is unaffected.
+  const flip = square && !straight;
+  for (let j = 0; j < zs.length - 1; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      const v = j * nx + i;
+      const [a, b, c, d] = [top[v], top[v + 1], top[v + nx + 1], top[v + nx]];
+      if (flip) acc.face(b, c, d, a);
+      else acc.face(a, b, c, d);
+    }
+  }
+
+  // Perimeter skirt, walked so that each side's outward face comes out front.
+  // Its vertices are its own rather than the top face's, so the crease stays
+  // sharp and the top keeps pointing straight up.
+  const th = s.thickness;
+  const w2 = s.w / 2;
+  const l2 = s.len / 2;
+  const last = zs.length - 1;
+  for (let j = 0; j < last; j++) {
+    const a = j * nx;
+    const b = (j + 1) * nx;
+    acc.skirt(-w2, ys[a], zs[j], -w2, ys[b], zs[j + 1], th);
+    acc.skirt(w2, ys[b + nx - 1], zs[j + 1], w2, ys[a + nx - 1], zs[j], th);
+  }
+  for (let i = 0; i < nx - 1; i++) {
+    const e = last * nx;
+    acc.skirt(xs[i + 1], ys[i + 1], -l2, xs[i], ys[i], -l2, th);
+    acc.skirt(xs[i], ys[e + i], l2, xs[i + 1], ys[e + i + 1], l2, th);
+  }
+
+  // The skirt's normals point sideways by design, so the floor's face-up
+  // assertion does not apply to this shape.
+  return acc.finish(false);
+}
+
+/**
+ * Sample coordinates across one local axis of a slab footprint, from
+ * `-extent` to `+extent`.
+ *
+ * With an `axis` the footprint is on a quarter turn, so the cuts are the grid
+ * lines themselves and nothing else: a slab quad then coincides with a terrain
+ * quad, corner for corner and diagonal for diagonal, and the two surfaces
+ * cannot cross. Splitting a cell finer would be strictly worse — the extra
+ * vertices sit on the floor's *plane* only where the two triangulations agree,
+ * and a mid-cell sample lands on the wrong side of the terrain's diagonal.
+ *
+ * Without an axis there is nothing to align to and the footprint is simply
+ * stepped, which is approximate by construction; `hygiene` already nudges
+ * placements onto quarter turns.
+ */
+function slabCuts(
+  extent: number,
+  axis: { base: number; sign: number } | null,
+  cell: number,
+  mapHalf: number,
+): number[] {
+  const cuts = [-extent];
+  if (axis) {
+    // Grid lines sit at world `-mapHalf + k * cell`; a local t maps to world
+    // `base + sign * t`, so the crossings are an arithmetic progression of
+    // step `cell` through `sign * (-mapHalf - base)`.
+    const u0 = axis.sign * (-mapHalf - axis.base);
+    const first = u0 + Math.ceil((-extent - u0) / cell) * cell;
+    for (let t = first; t < extent - 1e-6; t += cell) {
+      if (t > -extent + 1e-6) cuts.push(t);
+    }
+    cuts.push(extent);
+    return cuts;
+  }
+
+  const steps = Math.max(1, Math.ceil((2 * extent) / (cell * SLAB_OFF_AXIS_STEP)));
+  for (let k = 1; k <= steps; k++) cuts.push(-extent + (2 * extent * k) / steps);
+  return cuts;
+}
+
 /** Accumulates quads into one block's buffers. */
 class Accum {
   private readonly positions: number[] = [];
@@ -229,6 +468,40 @@ class Accum {
     }
   }
 
+  /** One vertex, returning its index — for shapes `grid` does not cover. */
+  vertex(x: number, y: number, z: number, u: number, v: number): number {
+    this.positions.push(x, y, z);
+    this.uvs.push(u, v);
+    return this.positions.length / 3 - 1;
+  }
+
+  /** `quad`, by index, for callers that placed their own vertices. */
+  face(a: number, b: number, c: number, d: number): void {
+    this.quad(a, b, c, d);
+  }
+
+  /**
+   * One panel of a slab's skirt: a top edge from p0 to p1 and the two vertices
+   * `th` below them. The resulting face points along the edge direction turned
+   * a quarter turn to its right, so walking a perimeter anticlockwise seen
+   * from above puts every panel's front face outward.
+   */
+  skirt(
+    x0: number,
+    y0: number,
+    z0: number,
+    x1: number,
+    y1: number,
+    z1: number,
+    th: number,
+  ): void {
+    const a = this.vertex(x0, y0, z0, x0, z0);
+    const b = this.vertex(x1, y1, z1, x1, z1);
+    const c = this.vertex(x1, y1 - th, z1, x1, z1);
+    const d = this.vertex(x0, y0 - th, z0, x0, z0);
+    this.quad(a, b, c, d);
+  }
+
   /**
    * Two triangles for one quad, given its corners in -X/-Z, +X/-Z, +X/+Z,
    * -X/+Z order. Wound for Babylon's LEFT-handed default
@@ -242,7 +515,11 @@ class Accum {
     this.indices.push(a, b, c, a, c, d);
   }
 
-  finish(): VertexData {
+  /**
+   * `facesUp` is the floor's own invariant, not every caller's: a slab's skirt
+   * points sideways by design, so only the ground asserts it.
+   */
+  finish(facesUp = true): VertexData {
     const data = new VertexData();
     data.positions = this.positions;
     data.uvs = this.uvs;
@@ -250,7 +527,7 @@ class Accum {
     const normals: number[] = [];
     VertexData.ComputeNormals(this.positions, this.indices, normals);
     data.normals = normals;
-    assertFacesUp(normals);
+    if (facesUp) assertFacesUp(normals);
     return data;
   }
 }
