@@ -158,7 +158,7 @@ const placements: Placement[] = [
   { kind: "lamp", x: -74, z: 65, y: TERRACE_H },
   { kind: "lamp", x: -46, z: 65, y: TERRACE_H },
   { kind: "cottage", x: -34, z: 92, params: { ruined: true } },
-  { kind: "cottage", x: -80, z: 112, params: { width: 8, litWindows: true } },
+  { kind: "cottage", x: -90, z: 72, rotY: Math.PI / 2, params: { width: 8, litWindows: true } },
 
   // ===== B — the mill and the creek ===========================================
   // Two embankments 1.5 m high with a 6 m sunken lane between them. The creek
@@ -170,8 +170,8 @@ const placements: Placement[] = [
   // flush with the lane's edge so nothing floats over the drop; only the
   // wheel straddles the water.
   { kind: "mill", x: -76.7, z: 12, y: BANK_H },
-  { kind: "bridge", x: -85, z: 22, y: BANK_H + 0.15, rotY: Math.PI / 2, params: { length: 26 } },
-  { kind: "bridge", x: -85, z: -44, y: BANK_H + 0.15, rotY: Math.PI / 2, params: { length: 26 } },
+  { kind: "bridge", x: -85, z: 22, y: 2.34, rotY: Math.PI / 2, params: { length: 26 } },
+  { kind: "bridge", x: -85, z: -44, y: 2.19, rotY: Math.PI / 2, params: { length: 26 } },
   // Ramps in and out of the lane. A 1.5 m trench is right at the edge of a
   // standing jump, so without these the creek is a one-way trap for bots.
   { kind: "lamp", x: -73, z: -22, y: BANK_H },
@@ -327,7 +327,7 @@ const placements: Placement[] = [
   { kind: "woodpile", x: -56, z: -52, params: { length: 6 } },
   { kind: "cart", x: -40, z: -60 },
   { kind: "crates", x: -49, z: -76 },
-  { kind: "stoneWall", x: -56, z: -44, params: { length: 20 } },
+  { kind: "stoneWall", x: -53.5, z: -47.5, params: { length: 20 } },
   { kind: "stoneWall", x: -82, z: -92, params: { length: 16 } },
   { kind: "lamp", x: -60, z: -66 },
 
@@ -351,8 +351,8 @@ const placements: Placement[] = [
   // The deck stands 0.73 m over the mud — too tall to step onto, so the door
   // gets a ramp or the whole flag is unreachable.
   { kind: "ramp", x: 40, z: -71, y: -0.346, rotY: Math.PI, params: { length: 5, width: 4, height: 0.73 } },
-  { kind: "jetty", x: 24.5, z: -83.5, y: 0.5, rotY: Math.PI / 2, params: { length: 20 } },
-  { kind: "jetty", x: 21.5, z: -95, y: 0.5, params: { length: 20 } },
+  { kind: "jetty", x: 24.5, z: -83.5, y: 0.642, rotY: Math.PI / 2, params: { length: 20 } },
+  { kind: "jetty", x: 21.5, z: -95, y: 0.68, params: { length: 20 } },
   // Shore fence, split at the ramp — an unbroken fence here blocked the only
   // door the ramp serves.
   { kind: "fence", x: 31, z: -70, params: { length: 10 } },
@@ -374,7 +374,7 @@ const scatter: ScatterSpec[] = [
   { prop: "deadTree", x: -72, z: 70, radius: 5, count: 3, y: TERRACE_H, scale: [1.0, 1.6], blocking: true, clearance: 0.55 },
   { prop: "deadTree", x: -47, z: 68, radius: 5, count: 3, y: TERRACE_H, scale: [1.0, 1.6], blocking: true, clearance: 0.55 },
   // The dead woods filling the map's corners — all inside the valley ridge.
-  { prop: "deadTree", x: -100, z: 52, radius: 16, count: 14, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
+  { prop: "deadTree", x: -82.5, z: 53, radius: 12, count: 13, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
   { prop: "deadTree", x: -14, z: 102, radius: 13, count: 12, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
   { prop: "deadTree", x: -46, z: 108, radius: 8, count: 6, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
   { prop: "deadTree", x: 98, z: 88, radius: 18, count: 16, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
@@ -496,7 +496,7 @@ const water: WaterRect[] = [
   // The creek: fills the sunken lane between the two embankments, running
   // under both footbridges and the mill's waterwheel. A touch wider than the
   // lane so the edges tuck under the retaining walls instead of showing a seam.
-  { x: -85, z: -10, width: 6.6, depth: 76 },
+  { x: -85, z: -10, width: 6.6, depth: 76, y: -0.246 },
   // The bog: the pool the boathouse and jetties stand in. Stops short of the
   // boathouse ramp foot in the north and the Blight road in the east.
   { x: 37, z: -95, width: 55, depth: 50 },
