@@ -28,6 +28,7 @@ import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { FlowField, NavGrid } from "../world/NavGrid";
 import { animateSoldier, buildSoldier, type SoldierRig } from "./SoldierModel";
 import { profileFor, type BotProfile } from "./BotSkill";
+import { mulberry32 } from "../world/rng";
 import { BotMemory } from "./BotMemory";
 import type { Combatant, Team } from "./Combatant";
 
@@ -46,6 +47,14 @@ export type BotState =
   | "retreat"
   | "capture"
   | "dead";
+
+/**
+ * What the bot is standing on, as far as its own objective is concerned.
+ * `contest` is a flag that still needs bodies in the circle to move the meter;
+ * `hold` is one the team already owns, where standing in the middle of an open
+ * capture radius is how you lose it.
+ */
+export type BotZone = "none" | "contest" | "hold";
 
 /**
  * Which states may interrupt which. A transition *up* this order is always
@@ -124,6 +133,8 @@ export class Bot implements Combatant {
   squad = 0;
   /** Control-point id the squad is heading for. */
   objective = "";
+  /** Squad posture: is this flag one the team already holds? */
+  defending = false;
 
   hp = 0;
   alive = false;
@@ -162,6 +173,33 @@ export class Bot implements Combatant {
    */
   private peekT = 0;
   private peekedOut = false;
+  /** Which kind of objective the bot is standing on; drives `capture`. */
+  private zone: BotZone = "none";
+  /**
+   * This bot's own random stream. Seeded rather than `Math.random()` so a round
+   * plays out the same way twice — with seven stages of new movement to tune,
+   * behaviour that cannot be reproduced cannot be judged.
+   */
+  private rand: () => number = mulberry32(1);
+
+  /**
+   * Gives this bot its own deterministic stream. Called once by BattleSystem
+   * with the pool index, so every bot weaves and paces differently but the same
+   * way on every run.
+   */
+  seedRandom(seed: number): void {
+    this.rand = mulberry32(seed);
+  }
+  /** Phase of this bot's lateral weave, so squadmates don't share a line. */
+  private lanePhase = 0;
+  /** Per-bot speed multiplier: nobody marches in lockstep. */
+  private paceMult = 1;
+  /** Smoothed heading, so the flow field's eight compass points don't snap. */
+  private headingX = 0;
+  private headingZ = 0;
+  private headingSet = false;
+  /** While positive, the bot is stopped looking at a corner it just reached. */
+  private cornerT = 0;
 
   /**
    * Where the bot is actually pointing — a lagging chase of the target's eyes
@@ -223,6 +261,12 @@ export class Bot implements Combatant {
     this.memory.reset();
     this.stateT = 0;
     this.sweepT = 0;
+    this.lanePhase = this.rand() * Math.PI * 2;
+    this.paceMult =
+      1 + (this.rand() * 2 - 1) * CONFIG.bots.movement.speedJitter;
+    this.headingSet = false;
+    this.cornerT = 0;
+    this.zone = "none";
     this.hasCoverSpot = false;
     this.coverCooldownT = 0;
     this.peekT = 0;
@@ -330,22 +374,48 @@ export class Bot implements Combatant {
     this.squeezeT = Math.max(0, this.squeezeT - dt);
     this.strafeT -= dt;
     if (this.strafeT <= 0) {
-      this.strafeT = 0.8 + Math.random() * 1.6;
-      this.strafe = Math.random() < 0.5 ? -1 : 1;
+      this.strafeT = 0.8 + this.rand() * 1.6;
+      this.strafe = this.pickStrafe(ctx);
     }
 
-    let speed = b.moveSpeed;
+    let speed: number = b.moveSpeed;
     _dir.setAll(0);
 
     switch (this.state) {
       case "advance": {
         const field = ctx.fieldFor(this);
-        if (field) ctx.nav.steer(field, this.position, _dir);
+        if (field) {
+          ctx.nav.steerAhead(field, this.position, b.movement.lookaheadCells, _dir);
+          this.smoothHeading(ctx, dt, _dir);
+        }
         speed *= b.advanceSprintMult;
         break;
       }
       case "capture": {
-        // Hold the flag, drifting slowly so the bot isn't a statue.
+        if (this.zone === "hold") {
+          // A flag the team already owns. The meter is maxed, so standing in
+          // the middle of an open circle achieves nothing and gets the holder
+          // shot first; sit at the most covered spot nearby instead and watch.
+          // Cover here is scored against the *threat bearing* rather than a
+          // target, since by definition there is nobody visible.
+          if (!this.hasCoverSpot && this.coverCooldownT <= 0 && this.alerted) {
+            if (ctx.findCover(this, this.memory.threat.x, this.memory.threat.z, this.coverSpot)) {
+              this.hasCoverSpot = true;
+            } else {
+              this.coverCooldownT = CONFIG.bots.cover.retryDelay;
+            }
+          }
+          if (this.hasCoverSpot && !this.atCoverSpot()) {
+            _to.copyFrom(this.coverSpot).subtractInPlace(this.position);
+            _to.y = 0;
+            const away = _to.length();
+            if (away > 1e-3) _dir.copyFrom(_to).scaleInPlace(1 / away);
+            speed *= 0.8;
+          }
+          break;
+        }
+        // Still being taken: bodies in the circle are what move the meter, so
+        // drift slowly rather than standing like a statue.
         _dir.set(Math.cos(this.walkPhase * 0.3), 0, Math.sin(this.walkPhase * 0.3));
         speed *= 0.25;
         break;
@@ -443,13 +513,24 @@ export class Bot implements Combatant {
         // shoot, the opposite of falling back. The home field has been built by
         // MapBuilder for every map since the beginning and read by nothing.
         const field = ctx.homeFieldFor(this) ?? ctx.fieldFor(this);
-        if (field) ctx.nav.steer(field, this.position, _dir);
+        if (field) {
+          ctx.nav.steerAhead(field, this.position, b.movement.lookaheadCells, _dir);
+          this.smoothHeading(ctx, dt, _dir);
+        }
         break;
       }
     }
 
     // A bot that has just been hit stumbles rather than jogging on serenely.
     if (this.flinchT > 0) speed *= 0.6;
+    // Per-bot pace, so a squad on one flow field doesn't move as one body.
+    speed *= this.paceMult;
+    // Stopped at a corner to look before committing to what is round it.
+    if (this.cornerT > 0) {
+      this.cornerT -= dt;
+      speed = 0;
+      _dir.setAll(0);
+    }
 
     ctx.separation(this, _sep);
     _dir.addInPlace(_sep);
@@ -759,7 +840,7 @@ export class Bot implements Combatant {
    * The expensive half of the AI, run at `CONFIG.bots.thinkRate` rather than
    * every frame. Everything here either fires a ray or walks a list.
    */
-  think(ctx: BattleCtx, inCaptureZone: boolean): void {
+  think(ctx: BattleCtx, zone: BotZone): void {
     if (this.state === "dead") return;
     const b = CONFIG.bots;
 
@@ -852,15 +933,27 @@ export class Bot implements Combatant {
       } else {
         want = "engage";
       }
+    } else if (zone === "hold") {
+      // Checked *before* the cue, deliberately. A defender that hears a shot
+      // and walks off to investigate has abandoned the only thing it was there
+      // to do — staying put is the job. It watches the bearing instead, which
+      // the facing code already does from the same threat memory.
+      //
+      // The hold branch owns its own cover spot, so unlike every other case
+      // here it must not drop one.
+      this.zone = zone;
+      want = "capture";
     } else if (m.hasCue) {
       // Something happened and nobody is in sight: go and look.
       this.dropCover();
       want = "hunt";
-    } else if (inCaptureZone) {
+    } else if (zone === "contest") {
       this.dropCover();
+      this.zone = zone;
       want = "capture";
     } else {
       this.dropCover();
+      this.zone = "none";
       want = "advance";
     }
 
@@ -883,6 +976,96 @@ export class Bot implements Combatant {
         this.peekT = this.profile.peekOutTime;
       }
     }
+  }
+
+  /**
+   * Turns the flow field's raw output into something a body could plausibly
+   * walk, in place: smooths it, weaves it, hugs walls with it, and notices when
+   * the route has just turned a corner.
+   *
+   * Only the flow-field states use this. The close-quarters states (`hunt`
+   * arrival, `takeCover`, the peek cycle) steer at a specific point a few metres
+   * away, where smoothing would only add lag and blur the peek.
+   *
+   * It runs *before* separation and the stuck watchdog on purpose: the
+   * watchdog's sidestep is what gets a wedged bot out from behind a tree, and
+   * smoothing applied after it would blunt exactly that.
+   */
+  private smoothHeading(ctx: BattleCtx, dt: number, dir: Vector3): void {
+    const m = CONFIG.bots.movement;
+    if (dir.x === 0 && dir.z === 0) return;
+
+    // Lateral weave. Four bots sharing one field otherwise walk single file
+    // down the identical line, which no squad has ever done.
+    this.lanePhase += (dt * Math.PI * 2) / m.lanePeriod;
+    const weave = Math.sin(this.lanePhase) * m.laneOffset;
+    let wantX = dir.x - dir.z * weave;
+    let wantZ = dir.z + dir.x * weave;
+
+    // Wall hugging: nudge toward the more enclosed side. A preference only —
+    // the field still decides where the bot is going, this picks which side of
+    // the street it walks down.
+    const open = ctx.openness(this);
+    if (open < 1) {
+      const pull = (1 - open) * m.wallHug;
+      wantX += -dir.z * this.strafe * pull;
+      wantZ += dir.x * this.strafe * pull;
+    }
+
+    const len = Math.hypot(wantX, wantZ);
+    if (len < 1e-4) return;
+    wantX /= len;
+    wantZ /= len;
+
+    if (!this.headingSet) {
+      this.headingX = wantX;
+      this.headingZ = wantZ;
+      this.headingSet = true;
+    } else {
+      // A big swing means the route just turned a corner. Stop and look before
+      // walking round it — the pause is the tell, and `moveBlend` decaying to
+      // zero makes the rig actually stand still rather than moonwalk.
+      const dot = this.headingX * wantX + this.headingZ * wantZ;
+      if (dot < Math.cos(m.cornerAngle) && this.cornerT <= 0) {
+        this.cornerT = m.cornerPause;
+      }
+      const k = Math.min(1, dt * m.headingRate);
+      this.headingX += (wantX - this.headingX) * k;
+      this.headingZ += (wantZ - this.headingZ) * k;
+      const hl = Math.hypot(this.headingX, this.headingZ);
+      if (hl > 1e-4) {
+        this.headingX /= hl;
+        this.headingZ /= hl;
+      }
+    }
+    dir.set(this.headingX, 0, this.headingZ);
+  }
+
+  /**
+   * Which way to strafe, by cover rather than by coin flip. The old version
+   * flipped a `Math.random()` every second or so, which circles a target
+   * regardless of whether either side has anything to hide behind.
+   */
+  private pickStrafe(ctx: BattleCtx): number {
+    const t = this.target;
+    if (!t) return this.rand() < 0.5 ? -1 : 1;
+    const dx = t.position.x - this.position.x;
+    const dz = t.position.z - this.position.z;
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-3) return this.strafe;
+    const probe = CONFIG.bots.cover.probeDistance;
+    // A body's step along each tangent, scored by whether it has cover from
+    // where the target is standing.
+    const leftCovered = ctx.hasCover(this, t.position.x, t.position.z);
+    if (leftCovered) return this.strafe;
+    const nx = -dz / len;
+    const nz = dx / len;
+    // Cheap proxy for "is there more to hide behind that way": the cover mask
+    // is per-surface, so sample the bearing rather than moving the bot.
+    const a = ctx.hasCover(this, this.position.x + nx * probe, this.position.z + nz * probe);
+    const b = ctx.hasCover(this, this.position.x - nx * probe, this.position.z - nz * probe);
+    if (a !== b) return a ? 1 : -1;
+    return this.rand() < 0.5 ? -1 : 1;
   }
 
   /** Standing at (or beside) the latched cover spot. */

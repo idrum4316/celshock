@@ -97,7 +97,8 @@ src/
     SoldierModel.ts         # Cheap merged bot rig + procedural animation
   systems/
     BattleSystem.ts         # Bot pool, AI scheduling, LOS, distance LOD
-    ConquestSystem.ts       # Flags, capture meters, tickets, bleed, spawns
+    ConquestSystem.ts       # Flags, capture meters, tickets, bleed, spawns,
+                            #   squad orders (planSquads) + defend posture
     CombatSystem.ts         # Hitscan + pooled tracers and sparks
     AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
@@ -752,6 +753,43 @@ cover query is a bit test. Three rules:
   shoots; only the tucked-in half of the peek cycle holds fire. Both of those
   were learned the hard way: without them bots walked into walls holding fire
   for the whole round.
+
+### Squads and movement texture
+
+**Squad orders are planned as a group** (`ConquestSystem.planSquads`), on their
+own 2 Hz timer rather than per bot per think. What it replaces was
+`ranked[squad % ranked.length]`: squad N took the Nth-best flag, so a team with
+two squads only ever pursued its top two objectives, could never choose to
+defend (an owned flag scored a flat −30 however close it was to being lost), and
+re-sorted the point list 80 times a second to do it.
+
+- A claimed point is **penalised, not excluded**. When the round hinges on one
+  flag, two squads stacking on it is correct; forced spreading is what sent bots
+  wandering away from the fight that decided the game.
+- **`ControlPoint.present[]` is finally read.** It had been counted every tick
+  since the beginning by nothing at all; an owned flag with enemies on it now
+  scores a defence bonus scaled by how far the meter has slipped.
+- **Defending is a posture, not a destination.** `Bot.think` takes a
+  `BotZone` (`none` / `contest` / `hold`): `contest` keeps the old drift, since
+  bodies in the circle are what move the meter, while `hold` takes a covered
+  vantage and watches. **`hold` is checked before the search cue** — a defender
+  that hears a shot and walks off to investigate has abandoned the only thing it
+  was there to do.
+
+**Movement texture is heading, speed and facing only** — the rig cannot express
+anything else. Two measured results worth keeping:
+
+- `NavGrid.steerAhead` plus heading smoothing cut mean path curvature by ~27%.
+  `steer` returns the direction to the next 8-neighbour cell *centre*, which is
+  why bots walked flow fields as a visible 1.5 m zigzag.
+- The per-bot lateral weave spreads a squad (+95% mean separation) but is itself
+  a source of curvature: at a 5 s period it put back *exactly* the wobble the
+  smoothing removed. Slowing it to 11 s keeps the spread and the straightness
+  both. If you retune one, re-measure the other.
+
+Smoothing runs **before** separation and the stuck watchdog, deliberately: the
+watchdog's sidestep is what frees a bot wedged behind a tree, and smoothing
+applied after it would blunt exactly that.
 
 **Skill is one scalar per bot** (`BotSkill.profileFor`), resolved into a
 `BotProfile` once at assignment and never per frame — `CONFIG` is `as const`, so

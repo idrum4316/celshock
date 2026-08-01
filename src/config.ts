@@ -208,6 +208,97 @@ export const CONFIG = {
     },
 
     /**
+     * Movement texture. All of this is heading, speed and facing only — the rig
+     * has seven joints and four animation parameters, so there is no crouch,
+     * lean or vault to reach for. What is achievable is *where* and *how fast*,
+     * and that turns out to carry most of it.
+     */
+    movement: {
+      /**
+       * How many cells down the flow field a bot aims. `steer` returns the next
+       * cell centre, which is why bots walked a visible 1.5 m zigzag; looking
+       * ahead points at where the route actually goes.
+       */
+      lookaheadCells: 3,
+      /**
+       * Heading smoothing, per second. The flow field's direction snaps between
+       * eight compass points, and a body that turns instantly between them
+       * reads as a machine following a grid — which is exactly what it was.
+       *
+       * Applied only to the flow-field states, and *before* the stuck
+       * watchdog's sidestep, so smoothing can never blunt the thing that gets a
+       * wedged bot out.
+       */
+      headingRate: 5,
+      /**
+       * Amplitude and period of the per-bot lateral weave. Four bots on one
+       * flow field otherwise walk in single file down the exact same line,
+       * which no squad has ever done.
+       *
+       * The period is long for a measured reason: the weave is itself a source
+       * of curvature, and at 5 s it put back exactly as much path wobble as the
+       * smoothing above had taken out (mean turn 7.25 deg against a 7.41 deg
+       * baseline, for +60% squad spread). Slowing it to 11 s keeps the same
+       * lateral displacement while changing direction half as fast — 5.13 deg
+       * and +95% spread, better than the baseline on both counts instead of
+       * trading one for the other.
+       */
+      laneOffset: 0.55,
+      lanePeriod: 11,
+      /** Per-bot speed variation, as a fraction. Nobody marches in lockstep. */
+      speedJitter: 0.12,
+      /**
+       * A heading swing larger than this (radians, per think) means the route
+       * just turned a corner — so pause and look before committing to it.
+       */
+      cornerAngle: 1.0,
+      cornerPause: 0.45,
+      /**
+       * How strongly openness pulls a bot toward walls. A preference only: the
+       * flow field still decides where it is going, this just biases which side
+       * of the street it walks down.
+       */
+      wallHug: 0.35,
+    },
+
+    /**
+     * Squad coordination. Squads are planned as a group, on their own slow
+     * timer — this is four objects at 2 Hz, so it deliberately does not steal
+     * from the per-bot think budget, where it would silently slow every bot's
+     * reaction time.
+     */
+    squad: {
+      /** How often a team's squad orders are re-planned. */
+      updateRate: 2,
+      /**
+       * Score a flag loses per squad already heading there. A penalty, not an
+       * exclusion: when the round hinges on one flag, two squads stacking on
+       * it is correct, and the old `squad % flags` forced spreading is what
+       * sent bots wandering away from the fight that decided the game.
+       */
+      claimPenalty: 45,
+      /**
+       * Bonus a squad's current objective keeps. Held on the squad rather than
+       * the bot, so two flags' scores crossing cannot turn a squad round
+       * halfway through its approach.
+       */
+      switchMargin: 30,
+      /**
+       * Bonus for a flag you own with enemies standing on it, scaled by how far
+       * the meter has already slipped. This is the whole defence behaviour:
+       * without it an owned flag scores a flat penalty however close it is to
+       * being lost, so nobody ever goes home.
+       */
+      defendUnderAttack: 110,
+      /**
+       * How far outside the capture radius a defender will look for a covered
+       * vantage. Holding a flag from the geometric centre of an open circle is
+       * how you lose it; holding it from the doorway across the street is not.
+       */
+      defendStandoff: 6,
+    },
+
+    /**
      * Cover. Baked once at map load into a per-surface direction mask; see
      * `src/world/CoverMap.ts` for why it is baked rather than probed.
      */

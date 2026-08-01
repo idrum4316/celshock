@@ -1,17 +1,30 @@
 /**
  * ConquestSystem.ts — Conquest rules: flags, capture meters, tickets, bleed,
- * spawn selection, bot objective assignment.
+ * spawn selection, squad orders.
  * Invariants: the meter runs -1..+1 and ownership flips only by crossing 0 —
  * a flag must be neutralised before it changes hands. Occupancy comes from the
  * combatant list Game assembles each frame. update() runs BEFORE
  * BattleSystem.update so bots see this frame's ownership. Events go out via
  * onCaptured/onNeutralised callbacks wired in Game — never import other
- * systems. All numbers come from CONFIG.conquest.
+ * systems. Squad orders are planned for a whole team at once (planSquads) so
+ * squads can be spread — or deliberately stacked — relative to each other; a
+ * claimed flag is penalised, never excluded. Round numbers come from
+ * CONFIG.conquest, squad ones from CONFIG.bots.squad.
  */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { Combatant, Team } from "../entities/Combatant";
 import type { ControlPointDef, GameMap, SpawnPointDef } from "../world/MapBuilder";
+
+/**
+ * What one squad has been told to do. `defend` is a posture rather than a
+ * destination — the squad goes to the same flag either way and behaves
+ * differently once it arrives.
+ */
+export interface SquadOrder {
+  pointId: string;
+  defend: boolean;
+}
 
 /** Live state of one flag. */
 export interface ControlPoint {
@@ -215,23 +228,57 @@ export class ConquestSystem {
   }
 
   /**
-   * Which flag a squad should be heading for.
+   * Orders for one team's squads, resolved together.
    *
-   * Deliberately simple: score every point by how much it is worth taking and
-   * hand the squad the best one, with the squad index breaking ties so the four
-   * squads spread across the map instead of stacking on one flag.
+   * Together, because the interesting part is what the squads do *relative to
+   * each other* — and because the thing this replaces could not express it.
+   * The old `objectiveFor` was `ranked[squad % ranked.length]`: squad N took
+   * the Nth-best flag, full stop. With two squads per team that meant a team
+   * only ever pursued its top two objectives, could never choose to defend
+   * (an owned flag scored a flat -30 however close it was to being lost), and
+   * re-sorted the whole point list per bot per think tick — 160 throwaway
+   * arrays a second for a value that changes every few seconds.
+   *
+   * Squads are resolved in order and each claims a point. A claimed point is
+   * *penalised*, not excluded: when the round hinges on one flag, two squads
+   * stacking on it is the right answer, and forced spreading is what made bots
+   * wander off from the fight that decided the game.
    */
-  objectiveFor(team: Team, squad: number, from: Vector3): string {
-    if (this.points.length === 0) return "";
-    const ranked = this.points
-      .map((p) => ({ p, score: this.pointValue(p, team, from) }))
-      .sort((a, b) => b.score - a.score);
-    // Each squad takes a different entry from the ranked list, wrapping round,
-    // so the four squads spread over the map instead of stacking on one flag.
-    return ranked[squad % ranked.length].p.def.id;
+  planSquads(team: Team, centroids: Vector3[], previous: string[]): SquadOrder[] {
+    const out: SquadOrder[] = [];
+    if (this.points.length === 0) {
+      for (let i = 0; i < centroids.length; i++) out.push({ pointId: "", defend: false });
+      return out;
+    }
+
+    const s = CONFIG.bots.squad;
+    const claims = new Map<string, number>();
+    for (let i = 0; i < centroids.length; i++) {
+      const from = centroids[i];
+      const held = previous[i] ?? "";
+      let best = this.points[0];
+      let bestScore = -Infinity;
+      for (const p of this.points) {
+        let score = this.pointValue(p, team, from);
+        score -= (claims.get(p.def.id) ?? 0) * s.claimPenalty;
+        // Hysteresis, on the squad rather than the bot: the score of two
+        // flags crossing must not make a squad turn round mid-approach.
+        if (p.def.id === held) score += s.switchMargin;
+        if (score > bestScore) {
+          bestScore = score;
+          best = p;
+        }
+      }
+      claims.set(best.def.id, (claims.get(best.def.id) ?? 0) + 1);
+      // Defending is a posture, not a destination: you go to the same place
+      // either way, you just behave differently once you arrive.
+      out.push({ pointId: best.def.id, defend: best.owner === team });
+    }
+    return out;
   }
 
   private pointValue(p: ControlPoint, team: Team, from: Vector3): number {
+    const s = CONFIG.bots.squad;
     let score = 100;
     // Taking a flag off the enemy is worth more than grabbing a neutral one,
     // which is worth more than standing on your own.
@@ -239,6 +286,18 @@ export class ConquestSystem {
     else if (p.owner !== team) score += 70;
     else score -= 30;
     if (p.contested) score += 50;
+    // A flag you hold with enemies standing on it is about to stop being one.
+    // `present` has been counted every tick since the beginning and read by
+    // nothing; this is what turns it into a reason to go home and defend.
+    if (p.owner === team) {
+      const enemies = p.present[team === 0 ? 1 : 0];
+      if (enemies > 0) {
+        // Scaled by how far the meter has already slipped, so a flag actually
+        // being taken outranks one with a single enemy wandering across it.
+        const slipped = team === 0 ? (p.meter + 1) / 2 : (1 - p.meter) / 2;
+        score += s.defendUnderAttack * Math.min(1, enemies / 2) * (0.4 + slipped);
+      }
+    }
     // Distance is a mild penalty, not a dominant one — otherwise every squad
     // just defends whatever is closest to the home spawn.
     score -= Vector3.Distance(from, p.def.pos) * 0.25;

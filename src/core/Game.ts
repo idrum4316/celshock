@@ -238,12 +238,16 @@ export class Game {
     // knowing what a bot is — so the routing happens here.
     this.combat.onNearMiss = (near, from) => this.battle.suppress(near, from);
     this.battle.spawnPointFor = (bot) => this.spawnPointFor(bot.team);
-    this.battle.objectiveFor = (bot) =>
-      this.conquest.objectiveFor(bot.team, bot.squad, bot.position);
-    // A bot holds a flag only when it is standing on the one it was sent to.
-    this.battle.inCaptureZone = (bot) => {
+    // Squad orders are planned as a group, so squads can be spread across
+    // objectives — or deliberately stacked on the one that decides the round.
+    this.battle.planSquads = (team, centroids, previous) =>
+      this.conquest.planSquads(team, centroids, previous);
+    // A bot is "on" a flag only when it is the one it was sent to. Whether that
+    // means contesting it or holding it is the squad's posture.
+    this.battle.zoneFor = (bot) => {
       const p = this.conquest.pointAt(bot.position);
-      return !!p && p.def.id === bot.objective;
+      if (!p || p.def.id !== bot.objective) return "none";
+      return bot.defending && p.owner === bot.team ? "hold" : "contest";
     };
     this.conquest.onCaptured = (point, by) => {
       if (by === this.player.team) this.sfx.capture();

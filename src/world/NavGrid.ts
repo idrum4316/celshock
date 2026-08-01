@@ -539,6 +539,65 @@ export class NavGrid {
     return into.set(dx / len, 0, dz / len);
   }
 
+  /**
+   * Like `steer`, but aims at a cell `steps` further down the gradient.
+   *
+   * `steer` returns the direction to the single best 8-neighbour cell *centre*,
+   * which is why bots walked flow fields as a visible 1.5 m zigzag: every step
+   * re-aimed at the next centre in turn. Looking further ahead points at where
+   * the route is actually going.
+   *
+   * The result is blended with the immediate direction rather than used raw. A
+   * route that bends round a corner has a lookahead cell on the far side of the
+   * wall, and steering straight at it would drive the bot into the stone; the
+   * blend cuts the corner without ever aiming hard through it, and the caller's
+   * stuck watchdog covers what is left.
+   */
+  steerAhead(field: FlowField, pos: Vector3, steps: number, into: Vector3): Vector3 {
+    into.setAll(0);
+    let here = this.surfaceAt(pos.x, pos.y, pos.z);
+    if (here < 0) return into;
+
+    const linkStride = NEIGHBOURS.length;
+    let firstX = 0;
+    let firstZ = 0;
+    let aheadX = pos.x;
+    let aheadZ = pos.z;
+
+    for (let step = 0; step < steps; step++) {
+      let best = -1;
+      let bestDist = field.dist[here];
+      for (let n = 0; n < linkStride; n++) {
+        const t = this.links[here * linkStride + n];
+        if (t < 0 || !this.walkable[t]) continue;
+        if (field.dist[t] < bestDist) {
+          bestDist = field.dist[t];
+          best = t;
+        }
+      }
+      if (best < 0) break;
+      const cell = Math.floor(best / MAX_SURFACES);
+      aheadX = this.toWorld(cell % this.dim);
+      aheadZ = this.toWorld(Math.floor(cell / this.dim));
+      if (step === 0) {
+        firstX = aheadX - pos.x;
+        firstZ = aheadZ - pos.z;
+      }
+      here = best;
+    }
+
+    const firstLen = Math.hypot(firstX, firstZ);
+    if (firstLen < 1e-4) return into;
+    const aheadLen = Math.hypot(aheadX - pos.x, aheadZ - pos.z);
+    if (aheadLen < 1e-4) return into.set(firstX / firstLen, 0, firstZ / firstLen);
+
+    const x = firstX / firstLen + (aheadX - pos.x) / aheadLen;
+    const z = firstZ / firstLen + (aheadZ - pos.z) / aheadLen;
+    const len = Math.hypot(x, z);
+    if (len < 1e-4) return into.set(firstX / firstLen, 0, firstZ / firstLen);
+    return into.set(x / len, 0, z / len);
+  }
+
   /** True when a field can reach the surface under `pos` at all. */
   reachable(field: FlowField, pos: Vector3): boolean {
     const s = this.surfaceAt(pos.x, pos.y, pos.z);

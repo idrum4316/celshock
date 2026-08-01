@@ -18,7 +18,7 @@
  */
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import { Bot, type BattleCtx } from "../entities/Bot";
+import { Bot, type BattleCtx, type BotZone } from "../entities/Bot";
 import { assignSkills } from "../entities/BotSkill";
 import { OTHER_TEAM, type Combatant, type Team } from "../entities/Combatant";
 import type { CelMaterialFactory } from "../shaders/CelShader";
@@ -27,6 +27,7 @@ import type { FlowField, NavGrid } from "../world/NavGrid";
 import type { GameMap } from "../world/MapBuilder";
 import type { ObstacleField } from "../world/ObstacleField";
 import type { CombatSystem, Hittable } from "./CombatSystem";
+import type { SquadOrder } from "./ConquestSystem";
 
 /**
  * Owns both teams: a fixed pool of bot rigs, the AI schedule, and the render
@@ -64,16 +65,31 @@ export class BattleSystem {
   onBotReloaded: (bot: Bot) => void = () => {};
   /** Wired by Game: where should this bot deploy? */
   spawnPointFor: (bot: Bot) => { pos: Vector3; yaw: number } | null = () => null;
-  /** Wired by Game: which flag is this bot's squad heading for? */
-  objectiveFor: (bot: Bot) => string = () => "";
-  /** Wired by Game: is this bot standing in a capture zone it should hold? */
-  inCaptureZone: (bot: Bot) => boolean = () => false;
+  /**
+   * Wired by Game: orders for one team's squads, given each squad's centroid
+   * and what it is currently doing. Resolved as a group so squads can be spread
+   * (or deliberately stacked) relative to each other.
+   */
+  planSquads: (team: Team, centroids: Vector3[], previous: string[]) => SquadOrder[] =
+    () => [];
+  /** Wired by Game: what is this bot standing on? */
+  zoneFor: (bot: Bot) => BotZone = () => "none";
 
   private nav: NavGrid | null = null;
   private cover: CoverMap | null = null;
   private obstacles: ObstacleField | null = null;
   private player: Combatant | null = null;
   private thinkCursor = 0;
+  /**
+   * Live orders per team, indexed by squad. Replanned on their own slow timer
+   * rather than per bot per think — the old per-bot call re-sorted the whole
+   * control-point list 80 times a second and threw the arrays away.
+   */
+  private readonly squadOrders: SquadOrder[][] = [[], []];
+  private squadT = 0;
+  /** Scratch for the centroid pass; never reallocated. */
+  private readonly centroidScratch: Vector3[][] = [[], []];
+  private readonly squadHeld: string[][] = [[], []];
   /** Carried across frames so a fractional think budget isn't lost. */
   private thinkDebt = 0;
   private ctx: BattleCtx;
@@ -97,6 +113,9 @@ export class BattleSystem {
           spec.eyeColor,
         );
         bot.squad = Math.floor(i / CONFIG.bots.squadSize);
+        // A stream per bot, seeded off the pool slot: movement personality
+        // differs between bots but is identical between runs.
+        bot.seedRandom(CONFIG.bots.skill.seed + team * 131 + i * 17);
         bot.onReload = () => this.onBotReloaded(bot);
         this.bots.push(bot);
       }
@@ -232,10 +251,12 @@ export class BattleSystem {
       if (bot.alive || bot.respawnT > 0) continue;
       const spawn = this.spawnPointFor(bot);
       if (spawn) {
-        bot.objective = this.objectiveFor(bot);
+        this.applyOrder(bot);
         bot.spawn(spawn.pos, spawn.yaw);
       }
     }
+
+    this.updateSquads(dt);
 
     // --- staggered thinking ---
     // Budget = roster * rate * dt, so each bot thinks `thinkRate` times a
@@ -253,8 +274,8 @@ export class BattleSystem {
       const bot = this.bots[this.thinkCursor];
       this.thinkCursor = (this.thinkCursor + 1) % this.bots.length;
       if (!bot.alive) continue;
-      bot.objective = this.objectiveFor(bot);
-      bot.think(this.ctx, this.inCaptureZone(bot));
+      this.applyOrder(bot);
+      bot.think(this.ctx, this.zoneFor(bot));
       done++;
     }
 
@@ -276,6 +297,59 @@ export class BattleSystem {
       bot.setOutlines(d < b.lodOutlineDistance);
       bot.update(dt, this.ctx, d < b.lodFreezeDistance);
     }
+  }
+
+  /**
+   * Re-plans both teams' squad orders on their own slow timer.
+   *
+   * Its own budget rather than the per-bot think budget: this is four objects
+   * at `CONFIG.bots.squad.updateRate`, and stealing think slots for it would
+   * silently lengthen every bot's reaction time for no reason.
+   */
+  private updateSquads(dt: number): void {
+    this.squadT -= dt;
+    if (this.squadT > 0) return;
+    this.squadT = 1 / CONFIG.bots.squad.updateRate;
+
+    for (const team of [0, 1] as const) {
+      const centroids = this.centroidScratch[team];
+      const held = this.squadHeld[team];
+      centroids.length = 0;
+      held.length = 0;
+
+      // Centroid of each squad's living members. A dead squad still needs an
+      // entry so the order array stays indexed by squad number.
+      const counts: number[] = [];
+      for (const bot of this.bots) {
+        if (bot.team !== team) continue;
+        while (centroids.length <= bot.squad) {
+          centroids.push(new Vector3());
+          counts.push(0);
+          held.push(this.squadOrders[team][held.length]?.pointId ?? "");
+        }
+        if (!bot.alive) continue;
+        centroids[bot.squad].addInPlace(bot.position);
+        counts[bot.squad] += 1;
+      }
+      for (let i = 0; i < centroids.length; i++) {
+        if (counts[i] > 0) centroids[i].scaleInPlace(1 / counts[i]);
+        else {
+          // Nobody left: plan from the home spawn, which is where they will
+          // come back from anyway.
+          const spawn = this.spawnPointFor(this.bots.find((b) => b.team === team)!);
+          if (spawn) centroids[i].copyFrom(spawn.pos);
+        }
+      }
+      this.squadOrders[team] = this.planSquads(team, centroids, held);
+    }
+  }
+
+  /** Pushes the squad's current order onto one bot. */
+  private applyOrder(bot: Bot): void {
+    const order = this.squadOrders[bot.team][bot.squad];
+    if (!order) return;
+    bot.objective = order.pointId;
+    bot.defending = order.defend;
   }
 
   // --- BattleCtx implementation -------------------------------------------
