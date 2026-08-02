@@ -212,17 +212,68 @@ const SCATTER_LIGHTS: Partial<
   fireDrum: { color: "#ff8a2a", range: 19, intensity: 2.0, y: 1.1, flicker: 0.4 },
 };
 
-/** Approximate prop heights at scale 1, for the burial check in `findSpot`. */
-const PROP_HEIGHTS: Record<ScatterSpec["prop"], number> = {
-  deadTree: 5.4,
-  gravestone: 1.7,
-  log: 0.9,
-  fungus: 1.1,
-  rubble: 1.5,
-  fireDrum: 2.1,
-  boulder: 1.4,
-  bramble: 1.6,
-  barrel: 1.3,
+/** One scatter prop's measured body. See `PROP_BODIES`. */
+interface PropBody {
+  /** Collider footprint and height at scale 1 — the part that stops a bullet. */
+  w: number;
+  d: number;
+  h: number;
+  /**
+   * Roughly how high the prop reaches, for `findSpot`'s burial check — a
+   * different question from `h`, which stops at what is solid. A fire drum's
+   * flame is 0.85 m of light that must not be planted inside a wall and 0 m of
+   * anything a bullet can find.
+   *
+   * Approximate, and deliberately frozen at the values this table shipped
+   * with: it feeds placement, so changing one rerolls the seeded dressing
+   * field across the whole map for no gain.
+   */
+  visualTop: number;
+}
+
+/**
+ * Every scatter prop's body at scale 1, measured off the builders in
+ * `Props.ts`. The collider box is `w`/`d`/`h`, oriented with the prop.
+ *
+ * **This is deliberately not `ScatterSpec.clearance`, which is what it used to
+ * be.** Clearance is a *placement* rule — how much room a prop wants around it
+ * so a stand of trees doesn't grow into itself or into a wall — and it is
+ * generous on purpose. Sizing the collider from it gave every blocking prop a
+ * square box inflated by its own spacing margin, and square is the worst shape
+ * for it: a headstone 0.24 m thick stopped rounds through 1.2 m of air, and a
+ * dead tree ate a 1.74 m corridor at chest height around a 0.7 m trunk. Since
+ * the same boxes are what `CombatSystem` caps a shot on, what `BattleSystem`
+ * tests line of sight against and what `CameraSystem` pulls in on, one wrong
+ * number was showing up as three unrelated-looking complaints.
+ *
+ * Keep these honest against `Props.ts`. Too small only costs a round clipping
+ * through a silhouette; too large costs shots that visibly should have landed.
+ */
+const PROP_BODIES: Record<ScatterSpec["prop"], PropBody> = {
+  // Trunk only, at roughly its width around chest height (it tapers 0.85 ->
+  // 0.32 over 5.2 m). The branches are 4 cm twigs — nothing should stop on one.
+  deadTree: { w: 0.7, d: 0.7, h: 5.2, visualTop: 5.4 },
+  // Slab and plinth: wide, and *thin*. The one prop whose orientation matters
+  // most — squared off, it blocked five times its own thickness.
+  gravestone: { w: 1.15, d: 0.42, h: 1.6, visualTop: 1.7 },
+  // Lies along its own local X, so the collider's rotation is load-bearing:
+  // 3 m one way and 0.7 m the other is meaningless axis-aligned.
+  log: { w: 3.0, d: 0.7, h: 0.75, visualTop: 0.9 },
+  fungus: { w: 0.8, d: 0.8, h: 0.9, visualTop: 1.1 },
+  // Heap plus the chunks piled on it. The rebar is a 6 cm rod sticking out to
+  // 1.8 m and is not in this — you do not lose a round to a piece of wire.
+  rubble: { w: 1.9, d: 1.7, h: 1.05, visualTop: 1.5 },
+  // The drum. NOT the flame above it, which is emissive and 0.85 m tall.
+  fireDrum: { w: 0.95, d: 0.95, h: 1.25, visualTop: 2.1 },
+  // The one prop that was already too *small*, and stays generous: measured,
+  // a boulder is 2.4 m across the waist and 2.2 m tall, because
+  // `CreatePolyhedron`'s `size: 0.8` is not a radius — it yields a 2.26 m
+  // shape before the builder's own 1.3-1.7x stretch. The old clearance-derived
+  // 2.0 m box already let rounds through visible rock. Height stays near it so
+  // a large boulder still bakes as hard cover (CoverMap's 1.7 m).
+  boulder: { w: 2.1, d: 1.9, h: 1.45, visualTop: 1.4 },
+  bramble: { w: 0.8, d: 0.8, h: 1.2, visualTop: 1.6 },
+  barrel: { w: 0.88, d: 0.88, h: 1.25, visualTop: 1.3 },
 };
 
 /**
@@ -518,7 +569,12 @@ export class MapBuilder {
       prop.position.x = spot.x;
       prop.position.z = spot.z;
       prop.position.y = prop.position.y * scale + base;
-      prop.rotation.y = rng() * Math.PI * 2;
+      // Drawn here and not a line earlier: `build` consumes the same seeded
+      // stream, so moving this draw would reroll the whole dressing field.
+      // Kept in a local because the collider below is oriented with the prop —
+      // the only way a headstone or a fallen log gets a box that means anything.
+      const yaw = rng() * Math.PI * 2;
+      prop.rotation.y = yaw;
       // Bake the placement into the vertices, then hand the flattened
       // hierarchy to the merge — the same identity-transform trick the
       // structures use, applied one level up.
@@ -534,17 +590,19 @@ export class MapBuilder {
         );
       }
       if (spec.blocking) {
-        // Real prop height, not a generic 3 m — a rubble heap's collider
-        // reaching 3 m up blocks shots and sightlines over empty air.
-        const h = PROP_HEIGHTS[spec.prop] * scale;
+        // The prop's measured body, oriented with it — not its placement
+        // clearance squared off. See PROP_BODIES.
+        const body = PROP_BODIES[spec.prop];
+        const h = body.h * scale;
         colliders.push(
           this.collider(`${spec.prop}-col`, {
-            w: clearance * 2,
+            w: body.w * scale,
             h,
-            d: clearance * 2,
+            d: body.d * scale,
             x: spot.x,
             y: base + h / 2,
             z: spot.z,
+            rotY: yaw,
           }),
         );
       }
@@ -608,23 +666,31 @@ export class MapBuilder {
     clearance: number,
   ): boolean {
     const baseY = spec.y ?? 0;
-    const topY = baseY + PROP_HEIGHTS[spec.prop] * (spec.scale?.[1] ?? 1);
-    // The collider a prop gets spans `clearance` out from its centre — pad by
-    // the full amount or the new collider ends up inside the structure's.
+    // The prop's visual reach, not its collider height: a lantern flame or a
+    // spray of branches buried in a wall looks broken even though nothing
+    // solid overlaps.
+    const topY = baseY + PROP_BODIES[spec.prop].visualTop * (spec.scale?.[1] ?? 1);
+    // Padded by the placement clearance rather than by the prop's own
+    // half-width, so a prop keeps visible daylight around it instead of merely
+    // not intersecting.
     const pad = clearance;
     for (const b of this.boxes) {
       // A tilted box (rotX ramps) spans a taller band than its thickness.
       let halfH = b.h / 2;
       if (b.rotX !== 0) halfH += (Math.abs(Math.sin(b.rotX)) * b.d) / 2;
       if (topY <= b.cy - halfH + 0.05 || baseY >= b.cy + halfH - 0.05) continue;
-      // XZ overlap, tested in the box's local frame.
+      // XZ overlap, tested in the box's local frame. Rotate the delta by
+      // *minus* rotY — the same convention as boxGeometry's `toLocalXZ`, and
+      // the inverse of the box's own rotation. Rotating the other way reflects
+      // the test across the box, which matters the moment a box is longer than
+      // it is deep; scatter colliders now are.
       let lx = x - b.cx;
       let lz = z - b.cz;
       if (b.rotY !== 0) {
         const c = Math.cos(b.rotY);
         const s = Math.sin(b.rotY);
-        const rx = lx * c - lz * s;
-        lz = lx * s + lz * c;
+        const rx = lx * c + lz * s;
+        lz = -lx * s + lz * c;
         lx = rx;
       }
       if (Math.abs(lx) <= b.w / 2 + pad && Math.abs(lz) <= b.d / 2 + pad) {

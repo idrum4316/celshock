@@ -354,6 +354,16 @@ normals.
 
 Layout gotchas that have already cost time:
 
+- **A blocking scatter prop's collider comes from `PROP_BODIES`, not from its
+  `clearance`.** Clearance is a placement rule and is generous on purpose;
+  sizing the box from it gave every prop a square collider inflated by its own
+  spacing margin — a 0.24 m headstone stopped rounds through 1.2 m of air and a
+  dead tree ate a 1.74 m corridor around a 0.7 m trunk. The box is oriented with
+  the prop, which is the only thing that makes a fallen log or a headstone
+  meaningful. Keep the numbers measured against `Props.ts`: too small costs a
+  round clipping a silhouette, too large costs shots that visibly should have
+  landed. Note `CreatePolyhedron`'s `size` is not a radius — `size: 0.8` is a
+  2.26 m boulder, which is why that one is the only prop sized *up*.
 - A collider's top face must stay within `CONFIG.nav.stepHeight` (0.6) of the
   ground beside it, or the nav flood fill never reaches it and bots treat it as a
   wall. The boathouse and jetty decks both failed this at 0.62–0.73 m.
