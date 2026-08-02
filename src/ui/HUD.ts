@@ -1,9 +1,10 @@
 /**
- * HUD.ts — In-game DOM overlay: health/ammo, tickets, flag strip, crosshair,
- * hitmarker, damage vignette, directional damage arcs, toasts, killfeed,
- * scoreboard, menu/round-over.
+ * HUD.ts — In-game DOM overlay: health/ammo, tickets, flag strip, capture-zone
+ * panel, crosshair, hitmarker, damage vignette, directional damage arcs,
+ * toasts, killfeed, scoreboard, menu/round-over.
  * Invariants: Game pushes state every frame (setHealth/setAmmo/setFlags/
- * setViewYaw/...) — setting HUD state from anywhere else is overwritten next
+ * setCapture/setViewYaw/...) — setting HUD state from anywhere else is
+ * overwritten next
  * tick. Pure DOM manipulation; reads ControlPoint data, never imports game
  * systems beyond types. Transient elements (toasts, killfeed) self-remove via
  * setTimeout; the damage arcs are a fixed pool, never allocated per hit.
@@ -79,6 +80,30 @@ function angleDelta(a: number, b: number): number {
 }
 
 /**
+ * The flag the player is standing in, relative to the player's own team. Game
+ * derives this from the live ControlPoint each frame; the HUD picks the words.
+ */
+export interface CaptureStatus {
+  /** Single letter, A..E. */
+  id: string;
+  name: string;
+  owner: "mine" | "theirs" | "neutral";
+  /** 0..1 — how far the meter has run, whichever way it has run. */
+  progress: number;
+  /**
+   * The side the meter currently stands for — the bar's colour. Distinct from
+   * `taking` on purpose: a flag at 95% theirs that you have just walked onto
+   * is still showing a red bar while it runs back down toward you.
+   */
+  held: "mine" | "theirs";
+  /** Which way the meter is being pushed, from who is standing in the zone. */
+  taking: "mine" | "theirs";
+  contested: boolean;
+  /** Enemies standing in the zone with you. */
+  enemies: number;
+}
+
+/**
  * DOM-based HUD: health/ammo, the Conquest scoreboard (tickets and the flag
  * strip), crosshair, hitmarker, damage vignette, toasts, and full-screen
  * overlays. Styling lives in index.html.
@@ -104,6 +129,14 @@ export class HUD {
   private lockHint: HTMLElement;
   private killfeed: HTMLElement;
   private scoreboard: HTMLElement;
+  private capture: HTMLElement;
+  /** The capture panel's parts, looked up once — it is written every frame. */
+  private captureParts: {
+    id: HTMLElement;
+    name: HTMLElement;
+    fill: HTMLElement;
+    state: HTMLElement;
+  };
 
   private hitT = 0;
   private vignetteT = 0;
@@ -127,6 +160,11 @@ export class HUD {
       <div id="killfeed"></div>
       <div id="scoreboard" class="hidden"></div>
       <div id="lock-hint" class="hidden">Click to capture the mouse</div>
+      <div id="capture-status" class="hidden">
+        <div class="cap-head"><span class="cap-id"></span><span class="cap-name"></span></div>
+        <div class="cap-meter"><div class="cap-meter-fill"></div></div>
+        <div class="cap-state"></div>
+      </div>
       <div id="hud-bottom">
         <div class="panel">
           <div class="label">HP</div>
@@ -153,6 +191,13 @@ export class HUD {
     this.lockHint = document.getElementById("lock-hint")!;
     this.killfeed = document.getElementById("killfeed")!;
     this.scoreboard = document.getElementById("scoreboard")!;
+    this.capture = document.getElementById("capture-status")!;
+    this.captureParts = {
+      id: this.capture.querySelector(".cap-id") as HTMLElement,
+      name: this.capture.querySelector(".cap-name") as HTMLElement,
+      fill: this.capture.querySelector(".cap-meter-fill") as HTMLElement,
+      state: this.capture.querySelector(".cap-state") as HTMLElement,
+    };
   }
 
   update(dt: number): void {
@@ -304,6 +349,39 @@ export class HUD {
       cell.fill.className = `cap-fill ${
         Math.sign(p.meter) === (playerTeam === 0 ? -1 : 1) ? "mine" : "theirs"
       }`;
+    }
+  }
+
+  /**
+   * The "you are standing in it" panel: shown only while the player is inside
+   * a capture zone, which is the one thing the flag strip cannot say. The ring
+   * on the ground draws the boundary; this confirms which side of it you are
+   * on, and what the meter is doing about it.
+   */
+  setCapture(status: CaptureStatus | null): void {
+    if (!status) {
+      this.capture.classList.add("hidden");
+      return;
+    }
+    const parts = this.captureParts;
+    // Rewritten wholesale rather than toggled, which is also what clears the
+    // `hidden` the null branch above puts back on.
+    this.capture.className = `zone ${status.owner}${status.contested ? " contested" : ""}`;
+    parts.id.textContent = status.id;
+    parts.name.textContent = status.name.toUpperCase();
+    parts.fill.style.width = `${Math.round(status.progress * 100)}%`;
+    parts.fill.className = `cap-meter-fill ${status.held}`;
+    // A held flag with nobody contesting it has no meter story to tell, so the
+    // panel says so rather than showing a full bar and leaving you to read it.
+    if (status.contested) {
+      const n = status.enemies;
+      parts.state.textContent = `CONTESTED — ${n} ENEM${n === 1 ? "Y" : "IES"} IN ZONE`;
+    } else if (status.owner === "mine" && status.progress >= 1) {
+      parts.state.textContent = "SECURED";
+    } else if (status.taking === "mine") {
+      parts.state.textContent = "CAPTURING";
+    } else {
+      parts.state.textContent = "LOSING";
     }
   }
 

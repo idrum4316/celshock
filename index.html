@@ -209,6 +209,69 @@
       .flag .cap-fill.mine { background: #ffc46b; }
       .flag .cap-fill.theirs { background: #ff5a4f; }
 
+      /* --- conquest: the "you are standing in it" panel ---
+         Shown only while the player is inside a capture zone. The ring drawn
+         on the ground says where the boundary is; this says which side of it
+         you are on, so it sits low and centred, under the crosshair and clear
+         of the health/ammo panels. */
+      #capture-status {
+        position: absolute;
+        left: 50%;
+        bottom: 96px;
+        transform: translateX(-50%);
+        width: 232px;
+        padding: 6px 10px 7px;
+        text-align: center;
+        background: rgba(0, 0, 0, 0.5);
+        border: 2px solid #000;
+        border-radius: 4px;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+      }
+      #capture-status .cap-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: center;
+        gap: 7px;
+      }
+      #capture-status .cap-id {
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 1px;
+      }
+      #capture-status .cap-name {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        opacity: 0.85;
+      }
+      #capture-status.mine .cap-id { color: #ffc46b; }
+      #capture-status.theirs .cap-id { color: #ff5a4f; }
+      #capture-status.neutral .cap-id { color: #c2c7d0; }
+      #capture-status .cap-meter {
+        height: 5px;
+        margin: 5px 0 4px;
+        background: rgba(255, 255, 255, 0.12);
+        overflow: hidden;
+      }
+      #capture-status .cap-meter-fill {
+        height: 100%;
+        width: 0;
+        transition: width 0.15s linear;
+      }
+      #capture-status .cap-meter-fill.mine { background: #ffc46b; }
+      #capture-status .cap-meter-fill.theirs { background: #ff5a4f; }
+      #capture-status .cap-state {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 2px;
+        text-shadow: 0 1px 0 #000;
+      }
+      /* Same pulse as the flag strip's contested cell, for the same reason. */
+      #capture-status.contested {
+        animation: flagPulse 0.7s ease-in-out infinite alternate;
+      }
+      #capture-status.contested .cap-state { color: #ff5a4f; }
+
       /* --- bars --- */
       .bar {
         height: 14px;
@@ -486,6 +549,7 @@
          can keep writing to those nodes without fighting the toggle. */
       #hud.editing #ticket-bar,
       #hud.editing #flag-strip,
+      #hud.editing #capture-status,
       #hud.editing #crosshair,
       #hud.editing #damage-dirs,
       #hud.editing #hud-bottom,

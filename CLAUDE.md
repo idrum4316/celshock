@@ -100,6 +100,8 @@ src/
     BattleSystem.ts         # Bot pool, AI scheduling, LOS, distance LOD
     ConquestSystem.ts       # Flags, capture meters, tickets, bleed, spawns,
                             #   squad orders (planSquads) + defend posture
+    CaptureZoneSystem.ts    # The flags drawn in the world: boundary ring,
+                            #   proximity-revealed skirt, beacon
     CombatSystem.ts         # Hitscan + pooled tracers and sparks
     AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
@@ -156,8 +158,8 @@ src/
       heights.ts            # GENERATED floor heights (editor terrain mode)
       environment.ts        # Hollowmere's palette, fog, mist, particles
   ui/
-    HUD.ts                  # DOM overlay: tickets, flags, killfeed, scoreboard,
-                            # world-anchored directional damage arcs
+    HUD.ts                  # DOM overlay: tickets, flags, capture-zone panel,
+                            # killfeed, scoreboard, world-anchored damage arcs
     DeployScreen.ts         # Clickable top-down deploy map
     Minimap.ts              # Corner minimap: flags, friendlies, firing enemies
   shaders/
@@ -832,6 +834,34 @@ list `Game` assembles each frame (player + all bots).
 The player's health regenerates after `CONFIG.player.regenDelay`. This is not
 decoration: with sixteen hostile bots and no medics, a pool that never refills
 turns the round into a respawn queue.
+
+**A capture zone is drawn, not just counted** (`CaptureZoneSystem`, plus
+`HUD.setCapture` for the panel that appears while you are standing in one). The
+rules layer had no geometry at all, so the only way to find out whether you
+were inside a flag was to watch the HUD strip move. Four things about it are
+load-bearing:
+
+- **The ring is the boundary.** It is built at `ControlPointDef.radius`, which
+  is what `pointAt` tests, so the line on the floor is not an approximation of
+  the zone — it is the zone. Drawing it at anything else would be worse than
+  drawing nothing.
+- **It follows the surface you STAND on, not the terrain.** A 28 m ring placed
+  by one height sample at the flag is buried at one end, the same problem
+  `terrainSlab` solves for roads — but sampling `TerrainField` alone is still
+  wrong, because four of the five flags sit on a paved square or a deck whose
+  top face is above the ground under it. The ring takes the higher of
+  `terrain.surfaceAt(x, z, true)` and the nav graph's walkable height nearest
+  the flag's own `y`.
+- **The skirt is revealed by proximity, and that is a fix, not a flourish.**
+  It is a cylinder around the zone, so from inside you are always looking
+  through its far side; at any alpha that reads as a wall, that is a white wash
+  over the entire screen. Per-frame vertex alpha keyed to the viewer's distance
+  shows only the stretch you are about to cross.
+- **Markers are annotation.** No `solid`, no collider, no `WorldBox`, excluded
+  from the GlowLayer by hand (Game's scan is construction-time). They are the
+  one persistent unlit `StandardMaterial` geometry in the world, so they get no
+  shader fog and have to fade themselves out at the fog wall — the beacon
+  keeps a floor so a distant flag still reads as a faint column in the mist.
 
 ### Rendering constraints that look like bugs if you undo them
 

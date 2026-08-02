@@ -59,6 +59,11 @@ is untouched, so mixed setups never penalize keyboard/mouse aim.
   diminishing returns; if both teams are inside, the meter freezes. A flag has
   to be swept through **neutral** before it changes hands, so you cannot steal
   one by briefly outnumbering the defender.
+- Every zone is **drawn in the world**: a coloured ring on the ground marking
+  the exact capture boundary, a low glow that rises from the stretch of it you
+  are walking up to, and a beacon over the flag you can see across the village.
+  They carry the owner's colour and pulse while the flag is being taken. Step
+  inside and a panel names the point and shows the meter running.
 - Each team starts with **400 reinforcements**. Every death costs one, and
   whichever side holds **fewer flags bleeds** tickets steadily on top. Winning
   fights while ignoring objectives still loses the round.

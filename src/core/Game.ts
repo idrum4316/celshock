@@ -31,6 +31,7 @@ import { Player } from "../entities/Player";
 import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
+import { CaptureZoneSystem } from "../systems/CaptureZoneSystem";
 import { CombatSystem } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
 import { GrassSystem } from "../systems/GrassSystem";
@@ -44,7 +45,7 @@ import { HollowmereEnvironment } from "../world/hollowmere/environment";
 import { HollowmereLayout } from "../world/hollowmere/layout";
 import { MapBuilder, type GameMap } from "../world/MapBuilder";
 import { DeployScreen } from "../ui/DeployScreen";
-import { HUD } from "../ui/HUD";
+import { HUD, type CaptureStatus } from "../ui/HUD";
 import { Minimap } from "../ui/Minimap";
 import { CameraSystem } from "./CameraSystem";
 import { InputManager } from "./InputManager";
@@ -108,6 +109,8 @@ export class Game {
   private aimAssist: AimAssistSystem;
   private battle: BattleSystem;
   private conquest: ConquestSystem;
+  /** The flags' in-world markers — rings, skirts and beacons. */
+  private zones: CaptureZoneSystem;
   private lighting: LightingSystem;
   private shadows: ShadowSystem;
   private atmosphere: Atmosphere;
@@ -196,6 +199,7 @@ export class Game {
     this.aimAssist = new AimAssistSystem(this.scene);
     this.battle = new BattleSystem(this.scene, this.mats, this.combat);
     this.conquest = new ConquestSystem();
+    this.zones = new CaptureZoneSystem(this.scene, glow);
     this.player = new Player(this.scene, this.mats);
     this.player.setBodyHidden(true); // hidden until a round starts
     for (const m of this.scene.meshes) {
@@ -437,6 +441,10 @@ export class Game {
   private buildEditorMap(): GameMap {
     this.map?.dispose();
     this.combat.clearTransient();
+    // The editor draws its own flag proxies, and its terrain moves under them;
+    // leaving the play markers up would double every ring. Leaving the editor
+    // always runs startRound, which builds them again.
+    this.zones.dispose();
     const map = this.mapBuilder.build(HollowmereLayout, HollowmereEnvironment, {
       editor: true,
     });
@@ -506,6 +514,14 @@ export class Game {
     this.battle.setMap(this.map);
     this.battle.reset();
     this.conquest.start(this.map);
+    // The flags' markers read the same radius ConquestSystem tests against,
+    // and follow the same terrain the ring is drawn across.
+    this.zones.build(
+      this.map.controlPoints,
+      this.map.terrain,
+      this.map.nav,
+      HollowmereEnvironment,
+    );
     this.player.fullReset();
     this.player.team = 0;
     this.minimap.setMap(this.map, this.player.team);
@@ -639,6 +655,14 @@ export class Game {
     this.combat.update(dt);
 
     this.updateCameraAndLighting(dt);
+    // Reads the camera (it fades the markers into the fog wall) but never
+    // moves it, so it belongs after the tail above rather than inside it.
+    this.zones.update(
+      dt,
+      this.conquest.points,
+      this.player.team,
+      this.cameraSys.camera.position,
+    );
     this.updateHud(dt);
   }
 
@@ -751,6 +775,7 @@ export class Game {
       this.player.team,
     );
     this.hud.setFlags(this.conquest.points, this.player.team);
+    this.hud.setCapture(this.captureStatus());
     this.hud.setScoreboard(this.input.scoreboard, {
       teams: [CONFIG.teams[0].name, CONFIG.teams[1].name],
       tickets: this.conquest.tickets,
@@ -773,6 +798,36 @@ export class Game {
   }
 
   /**
+   * The flag the player is standing in, as the HUD wants it — null when they
+   * are outside every zone, which is what hides the panel. The zone test is
+   * `ConquestSystem.pointAt`, the same one that decides occupancy, so the
+   * panel appears exactly when the player starts counting toward the meter.
+   */
+  private captureStatus(): CaptureStatus | null {
+    const p = this.conquest.pointAt(this.player.position);
+    if (!p) return null;
+    const mine = this.player.team;
+    const theirs = 1 - mine;
+    // The meter runs -1 (team 0) .. +1 (team 1), so "my way" is negative for
+    // team 0 and positive for team 1.
+    const mineWay = mine === 0 ? -1 : 1;
+    return {
+      id: p.def.id,
+      name: p.def.name,
+      owner: p.owner === null ? "neutral" : p.owner === mine ? "mine" : "theirs",
+      progress: Math.abs(p.meter),
+      held: p.meter * mineWay >= 0 ? "mine" : "theirs",
+      // Which way it is MOVING, which is a question about bodies, not about
+      // the meter: walk onto a flag the enemy holds outright and you are
+      // capturing it, even though the bar is still full red. The player is in
+      // the zone by construction here, so `mine` is never zero.
+      taking: p.present[mine] >= p.present[theirs] ? "mine" : "theirs",
+      contested: p.contested,
+      enemies: p.present[theirs],
+    };
+  }
+
+  /**
    * Opens the deploy screen. `delay` is the reinforcement wait — zero at the
    * start of a round, so the first deployment is immediate.
    */
@@ -781,6 +836,9 @@ export class Game {
     this.minimap.setVisible(false);
     this.hud.clearDamageDirections();
     this.hud.setScoreboard(false);
+    // updateHud stops running outside `playing`, so the panel has to be told
+    // to go — otherwise the zone the player died in stays on screen.
+    this.hud.setCapture(null);
     if (this.map) this.deployScreen.show(this.map, this.conquest, this.player.team);
     this.deployScreen.update(this.respawnT);
     this.state = "deploy";
@@ -792,6 +850,7 @@ export class Game {
     this.deployScreen.hide();
     this.hud.setScoreboard(false);
     this.hud.clearDamageDirections();
+    this.hud.setCapture(null);
     // `updateGameplay` stops running here, so push the final state once more —
     // otherwise the ticket bar sits frozen a frame behind the result text.
     this.hud.setTickets(
