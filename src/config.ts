@@ -742,13 +742,21 @@ export const CONFIG = {
     hipPos: { x: 0.184, y: -0.185, z: 0.66 },
     hipRot: { x: 0.03, y: -0.08, z: 0.06 },
     /**
-     * Sprint: dropped across the body, out of the way of the view. Dropped
-     * far enough to read as "not ready to shoot" and no further — push it
-     * down much past this and all that is left on screen is the optic
-     * sticking up out of the bottom edge.
+     * Sprint: the rifle carried ACROSS the body, muzzle swung inboard and
+     * canted, reading as a diagonal through the lower right of the frame.
+     *
+     * The yaw sign is the whole pose. Babylon is left-handed, so a positive
+     * `rotY` takes the barrel (+z) toward +x — outboard, away from the
+     * shooter. That is a rifle held out to one side at arm's length: it
+     * reads as broken rather than as running, and it swings the weapon off
+     * the edge of the screen so only the optic is left. Inboard is negative.
+     *
+     * The drop is small on purpose. `hipPos.y` is already -0.185, so an
+     * offset much past this lands near -0.3 and sinks the whole weapon out
+     * of frame — the same symptom, from the other axis.
      */
-    sprintPos: { x: 0.04, y: -0.1, z: -0.02 },
-    sprintRot: { x: 0.16, y: 0.44, z: 0.3 },
+    sprintPos: { x: -0.01, y: -0.05, z: -0.03 },
+    sprintRot: { x: 0.2, y: -0.4, z: 0.3 },
     /** Reload: tipped down and rolled toward the magwell. */
     reloadPos: { x: 0.02, y: -0.1, z: -0.05 },
     reloadRot: { x: 0.3, y: -0.2, z: 0.42 },
