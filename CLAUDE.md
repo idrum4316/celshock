@@ -107,7 +107,8 @@ src/
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
     ShadowSystem.ts         # Moon shadow map (stepped shadows) + blob shadows
     Atmosphere.ts           # Drifting ash particle field
-    Sky.ts                  # Generated sky dome (gradient/stars/halo), moon, clouds
+    Sky.ts                  # Generated sky: dome (gradient/galactic band/stars/
+                            #   moon halo), textured moon, fBm cloud decks
     WaterSystem.ts          # Water surfaces from map WaterRects
   editor/                   # Dev-only map editor (F2). Dynamically imported —
     index.ts                #   never statically imported from anywhere else,
@@ -165,6 +166,8 @@ src/
   shaders/
     CelShader.ts            # Custom cel ShaderMaterial + outline helper
     WaterShader.ts          # Animated water ShaderMaterial
+    GodRays.ts              # Moon shafts: screen-space radial blur of the
+                            #   frame's bright pixels away from the moon
     HorrorPost.ts           # Vignette / grain / aberration / damage flash pass
 ```
 
@@ -195,7 +198,8 @@ tick sees this frame's flag ownership rather than last frame's.
 
 ### The scene has (almost) no Babylon lights
 
-Cel materials carry their own `lightDir`/`lightColor`/`ambientColor` and
+Cel materials carry their own `lightDir`/`lightColor`/`ambientColor`/
+`skyLightColor` and
 a packed array of up to `MAX_POINT_LIGHTS` (16) point lights as uniforms;
 `LightingSystem` is the sole owner of dynamic light and uploads the winning slots
 via `CelMaterialFactory.setPointLights()` once per frame. Adding a
@@ -203,6 +207,16 @@ via `CelMaterialFactory.setPointLights()` once per frame. Adding a
 Effect meshes (tracers, sparks, neon, reticles) use unlit emissive
 `StandardMaterial`s from `mats.getEmissive()` and are unaffected by lighting
 entirely.
+
+**Four light terms, not three.** Beside the key light, the flat ambient and the
+point lights there is a *hemispheric* term, `skyLightColor`, applied by `n.y`
+and never gated by the shadow map: full strength on up-facing surfaces, nothing
+underneath. It is what makes streets, roofs and open ground read as moonlit
+while walls and undersides stay black — flat ambient alone lifts every face
+equally, which reads as a grey wash rather than as light coming from the sky.
+Because it is ungated, a roof standing in the moon's shadow still catches it.
+It also has a cost that is easy to miss: it lifts *albedo*, so a bright
+material (the cobble street) gains far more from it than a dark one.
 
 The one exception is `ShadowSystem`'s `DirectionalLight`, which no material
 reads — it exists only to define the shadow camera for its `ShadowGenerator`.
@@ -912,6 +926,61 @@ load-bearing:
   lanterns wastes slots and flattens the darkness. The retired room generator
   enforced this automatically with a sqrt scale — hand authoring means enforcing
   it by eye.
+
+### The sky
+
+Everything overhead is painted at runtime by `src/systems/Sky.ts` from the map's
+`SkySpec`: an equirectangular dome texture (gradient, galactic band, stars, the
+moon's scattering halo), a textured moon disc that feeds the GlowLayer, and two
+drifting cloud decks. Four things there are load-bearing:
+
+- **Sky textures are uploaded with `update(false)`.** `DynamicTexture.update()`
+  flips Y by default, which maps canvas row 0 to `v = 1` — the *nadir* on
+  Babylon's sphere, whose UVs run `v = acos(y)/PI` down from the zenith. A sky
+  painted top-down and then flipped puts its stars, its band and its halo under
+  the map and leaves the visible half showing the fog colour the gradient ends
+  on. It does not look upside down. It looks like there is no sky at all, with
+  a moon still correctly placed in it because the disc is geometry, not paint.
+- **Cloud masks are 3D noise sampled along each texel's own direction.** An
+  equirect image stretches by `1/sin(latitude)`, so a 2D field smears into
+  bands as it climbs and pinches at the pole; a tileable 3D lattice has no seam
+  and no pole. The field is also **normalised to its own range before it is
+  thresholded** — summed value noise clusters around 0.5, so a raw fBm against
+  a 0.5 threshold produces haze, not cloud.
+- **The moonlit silver is a second, additive shell with a static per-vertex
+  alpha mask**, not a bright patch in the mask texture. The texture scrolls and
+  the moon does not; baking the lit side in would drag the highlight across the
+  sky with the clouds.
+- **Stars live or die on dome resolution.** 360 degrees of texture against ~50
+  of screen is a hard magnification, so a dot drawn much over a pixel arrives as
+  a bokeh ball. That is why the dome is 4096x2048 and `starMaxSize` is ~1.6.
+  The same magnification is why `cloudSoftness` is wide: bilinear magnification
+  of a *hard* alpha contour comes out as straight-edged wedges — torn paper,
+  not cloud — and a soft ramp magnifies cleanly for free.
+- **The dome wraps, so anything painted near its edge must be painted twice**
+  (`acrossSeam`). The left and right edges are the same piece of sky, a canvas
+  clips instead of wrapping, and the widest mark on the dome is the moon's halo
+  — wider, at these settings, than the moon's own distance from the wrap column.
+  Miss this and you get a bright gradient ending in a straight vertical line
+  down the sky. Setting `wrapU = WRAP_ADDRESSMODE` is also required (Babylon's
+  `DynamicTexture` defaults BOTH axes to CLAMP) but it only fixes the
+  filtering: the seam that shows is the one in the paint. `v` stays clamped —
+  it runs pole to pole and has nothing to meet.
+
+`Game.applySky()` no-ops when the environment object is unchanged. The map is
+rebuilt every round; the sky is not, and repainting 8 megapixels of dome plus
+two noise masks per round for an unchanged sky is pure cost.
+
+`GodRays` (`src/shaders/GodRays.ts`) then adds the shafts, in screen space:
+march each pixel back toward the moon's projected position and accumulate what
+is bright along the way, so anything dark between the camera and the moon
+leaves a beam-shaped hole. There is no occlusion render pass — the substitute
+material trick Babylon's `VolumetricLightScatteringPostProcess` uses does not
+fit the cel materials — so **the luminance threshold IS the occlusion test**,
+and it has to sit above the brightest non-sky thing in the frame. That is the
+wet cobbled street (~0.67 looking along the moon); below it the road smears
+upward and the frame fills with ground haze. The pass early-outs to a copy
+whenever the moon is behind the camera or off screen, which is most of a round.
 
 ### Procedural models
 

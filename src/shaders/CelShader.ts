@@ -126,6 +126,9 @@ varying vec3 vPosW;
 uniform vec3 lightDir;
 uniform vec3 lightColor;
 uniform vec3 ambientColor;
+// Hemispheric fill from the sky dome: full strength on up-facing surfaces,
+// nothing underneath. Banded like everything else so the toon look survives.
+uniform vec3 skyLightColor;
 uniform vec3 rimColor;
 #ifdef CEL_TEXTURED
 uniform sampler2D baseColorTex;
@@ -234,6 +237,13 @@ void main() {
   vec3 light = ambientColor;
   light += lightColor * band(max(dot(n, -lightDir), 0.0), 4.0) * shadow;
 
+  // Sky fill: the whole dome is a dim source, so anything looking up at it
+  // picks up moonlight even where the key light is blocked. Deliberately NOT
+  // gated by the shadow map — a roof in the moon's shadow still faces the sky.
+  // This is what keeps roads, roofs and open ground reading as moonlit while
+  // walls and undersides stay black.
+  light += skyLightColor * band(0.5 + 0.5 * n.y, 3.0);
+
   // --- point lights (3 bands, smooth inverse-square-ish falloff) ---
   for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
     if (float(i) < pointCount) {
@@ -338,6 +348,7 @@ export class CelMaterialFactory {
     "lightDir",
     "lightColor",
     "ambientColor",
+    "skyLightColor",
     "rimColor",
     "baseColor",
     "fogColor",
@@ -363,6 +374,7 @@ export class CelMaterialFactory {
   private lightDir = new Vector3(-0.5, -0.9, 0.4).normalize();
   private lightColor = new Color3(0.55, 0.62, 0.8);
   private ambientColor = new Color3(0.16, 0.18, 0.24);
+  private skyLightColor = new Color3(0.08, 0.11, 0.18);
   private rimColor = new Color3(0.18, 0.2, 0.26);
   private fogColor = new Color3(0.05, 0.06, 0.08);
   private fogStart = 24;
@@ -558,6 +570,7 @@ export class CelMaterialFactory {
     lightDir: Vector3;
     lightColor: Color3;
     ambientColor: Color3;
+    skyLightColor: Color3;
     rimColor: Color3;
     fogColor: Color3;
     fogStart: number;
@@ -569,6 +582,7 @@ export class CelMaterialFactory {
     this.lightDir = env.lightDir.normalizeToNew();
     this.lightColor = env.lightColor;
     this.ambientColor = env.ambientColor;
+    this.skyLightColor = env.skyLightColor;
     this.rimColor = env.rimColor;
     this.fogColor = env.fogColor;
     this.fogStart = env.fogStart;
@@ -628,6 +642,7 @@ export class CelMaterialFactory {
     mat.setVector3("lightDir", this.lightDir);
     mat.setColor3("lightColor", this.lightColor);
     mat.setColor3("ambientColor", this.ambientColor);
+    mat.setColor3("skyLightColor", this.skyLightColor);
     mat.setColor3("rimColor", this.rimColor);
     mat.setColor3("fogColor", this.fogColor);
     mat.setVector2("fogParams", new Vector2(this.fogStart, this.fogEnd));

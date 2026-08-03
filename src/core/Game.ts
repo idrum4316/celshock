@@ -14,6 +14,7 @@
  * pipeline.imageProcessingEnabled === false, window.__celshock debug handle.
  */
 import {
+  Color3,
   DefaultRenderingPipeline,
   Engine,
   GlowLayer,
@@ -23,6 +24,7 @@ import {
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { CelMaterialFactory, updateOutlineScales } from "../shaders/CelShader";
+import { GodRays } from "../shaders/GodRays";
 import { HorrorPost } from "../shaders/HorrorPost";
 import { Bot } from "../entities/Bot";
 import { difficultyNames } from "../entities/BotSkill";
@@ -39,7 +41,7 @@ import { LightingSystem } from "../systems/LightingSystem";
 import { ShadowSystem } from "../systems/ShadowSystem";
 import { Sky } from "../systems/Sky";
 import { WaterSystem } from "../systems/WaterSystem";
-import { applyEnvironment } from "../world/environment";
+import { applyEnvironment, type EnvironmentSpec } from "../world/environment";
 import type { EditorSession } from "../editor";
 import { HollowmereEnvironment } from "../world/hollowmere/environment";
 import { HollowmereLayout } from "../world/hollowmere/layout";
@@ -118,6 +120,10 @@ export class Game {
   private water: WaterSystem;
   private grass: GrassSystem;
   private post: HorrorPost;
+  /** Moon shafts. Driven from the sky's own moon direction every frame. */
+  private godRays: GodRays;
+  /** The environment the sky is currently painted for — see applySky(). */
+  private skyEnv: EnvironmentSpec | null = null;
   private player: Player;
   private canvas: HTMLCanvasElement;
   /**
@@ -184,6 +190,10 @@ export class Game {
     });
     glow.intensity = g.glowIntensity;
     this.glow = glow;
+    // Moon shafts read the finished frame and add light back into it, so they
+    // come after FXAA and before the grade — the vignette and grain have to
+    // land on top of the beams, not under them.
+    this.godRays = new GodRays(this.scene, this.cameraSys.camera);
     // Vignette/grain/aberration go last, over the finished frame.
     this.post = new HorrorPost(this.scene, this.cameraSys.camera);
     this.sfx = new Sfx();
@@ -208,7 +218,7 @@ export class Game {
     // The sky hangs behind every state (menu included), so it is dressed
     // once here and re-applied per round alongside the environment.
     this.sky = new Sky(this.scene, glow);
-    this.sky.apply(HollowmereEnvironment);
+    this.applySky();
 
     // --- system wiring ---
     // Systems never import each other; every cross-system behaviour is a
@@ -295,6 +305,30 @@ export class Game {
   }
 
   /**
+   * Dresses the sky and hands the moon shafts their colour. The two belong
+   * together: the shafts are the moon's own light in the air, so they take the
+   * halo's tint rather than a colour of their own, and re-applying the sky
+   * without re-tinting them would leave last environment's beams in the frame.
+   *
+   * Called on every round start, and deliberately a no-op when the environment
+   * has not changed. `Sky.apply` repaints an 8-megapixel dome (two thousand
+   * stars, a galactic band, a stretched halo) and two fBm cloud masks, and the
+   * sky over Hollowmere is the same sky it was last round — unlike the map,
+   * which genuinely has to be rebuilt. A second map, with a spec object of its
+   * own, repaints as it should.
+   */
+  private applySky(): void {
+    const env = HollowmereEnvironment;
+    if (this.skyEnv === env) return;
+    this.skyEnv = env;
+    this.sky.apply(env);
+    if (env.sky) {
+      const tint = Color3.FromHexString(env.sky.moonGlowColor);
+      this.godRays.setTint(tint.r, tint.g, tint.b);
+    }
+  }
+
+  /**
    * Redraws the menu overlay. The difficulty row is re-rendered rather than
    * patched because `showMenu` writes the whole overlay anyway — and the round
    * -over screen shares that overlay, so there is nothing to keep in sync.
@@ -353,6 +387,13 @@ export class Game {
     this.hud.update(dt);
     this.post.update(dt);
     this.sky.update(dt);
+    // After every state has had its go at the camera, and before the render
+    // that the shafts are drawn into.
+    this.godRays.update(
+      this.scene,
+      this.cameraSys.camera,
+      this.sky.moonDirection,
+    );
     this.scene.render();
   }
 
@@ -487,7 +528,7 @@ export class Game {
     this.combat.clearTransient();
 
     applyEnvironment(this.scene, HollowmereEnvironment, this.mats);
-    this.sky.apply(HollowmereEnvironment);
+    this.applySky();
     this.map = this.mapBuilder.build(HollowmereLayout, HollowmereEnvironment);
     // The shadow camera follows the environment's key light, and its casters
     // are the fresh map's visuals — last round's meshes are now disposed.

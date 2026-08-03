@@ -20,21 +20,38 @@ export const HollowmereEnvironment: EnvironmentSpec = {
   wallColor: "#2c2f2e",
   wallTrimColor: "#555c54",
   accentColor: "#7fe0a0",
-  skyColor: "#06080c",
-  fogColor: "#0a0d11",
+  skyColor: "#080d16",
+  /**
+   * Fog and mist are the moonlight the shader can't reach: a lit haze rather
+   * than a black cut-off, so distance reads as air with the moon in it. They
+   * stay dark enough that a silhouette at 60 m is still a silhouette.
+   */
+  fogColor: "#131c2a",
   fogStart: 22,
   fogEnd: 78,
-  mistColor: "#141c1e",
+  mistColor: "#1d2a38",
   mistHeight: 3.2,
   mistStrength: 0.45,
   lighting: {
-    color: "#8fb4ff",
-    intensity: 0.5,
-    direction: [-0.3, -0.85, 0.42],
-    ambientColor: "#18212e",
+    color: "#a8c4ff",
+    intensity: 0.78,
+    /**
+     * The moon sits opposite this, ~38 deg up in the south-east. It used to be
+     * ~59, and coming down bought two things: shadows long enough to read as
+     * evening, and a moon low enough for rooflines and trees to stand in front
+     * of — which is the whole precondition for the shafts. It also costs: the
+     * cobble sheen (`graphics.spec.cobble`) fires far more broadly at a
+     * grazing angle, so that intensity is tuned against this elevation.
+     */
+    direction: [-0.46, -0.62, 0.64],
+    ambientColor: "#1a2331",
     ambientIntensity: 1.0,
-    rimColor: "#7ea6ff",
-    rimIntensity: 0.32,
+    /** The dome's own light: cobbles, roofs and open ground catch it, walls
+     *  and undersides don't. See EnvironmentSpec — this is not flat ambient. */
+    skyLightColor: "#2f4a66",
+    skyLightIntensity: 0.27,
+    rimColor: "#8fb2ff",
+    rimIntensity: 0.4,
   },
   particles: {
     color: "#8a9aa6",
@@ -44,20 +61,25 @@ export const HollowmereEnvironment: EnvironmentSpec = {
     riseSpeed: -0.25,
   },
   /**
-   * A cold, high moon (it sits opposite the key light, ~58 deg up in the
-   * south-east) over a near-black zenith, with a faint dead-green band at
-   * the horizon that hands off to the fog. Stars are dim and sparse — thin
-   * cloud cover, not a clear night.
+   * A cold moon low in the south-east (opposite the key light — see above)
+   * burning a wide halo into a deep blue zenith, with a dead-green
+   * band at the horizon that hands off to the fog. Broken cloud drifts across
+   * it and silvers where the moon is behind it; the galactic band shows in
+   * the clear stretch overhead.
    */
   sky: {
-    zenithColor: "#020305",
-    horizonColor: "#14201d",
-    starColor: "#aebfcf",
-    starCount: 240,
-    starBrightness: 0.6,
-    moonColor: "#d4e4ff",
-    cloudColor: "#3a4a58",
-    cloudOpacity: 0.4,
+    zenithColor: "#050b17",
+    horizonColor: "#1b2b2a",
+    starColor: "#c8d8ef",
+    starCount: 1300,
+    starBrightness: 0.9,
+    moonColor: "#e6efff",
+    moonGlowColor: "#7ea0d8",
+    milkyWayColor: "#5a6f96",
+    cloudColor: "#1a2434",
+    cloudOpacity: 0.72,
+    cloudLitColor: "#86a8dc",
+    cloudLitStrength: 0.34,
   },
   // The creek at B and the bog at E: black-green standing water that mostly
   // exists to catch the moon and the muzzle flashes.

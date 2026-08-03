@@ -51,9 +51,24 @@ export interface SkySpec {
    * agrees with the shadows. This is just its colour — size is `CONFIG.sky`.
    */
   moonColor: string;
-  /** Drifting cloud banks: tint (moonlit grey-blue) and 0..1 ceiling alpha. */
+  /**
+   * The broad scattering halo baked around the moon: the air near it lit up,
+   * not the disc itself. Wants to be cooler and dimmer than `moonColor` —
+   * this is the term that decides whether the sky reads as lit or as black.
+   */
+  moonGlowColor: string;
+  /** Faint galactic band. Omit for an empty sky. */
+  milkyWayColor?: string;
+  /** Drifting cloud decks: tint (the shadowed body) and 0..1 ceiling alpha. */
   cloudColor: string;
   cloudOpacity: number;
+  /**
+   * The silver a deck takes on where the moon is behind it, added on a second
+   * shell so the lit patch stays anchored to the moon while the cloud texture
+   * scrolls through it. Strength is that shell's peak alpha.
+   */
+  cloudLitColor: string;
+  cloudLitStrength: number;
 }
 
 /** Shallow-water palette. Omitting it leaves the map dry. */
@@ -101,6 +116,15 @@ export interface EnvironmentSpec {
     direction: [number, number, number];
     ambientColor: string;
     ambientIntensity: number;
+    /**
+     * Hemispheric fill from the sky itself, applied by n.y: full on up-facing
+     * surfaces, nothing underneath, and never gated by the shadow map. Flat
+     * ambient alone lifts every face equally and reads as a grey wash; this is
+     * what makes ground and roofs look moonlit while walls stay dark. Should
+     * sit close to the sky's own zenith/horizon colours.
+     */
+    skyLightColor: string;
+    skyLightIntensity: number;
     rimColor: string;
     rimIntensity: number;
   };
@@ -130,6 +154,9 @@ export function applyEnvironment(
     lightColor: Color3.FromHexString(lit.color).scale(lit.intensity),
     ambientColor: Color3.FromHexString(lit.ambientColor).scale(
       lit.ambientIntensity,
+    ),
+    skyLightColor: Color3.FromHexString(lit.skyLightColor).scale(
+      lit.skyLightIntensity,
     ),
     rimColor: Color3.FromHexString(lit.rimColor).scale(lit.rimIntensity),
     fogColor: Color3.FromHexString(env.fogColor),

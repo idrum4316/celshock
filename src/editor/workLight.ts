@@ -37,6 +37,11 @@ export function workLightEnvironment(env: EnvironmentSpec): EnvironmentSpec {
       intensity: 1.15,
       ambientColor: "#8f9aa8",
       ambientIntensity: 0.85,
+      // Neutral and low: the map's own sky fill is a saturated moon blue, and
+      // stacked on a lifted ambient it tints every roof and street the one
+      // colour you are least able to judge the palette against.
+      skyLightColor: "#b9c2cc",
+      skyLightIntensity: 0.2,
       rimIntensity: env.lighting.rimIntensity * 0.5,
     },
   };
