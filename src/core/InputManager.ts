@@ -31,6 +31,7 @@ export class InputManager {
   stickLookX = 0;
   stickLookY = 0;
   ads = false;
+  /** Held: trigger. See `consumeFire()` for the release latch. */
   fire = false;
   jumpPressed = false;
   reloadPressed = false;
@@ -90,6 +91,8 @@ export class InputManager {
   private prevPadSprint = false;
   /** Latched L3 sprint state — toggled on each L3 press, cleared on blur. */
   private padSprintOn = false;
+  /** Set by `consumeFire()`; cleared the frame the trigger reads released. */
+  private fireBlocked = false;
 
   constructor(canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", (e) => {
@@ -203,7 +206,11 @@ export class InputManager {
 
     const buttons = this.pointerMask | this.mouseMask;
     this.ads = (buttons & 2) !== 0 || padAds;
-    this.fire = (buttons & 1) !== 0 || padFire;
+    // The trigger is held, not edge-triggered — full-auto depends on it — so a
+    // suppressed press is cleared by the release rather than by a timer.
+    const fireNow = (buttons & 1) !== 0 || padFire;
+    if (!fireNow) this.fireBlocked = false;
+    this.fire = fireNow && !this.fireBlocked;
 
     // L3 toggles sprint rather than holding it — a stick click is fatiguing
     // to hold, and sprint here is traversal, not a burst.
@@ -249,6 +256,28 @@ export class InputManager {
     this.menuRightPressed = rightNow && !this.prevMenuRight;
     this.prevMenuLeft = leftNow;
     this.prevMenuRight = rightNow;
+  }
+
+  /**
+   * Suppresses `fire` until the trigger is physically released, so a button
+   * still held from a UI click cannot discharge the gun.
+   *
+   * This exists because the deploy map's click is BOTH the UI click and the
+   * gesture that acquires pointer lock: `DeployScreen` spawns the player on
+   * pointerdown, the same event bubbles to `Game`'s document listener which —
+   * now that the state is "playing" — locks the pointer, and the held button
+   * then satisfies the `pointerLocked` fire gate on the very next frame. The
+   * gate assumes UI clicks happen while unlocked; this is the one that does
+   * not. A timed lockout would be wrong: it would be frame-rate dependent and
+   * would also eat a deliberate first shot from a fast player.
+   *
+   * The latch is set unconditionally rather than from the current `fire`,
+   * which is a frame old here — callers run inside an event handler, between
+   * two `update()`s. If nothing was held, the next `update()` clears it and
+   * the call cost nothing.
+   */
+  consumeFire(): void {
+    this.fireBlocked = true;
   }
 
   /**

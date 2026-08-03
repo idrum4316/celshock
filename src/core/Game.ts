@@ -596,6 +596,11 @@ export class Game {
     this.deployScreen.hide();
     this.player.setBodyHidden(false);
     this.minimap.setVisible(true);
+    // Deploying by clicking the map arrives here from a pointerdown whose
+    // button is still down, and which is about to grab pointer lock on its way
+    // up the DOM — so the fire gate below would be satisfied by the very click
+    // that spawned the player. Hold the trigger until it is released.
+    this.input.consumeFire();
     this.state = "playing";
   }
 
@@ -624,6 +629,8 @@ export class Game {
 
     // --- shooting (hitscan from the camera through the crosshair) ---
     // Mouse fire requires pointer lock so UI clicks never discharge the gun.
+    // The deploy map's click is the exception that gate cannot see — it is the
+    // click that TAKES the lock — and `spawnPlayer` calls `consumeFire()` for it.
     const canFire = this.input.pointerLocked || this.input.gamepadConnected;
     if (this.input.fire && canFire && this.player.tryShot()) {
       const blend = this.cameraSys.adsBlend;
