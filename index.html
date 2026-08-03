@@ -5,6 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HOLLOWMERE — Cel-Shaded Conquest</title>
     <style>
+      /* =====================================================================
+         HOLLOWMERE HUD
+         ---------------------------------------------------------------------
+         House rules for anything added here, learned the hard way:
+
+         - NO `border-radius` on gameplay chrome. A rounded rectangle reads as
+           a web card; a military HUD is cut corners and hard edges. Panels get
+           their shape from `.frame` (a chamfered hull) or from `clip-path`.
+         - `clip-path` clips a CSS border away with everything else outside the
+           polygon, so a chamfered panel draws its edge as a coloured layer
+           with the fill inset 1px on top. `.frame` does that with two
+           pseudo-elements; the flag hexagons do it with a nested `.core`.
+         - Legibility comes from the scrim and text shadows, not from opaque
+           panel backgrounds. The scene behind the HUD is dark, moonlit and
+           moving; a solid box over it is the thing that looks bolted on.
+         - Anything written every frame is a text node, a class flag or a CSS
+           custom property (see HUD.ts). Per-frame `innerHTML` is a bug.
+         ===================================================================== */
+
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
       body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
@@ -23,49 +42,205 @@
         pointer-events: none;
         color: #fff;
         user-select: none;
+        /* A condensed grotesque is what separates a military HUD from a web
+           page, and every one of these ships with some desktop OS — the game
+           carries no font files, the same rule as its meshes and its audio.
+           Whichever lands first, the fallbacks are all narrow. */
+        --font: "Bahnschrift", "DIN Alternate", "DIN Condensed",
+          "Roboto Condensed", "Oswald", "Ubuntu Condensed",
+          "Franklin Gothic Medium", "Arial Narrow", "Liberation Sans Narrow",
+          "Nimbus Sans Narrow", "DejaVu Sans Condensed", "Segoe UI", sans-serif;
+        /* Friend/foe, matching CONFIG.teams' eye colours and the minimap's
+           canvas constants — warm amber against cold crimson. */
+        --mine: #ffc46b;
+        --theirs: #ff5a4f;
+        --neutral: #aeb6c2;
+        --hot: #ffe680;
+        --good: #7ff08a;
+        --edge: rgba(255, 255, 255, 0.22);
+        --ink: rgba(8, 10, 15, 0.82);
+        font-family: var(--font);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* The whole HUD sits on the scene, so everything on it carries its own
+         separation from a bright cobbled street or a muzzle flash. */
+      #hud .cap,
+      #hud .tag,
+      #ticket-bar .n,
+      #hud-left,
+      #hud-right,
+      #message,
+      #killfeed,
+      #lock-hint {
+        text-shadow: 0 2px 5px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.9);
+      }
+
+      /* --- reusable chamfered panel hull ---
+         ::before is the edge, ::after the fill inset 1px inside it. Both sit
+         at z-index -1 in the element's own stacking context, so they paint
+         behind its content and nowhere else. The cut corners are opposite
+         (top-left / bottom-right): four cuts reads as a sticker, two reads as
+         a machined plate. */
+      .frame {
+        position: relative;
+        z-index: 0;
+        --cham: 14px;
+        --frame-edge: var(--edge);
+        --frame-fill: rgba(6, 8, 13, 0.9);
+      }
+      .frame::before,
+      .frame::after {
+        content: "";
+        position: absolute;
+        z-index: -1;
+        clip-path: polygon(
+          var(--cham) 0,
+          100% 0,
+          100% calc(100% - var(--cham)),
+          calc(100% - var(--cham)) 100%,
+          0 100%,
+          0 var(--cham)
+        );
+      }
+      .frame::before { inset: 0; background: var(--frame-edge); }
+      .frame::after { inset: 1px; background: var(--frame-fill); }
+
+      /* Corner ticks, for things that own a rectangle of their own (the
+         minimap, the deploy map). Cheaper than a frame and reads as a sight
+         bracket rather than as a border. */
+      .brackets::before,
+      .brackets::after {
+        content: "";
+        position: absolute;
+        width: 14px;
+        height: 14px;
+        border: 2px solid var(--edge);
+        pointer-events: none;
+      }
+      .brackets::before { top: -5px; left: -5px; border-right: 0; border-bottom: 0; }
+      .brackets::after { bottom: -5px; right: -5px; border-left: 0; border-top: 0; }
+
+      /* Micro-captions: the small all-caps labels that name a readout. */
+      #hud .cap {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        color: rgba(255, 255, 255, 0.5);
+      }
+
+      /* --- edge scrim ---
+         Gameplay readouts live in the top and bottom bands, and the scene
+         behind them is not reliably dark — snow-lit cobbles under the moon
+         will swallow white text outright. A gradient at each edge buys the
+         contrast without putting a box around anything. */
+      #scrim {
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent 15%),
+          linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent 20%);
       }
 
       /* --- minimap --- */
       /* Width/height are set from CONFIG.minimap.size in JS so the backing
-         store and the CSS box can never drift apart and blur. */
-      #minimap {
+         store and the CSS box can never drift apart and blur. The frame is a
+         wrapper element (Minimap.ts) because a canvas cannot carry the corner
+         brackets itself — a pseudo-element needs a container. */
+      #minimap-frame {
         position: absolute;
-        top: 16px;
-        left: 16px;
-        border: 2px solid #000;
-        border-radius: 4px;
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
-        opacity: 0.92;
+        top: 18px;
+        left: 18px;
+        /* Its own stacking context, so the hull's `z-index: -1` puts it behind
+           the canvas and nothing else. */
+        z-index: 0;
+        line-height: 0;
+        opacity: 0.94;
+        filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.7));
+      }
+      #minimap {
+        display: block;
+        /* Same cut corners as .frame, so the map reads as part of the set. */
+        clip-path: polygon(
+          12px 0, 100% 0, 100% calc(100% - 12px),
+          calc(100% - 12px) 100%, 0 100%, 0 12px
+        );
+        background: #0b0e12;
+      }
+      /* The hull, drawn a pixel proud of the canvas on every side. */
+      #minimap-frame .hull {
+        position: absolute;
+        inset: -1px;
+        background: var(--edge);
+        clip-path: polygon(
+          13px 0, 100% 0, 100% calc(100% - 13px),
+          calc(100% - 13px) 100%, 0 100%, 0 13px
+        );
+        z-index: -1;
+      }
+      #minimap-frame .compass {
+        position: absolute;
+        top: 4px;
+        right: 8px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        line-height: 1;
+        color: rgba(255, 255, 255, 0.45);
       }
 
-      /* --- killfeed --- */
+      /* --- killfeed ---
+         Flat lines with a colour flag on the outer edge, not bordered boxes:
+         six stacked cards is a wall, six stacked lines is chatter you can
+         ignore until one of them has your name on it. */
       #killfeed {
         position: absolute;
-        top: 92px;
-        right: 22px;
+        top: 104px;
+        right: 20px;
         display: flex;
         flex-direction: column;
         align-items: flex-end;
-        gap: 4px;
+        gap: 3px;
         font-size: 12px;
         font-weight: 700;
-        letter-spacing: 1px;
+        letter-spacing: 0.1em;
+        /* Names arrive as CONFIG.teams entries ("The Blight"), and mixed case
+           against an all-caps HUD reads as a different piece of software. */
+        text-transform: uppercase;
       }
       .kill {
-        background: rgba(0, 0, 0, 0.55);
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        padding: 3px 8px;
         display: flex;
-        gap: 7px;
+        gap: 8px;
         align-items: center;
-        text-shadow: 0 1px 0 #000;
+        padding: 4px 9px 4px 14px;
+        border-right: 2px solid rgba(255, 255, 255, 0.28);
+        background: linear-gradient(to right, transparent, rgba(6, 8, 13, 0.72));
         transition: opacity 0.6s ease-out;
+        animation: killIn 0.18s ease-out;
       }
       .kill.fade { opacity: 0; }
-      .kill .x { opacity: 0.55; }
+      .kill .k { color: #e6ebf3; }
+      .kill .v { color: #9aa3b1; }
+      /* The kill glyph as a chamfered chip: it reads as a slot on the line
+         rather than as a piece of punctuation between two names. */
+      .kill .x {
+        font-size: 10px;
+        line-height: 1;
+        padding: 3px 5px;
+        color: #cfd6e2;
+        background: rgba(255, 255, 255, 0.1);
+        clip-path: polygon(3px 0, 100% 0, 100% calc(100% - 3px), calc(100% - 3px) 100%, 0 100%, 0 3px);
+      }
       /* Anything the player did or had done to them reads brighter. */
-      .kill.mine { border-color: #ffc46b; }
-      .kill.mine .k { color: #ffc46b; }
+      .kill.mine {
+        border-right-color: var(--mine);
+        background: linear-gradient(to right, transparent, rgba(255, 196, 107, 0.16));
+      }
+      .kill.mine .k { color: var(--hot); }
+      .kill.mine .x { background: rgba(255, 196, 107, 0.25); color: var(--hot); }
+      @keyframes killIn {
+        from { opacity: 0; transform: translateX(16px); }
+      }
 
       /* --- scoreboard (hold Tab) --- */
       #scoreboard {
@@ -73,32 +248,106 @@
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
-        background: rgba(6, 8, 14, 0.92);
-        border: 2px solid rgba(255, 255, 255, 0.18);
-        padding: 22px 30px;
-        text-align: center;
+        --cham: 20px;
+        --frame-fill: rgba(6, 8, 13, 0.94);
+        min-width: 620px;
+        padding: 0 0 15px;
       }
-      #scoreboard table { border-collapse: collapse; }
-      #scoreboard th,
-      #scoreboard td {
-        padding: 7px 20px;
-        font-size: 14px;
-        letter-spacing: 2px;
+      #scoreboard .sb-head {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        padding: 14px 26px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      }
+      #scoreboard .sb-mode {
+        font-size: 20px;
+        font-weight: 800;
+        letter-spacing: 0.32em;
+        color: var(--hot);
+      }
+      #scoreboard .sb-map {
+        font-size: 11px;
+        letter-spacing: 0.3em;
+        color: rgba(255, 255, 255, 0.4);
+      }
+      #scoreboard .sb-cols,
+      #scoreboard .sb-row {
+        display: grid;
+        grid-template-columns: 1fr 190px 74px 74px 74px;
+        align-items: center;
+        gap: 10px;
+        padding: 0 26px;
+      }
+      #scoreboard .sb-cols {
+        padding-top: 11px;
+        padding-bottom: 5px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        color: rgba(255, 255, 255, 0.38);
         text-align: right;
       }
-      #scoreboard th {
-        font-size: 11px;
-        opacity: 0.55;
+      #scoreboard .sb-row {
+        position: relative;
+        padding-top: 9px;
+        padding-bottom: 9px;
+        font-size: 17px;
         font-weight: 700;
+        text-align: right;
       }
-      #scoreboard td.name { text-align: left; font-weight: 800; }
-      #scoreboard tr.mine td { color: #ffc46b; }
-      #scoreboard tr.theirs td { color: #ff5a4f; }
-      #scoreboard .you {
-        margin-top: 14px;
-        font-size: 12px;
-        letter-spacing: 2px;
-        opacity: 0.7;
+      /* A colour flag down the left of the row, the way a team is marked in a
+         real scoreboard — the row itself stays neutral so the numbers read. */
+      #scoreboard .sb-row::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 2px;
+        bottom: 2px;
+        width: 4px;
+        background: currentColor;
+      }
+      #scoreboard .sb-row.mine { color: var(--mine); }
+      #scoreboard .sb-row.theirs { color: var(--theirs); }
+      #scoreboard .sb-row.mine { background: rgba(255, 196, 107, 0.06); }
+      #scoreboard .sb-row.theirs { background: rgba(255, 90, 79, 0.06); }
+      #scoreboard .sb-name {
+        text-align: left;
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+      }
+      #scoreboard .sb-n { color: #dfe5ee; }
+      #scoreboard .sb-tickets {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 9px;
+      }
+      #scoreboard .sb-gauge {
+        display: block;
+        width: 108px;
+        height: 6px;
+        background: rgba(255, 255, 255, 0.1);
+        transform: skewX(-20deg);
+      }
+      #scoreboard .sb-gauge u { display: block; height: 100%; background: currentColor; }
+      #scoreboard .sb-you {
+        display: flex;
+        align-items: baseline;
+        gap: 18px;
+        margin: 12px 26px 0;
+        padding-top: 11px;
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+        font-size: 11px;
+        letter-spacing: 0.22em;
+        color: rgba(255, 255, 255, 0.55);
+      }
+      #scoreboard .sb-you .sb-label { color: var(--hot); font-weight: 700; }
+      #scoreboard .sb-you b {
+        font-size: 17px;
+        color: #fff;
+        margin-right: 5px;
       }
 
       /* --- deploy screen --- */
@@ -107,150 +356,250 @@
       #deploy {
         position: absolute;
         inset: 0;
-        background: rgba(6, 8, 14, 0.9);
+        background:
+          radial-gradient(ellipse at center, rgba(6, 8, 14, 0.72), rgba(3, 4, 8, 0.94)),
+          repeating-linear-gradient(
+            to bottom,
+            rgba(255, 255, 255, 0.022) 0 1px,
+            transparent 1px 3px
+          );
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 14px;
+        gap: 18px;
         pointer-events: auto;
       }
       #deploy h2 {
-        font-size: 15px;
+        position: relative;
+        font-size: 14px;
         font-weight: 800;
-        letter-spacing: 6px;
-        opacity: 0.75;
+        letter-spacing: 0.55em;
+        color: var(--hot);
+        padding: 0 26px;
       }
+      /* Rules either side of the heading — a title bar without a box. */
+      #deploy h2::before,
+      #deploy h2::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        width: 54px;
+        height: 1px;
+        background: linear-gradient(to right, transparent, rgba(255, 230, 128, 0.55));
+      }
+      #deploy h2::before { right: 100%; }
+      #deploy h2::after {
+        left: 100%;
+        background: linear-gradient(to left, transparent, rgba(255, 230, 128, 0.55));
+      }
+      /* Same hull-behind-canvas trick as the minimap, and for the same reason:
+         a canvas cannot draw its own chamfered edge or corner brackets. */
+      #deploy .map-wrap { position: relative; z-index: 0; line-height: 0; }
       #deploy-map {
         width: min(62vh, 62vw);
         height: min(62vh, 62vw);
-        border: 2px solid rgba(255, 255, 255, 0.22);
+        display: block;
         cursor: crosshair;
         image-rendering: auto;
+        clip-path: polygon(
+          22px 0, 100% 0, 100% calc(100% - 22px),
+          calc(100% - 22px) 100%, 0 100%, 0 22px
+        );
+      }
+      #deploy .map-wrap .hull {
+        position: absolute;
+        inset: -1px;
+        z-index: -1;
+        background: var(--edge);
+        clip-path: polygon(
+          23px 0, 100% 0, 100% calc(100% - 23px),
+          calc(100% - 23px) 100%, 0 100%, 0 23px
+        );
       }
       #deploy-status {
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 700;
-        letter-spacing: 3px;
-        opacity: 0.6;
+        letter-spacing: 0.28em;
+        color: rgba(255, 255, 255, 0.55);
+        padding: 7px 18px;
+        border-left: 2px solid rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.04);
       }
       #deploy-status.ready {
-        opacity: 1;
-        color: #ffc46b;
+        color: var(--hot);
+        border-left-color: var(--hot);
+        background: rgba(255, 230, 128, 0.1);
+        animation: pulse 1.4s ease-in-out infinite;
       }
 
-      /* --- conquest: reinforcement counts --- */
+      /* --- conquest: the reinforcement gauge ---
+         Two counts with a gauge each, draining away from the centre. The bar
+         is the fraction of the round's starting pool still standing, so "we
+         are losing" is a shape rather than a subtraction. */
       #ticket-bar {
         position: absolute;
-        top: 16px;
+        top: 14px;
         left: 50%;
         transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      #ticket-bar .side {
         display: flex;
         align-items: baseline;
-        gap: 10px;
-        font-size: 14px;
+        gap: 8px;
+        min-width: 168px;
+      }
+      #ticket-bar .side.mine { justify-content: flex-end; }
+      #ticket-bar .tag {
+        font-size: 11px;
         font-weight: 700;
-        letter-spacing: 2px;
-        text-shadow: 0 2px 0 #000;
+        letter-spacing: 0.22em;
+        color: rgba(255, 255, 255, 0.55);
       }
-      #ticket-bar b {
-        font-size: 21px;
-        letter-spacing: 1px;
+      #ticket-bar .n {
+        font-size: 26px;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        line-height: 1;
       }
-      #ticket-bar .team.mine { color: #ffc46b; }
-      #ticket-bar .team.theirs { color: #ff5a4f; }
-      #ticket-bar .sep { opacity: 0.45; }
+      #ticket-bar .side.mine .n { color: var(--mine); }
+      #ticket-bar .side.theirs .n { color: var(--theirs); }
+      /* Running out is the round ending, so it gets the one animated readout
+         in the top band. */
+      #ticket-bar .n.critical { animation: pulse 0.9s ease-in-out infinite; }
+      #ticket-bar .gauge { display: flex; gap: 5px; }
+      #ticket-bar .track {
+        position: relative;
+        width: 108px;
+        height: 7px;
+        background: rgba(255, 255, 255, 0.11);
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+        overflow: hidden;
+        transform: skewX(-20deg);
+      }
+      #ticket-bar .track i {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 100%;
+        transition: width 0.4s linear;
+      }
+      /* Both fills are anchored at the centre of the pair, so the two teams
+         meet in the middle at full strength and retreat outward as they bleed. */
+      #ticket-bar .track.mine i { right: 0; background: var(--mine); }
+      #ticket-bar .track.theirs i { left: 0; background: var(--theirs); }
 
-      /* --- conquest: the A..E flag strip --- */
+      /* --- conquest: the A..E flag strip ---
+         A hexagon per point, filling from the bottom with the capture meter.
+         `clip-path` clips a border away, so the coloured hull IS the outer
+         element and `.core` is the dark inset that leaves a 2px rim. */
       #flag-strip {
         position: absolute;
-        top: 50px;
+        top: 58px;
         left: 50%;
         transform: translateX(-50%);
         display: flex;
-        gap: 8px;
+        gap: 7px;
       }
       .flag {
-        width: 46px;
-        text-align: center;
-        border: 2px solid #000;
-        border-radius: 3px;
-        background: rgba(0, 0, 0, 0.5);
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
-        padding: 2px 0 0;
+        --hex: polygon(50% 0, 100% 26%, 100% 74%, 50% 100%, 0 74%, 0 26%);
+        position: relative;
+        width: 36px;
+        height: 42px;
+        clip-path: var(--hex);
+        background: var(--neutral);
       }
-      .flag .id {
-        display: block;
-        font-size: 13px;
-        font-weight: 800;
-        letter-spacing: 1px;
-        color: #8b8f96;
-        text-shadow: 0 1px 0 #000;
-      }
-      .flag.mine .id { color: #ffc46b; }
-      .flag.theirs .id { color: #ff5a4f; }
-      /* A contested flag pulses so it reads from the corner of the eye. */
-      .flag.contested { animation: flagPulse 0.7s ease-in-out infinite alternate; }
-      @keyframes flagPulse {
-        from { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18); }
-        to { box-shadow: 0 0 6px 2px rgba(255, 255, 255, 0.55); }
-      }
-      .flag .cap {
-        height: 4px;
-        margin: 2px 3px 3px;
-        background: rgba(255, 255, 255, 0.12);
+      .flag.mine { background: var(--mine); }
+      .flag.theirs { background: var(--theirs); }
+      .flag .core {
+        position: absolute;
+        inset: 2px;
+        clip-path: var(--hex);
+        background: rgba(6, 8, 13, 0.88);
         overflow: hidden;
       }
       .flag .cap-fill {
-        height: 100%;
-        width: 0;
-        transition: width 0.15s linear;
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 0;
+        opacity: 0.55;
+        transition: height 0.15s linear;
       }
-      .flag .cap-fill.mine { background: #ffc46b; }
-      .flag .cap-fill.theirs { background: #ff5a4f; }
+      .flag .cap-fill.mine { background: var(--mine); }
+      .flag .cap-fill.theirs { background: var(--theirs); }
+      .flag .id {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        color: #d3d9e2;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+      }
+      .flag.mine .id { color: var(--mine); }
+      .flag.theirs .id { color: var(--theirs); }
+      /* A contested flag pulses so it reads from the corner of the eye. It has
+         to be `drop-shadow` and not `box-shadow`: the hull is clipped to the
+         hexagon, and a box shadow is clipped away with the corners.
+         `#capture-status` borrows the same keyframes for the same reason. */
+      .flag.contested { animation: flagPulse 0.7s ease-in-out infinite alternate; }
+      @keyframes flagPulse {
+        from { filter: drop-shadow(0 0 0 rgba(255, 255, 255, 0)); }
+        to { filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.85)); }
+      }
 
       /* --- conquest: the "you are standing in it" panel ---
          Shown only while the player is inside a capture zone. The ring drawn
          on the ground says where the boundary is; this says which side of it
          you are on, so it sits low and centred, under the crosshair and clear
-         of the health/ammo panels. */
+         of the vitals and ammo. */
       #capture-status {
         position: absolute;
         left: 50%;
-        bottom: 96px;
+        bottom: 104px;
         transform: translateX(-50%);
-        width: 232px;
-        padding: 6px 10px 7px;
+        width: 288px;
+        padding: 8px 12px 9px;
         text-align: center;
-        background: rgba(0, 0, 0, 0.5);
-        border: 2px solid #000;
-        border-radius: 4px;
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+        --cham: 11px;
       }
       #capture-status .cap-head {
         display: flex;
-        align-items: baseline;
+        align-items: center;
         justify-content: center;
-        gap: 7px;
+        gap: 8px;
       }
+      /* The letter as a chamfered chip, matching the flag strip's cells. */
       #capture-status .cap-id {
-        font-size: 15px;
+        font-size: 14px;
         font-weight: 800;
-        letter-spacing: 1px;
+        line-height: 1;
+        padding: 4px 7px;
+        color: #12141a;
+        background: var(--neutral);
+        clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
       }
       #capture-status .cap-name {
         font-size: 11px;
         font-weight: 700;
-        letter-spacing: 2px;
-        opacity: 0.85;
+        letter-spacing: 0.26em;
+        color: rgba(255, 255, 255, 0.85);
       }
-      #capture-status.mine .cap-id { color: #ffc46b; }
-      #capture-status.theirs .cap-id { color: #ff5a4f; }
-      #capture-status.neutral .cap-id { color: #c2c7d0; }
+      #capture-status.mine .cap-id { background: var(--mine); }
+      #capture-status.theirs .cap-id { background: var(--theirs); }
       #capture-status .cap-meter {
-        height: 5px;
-        margin: 5px 0 4px;
-        background: rgba(255, 255, 255, 0.12);
+        position: relative;
+        height: 7px;
+        margin: 7px 0 6px;
+        background: rgba(255, 255, 255, 0.1);
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
         overflow: hidden;
       }
       #capture-status .cap-meter-fill {
@@ -258,38 +607,35 @@
         width: 0;
         transition: width 0.15s linear;
       }
-      #capture-status .cap-meter-fill.mine { background: #ffc46b; }
-      #capture-status .cap-meter-fill.theirs { background: #ff5a4f; }
+      #capture-status .cap-meter-fill.mine { background: var(--mine); }
+      #capture-status .cap-meter-fill.theirs { background: var(--theirs); }
+      /* Notches over the fill: a segmented meter reads as an instrument, and
+         the ticks give the eye something to measure progress against. */
+      #capture-status .cap-meter .ticks {
+        position: absolute;
+        inset: 0;
+        background: repeating-linear-gradient(
+          to right,
+          transparent 0 10px,
+          rgba(0, 0, 0, 0.5) 10px 11px
+        );
+      }
       #capture-status .cap-state {
         font-size: 11px;
         font-weight: 800;
-        letter-spacing: 2px;
-        text-shadow: 0 1px 0 #000;
+        letter-spacing: 0.22em;
+        color: rgba(255, 255, 255, 0.9);
       }
-      /* Same pulse as the flag strip's contested cell, for the same reason. */
       #capture-status.contested {
+        --frame-edge: rgba(255, 90, 79, 0.75);
         animation: flagPulse 0.7s ease-in-out infinite alternate;
       }
-      #capture-status.contested .cap-state { color: #ff5a4f; }
+      #capture-status.contested .cap-state { color: var(--theirs); }
 
-      /* --- bars --- */
-      .bar {
-        height: 14px;
-        background: rgba(0, 0, 0, 0.55);
-        border: 2px solid #000;
-        border-radius: 3px;
-        overflow: hidden;
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
-      }
-      .bar .fill {
-        height: 100%;
-        width: 100%;
-        background: #5aff7a;
-        transition: width 0.12s ease-out;
-      }
-      .bar .fill.low { background: #ff5a4f; }
-
-      /* --- bottom panels --- */
+      /* --- bottom band: vitals and ammunition ---
+         Deliberately un-panelled. The old version was two bordered cards, and
+         a bordered card over a 3D scene is the single thing that makes a HUD
+         look like a web page. The scrim carries the legibility instead. */
       #hud-bottom {
         position: absolute;
         left: 0;
@@ -298,81 +644,202 @@
         display: flex;
         justify-content: space-between;
         align-items: flex-end;
-        padding: 22px 28px;
+        padding: 26px 34px;
       }
-      .panel {
-        background: rgba(0, 0, 0, 0.5);
-        border: 2px solid #000;
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
-        border-radius: 6px;
-        padding: 10px 16px;
-        min-width: 220px;
+      #hud-left { display: flex; flex-direction: column; gap: 5px; }
+      #hud-right {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 5px;
       }
-      .panel.right {
-        min-width: 130px;
-        text-align: right;
+      #hud-left .cap-row,
+      #hud-right .cap-row {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
       }
-      .panel .label {
+
+      /* The skew is the signature of the set: bars, gauges and magazine ticks
+         all lean the same 20 degrees, which is what ties the top band to the
+         bottom one without drawing a single box. */
+      .hp-bar {
+        position: relative;
+        width: 224px;
+        height: 11px;
+        background: rgba(255, 255, 255, 0.1);
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.55);
+        overflow: hidden;
+        transform: skewX(-20deg);
+      }
+      #health-fill {
+        display: block;
+        height: 100%;
+        width: 100%;
+        background: linear-gradient(to bottom, #b6ffc4, var(--good));
+        transition: width 0.12s ease-out;
+      }
+      .hp-bar .segs {
+        position: absolute;
+        inset: 0;
+        background: repeating-linear-gradient(
+          to right,
+          transparent 0 21px,
+          rgba(0, 0, 0, 0.5) 21px 23px
+        );
+      }
+      .hp-bar.low #health-fill { background: linear-gradient(to bottom, #ff9a92, var(--theirs)); }
+      .hp-bar.low { animation: lowPulse 0.8s ease-in-out infinite alternate; }
+      @keyframes lowPulse {
+        from { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.55); }
+        to { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 10px rgba(255, 90, 79, 0.65); }
+      }
+      .hp-num { display: flex; align-items: baseline; gap: 6px; }
+      #health-text {
+        font-size: 34px;
+        font-weight: 800;
+        line-height: 0.9;
+        letter-spacing: 0.02em;
+      }
+      #health-text.low { color: var(--theirs); }
+      .hp-num em {
+        font-style: normal;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.24em;
+        color: rgba(255, 255, 255, 0.45);
+      }
+
+      #hud-right .ammo { display: flex; align-items: baseline; gap: 8px; }
+      #ammo-mag {
+        font-size: 46px;
+        font-weight: 800;
+        line-height: 0.85;
+        letter-spacing: 0.01em;
+      }
+      #ammo-mag.low { color: var(--theirs); }
+      #ammo-cap {
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        color: rgba(255, 255, 255, 0.42);
+      }
+      /* One tick per round left in the magazine. The count is legible without
+         reading the number, which is what the strip is for — the number is the
+         confirmation, not the reading. */
+      #mag-strip {
+        position: relative;
+        display: flex;
+        gap: 2px;
+        height: 13px;
+        overflow: hidden;
+        transform: skewX(-20deg);
+      }
+      #mag-strip i {
+        display: block;
+        width: 5px;
+        height: 100%;
+        background: var(--hot);
+        box-shadow: 0 0 4px rgba(255, 230, 128, 0.35);
+      }
+      #mag-strip i.spent {
+        background: rgba(255, 255, 255, 0.13);
+        box-shadow: none;
+      }
+      #hud-right .reload-note {
         font-size: 11px;
         font-weight: 800;
-        letter-spacing: 2px;
-        opacity: 0.8;
-        margin-bottom: 4px;
+        letter-spacing: 0.26em;
+        color: var(--hot);
+        opacity: 0;
       }
-      #health-text {
-        font-size: 12px;
-        margin-top: 4px;
-        opacity: 0.85;
+      #hud-right.reloading .reload-note { opacity: 1; }
+      #hud-right.reloading .ammo { opacity: 0.3; }
+      /* A sweep across the strip while the magazine is being changed. The 1.4s
+         cycle mirrors CONFIG.weapon.reloadTime so one pass ≈ one reload; it is
+         cosmetic, and nothing reads it back. */
+      #hud-right.reloading #mag-strip::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          to right,
+          transparent,
+          rgba(255, 230, 128, 0.75),
+          transparent
+        );
+        animation: magSweep 1.4s linear infinite;
       }
-      #ammo-text {
-        font-size: 26px;
-        font-weight: 800;
-        letter-spacing: 1px;
-        text-shadow: 0 2px 0 #000;
+      @keyframes magSweep {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(100%); }
       }
-      #ammo-text.reloading { font-size: 16px; color: #ffb400; }
 
-      /* --- crosshair --- */
+      /* --- crosshair ---
+         Four ticks around a centre dot. The GAP between them is the live
+         bullet spread: HUD.setCrosshair writes `--sp` once per frame and all
+         four ticks read it off, so recoil bloom is the crosshair opening up.
+         No transition on opacity — the ADS blend is already eased, and a
+         second easing on top of it lags the sight it is handing over to. */
       #crosshair {
         position: absolute;
         top: 50%;
         left: 50%;
-        transform: translate(-50%, -50%);
+        --sp: 26px;
       }
-      /* Opacity and the ring's size are set inline every frame: the ring IS
-         the live bullet spread, and the whole crosshair fades out as ADS
-         brings the rifle's own holo reticle onto the centre of the screen.
-         No CSS transition on opacity — the ADS blend is already eased, and a
-         second easing on top of it lags the sight it is handing over to. */
-      #crosshair .dot {
-        width: 4px;
-        height: 4px;
-        background: #fff;
-        border-radius: 50%;
-        box-shadow: 0 0 0 1px #000;
+      #crosshair i {
         position: absolute;
-        top: 50%; left: 50%;
-        transform: translate(-50%, -50%);
+        background: #fff;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65), 0 0 3px rgba(0, 0, 0, 0.9);
+        transition: transform 0.08s linear;
       }
-      #crosshair .ring {
-        display: block;
-        width: 26px;
-        height: 26px;
-        border: 2px solid rgba(255, 255, 255, 0.75);
-        box-shadow: 0 0 0 1px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(0,0,0,0.6);
-        border-radius: 50%;
-        transition: width 0.12s, height 0.12s, opacity 0.12s;
+      #crosshair i.t,
+      #crosshair i.b { width: 2px; height: 9px; margin: -4.5px 0 0 -1px; }
+      #crosshair i.l,
+      #crosshair i.r { width: 9px; height: 2px; margin: -1px 0 0 -4.5px; }
+      #crosshair i.t { transform: translateY(calc(var(--sp) / -2 - 5px)); }
+      #crosshair i.b { transform: translateY(calc(var(--sp) / 2 + 5px)); }
+      #crosshair i.l { transform: translateX(calc(var(--sp) / -2 - 5px)); }
+      #crosshair i.r { transform: translateX(calc(var(--sp) / 2 + 5px)); }
+      #crosshair .dot {
+        position: absolute;
+        width: 3px;
+        height: 3px;
+        margin: -1.5px 0 0 -1.5px;
+        background: #fff;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
       }
 
-      /* --- hitmarker --- */
+      /* --- hitmarker ---
+         Four diagonal ticks, the shooter convention. The kill variant is red
+         and is the cue to stop shooting a body that is already going down.
+         The pop is written as a transform by HUD.update rather than run as a
+         keyframe: at full auto it re-triggers several times a second, and
+         restarting a CSS animation needs a forced reflow each time. */
       #hitmarker {
         position: absolute;
-        top: 50%; left: 50%;
+        top: 50%;
+        left: 50%;
+        width: 0;
+        height: 0;
         transform: translate(-50%, -50%);
-        font-size: 22px;
-        font-weight: 900;
-        color: #ffe680;
-        text-shadow: 0 0 4px #000;
+      }
+      #hitmarker i {
+        position: absolute;
+        width: 2px;
+        height: 9px;
+        margin: -4.5px 0 0 -1px;
+        background: #fff;
+        box-shadow: 0 0 3px rgba(0, 0, 0, 0.95);
+      }
+      #hitmarker i:nth-child(1) { transform: rotate(45deg) translateY(-11px); }
+      #hitmarker i:nth-child(2) { transform: rotate(135deg) translateY(-11px); }
+      #hitmarker i:nth-child(3) { transform: rotate(225deg) translateY(-11px); }
+      #hitmarker i:nth-child(4) { transform: rotate(315deg) translateY(-11px); }
+      #hitmarker.kill i {
+        background: var(--theirs);
+        height: 11px;
+        box-shadow: 0 0 5px rgba(0, 0, 0, 0.95);
       }
 
       /* --- damage vignette --- */
@@ -410,95 +877,114 @@
         stroke-width: 1.2;
       }
 
-      /* --- center message --- */
+      /* --- centre message (flag captured, and so on) --- */
       #message {
         position: absolute;
-        top: 26%;
+        top: 24%;
         left: 50%;
         transform: translateX(-50%);
-        font-size: 26px;
+        padding: 9px 0;
+        font-size: 24px;
         font-weight: 800;
-        letter-spacing: 4px;
+        letter-spacing: 0.28em;
         text-align: center;
-        text-shadow: 0 3px 0 #000;
         white-space: nowrap;
+        border-top: 1px solid rgba(255, 255, 255, 0.22);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+        animation: msgIn 0.25s ease-out;
+      }
+      @keyframes msgIn {
+        from { opacity: 0; letter-spacing: 0.5em; }
       }
 
-      /* --- toasts --- */
+      /* --- toasts ---
+         The bottom-centre column is a stack, and the offsets have to clear
+         each other because all three can be on screen at once: the lock hint
+         at 58, the capture panel at 104 (about 72 tall), toasts above that.
+         The vitals and ammo are anchored to the corners, so the centre lane is
+         theirs alone. */
       #toasts {
         position: absolute;
-        bottom: 120px;
+        bottom: 194px;
         left: 50%;
         transform: translateX(-50%);
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 6px;
+        gap: 5px;
       }
       .toast {
-        background: rgba(0, 0, 0, 0.65);
-        border: 2px solid #000;
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
-        border-radius: 4px;
-        padding: 6px 14px;
-        font-size: 14px;
+        padding: 6px 15px;
+        font-size: 12px;
         font-weight: 700;
-        letter-spacing: 1px;
-        color: #ffe680;
+        letter-spacing: 0.2em;
+        /* Same reason as the killfeed: the text is a ControlPoint's own name. */
+        text-transform: uppercase;
+        color: var(--hot);
+        background: rgba(6, 8, 13, 0.72);
+        border-left: 2px solid var(--hot);
         transition: opacity 0.7s;
+        animation: killIn 0.2s ease-out;
       }
       .toast.fade { opacity: 0; }
 
       #lock-hint {
         position: absolute;
-        bottom: 84px;
+        bottom: 58px;
         left: 50%;
         transform: translateX(-50%);
-        font-size: 13px;
-        opacity: 0.75;
-        text-shadow: 0 1px 0 #000;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.28em;
+        color: rgba(255, 255, 255, 0.65);
       }
+      #lock-hint b { color: var(--hot); }
 
-      /* --- overlays (menu / death / victory) --- */
+      /* --- overlays (menu / round over) --- */
       #overlay {
         position: absolute;
         inset: 0;
-        background: rgba(6, 8, 14, 0.88);
+        background:
+          radial-gradient(ellipse at center, rgba(6, 8, 14, 0.78), rgba(2, 3, 6, 0.96)),
+          repeating-linear-gradient(
+            to bottom,
+            rgba(255, 255, 255, 0.025) 0 1px,
+            transparent 1px 3px
+          );
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 18px;
+        gap: 26px;
         text-align: center;
       }
+      #overlay .ov-title { display: flex; flex-direction: column; gap: 10px; }
       #overlay h1 {
-        font-size: 64px;
+        font-size: 76px;
         font-weight: 900;
-        letter-spacing: 10px;
-        color: #ffe680;
-        text-shadow: 4px 4px 0 #000, -2px -2px 0 #35f0ff;
+        letter-spacing: 0.22em;
+        /* Indented so the tracking doesn't push the block off-centre. */
+        text-indent: 0.22em;
+        color: var(--hot);
+        text-shadow: 5px 5px 0 #000, -2px -2px 0 #35f0ff;
       }
-      #overlay h1.dead { color: #ff5a4f; text-shadow: 4px 4px 0 #000; }
-      #overlay h1.win { color: #5aff7a; text-shadow: 4px 4px 0 #000; }
-      #overlay .tagline { font-size: 16px; opacity: 0.85; letter-spacing: 1px; }
+      #overlay h1.dead { color: var(--theirs); text-shadow: 5px 5px 0 #000; }
+      #overlay h1.win { color: var(--good); text-shadow: 5px 5px 0 #000; }
+      #overlay .tagline {
+        font-size: 13px;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.5);
+      }
       #overlay .prompt {
-        font-size: 15px;
+        font-size: 12px;
         font-weight: 700;
-        letter-spacing: 2px;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
         color: #35f0ff;
         animation: pulse 1.4s ease-in-out infinite;
       }
-      #overlay table.controls {
-        border-collapse: collapse;
-        font-size: 14px;
-        margin-top: 6px;
-      }
-      #overlay table.controls th,
-      #overlay table.controls td {
-        padding: 5px 18px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-      }
-      #overlay table.controls th { color: #ffe680; letter-spacing: 1px; }
+
       /* The overlay itself stays pointer-events:none (inherited from #hud);
          only this row opts back in, so a click anywhere else is still the
          game's. */
@@ -506,57 +992,152 @@
         pointer-events: auto;
         display: flex;
         align-items: center;
-        gap: 8px;
-        flex-wrap: wrap;
-        justify-content: center;
+        gap: 14px;
       }
+      #overlay .difficulty .tiers { display: flex; gap: 6px; }
       #overlay .difficulty .label,
       #overlay .difficulty .hint {
-        font-size: 12px;
-        letter-spacing: 2px;
+        font-size: 10px;
+        letter-spacing: 0.24em;
         text-transform: uppercase;
-        opacity: 0.6;
+        color: rgba(255, 255, 255, 0.42);
       }
       #overlay .difficulty button.tier {
         font: inherit;
-        font-size: 13px;
-        letter-spacing: 2px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.2em;
         text-transform: uppercase;
-        padding: 6px 14px;
+        padding: 8px 18px;
         color: #cdd6e6;
         background: rgba(255, 255, 255, 0.05);
-        border: 2px solid rgba(255, 255, 255, 0.18);
+        border: 0;
         cursor: pointer;
+        clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+        transition: background 0.12s, color 0.12s;
       }
       #overlay .difficulty button.tier:hover {
-        border-color: rgba(255, 230, 128, 0.6);
+        background: rgba(255, 230, 128, 0.18);
+        color: var(--hot);
       }
       #overlay .difficulty button.tier.on {
         color: #12141a;
-        background: #ffe680;
-        border-color: #ffe680;
-        font-weight: 700;
+        background: var(--hot);
       }
-      #overlay table.controls td:first-child { font-weight: 700; text-align: left; }
+
+      /* Controls as a key-cap table: three columns, action / keyboard / pad. */
+      #overlay .ov-controls {
+        --cham: 16px;
+        padding: 16px 26px 18px;
+        min-width: 470px;
+      }
+      #overlay .ov-controls-head,
+      #overlay .ctl {
+        display: grid;
+        grid-template-columns: 1fr 168px 96px;
+        align-items: center;
+        gap: 12px;
+        text-align: left;
+      }
+      #overlay .ov-controls-head {
+        padding-bottom: 8px;
+        margin-bottom: 6px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.4);
+      }
+      #overlay .ctl { padding: 3px 0; }
+      #overlay .ctl-act {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #dfe5ee;
+      }
+      #overlay .ctl-keys,
+      #overlay .ctl-pad { display: flex; gap: 4px; }
+      #overlay kbd {
+        font: inherit;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        padding: 4px 8px;
+        min-width: 26px;
+        text-align: center;
+        color: #cfd6e2;
+        background: rgba(255, 255, 255, 0.07);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+        clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+      }
+      #overlay kbd.pad { color: var(--hot); box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3); }
+
+      #overlay .ov-result {
+        --cham: 14px;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        padding: 12px 26px;
+      }
+      #overlay .ov-result .lbl {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.24em;
+        color: rgba(255, 255, 255, 0.45);
+      }
+      #overlay .ov-result .vals { display: flex; align-items: baseline; gap: 10px; }
+      #overlay .ov-result b { font-size: 24px; font-weight: 800; }
+      #overlay .ov-result b:first-of-type { color: var(--mine); }
+      #overlay .ov-result b:last-of-type { color: var(--theirs); }
+      #overlay .ov-result i {
+        font-style: normal;
+        color: rgba(255, 255, 255, 0.3);
+      }
 
       @keyframes pulse {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.4; }
       }
 
+      /* --- behind a full-screen overlay ---
+         The menu and the round-over card sit over a live scene, so last
+         round's gauges and killfeed read through them and make the HUD look
+         like it is still running. HUD.setOverlaid() puts .overlaid on #hud;
+         the deploy screen deliberately does not use it — tickets and flags are
+         what you are picking a spawn against. */
+      #hud.overlaid #ticket-bar,
+      #hud.overlaid #flag-strip,
+      #hud.overlaid #capture-status,
+      #hud.overlaid #crosshair,
+      #hud.overlaid #hitmarker,
+      #hud.overlaid #damage-dirs,
+      #hud.overlaid #hud-bottom,
+      #hud.overlaid #killfeed,
+      #hud.overlaid #message,
+      #hud.overlaid #toasts { display: none; }
+
       /* --- map editor (dev only) --- */
       /* The gameplay chrome is meaningless with no player, and the crosshair
          actively gets in the way of clicking things. HUD.setEditing() puts
          .editing on #hud; hiding here rather than per element means update()
          can keep writing to those nodes without fighting the toggle. */
+      #hud.editing #scrim,
       #hud.editing #ticket-bar,
       #hud.editing #flag-strip,
       #hud.editing #capture-status,
       #hud.editing #crosshair,
+      #hud.editing #hitmarker,
       #hud.editing #damage-dirs,
       #hud.editing #hud-bottom,
       #hud.editing #killfeed,
       #hud.editing #lock-hint { display: none; }
+
+      /* The editor keeps the old interface font on purpose: it is a dense
+         numeric tool, not part of the game's presentation, and it should not
+         move when the HUD is restyled. */
+      #editor-panel { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 
       /* Same opt-in as #deploy: #hud is pointer-events:none. */
       #editor-panel {

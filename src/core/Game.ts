@@ -676,9 +676,11 @@ export class Game {
       const haptic = CONFIG.rumble;
       this.input.rumble(haptic.shotStrong, haptic.shotWeak, haptic.shotMs);
       if (shot.target) {
-        this.hud.flashHitmarker();
-        this.sfx.hit();
         const killed = shot.killed && shot.target instanceof Bot;
+        // Resolved before the marker so a kill gets the red one — the cue to
+        // stop putting rounds into a body that is already going down.
+        this.hud.flashHitmarker(killed);
+        this.sfx.hit();
         this.input.rumble(
           killed ? haptic.killStrong : haptic.hitStrong,
           killed ? haptic.killWeak : haptic.hitWeak,

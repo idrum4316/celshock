@@ -35,6 +35,12 @@ const COLOR_TEXT = "#e8e8ea";
  */
 export class Minimap {
   private canvas: HTMLCanvasElement;
+  /**
+   * The chrome around the canvas — chamfered hull and compass mark. A canvas
+   * cannot carry those itself (a pseudo-element needs a container), and the
+   * frame is what `setVisible` toggles, so the two can never disagree.
+   */
+  private frame: HTMLElement;
   private ctx: CanvasRenderingContext2D;
   /** Static backdrop (ground + footprints + home gates), rebuilt per round. */
   private base: HTMLCanvasElement | null = null;
@@ -54,13 +60,19 @@ export class Minimap {
     // is scaled and every blip blurs.
     this.canvas.style.width = `${size}px`;
     this.canvas.style.height = `${size}px`;
-    this.canvas.classList.add("hidden");
-    document.getElementById("hud")!.appendChild(this.canvas);
+
+    this.frame = document.createElement("div");
+    this.frame.id = "minimap-frame";
+    this.frame.className = "hidden";
+    this.frame.innerHTML = `<div class="hull"></div><div class="compass">N</div>`;
+    // The hull is sized off the canvas, so the canvas has to be inside it.
+    this.frame.insertBefore(this.canvas, this.frame.querySelector(".compass"));
+    document.getElementById("hud")!.appendChild(this.frame);
     this.ctx = this.canvas.getContext("2d")!;
   }
 
   setVisible(visible: boolean): void {
-    this.canvas.classList.toggle("hidden", !visible);
+    this.frame.classList.toggle("hidden", !visible);
   }
 
   /**

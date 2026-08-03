@@ -1,13 +1,19 @@
 /**
- * HUD.ts — In-game DOM overlay: health/ammo, tickets, flag strip, capture-zone
- * panel, crosshair, hitmarker, damage vignette, directional damage arcs,
- * toasts, killfeed, scoreboard, menu/round-over.
+ * HUD.ts — In-game DOM overlay: vitals/ammo, reinforcement gauge, flag strip,
+ * capture-zone panel, crosshair, hitmarker, damage vignette, directional damage
+ * arcs, toasts, killfeed, scoreboard, menu/round-over.
  * Invariants: Game pushes state every frame (setHealth/setAmmo/setFlags/
  * setCapture/setViewYaw/...) — setting HUD state from anywhere else is
- * overwritten next
- * tick. Pure DOM manipulation; reads ControlPoint data, never imports game
- * systems beyond types. Transient elements (toasts, killfeed) self-remove via
- * setTimeout; the damage arcs are a fixed pool, never allocated per hit.
+ * overwritten next tick. Pure DOM manipulation; reads ControlPoint data, never
+ * imports game systems beyond types. Transient elements (toasts, killfeed)
+ * self-remove via setTimeout; the damage arcs are a fixed pool, never allocated
+ * per hit.
+ *
+ * Per-frame writes touch text nodes, class flags and CSS custom properties
+ * only — never innerHTML. Every element written 60 times a second (the ticket
+ * gauge, the flag cells, the magazine strip) is built once and cached; the
+ * markup-rebuilding calls (`setScoreboard`, `showMenu`, `showRoundOver`) are
+ * the ones that fire on a state change instead.
  */
 import { CONFIG } from "../config";
 import type { ControlPoint } from "../systems/ConquestSystem";
@@ -103,23 +109,45 @@ export interface CaptureStatus {
   enemies: number;
 }
 
+/** The player's controls, as the menu lists them. */
+const CONTROLS: readonly [string, string, string][] = [
+  ["Move", "Left stick", "W A S D"],
+  ["Look", "Right stick", "Mouse"],
+  ["Aim", "LT", "RMB"],
+  ["Fire", "RT", "LMB"],
+  ["Jump", "A", "Space"],
+  ["Reload", "X", "R"],
+  ["Sprint", "L3", "Shift"],
+  ["Crouch", "B", "Ctrl"],
+];
+
 /**
- * DOM-based HUD: health/ammo, the Conquest scoreboard (tickets and the flag
- * strip), crosshair, hitmarker, damage vignette, toasts, and full-screen
- * overlays. Styling lives in index.html.
+ * DOM-based HUD: vitals/ammo, the Conquest reinforcement gauge and flag strip,
+ * crosshair, hitmarker, damage vignette, toasts, and full-screen overlays.
+ * Styling lives in index.html.
  */
 export class HUD {
   private root: HTMLElement;
   private healthFill: HTMLElement;
   private healthText: HTMLElement;
-  private ammoText: HTMLElement;
-  private ticketBar: HTMLElement;
+  private healthBar: HTMLElement;
+  private ammoMag: HTMLElement;
+  private ammoCap: HTMLElement;
+  private magStrip: HTMLElement;
+  private hudRight: HTMLElement;
+  /** One tick per round in the magazine; rebuilt only when the size changes. */
+  private magTicks: HTMLElement[] = [];
+  private magBuilt = -1;
   private flagStrip: HTMLElement;
   /** One cell per flag, rebuilt only when the roster changes. */
   private flagCells: { wrap: HTMLElement; fill: HTMLElement }[] = [];
+  /** The reinforcement gauge's parts — written every frame, never rebuilt. */
+  private ticketParts: {
+    tag: HTMLElement;
+    num: HTMLElement;
+    fill: HTMLElement;
+  }[] = [];
   private crosshair: HTMLElement;
-  /** The crosshair's ring, resized every frame to the live bullet spread. */
-  private crosshairRing: HTMLElement;
   private hitmarker: HTMLElement;
   private vignette: HTMLElement;
   private damageDirs: HTMLElement;
@@ -149,39 +177,61 @@ export class HUD {
   constructor() {
     this.root = document.getElementById("hud")!;
     this.root.innerHTML = `
-      <div id="ticket-bar"></div>
+      <div id="scrim"></div>
+      <div id="ticket-bar">
+        <div class="side mine"><span class="tag"></span><span class="n"></span></div>
+        <div class="gauge">
+          <div class="track mine"><i></i></div>
+          <div class="track theirs"><i></i></div>
+        </div>
+        <div class="side theirs"><span class="n"></span><span class="tag"></span></div>
+      </div>
       <div id="flag-strip"></div>
-      <div id="crosshair"><div class="dot"></div><span class="ring"></span></div>
-      <div id="hitmarker" class="hidden">✕</div>
+      <div id="crosshair">
+        <i class="t"></i><i class="r"></i><i class="b"></i><i class="l"></i>
+        <span class="dot"></span>
+      </div>
+      <div id="hitmarker" class="hidden"><i></i><i></i><i></i><i></i></div>
       <div id="vignette"></div>
       <div id="damage-dirs"></div>
       <div id="message" class="hidden"></div>
       <div id="toasts"></div>
       <div id="killfeed"></div>
-      <div id="scoreboard" class="hidden"></div>
-      <div id="lock-hint" class="hidden">Click to capture the mouse</div>
+      <div id="scoreboard" class="frame hidden"></div>
+      <div id="lock-hint" class="hidden"><b>CLICK</b> TO CAPTURE THE MOUSE</div>
       <div id="capture-status" class="hidden">
         <div class="cap-head"><span class="cap-id"></span><span class="cap-name"></span></div>
-        <div class="cap-meter"><div class="cap-meter-fill"></div></div>
+        <div class="cap-meter"><div class="cap-meter-fill"></div><i class="ticks"></i></div>
         <div class="cap-state"></div>
       </div>
       <div id="hud-bottom">
-        <div class="panel">
-          <div class="label">HP</div>
-          <div class="bar"><div id="health-fill" class="fill"></div></div>
-          <div id="health-text"></div>
+        <div id="hud-left">
+          <div class="cap-row"><span class="cap">VITALS</span></div>
+          <div class="hp-bar"><i id="health-fill"></i><b class="segs"></b></div>
+          <div class="hp-num"><span id="health-text">100</span><em>HP</em></div>
         </div>
-        <div class="panel right"><div id="ammo-text"></div></div>
+        <div id="hud-right">
+          <div class="ammo">
+            <span id="ammo-mag">0</span><span id="ammo-cap"></span>
+          </div>
+          <div id="mag-strip"></div>
+          <div class="cap-row">
+            <span class="cap">RIFLE &middot; AUTO</span>
+            <span class="reload-note">RELOADING</span>
+          </div>
+        </div>
       </div>
       <div id="overlay" class="hidden"></div>
     `;
     this.healthFill = document.getElementById("health-fill")!;
     this.healthText = document.getElementById("health-text")!;
-    this.ammoText = document.getElementById("ammo-text")!;
-    this.ticketBar = document.getElementById("ticket-bar")!;
+    this.healthBar = this.root.querySelector("#hud-left .hp-bar") as HTMLElement;
+    this.ammoMag = document.getElementById("ammo-mag")!;
+    this.ammoCap = document.getElementById("ammo-cap")!;
+    this.magStrip = document.getElementById("mag-strip")!;
+    this.hudRight = document.getElementById("hud-right")!;
     this.flagStrip = document.getElementById("flag-strip")!;
     this.crosshair = document.getElementById("crosshair")!;
-    this.crosshairRing = this.crosshair.querySelector(".ring") as HTMLElement;
     this.hitmarker = document.getElementById("hitmarker")!;
     this.vignette = document.getElementById("vignette")!;
     this.damageDirs = document.getElementById("damage-dirs")!;
@@ -198,12 +248,27 @@ export class HUD {
       fill: this.capture.querySelector(".cap-meter-fill") as HTMLElement,
       state: this.capture.querySelector(".cap-state") as HTMLElement,
     };
+    // The gauge is [mine, theirs] in DOM order, which is also the order
+    // setTickets resolves the teams into — index 0 is always the player's.
+    const bar = document.getElementById("ticket-bar")!;
+    this.ticketParts = (["mine", "theirs"] as const).map((side) => ({
+      tag: bar.querySelector(`.side.${side} .tag`) as HTMLElement,
+      num: bar.querySelector(`.side.${side} .n`) as HTMLElement,
+      fill: bar.querySelector(`.track.${side} i`) as HTMLElement,
+    }));
   }
 
   update(dt: number): void {
     if (this.hitT > 0) {
       this.hitT -= dt;
       if (this.hitT <= 0) this.hitmarker.classList.add("hidden");
+      else {
+        // The pop is driven here rather than by a CSS animation: the marker is
+        // re-triggered several times a second at full auto, and restarting a
+        // keyframe animation needs a forced reflow every time.
+        const pop = 1 + 0.4 * Math.max(0, this.hitT / 0.12);
+        this.hitmarker.style.transform = `translate(-50%, -50%) scale(${pop.toFixed(3)})`;
+      }
     }
     if (this.vignetteT > 0) {
       this.vignetteT -= dt;
@@ -304,28 +369,63 @@ export class HUD {
   setHealth(current: number, max: number): void {
     const frac = Math.max(0, current / max);
     this.healthFill.style.width = `${frac * 100}%`;
-    this.healthFill.classList.toggle("low", frac < 0.3);
-    this.healthText.textContent = `${Math.ceil(current)} / ${max}`;
+    // The low state is carried on the whole block, not just the fill: the bar
+    // goes red, the readout goes red, and both breathe, which is the one thing
+    // that has to register without being looked at.
+    const low = frac < 0.3;
+    this.healthBar.classList.toggle("low", low);
+    this.healthText.classList.toggle("low", low);
+    this.healthText.textContent = String(Math.ceil(current));
   }
 
   setAmmo(ammo: number, magSize: number, reloading: boolean): void {
-    this.ammoText.textContent = reloading ? "RELOADING…" : `${ammo} / ${magSize}`;
-    this.ammoText.classList.toggle("reloading", reloading);
-  }
-
-  /** Reinforcement counts, with the player's own team first. */
-  setTickets(names: readonly string[], tickets: readonly number[], playerTeam: number): void {
-    const mine = playerTeam;
-    const theirs = 1 - playerTeam;
-    this.ticketBar.innerHTML =
-      `<span class="team mine">${names[mine].toUpperCase()} <b>${tickets[mine]}</b></span>` +
-      `<span class="sep">/</span>` +
-      `<span class="team theirs"><b>${tickets[theirs]}</b> ${names[theirs].toUpperCase()}</span>`;
+    if (this.magBuilt !== magSize) {
+      this.magStrip.innerHTML = "";
+      this.magTicks = [];
+      for (let i = 0; i < magSize; i++) {
+        const tick = document.createElement("i");
+        this.magStrip.appendChild(tick);
+        this.magTicks.push(tick);
+      }
+      this.magBuilt = magSize;
+    }
+    // One tick per round left in the magazine — the count is legible without
+    // reading the number, which is the whole point of a strip.
+    for (let i = 0; i < this.magTicks.length; i++) {
+      this.magTicks[i].classList.toggle("spent", i >= ammo);
+    }
+    this.ammoMag.textContent = String(ammo);
+    this.ammoCap.textContent = `/ ${magSize}`;
+    this.ammoMag.classList.toggle("low", !reloading && ammo <= magSize * 0.25);
+    this.hudRight.classList.toggle("reloading", reloading);
   }
 
   /**
-   * The A..E flag strip. Each cell shows its owner as a colour and its capture
-   * progress as a fill, so a flag being taken is visible without looking at it.
+   * Reinforcement counts, as two gauges draining away from the centre. The
+   * player's team is always the left-hand one. `CONFIG.conquest.tickets` is the
+   * full-scale reading — the gauge is a fraction of the round's starting pool,
+   * so "we are losing" reads off the bar rather than off the arithmetic.
+   */
+  setTickets(names: readonly string[], tickets: readonly number[], playerTeam: number): void {
+    const max = CONFIG.conquest.tickets;
+    const order = [playerTeam, 1 - playerTeam];
+    for (let i = 0; i < 2; i++) {
+      const team = order[i];
+      const part = this.ticketParts[i];
+      const n = tickets[team];
+      part.tag.textContent = names[team].toUpperCase();
+      part.num.textContent = String(n);
+      part.fill.style.width = `${Math.max(0, Math.min(1, n / max)) * 100}%`;
+      part.num.classList.toggle("critical", n / max < 0.15);
+    }
+  }
+
+  /**
+   * The A..E flag strip. Each cell is a hexagon in its owner's colour, filling
+   * from the bottom with the capture meter, so a flag being taken is visible
+   * without looking at it. The two-layer shape (`.core` inset inside the
+   * coloured hull) is how the cell gets a border at all: `clip-path` clips a
+   * CSS border away with everything else outside the polygon.
    */
   setFlags(points: ControlPoint[], playerTeam: number): void {
     if (this.flagCells.length !== points.length) {
@@ -333,7 +433,9 @@ export class HUD {
       this.flagCells = points.map((p) => {
         const wrap = document.createElement("div");
         wrap.className = "flag";
-        wrap.innerHTML = `<span class="id">${p.def.id}</span><div class="cap"><div class="cap-fill"></div></div>`;
+        wrap.innerHTML =
+          `<div class="core"><i class="cap-fill"></i>` +
+          `<span class="id">${p.def.id}</span></div>`;
         this.flagStrip.appendChild(wrap);
         return { wrap, fill: wrap.querySelector(".cap-fill") as HTMLElement };
       });
@@ -345,7 +447,7 @@ export class HUD {
         p.owner === null ? "neutral" : p.owner === playerTeam ? "mine" : "theirs";
       cell.wrap.className = `flag ${owner}${p.contested ? " contested" : ""}`;
       // Meter runs -1..+1; show it as distance from neutral either way.
-      cell.fill.style.width = `${Math.abs(p.meter) * 100}%`;
+      cell.fill.style.height = `${Math.abs(p.meter) * 100}%`;
       cell.fill.className = `cap-fill ${
         Math.sign(p.meter) === (playerTeam === 0 ? -1 : 1) ? "mine" : "theirs"
       }`;
@@ -365,8 +467,11 @@ export class HUD {
     }
     const parts = this.captureParts;
     // Rewritten wholesale rather than toggled, which is also what clears the
-    // `hidden` the null branch above puts back on.
-    this.capture.className = `zone ${status.owner}${status.contested ? " contested" : ""}`;
+    // `hidden` the null branch above puts back on. `frame` has to be re-stated
+    // here — it is what draws the panel's chamfered hull.
+    this.capture.className = `frame zone ${status.owner}${
+      status.contested ? " contested" : ""
+    }`;
     parts.id.textContent = status.id;
     parts.name.textContent = status.name.toUpperCase();
     parts.fill.style.width = `${Math.round(status.progress * 100)}%`;
@@ -386,9 +491,11 @@ export class HUD {
   }
 
   /**
-   * Crosshair state, pushed every frame. The ring's diameter IS the current
-   * bullet spread in screen pixels, so recoil bloom is visible as the ring
-   * opening up and settling as it bleeds off.
+   * Crosshair state, pushed every frame. The gap between the four ticks IS the
+   * current bullet spread in screen pixels, so recoil bloom is visible as the
+   * crosshair opening up and settling as it bleeds off. The ticks read the gap
+   * off the `--sp` custom property, so one write per frame moves all four and
+   * the browser keeps it on the compositor.
    *
    * `adsBlend` fades it out rather than switching it off: aimed, the weapon's
    * own holo reticle sits on the camera axis at the exact centre of the
@@ -399,12 +506,17 @@ export class HUD {
   setCrosshair(adsBlend: number, spreadPx: number): void {
     this.crosshair.style.opacity = `${Math.max(0, 1 - adsBlend * 1.6)}`;
     const size = Math.round(Math.max(10, Math.min(90, spreadPx)));
-    this.crosshairRing.style.width = `${size}px`;
-    this.crosshairRing.style.height = `${size}px`;
+    this.crosshair.style.setProperty("--sp", `${size}px`);
   }
 
-  flashHitmarker(): void {
+  /**
+   * The hit confirmation. A kill is a distinct, redder marker — the standard
+   * shooter read, and the one piece of feedback that tells you to stop
+   * shooting at a body that is already going down.
+   */
+  flashHitmarker(killed = false): void {
     this.hitmarker.classList.remove("hidden");
+    this.hitmarker.classList.toggle("kill", killed);
     this.hitT = 0.12;
   }
 
@@ -435,7 +547,10 @@ export class HUD {
   addKill(killer: string, victim: string, mine: boolean): void {
     const el = document.createElement("div");
     el.className = `kill${mine ? " mine" : ""}`;
-    el.innerHTML = `<span class="k">${killer}</span><span class="x">&#9587;</span><span class="v">${victim}</span>`;
+    el.innerHTML =
+      `<span class="k">${killer}</span>` +
+      `<span class="x">&#9587;</span>` +
+      `<span class="v">${victim}</span>`;
     this.killfeed.appendChild(el);
     // Cap the feed: a full battle would otherwise fill the screen edge to edge.
     while (this.killfeed.childElementCount > 6) {
@@ -460,20 +575,36 @@ export class HUD {
   ): void {
     this.scoreboard.classList.toggle("hidden", !visible);
     if (!visible || !rows) return;
-    const row = (t: number) => `
-      <tr class="${t === rows.playerTeam ? "mine" : "theirs"}">
-        <td class="name">${rows.teams[t].toUpperCase()}</td>
-        <td>${rows.tickets[t]}</td>
-        <td>${rows.flags[t]}</td>
-        <td>${rows.kills[t]}</td>
-        <td>${rows.deaths[t]}</td>
-      </tr>`;
+    const max = CONFIG.conquest.tickets;
+    const row = (t: number) => {
+      const frac = Math.max(0, Math.min(1, rows.tickets[t] / max));
+      return `
+      <div class="sb-row ${t === rows.playerTeam ? "mine" : "theirs"}">
+        <span class="sb-name">${rows.teams[t].toUpperCase()}</span>
+        <span class="sb-tickets">
+          <b>${rows.tickets[t]}</b>
+          <i class="sb-gauge"><u style="width:${(frac * 100).toFixed(1)}%"></u></i>
+        </span>
+        <span class="sb-n">${rows.flags[t]}</span>
+        <span class="sb-n">${rows.kills[t]}</span>
+        <span class="sb-n">${rows.deaths[t]}</span>
+      </div>`;
+    };
     this.scoreboard.innerHTML = `
-      <table>
-        <tr><th>TEAM</th><th>TICKETS</th><th>FLAGS</th><th>KILLS</th><th>LOSSES</th></tr>
-        ${row(0)}${row(1)}
-      </table>
-      <div class="you">YOU &mdash; ${rows.playerKills} kills, ${rows.playerDeaths} deaths</div>
+      <div class="sb-head">
+        <span class="sb-mode">CONQUEST</span>
+        <span class="sb-map">HOLLOWMERE</span>
+      </div>
+      <div class="sb-cols">
+        <span></span><span>REINFORCEMENTS</span><span>FLAGS</span>
+        <span>KILLS</span><span>LOSSES</span>
+      </div>
+      ${row(rows.playerTeam)}${row(1 - rows.playerTeam)}
+      <div class="sb-you">
+        <span class="sb-label">OPERATIVE</span>
+        <span class="sb-stat"><b>${rows.playerKills}</b> KILLS</span>
+        <span class="sb-stat"><b>${rows.playerDeaths}</b> DEATHS</span>
+      </div>
     `;
   }
 
@@ -501,32 +632,41 @@ export class HUD {
    */
   showMenu(difficulties: readonly string[], selected: number): void {
     this.overlay.classList.remove("hidden");
+    this.setOverlaid(true);
     const tiers = difficulties
       .map(
         (name, i) =>
           `<button class="tier${i === selected ? " on" : ""}" data-tier="${i}">${name}</button>`,
       )
       .join("");
+    const controls = CONTROLS.map(
+      ([action, pad, key]) => `
+        <div class="ctl">
+          <span class="ctl-act">${action}</span>
+          <span class="ctl-keys">${key
+            .split(" ")
+            .map((k) => `<kbd>${k}</kbd>`)
+            .join("")}</span>
+          <span class="ctl-pad"><kbd class="pad">${pad}</kbd></span>
+        </div>`,
+    ).join("");
     this.overlay.innerHTML = `
-      <h1>HOLLOWMERE</h1>
-      <p class="tagline">Conquest — take and hold five points against the Blight</p>
+      <div class="ov-title">
+        <h1>HOLLOWMERE</h1>
+        <p class="tagline">Conquest &mdash; take and hold five points against the Blight</p>
+      </div>
       <div class="difficulty">
         <span class="label">Enemy skill</span>
-        ${tiers}
-        <span class="hint">&larr; &rarr; or D-pad</span>
+        <div class="tiers">${tiers}</div>
+        <span class="hint">&larr; &rarr; / D-pad</span>
       </div>
-      <table class="controls">
-        <tr><th></th><th>Gamepad</th><th>Keyboard / Mouse</th></tr>
-        <tr><td>Move</td><td>Left stick</td><td>WASD</td></tr>
-        <tr><td>Look</td><td>Right stick</td><td>Mouse</td></tr>
-        <tr><td>Aim (ADS)</td><td>LT</td><td>Right-click</td></tr>
-        <tr><td>Shoot</td><td>RT</td><td>Left-click</td></tr>
-        <tr><td>Jump</td><td>A / ✕</td><td>Space</td></tr>
-        <tr><td>Reload</td><td>X / ▢</td><td>R</td></tr>
-        <tr><td>Sprint</td><td>L3</td><td>Shift</td></tr>
-        <tr><td>Crouch</td><td>B / ○</td><td>Ctrl or C</td></tr>
-      </table>
-      <p class="prompt">Click, press Enter, or press Start to begin</p>
+      <div class="ov-controls frame">
+        <div class="ov-controls-head">
+          <span>Controls</span><span>Keyboard &amp; mouse</span><span>Gamepad</span>
+        </div>
+        ${controls}
+      </div>
+      <p class="prompt">Click, press Enter, or press Start to deploy</p>
     `;
     this.overlay
       .querySelectorAll<HTMLElement>("button.tier")
@@ -545,14 +685,38 @@ export class HUD {
     tickets1: number,
   ): void {
     this.overlay.classList.remove("hidden");
+    this.setOverlaid(true);
     this.overlay.innerHTML = `
-      <h1 class="${playerWon ? "win" : "dead"}">${playerWon ? "VICTORY" : "DEFEAT"}</h1>
-      <p class="tagline">${winnerName} hold Hollowmere. Reinforcements remaining: ${tickets0} / ${tickets1}.</p>
+      <div class="ov-title">
+        <h1 class="${playerWon ? "win" : "dead"}">${playerWon ? "VICTORY" : "DEFEAT"}</h1>
+        <p class="tagline">${winnerName} hold Hollowmere</p>
+      </div>
+      <div class="ov-result frame">
+        <span class="lbl">REINFORCEMENTS REMAINING</span>
+        <span class="vals"><b>${tickets0}</b><i>/</i><b>${tickets1}</b></span>
+      </div>
       <p class="prompt">Click, press Enter, or press Start for another round</p>
     `;
   }
 
   hideOverlay(): void {
     this.overlay.classList.add("hidden");
+    this.setOverlaid(false);
+  }
+
+  /**
+   * Hides the gameplay chrome behind a full-screen overlay. The menu and the
+   * round-over card sit over a live 3D scene, and the ticket gauge, flag strip,
+   * killfeed and vitals underneath them are last round's — readable enough
+   * through the scrim to look like the HUD is still running when it is not.
+   * Same mechanism as `setEditing`, and for the same reason: `update()` keeps
+   * writing to those nodes, so the hiding has to be in CSS.
+   *
+   * The deploy screen deliberately does NOT do this — you pick a spawn while
+   * the round continues, and the tickets and flags are exactly what you are
+   * deciding against.
+   */
+  private setOverlaid(on: boolean): void {
+    this.root.classList.toggle("overlaid", on);
   }
 }

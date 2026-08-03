@@ -45,9 +45,14 @@ export class DeployScreen {
     this.root = document.createElement("div");
     this.root.id = "deploy";
     this.root.className = "hidden";
+    // `.map-wrap` exists only to hang the chamfered hull and the corner
+    // brackets on — a canvas cannot draw its own chrome.
     this.root.innerHTML = `
       <h2>SELECT DEPLOYMENT</h2>
-      <canvas id="deploy-map" width="620" height="620"></canvas>
+      <div class="map-wrap brackets">
+        <div class="hull"></div>
+        <canvas id="deploy-map" width="620" height="620"></canvas>
+      </div>
       <div id="deploy-status"></div>
     `;
     document.getElementById("hud")!.appendChild(this.root);
