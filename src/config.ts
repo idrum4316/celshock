@@ -938,6 +938,40 @@ export const CONFIG = {
      * and a close one is mostly crack.
      */
     reverbDistanceSend: 1.6,
+
+    /**
+     * Footsteps. The player's are triggered by the camera's bob phase rather
+     * than by a timer of their own — a step you hear off the beat of the dip
+     * you see is worse than no step at all — so there is no interval here.
+     * What is here is how loud each stance is, and how far a bot's boots
+     * carry.
+     */
+    footstep: {
+      /** Walking, sprinting, and how much of that a crouch keeps. */
+      walkVol: 0.5,
+      sprintVol: 1,
+      /**
+       * Crouching is already slower and lower (the bob drive is damped by
+       * `camera.bobCrouchMult`), so this only has to finish the job. It does
+       * NOT make you quieter to the enemy: bots hear gunshots, never feet.
+       */
+      crouchMult: 0.3,
+      /**
+       * Impact speed (m/s) below which touching down is just walking, and the
+       * speed at which a landing is as loud as it gets. A step off a kerb is
+       * a footstep; a drop off the mill roof is not.
+       */
+      landMinSpeed: 3,
+      landFullSpeed: 11,
+      /**
+       * How far a bot's footfalls carry, well inside `maxDistance` (70). Boots
+       * are not rifles: at 70 m they would be inaudible in the mix and would
+       * only spend voices the gunfire needs — 16 bots stepping twice a second
+       * is 32 one-shots a second on its own. Short range keeps the cue
+       * meaningful (someone is close, and roughly there) and the cost small.
+       */
+      botRange: 20,
+    },
   },
 
   effects: {

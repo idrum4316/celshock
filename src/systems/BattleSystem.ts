@@ -63,6 +63,8 @@ export class BattleSystem {
   onBotFired: (bot: Bot, at: Vector3) => void = () => {};
   /** Wired by Game: a bot ran its magazine dry and started reloading. */
   onBotReloaded: (bot: Bot) => void = () => {};
+  /** Wired by Game: a bot put a foot down. Short-range sound only. */
+  onBotStepped: (bot: Bot) => void = () => {};
   /** Wired by Game: where should this bot deploy? */
   spawnPointFor: (bot: Bot) => { pos: Vector3; yaw: number } | null = () => null;
   /**
@@ -117,6 +119,7 @@ export class BattleSystem {
         // differs between bots but is identical between runs.
         bot.seedRandom(CONFIG.bots.skill.seed + team * 131 + i * 17);
         bot.onReload = () => this.onBotReloaded(bot);
+        bot.onStep = () => this.onBotStepped(bot);
         this.bots.push(bot);
       }
     }

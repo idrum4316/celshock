@@ -597,7 +597,16 @@ export class Bot implements Combatant {
         this.stuckStreak = 0;
       }
 
+      // The walk cycle is advanced by distance travelled, so a footfall is a
+      // point on it and never a timer: a bot slowed to a hunt's walk steps
+      // more slowly for free, and a stopped one stops stepping. The legs swing
+      // as sin(walkPhase), so a foot is planted forward at each half turn —
+      // pi/2 and 3pi/2, which is every pi offset by pi/2.
+      const wasStride = Math.floor((this.walkPhase - Math.PI / 2) / Math.PI);
       this.walkPhase += (speed * dt) / 0.9;
+      if (Math.floor((this.walkPhase - Math.PI / 2) / Math.PI) !== wasStride) {
+        this.onStep();
+      }
       this.moveBlend = Math.min(1, this.moveBlend + dt * 6);
     } else {
       this.stuckT = 0;
@@ -871,6 +880,13 @@ export class Bot implements Combatant {
 
   /** Wired by BattleSystem so Game can play the sound. */
   onReload: () => void = () => {};
+
+  /**
+   * Wired by BattleSystem so Game can play the sound: a foot went down. Fires
+   * for every bot on the map, however far away — the distance test lives in
+   * `Sfx.botStep`, which is the only thing that knows where the listener is.
+   */
+  onStep: () => void = () => {};
 
   /**
    * Parks the current target in short-term memory before it is dropped, so

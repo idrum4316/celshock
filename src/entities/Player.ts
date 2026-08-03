@@ -14,6 +14,9 @@
  * mesh and casing pool are player-only visuals (bots get neither — see
  * CONFIG.gunfeel), and the flash must join VIEWMODEL_GROUP with the rifle it
  * hangs off. Damage flows out via the onDamaged callback wired in Game.
+ * Footfalls are read off the CAMERA's bob phase, never a step timer of their
+ * own — the sound has to land on the dip you can see — and leave here as
+ * PlayerEvents rather than as a sound: this file owns no audio.
  */
 import {
   Mesh,
@@ -55,6 +58,45 @@ interface Casing {
 const _casingDir = new Vector3();
 
 /**
+ * Bob phase of the first of the two footfalls in a stride.
+ *
+ * The camera's vertical bob is `sin(bobPhase * 2)`, so its two dips per cycle
+ * — the moments the head is lowest — are at 3pi/4 and 7pi/4. That is where a
+ * foot is taking the weight, so that is where the sound goes. Deriving it from
+ * the phase rather than running a step timer is the same rule the viewmodel
+ * follows: two things fed the same drive stay together, and a step heard off
+ * the beat of the dip you can see is worse than no step at all.
+ */
+const FOOTFALL_PHASE = (3 * Math.PI) / 4;
+
+/**
+ * Whether the bob phase passed a footfall this frame. Phase wraps at 2pi and
+ * only ever advances, so this measures forward distance to each of the two
+ * marks and asks whether the frame's advance covered it.
+ */
+function crossedFootfall(prev: number, next: number): boolean {
+  const tau = Math.PI * 2;
+  const advance = (next - prev + tau) % tau;
+  if (advance <= 0) return false;
+  const first = (FOOTFALL_PHASE - prev + tau) % tau;
+  const second = (FOOTFALL_PHASE + Math.PI - prev + tau) % tau;
+  return (first > 0 && first <= advance) || (second > 0 && second <= advance);
+}
+
+/**
+ * What happened to the player this frame that something outside it has to
+ * react to. Returned from `update` and reused between frames — Game reads it
+ * immediately and keeps nothing.
+ */
+export interface PlayerEvents {
+  jumped: boolean;
+  /** Loudness 0..1 of a foot going down this frame; 0 if none did. */
+  footstep: number;
+  /** Impact speed (m/s) of a landing this frame; 0 if the player didn't. */
+  landed: number;
+}
+
+/**
  * Player pawn: movement (walk/jump/gravity) with Babylon collision sliding,
  * weapon state (ammo/reload/fire cooldown), and the smoothed signals that
  * drive the first-person weapon (movement, sprint, reload, turn rate, kick).
@@ -91,6 +133,10 @@ export class Player implements Combatant {
   private pitchRate = 0;
   private prevYaw = 0;
   private prevPitch = 0;
+  /** Last frame's bob phase, for the footfall crossing test. */
+  private prevBobPhase = 0;
+  /** This frame's outgoing events; rewritten each update, never reallocated. */
+  private readonly events: PlayerEvents = { jumped: false, footstep: 0, landed: 0 };
 
   health: number = CONFIG.player.maxHealth;
   alive = true;
@@ -257,6 +303,7 @@ export class Player implements Combatant {
     this.sprintBlend = 0;
     this.turnRate = 0;
     this.pitchRate = 0;
+    this.prevBobPhase = 0;
     this.view.reset();
   }
 
@@ -302,9 +349,12 @@ export class Player implements Combatant {
     this.terrain = terrain;
   }
 
-  update(dt: number, input: InputManager, cam: CameraSystem): boolean {
+  update(dt: number, input: InputManager, cam: CameraSystem): PlayerEvents {
     const p = CONFIG.player;
-    let jumped = false;
+    const ev = this.events;
+    ev.jumped = false;
+    ev.footstep = 0;
+    ev.landed = 0;
 
     // --- stance ---
     // Sprinting is mutually exclusive with aiming, and blocks firing (see
@@ -343,7 +393,7 @@ export class Player implements Combatant {
     if (input.jumpPressed && this.grounded) {
       this.velY = p.jumpVelocity;
       this.grounded = false;
-      jumped = true;
+      ev.jumped = true;
     }
     this.velY -= p.gravity * dt;
     this.root.position.y += this.velY * dt;
@@ -355,6 +405,10 @@ export class Player implements Combatant {
     const floorY = this.probeGround();
     const foot = this.root.position.y - this.groundY;
     if (foot <= floorY + (this.velY <= 0 ? p.stepHeight : 0)) {
+      // Report the arrival before the snap eats the speed it arrived at. Only
+      // a fall counts: walking on level ground touches down every frame at
+      // roughly one frame of gravity, which is well under `landMinSpeed`.
+      if (!this.grounded) ev.landed = Math.max(0, -this.velY);
       this.root.position.y = floorY + this.groundY;
       this.velY = 0;
       this.grounded = true;
@@ -394,7 +448,7 @@ export class Player implements Combatant {
     this.syncCombatant();
     this.updateGunfeel(dt);
     this.animate(dt, moveInput, cam);
-    return jumped;
+    return ev;
   }
 
   /**
@@ -439,6 +493,27 @@ export class Player implements Combatant {
         (1 - (1 - CONFIG.camera.bobCrouchMult) * this.crouchBlend),
       this.grounded,
     );
+
+    // --- footfalls, off that same phase ---
+    // The phase read here is a frame behind (the camera has not run yet), the
+    // same 16 ms the viewmodel's bob is behind, and for the same reason.
+    //
+    // Amplitude, cadence and loudness all come off one drive: the bob stalls
+    // when the player stops, so the steps stop with it, and the crouch damping
+    // above slows the cadence while `crouchMult` below takes the level down.
+    // Sprinting does NOT speed this up — the drive is movement *intent*, which
+    // is already 1 at a walk — so a sprint reads as heavier boots at the same
+    // pace rather than a faster gait.
+    const f = CONFIG.audio.footstep;
+    if (this.grounded && this.moveBlend > 0.15) {
+      if (crossedFootfall(this.prevBobPhase, cam.bobPhase)) {
+        this.events.footstep =
+          (f.walkVol + (f.sprintVol - f.walkVol) * this.sprintBlend) *
+          (1 - (1 - f.crouchMult) * this.crouchBlend) *
+          this.moveBlend;
+      }
+    }
+    this.prevBobPhase = cam.bobPhase;
     this.view.update(dt, {
       adsBlend: cam.adsBlend,
       moveBlend: this.moveBlend * (1 - this.airBlend),

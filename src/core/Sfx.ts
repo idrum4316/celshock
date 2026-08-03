@@ -7,7 +7,9 @@
  * Invariants: never generate a fresh noise buffer or impulse response per
  * sound — both are built once on unlock. setListener() is called once per
  * frame by Game, after the camera update. Firefox needs the legacy
- * setPosition/setOrientation path — keep both.
+ * setPosition/setOrientation path — keep both. Nothing here schedules a
+ * repeating sound: footsteps are one-shots fired by the caller's own gait
+ * phase (the camera's bob, a bot's walk cycle), never by a timer in here.
  */
 import type { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -234,6 +236,56 @@ export class Sfx {
     this.tone(330, 0.08, "sine", 0.04, 1.6);
   }
 
+  /**
+   * One boot going down, at the player's own feet. `weight` is 0..1 — a
+   * crouched shuffle to a sprint.
+   *
+   * Two layers, and the split is the whole sound: a soft lowpassed thud is the
+   * boot's mass arriving, and a very short bandpassed scuff on top is the grit
+   * it lands on. The thud alone is a knock on a door; the scuff alone is a
+   * brush stroke. Both are slices of the shared noise buffer for the same
+   * reason gunfire is — a footstep has no pitch, and anything with one reads
+   * as a click track under the movement.
+   *
+   * Volumes here are deliberately an order below the rifle. This plays two to
+   * three times a second for the entire round, which is exactly the sound that
+   * gets mixed too loud and then cannot be un-noticed.
+   */
+  step(weight: number): void {
+    const v = 0.88 + Math.random() * 0.24;
+    // A lowpass throws most of a noise slice's amplitude away, so the gain is
+    // set well above the level this plays at — same as the report's body.
+    this.burst({
+      dur: 0.07, vol: 0.3 * weight, type: "lowpass", freq: 420 * v,
+      freqEnd: 130, send: 0.12,
+    });
+    this.burst({
+      dur: 0.035, vol: 0.05 * weight * v, type: "bandpass", freq: 2400 * v,
+      q: 0.8, send: 0.1,
+    });
+  }
+
+  /**
+   * Touching down. `weight` is 0..1 across the fall speeds `CONFIG.audio
+   * .footstep` calls a landing rather than a step; the loud end is both boots
+   * and the gear on them, so it gets a third layer the walking step does not.
+   */
+  land(weight: number): void {
+    const v = 0.9 + Math.random() * 0.2;
+    this.burst({
+      dur: 0.09 + weight * 0.06, vol: 0.34 + 0.3 * weight, type: "lowpass",
+      freq: 300 * v, freqEnd: 90, send: 0.2,
+    });
+    this.burst({
+      dur: 0.05, vol: 0.07 + 0.07 * weight, type: "bandpass", freq: 1900 * v,
+      q: 0.7, send: 0.15,
+    });
+    // Webbing and magazines catching up with the body, a beat behind the feet.
+    if (weight > 0.25) {
+      this.clack(3000, 0.35 * weight, 0.035);
+    }
+  }
+
   /** Flag captured. */
   capture(): void {
     this.tone(440, 0.12, "sine", 0.07, 1.5);
@@ -302,6 +354,35 @@ export class Sfx {
     this.clack(2200, 0.5, delay, panner);
     this.clack(760, 0.6, delay + 0.3, panner);
     this.clack(3100, 0.45, delay + 0.55, panner);
+  }
+
+  /**
+   * A bot's boot, out in the village. Spatialised, and cut off far short of
+   * `maxDistance` (`CONFIG.audio.footstep.botRange`) — see that field for why.
+   *
+   * One layer, not the player's two: the scuff is the first thing the air and
+   * the distance take off a footstep, and past a few metres all that is left
+   * is the thud. Skipping it also halves what a squad jogging past costs.
+   *
+   * No propagation delay either, unlike `botShot`. At 20 m that is 58 ms — far
+   * too small to read as distance, and it would only smear the one thing this
+   * sound is for, which is knowing that someone is moving *now*, close, and
+   * roughly over there.
+   */
+  botStep(at: Vector3): void {
+    const f = CONFIG.audio.footstep;
+    const dist = this.distanceToListener(at);
+    if (dist > f.botRange) return;
+    const panner = this.panner(at);
+    if (!panner) return;
+    const v = 0.85 + Math.random() * 0.3;
+    // Fades out over its own range rather than the panner's much longer one,
+    // so the last audible steps trail off instead of being cut mid-stride.
+    const far = dist / f.botRange;
+    this.burst({
+      dur: 0.075, vol: 0.34 * (1 - far * 0.6), type: "lowpass", freq: 380 * v,
+      freqEnd: 110, out: panner, send: 0.15,
+    });
   }
 
   // --- primitives ----------------------------------------------------------

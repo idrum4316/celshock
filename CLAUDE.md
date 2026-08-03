@@ -264,6 +264,20 @@ load-bearing.
   `cam.setBobDrive()` and passes `cam.bobPhase` straight through to the
   viewmodel. Player runs before the camera in the frame order, so that phase is
   one frame old, which is 16 ms of an ~0.8 s cycle.
+- **Footsteps are a third reader of that phase, never a step timer.** The
+  camera's vertical bob is `sin(bobPhase * 2)`, so its two dips per stride —
+  3π/4 and 7π/4, where the head is lowest and a foot is taking the weight — are
+  where the sound goes; a step heard off the beat of the dip you can see is
+  worse than no step at all. Cadence therefore comes free: the bob stalls when
+  the player stops or leaves the ground, and `camera.bobCrouchMult` already
+  halves it in a crouch. It also means **sprinting does not step faster** — the
+  drive is movement *intent*, which is 1 at a walk — so a sprint is louder
+  boots at a walk's cadence (measured: 2.55 steps/s either way, a 2.0 m stride
+  walking against 2.6 m sprinting). Speeding the gait up means speeding the
+  camera's bob up with it. `Player.update` returns these as `PlayerEvents`
+  (`jumped` / `footstep` / `landed`) rather than playing anything: `Sfx` is
+  Game's, and the same split is why bots emit `onStep` and let
+  `Sfx.botStep` decide, from the listener position, whether it is audible.
 
 The bob and the view punch move the **rendered camera only** — `aimPitch`/
 `aimYaw` never see them, so bullets don't bob. `Player.setBodyHidden` now hides

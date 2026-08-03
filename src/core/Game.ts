@@ -254,6 +254,10 @@ export class Game {
     // A bot reloading is a window the player can push into, so it has to be
     // audible. Spatialised for the same reason bot fire is.
     this.battle.onBotReloaded = (bot) => this.sfx.botReload(bot.position);
+    // Boots, from bots close enough for them to carry. `Sfx.botStep` rejects
+    // the rest on distance — this fires for all 16 of them, so nothing
+    // upstream should do work per step.
+    this.battle.onBotStepped = (bot) => this.sfx.botStep(bot.position);
     // A round cracking past is a cue, not a hit. CombatSystem finds these
     // inside the target loop it already runs per shot, and has no business
     // knowing what a bot is — so the routing happens here.
@@ -638,8 +642,22 @@ export class Game {
 
   private updateGameplay(dt: number): void {
     // --- player ---
-    const jumped = this.player.update(dt, this.input, this.cameraSys);
-    if (jumped) this.sfx.jump();
+    const ev = this.player.update(dt, this.input, this.cameraSys);
+    if (ev.jumped) this.sfx.jump();
+    if (ev.footstep > 0) this.sfx.step(ev.footstep);
+    // Landing is scaled across the fall speeds that count as one at all, so a
+    // hop off a kerb is a step and a drop off the terrace is not.
+    if (ev.landed > 0) {
+      const f = CONFIG.audio.footstep;
+      if (ev.landed >= f.landMinSpeed) {
+        this.sfx.land(
+          Math.min(
+            1,
+            (ev.landed - f.landMinSpeed) / (f.landFullSpeed - f.landMinSpeed),
+          ),
+        );
+      }
+    }
     if (this.input.reloadPressed && this.player.startReload()) this.sfx.reload();
 
     // --- shooting (hitscan from the camera through the crosshair) ---
