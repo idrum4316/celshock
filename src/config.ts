@@ -917,6 +917,27 @@ export const CONFIG = {
     refDistance: 8,
     /** Distance at which it falls silent. Matched roughly to the fog. */
     maxDistance: 70,
+    /**
+     * Metres per second. A shot across the map arrives ~0.2 s after its muzzle
+     * flash, which is the cue that tells the ear how far away a firefight is
+     * far more strongly than volume does.
+     */
+    speedOfSound: 343,
+    /**
+     * The village answering a gunshot: one shared convolution reverb every shot
+     * sends into. Length is the decay of the diffuse tail; a report outdoors is
+     * a short transient followed by a few hundred milliseconds of stone and
+     * timber, and it is that tail, not the report, that reads as "real gun".
+     */
+    reverbSeconds: 0.9,
+    /** Wet level of that shared bus. */
+    reverbMix: 0.5,
+    /**
+     * Extra reverb send per unit of `maxDistance`. Reverberant energy falls off
+     * far more slowly than the direct sound, so a distant shot is mostly tail
+     * and a close one is mostly crack.
+     */
+    reverbDistanceSend: 1.6,
   },
 
   effects: {

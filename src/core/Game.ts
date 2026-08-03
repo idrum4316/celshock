@@ -251,7 +251,14 @@ export class Game {
     // A round cracking past is a cue, not a hit. CombatSystem finds these
     // inside the target loop it already runs per shot, and has no business
     // knowing what a bot is — so the routing happens here.
-    this.combat.onNearMiss = (near, from) => this.battle.suppress(near, from);
+    // The same event is the player's only warning that the rounds are meant
+    // for them: a bot's report is spatialised and late, but the round itself
+    // goes supersonic past the ear first. `suppress` ignores anything that
+    // isn't a bot, so both handlers can take every near miss.
+    this.combat.onNearMiss = (near, from) => {
+      this.battle.suppress(near, from);
+      if (near === this.player) this.sfx.nearMiss();
+    };
     this.battle.spawnPointFor = (bot) => this.spawnPointFor(bot.team);
     // Squad orders are planned as a group, so squads can be spread across
     // objectives — or deliberately stacked on the one that decides the round.
