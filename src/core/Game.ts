@@ -26,6 +26,7 @@ import { CONFIG } from "../config";
 import { CelMaterialFactory, updateOutlineScales } from "../shaders/CelShader";
 import { GodRays } from "../shaders/GodRays";
 import { HorrorPost } from "../shaders/HorrorPost";
+import { MotionBlur } from "../shaders/MotionBlur";
 import { Bot } from "../entities/Bot";
 import { difficultyNames } from "../entities/BotSkill";
 import type { Combatant, Team } from "../entities/Combatant";
@@ -122,6 +123,7 @@ export class Game {
   private post: HorrorPost;
   /** Moon shafts. Driven from the sky's own moon direction every frame. */
   private godRays: GodRays;
+  private motionBlur: MotionBlur;
   /** The environment the sky is currently painted for — see applySky(). */
   private skyEnv: EnvironmentSpec | null = null;
   private player: Player;
@@ -194,7 +196,11 @@ export class Game {
     // come after FXAA and before the grade — the vignette and grain have to
     // land on top of the beams, not under them.
     this.godRays = new GodRays(this.scene, this.cameraSys.camera);
-    // Vignette/grain/aberration go last, over the finished frame.
+    // Then the look smears, with the shafts already in the frame — they belong
+    // to the same instant as the geometry, so they have to blur with it.
+    this.motionBlur = new MotionBlur(this.scene, this.cameraSys.camera);
+    // Vignette/grain/aberration go last, over the finished frame. Grain in
+    // particular has to land AFTER the blur: smeared grain reads as smudge.
     this.post = new HorrorPost(this.scene, this.cameraSys.camera);
     this.sfx = new Sfx();
     this.hud = new HUD();
@@ -402,6 +408,12 @@ export class Game {
       this.cameraSys.camera,
       this.sky.moonDirection,
     );
+    // Every frame in every state, so the basis it reprojects against can never
+    // go stale while the player sits in a menu. In the editor the free-fly cam
+    // drives the Babylon camera directly and never touches these angles, so
+    // the pass sees no rotation and stays inert — which is what we want in an
+    // authoring tool.
+    this.motionBlur.update(this.cameraSys.aimYaw, this.cameraSys.aimPitch);
     this.scene.render();
   }
 
@@ -593,6 +605,9 @@ export class Game {
     );
     this.player.placeAt(spawn ? spawn.pos.add(jitter) : new Vector3(0, 0, 0));
     this.cameraSys.reset(spawn ? spawn.yaw : 0);
+    // The aim just jumped to the spawn heading. Reprojecting through that jump
+    // would greet the player with one frame smeared across the whole screen.
+    this.motionBlur.reset();
     this.deployScreen.hide();
     this.player.setBodyHidden(false);
     this.minimap.setVisible(true);
