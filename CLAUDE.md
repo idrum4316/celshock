@@ -95,7 +95,7 @@ src/
     Player.ts               # Movement, sprint, jump, weapon state, viewmodel
     ViewModel.ts            # The first-person weapon: rifle + gloved arms on
                             #   the camera, hip/ADS/sprint/reload, sway, bob
-    RifleModel.ts           # Low-poly SCAR-pattern rifle + holo sight builder
+    RifleModel.ts           # Low-poly SCAR-pattern rifle + tube optic builder
     GlbSoldier.ts           # UNREFERENCED since the first-person conversion —
     soldier/                #   the retired rigged GLB body and its pieces.
                             #   See "Project overview". Do not re-wire.
@@ -1052,11 +1052,25 @@ whenever the moon is behind the camera or off screen, which is most of a round.
 Every mesh is built from Babylon primitives at runtime, and all audio is
 synthesized (`Sfx`). Don't reintroduce asset files without being asked.
 
-`RifleModel.buildRifle()` merges its ~50 static boxes into one mesh per color
-(BODY/POLYMER/METAL) — that merge is what makes the outline pass draw one border
-per color group instead of a black shell around every screw. It works only
+`RifleModel.buildRifle()` merges its ~150 static parts into one mesh per color
+(BODY/POLYMER/METAL/RUBBER) — that merge is what makes the outline pass draw one
+border per color group instead of a black shell around every screw, and it is
+what makes detail on this model nearly free: it is four draws however many boxes
+go into it. A colour missing from `SECTIONS` is silently never merged, so
+anything `collect()` takes has to be listed there. The merge works only
 because the root is still at identity while building: `MergeMeshes` bakes world
 matrices and returns an identity-transform mesh, which is then re-parented.
+
+**Nothing in the rifle may be scaled non-uniformly.** `VertexData.transform`
+transforms normals *without* re-normalising them, and `renderOutline` extrudes
+each vertex along its own normal — so a squashed part grows an ink shell that is
+fat on the squashed axis. This is why the round shells (the optic housing, the
+muzzle cage) are built by `shell()`, a ring of slabs each turned to its own
+facet, rather than by stretching a torus along the axis. The primitives offer
+nothing else that would do: a capped cylinder has no bore, and an uncapped one
+is a single-sided shell whose far wall disappears exactly when you look through
+it. Facets cost nothing visually — the cel shader flat-shades from screen-space
+derivatives, so a smooth ring would render as a faceted one anyway.
 `ViewModel`'s arms follow the same rule, with the one wrinkle `mergeByMaterial`
 already documents: a colour group of **one** mesh has to be baked by hand
 (`bakeCurrentTransformIntoVertices`), and because that call resets the local
