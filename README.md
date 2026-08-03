@@ -30,6 +30,7 @@ Requires Node 18+ and a WebGL2-capable browser (Chrome/Edge/Firefox/Safari).
 | Move       | Left stick          | WASD             |
 | Look       | Right stick         | Mouse            |
 | Sprint     | L3 (toggle)         | Shift (hold)     |
+| Crouch     | B / ○ (hold)        | Ctrl or C (hold) |
 | ADS        | LT / L2             | Right-click      |
 | Shoot      | RT / R2             | Left-click       |
 | Jump       | A / ✕               | Space            |

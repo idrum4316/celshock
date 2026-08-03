@@ -39,6 +39,12 @@ export class InputManager {
    * 240 m crossing is miserable, so the pad latches instead.
    */
   sprint = false;
+  /**
+   * Held: crouch. Deliberately held rather than latched, unlike sprint — a
+   * crouch is taken for a corner or a burst, not for a 240 m crossing, and a
+   * toggle you forget you are in silently halves your speed.
+   */
+  crouch = false;
   /** Held: show the scoreboard. */
   scoreboard = false;
   /** Edge-triggered "confirm" (Enter / click / gamepad A / Start). */
@@ -90,6 +96,10 @@ export class InputManager {
       this.keys.add(e.code);
       // Space scrolls the page; Tab would move focus off the canvas.
       if (e.code === "Space" || e.code === "Tab") e.preventDefault();
+      // Crouch is on Ctrl and reload is on R, so the two most-pressed keys in
+      // a firefight spell "reload the browser tab". Chrome lets that one be
+      // prevented (unlike Ctrl+W/Ctrl+T), so take it.
+      if (e.ctrlKey && e.code === "KeyR") e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
     window.addEventListener("blur", () => {
@@ -166,10 +176,12 @@ export class InputManager {
     this.stickLookX = pad ? applyDeadzone(pad.axes[2] ?? 0, dz) : 0;
     this.stickLookY = pad ? applyDeadzone(pad.axes[3] ?? 0, dz) : 0;
 
-    // Actions (LT=6 ADS, RT=7 shoot, A=0 jump, X=2 reload, L3=10, Start=9)
+    // Actions (LT=6 ADS, RT=7 shoot, A=0 jump, B=1 crouch, X=2 reload,
+    // L3=10, Start=9)
     const padAds = pad ? buttonHeld(pad, 6, trig) : false;
     const padFire = pad ? buttonHeld(pad, 7, trig) : false;
     const padJump = pad ? buttonHeld(pad, 0, trig) : false;
+    const padCrouch = pad ? buttonHeld(pad, 1, trig) : false;
     const padReload = pad ? buttonHeld(pad, 2, trig) : false;
     const padStart = pad ? buttonHeld(pad, 9, trig) : false;
     const padSprint = pad ? buttonHeld(pad, 10, trig) : false;
@@ -183,6 +195,7 @@ export class InputManager {
         padAds ||
         padFire ||
         padJump ||
+        padCrouch ||
         padReload ||
         padStart ||
         padSprint ||
@@ -199,6 +212,11 @@ export class InputManager {
 
     this.sprint =
       this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.padSprintOn;
+    this.crouch =
+      this.keys.has("KeyC") ||
+      this.keys.has("ControlLeft") ||
+      this.keys.has("ControlRight") ||
+      padCrouch;
     this.altHeld = this.keys.has("AltLeft") || this.keys.has("AltRight");
     // Back / View button (6 on the standard mapping is LT, 8 is Back).
     this.scoreboard = this.keys.has("Tab") || (pad ? buttonHeld(pad, 8, trig) : false);

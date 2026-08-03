@@ -524,6 +524,7 @@ export class HUD {
         <tr><td>Jump</td><td>A / ✕</td><td>Space</td></tr>
         <tr><td>Reload</td><td>X / ▢</td><td>R</td></tr>
         <tr><td>Sprint</td><td>L3</td><td>Shift</td></tr>
+        <tr><td>Crouch</td><td>B / ○</td><td>Ctrl or C</td></tr>
       </table>
       <p class="prompt">Click, press Enter, or press Start to begin</p>
     `;

@@ -1,9 +1,12 @@
 /**
- * Player.ts — Player controller: movement/sprint/jump physics, health/regen,
- * weapon state (fire/reload/spread), gunfeel dressing (muzzle flash mesh,
- * ejected brass), and the first-person viewmodel wiring.
+ * Player.ts — Player controller: movement/sprint/crouch/jump physics,
+ * health/regen, weapon state (fire/reload/spread), gunfeel dressing (muzzle
+ * flash mesh, ejected brass), and the first-person viewmodel wiring.
  * Owns: the player Combatant, and the ViewModel hanging off the camera.
  * Invariants: probeGround and step-up ray tests filter metadata.solid === true.
+ * Crouch moves `eyePos` AND `center` on one blend — the eye is the camera, the
+ * LOS target and the bots' aim point at once, so lowering it without lowering
+ * the hit sphere makes crouching a liability rather than cover.
  * Health regenerates after CONFIG.player.regenDelay — with 8 hostile bots and
  * no medics this is load-bearing, not decoration. The player has no world body
  * mesh at all: the camera is inside the head, so the only thing on screen is
@@ -97,6 +100,14 @@ export class Player implements Combatant {
   reloading = false;
   /** True while the sprint key is held and the player is actually running. */
   sprinting = false;
+  /** True while the crouch key is held and the player is not sprinting. */
+  crouching = false;
+  /**
+   * Eased 0..1 stance blend. Drives the eye height, the hit sphere's centre,
+   * the move speed, the spread and the bob together — one number, so the
+   * transition reads as a single motion the way ADS does.
+   */
+  private crouchBlend = 0;
   /** Counts down from `regenDelay` after each hit; regen resumes at zero. */
   private regenLockT = 0;
   private reloadT = 0;
@@ -206,12 +217,18 @@ export class Player implements Combatant {
    * Bullet spread half-angle for the next shot, including recoil bloom.
    * Bloom is damped in ADS by the same factor as the aim kick — a braced
    * stance would otherwise lose far more precision than it has to give.
+   *
+   * Crouching scales the whole result, bloom included: it is a steadier
+   * platform, not a second set of sights, so it helps most where the sights
+   * help least (hip fire, deep into a burst).
    */
   spread(adsBlend: number): number {
     const w = CONFIG.weapon;
     const base = w.spreadHip + (w.spreadAds - w.spreadHip) * adsBlend;
     const bloomMult = 1 - (1 - CONFIG.recoil.adsMult) * adsBlend;
-    return base + this.spreadBloom * bloomMult;
+    const crouchMult =
+      1 - (1 - CONFIG.player.crouchSpreadMult) * this.crouchBlend;
+    return (base + this.spreadBloom * bloomMult) * crouchMult;
   }
 
   /** Full reset at the start of a run (permadeath — mods are cleared too). */
@@ -232,6 +249,8 @@ export class Player implements Combatant {
       c.t = 0;
       c.mesh.isVisible = false;
     }
+    this.crouching = false;
+    this.crouchBlend = 0;
     this.moveBlend = 0;
     this.airBlend = 0;
     this.reloadBlend = 0;
@@ -287,16 +306,30 @@ export class Player implements Combatant {
     const p = CONFIG.player;
     let jumped = false;
 
-    // --- horizontal movement (camera-relative), with collision sliding ---
+    // --- stance ---
     // Sprinting is mutually exclusive with aiming, and blocks firing (see
     // `tryShot`) — otherwise it is strictly better than walking.
+    //
+    // Sprint outranks crouch, and is resolved first so the two can't argue:
+    // asking to run stands the player up, and letting go of the sprint key
+    // drops straight back down while the crouch key is still held. Crouch is
+    // deliberately NOT gated on `grounded` — jumping out of it would pop the
+    // camera half a metre at the worst possible moment, and the collider
+    // capsule never changes size, so there is nothing underfoot to reconcile.
     this.sprinting =
       input.sprint && input.moveY > 0.1 && cam.adsBlend < 0.4 && !this.reloading;
+    this.crouching = input.crouch && !this.sprinting;
+    this.crouchBlend +=
+      ((this.crouching ? 1 : 0) - this.crouchBlend) *
+      Math.min(1, dt * p.crouchBlendSpeed);
+
+    // --- horizontal movement (camera-relative), with collision sliding ---
     const speed =
       p.moveSpeed *
       this.mods.speedMult *
       (cam.adsBlend > 0.4 ? p.adsMoveMult : 1) *
-      (this.sprinting ? p.sprintMult : 1);
+      (this.sprinting ? p.sprintMult : 1) *
+      (1 - (1 - p.crouchMoveMult) * this.crouchBlend);
     const move = cam.flatForward
       .scale(input.moveY)
       .add(cam.flatRight.scale(input.moveX));
@@ -398,7 +431,14 @@ export class Player implements Combatant {
     this.weaponKickT = Math.max(0, this.weaponKickT - dt / CONFIG.recoil.kickTime);
 
     // The camera bobs on the same drive the weapon does; it owns the phase.
-    cam.setBobDrive(this.moveBlend, this.grounded);
+    // The drive is movement *intent*, not speed, so the crouch damping has to
+    // be applied here — a half-speed shuffle covering ground at a full jog's
+    // stride tempo is the tell.
+    cam.setBobDrive(
+      this.moveBlend *
+        (1 - (1 - CONFIG.camera.bobCrouchMult) * this.crouchBlend),
+      this.grounded,
+    );
     this.view.update(dt, {
       adsBlend: cam.adsBlend,
       moveBlend: this.moveBlend * (1 - this.airBlend),
@@ -521,11 +561,32 @@ export class Player implements Combatant {
   }
 
   /** Returns true if this damage killed the player. */
-  /** Keeps `center`/`eyePos` current; called once per frame from `update`. */
+  /**
+   * Keeps `center`/`eyePos` current; called once per frame from `update`.
+   *
+   * Both ride the crouch blend, and they must ride it together. `eyePos` is
+   * the camera, the line-of-sight target and the point bots aim at all at
+   * once, so dropping it alone would leave the player harder to see and
+   * *easier* to hit — every incoming round aimed at the middle of an unmoved
+   * sphere instead of grazing its top. Moving `center` down by the same half
+   * metre keeps the sphere's top the same 0.05 m above the eye it is when
+   * standing, so the profile shrinks honestly.
+   *
+   * The collider capsule itself is untouched: `moveWithCollisions` is
+   * horizontal-only and the ground probe places the feet, so a shorter body
+   * would buy nothing and would need a stand-up clearance test to be safe.
+   */
   private syncCombatant(): void {
+    const c = CONFIG.player;
     const p = this.root.position;
-    this.center.set(p.x, p.y, p.z);
-    this.eyePos.set(p.x, p.y + CONFIG.camera.eyeHeight - this.groundY, p.z);
+    const feet = p.y - this.groundY;
+    const centerH =
+      this.groundY + (c.crouchCenterHeight - this.groundY) * this.crouchBlend;
+    const eyeH =
+      CONFIG.camera.eyeHeight +
+      (c.crouchEyeHeight - CONFIG.camera.eyeHeight) * this.crouchBlend;
+    this.center.set(p.x, feet + centerH, p.z);
+    this.eyePos.set(p.x, feet + eyeH, p.z);
   }
 
   /**

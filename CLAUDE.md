@@ -211,7 +211,25 @@ tick sees this frame's flag ownership rather than last frame's.
 
 The camera sits **at `Player.eyePos`** — the same point `CONFIG.camera.eyeHeight`
 defines and the same point bots test line of sight against, so what a bot can
-see of you is what you can see of it. There is no occlusion pick and no pull-in
+see of you is what you can see of it.
+
+**Crouch is that one point moving, and it only works because it is one point.**
+Holding crouch eases `eyePos` down to `CONFIG.player.crouchEyeHeight`, which
+lowers the camera, breaks a bot's line of sight and moves its aim point all at
+once — so ducking behind a waist-high wall genuinely breaks contact rather than
+looking like it does. The catch is that `Player.center` must come down the same
+half metre (`crouchCenterHeight`), and forgetting it inverts the whole feature:
+bots aim at `eyePos` and hit-test against the sphere at `center`, so a dropped
+eye against an unmoved sphere puts every incoming round through the middle of
+the target instead of grazing its top, and crouching makes you *easier* to kill.
+The two numbers are chosen to keep the sphere's top the same 0.05 m above the
+eye it is when standing — the same visible-but-unhittable trap `CoverMap`'s
+`hardHeight` documents from the other side. The collider capsule is deliberately
+*not* resized: `moveWithCollisions` is horizontal-only and the ground probe
+places the feet, so a shorter body would buy nothing and would owe a stand-up
+clearance test. Sprint outranks crouch and is resolved first, so the two can
+never argue over the blend. Bots have no equivalent — their rig has no knees
+(see `CoverMap`), and this is player-only. There is no occlusion pick and no pull-in
 any more: the old shoulder camera had to ray-test its way out of walls, and a
 camera inside the head has nothing to be occluded by. There is also **no player
 body mesh at all**. The only things the player renders are the viewmodel, its

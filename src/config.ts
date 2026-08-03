@@ -574,6 +574,37 @@ export const CONFIG = {
     height: 1.8,
     radius: 0.45,
     /**
+     * Crouch. Held, never toggled, and it costs speed for a lower profile and
+     * a steadier gun. Two numbers do the real work and they must move
+     * together:
+     *
+     * `crouchEyeHeight` is where the camera goes, where `Player.eyePos`
+     * reports, and therefore what bots test line of sight against and aim at —
+     * the same one-number-for-all-three rule the standing `camera.eyeHeight`
+     * follows. That is what makes crouching behind a waist-high wall actually
+     * break contact instead of just looking like it does.
+     *
+     * `crouchCenterHeight` moves the hit sphere down with it. Skip it and
+     * crouching makes you EASIER to kill, not harder: bots aim at `eyePos`, so
+     * a dropped eye against an unmoved sphere puts every shot through the
+     * middle of the target instead of grazing its top. Standing, the sphere's
+     * top (0.9 + 0.7) sits 0.05 m above the eye; crouched, 0.4 + 0.7 keeps the
+     * same relation, so the profile shrinks by the half-metre the eye dropped
+     * and nothing is visible-but-unhittable (or the reverse).
+     */
+    crouchEyeHeight: 1.05,
+    crouchCenterHeight: 0.4,
+    /** Movement multiplier while crouched — a shuffle, not a walk. */
+    crouchMoveMult: 0.5,
+    /**
+     * Spread multiplier while crouched. Applied to the whole spread, bloom
+     * included, so a braced stance is worth taking in a firefight and not
+     * only for the cover. Modest on purpose: crouch is not a second ADS.
+     */
+    crouchSpreadMult: 0.7,
+    /** How fast the stance blend converges (per second). */
+    crouchBlendSpeed: 12,
+    /**
      * Health regeneration, Battlefield-style: none for `regenDelay` seconds
      * after taking a hit, then `regenRate` per second back to full.
      *
@@ -681,9 +712,11 @@ export const CONFIG = {
     stickSensY: 1.8,
     adsStickMult: 0.5,
     /**
-     * Eye height. The camera sits here (first person), Player.eyePos reports
-     * it, and bot line-of-sight checks against the player use it — one number
-     * for all three, so what a bot can see is what you can see.
+     * Eye height, standing. The camera sits here (first person), Player.eyePos
+     * reports it, and bot line-of-sight checks against the player use it — one
+     * number for all three, so what a bot can see is what you can see.
+     * Crouching interpolates all three toward `player.crouchEyeHeight`; it is
+     * the same number doing the same three jobs, just lower.
      */
     eyeHeight: 1.55,
     fovHip: 0.95,
@@ -710,6 +743,13 @@ export const CONFIG = {
     bobLateral: 0.018,
     /** Bob multiplier while aimed — braced, so nearly still. */
     bobAdsMult: 0.2,
+    /**
+     * Bob multiplier while crouched. The bob drive is movement *intent*, not
+     * speed, so without this a crouch-shuffle at half pace bobs the head as
+     * hard as a jog — the stride reads at the wrong tempo for the distance
+     * actually being covered.
+     */
+    bobCrouchMult: 0.45,
     /** How fast the bob amplitude follows the movement input (per second). */
     bobSmooth: 7,
   },
