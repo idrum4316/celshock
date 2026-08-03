@@ -9,6 +9,9 @@
  * externally is overwritten next tick (this bites headless test scripts).
  * rumble() must stay a silent no-op when there is no pad, no actuator, or
  * the effect is rejected — haptics are a garnish, never a failure path.
+ * Every key this file binds is listed in BOUND_CODES and has its browser
+ * default suppressed; a new binding that is not added there will fight the
+ * browser (Ctrl+letter combinations especially — crouch is Ctrl).
  */
 import { CONFIG } from "../config";
 
@@ -97,12 +100,7 @@ export class InputManager {
   constructor(canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", (e) => {
       this.keys.add(e.code);
-      // Space scrolls the page; Tab would move focus off the canvas.
-      if (e.code === "Space" || e.code === "Tab") e.preventDefault();
-      // Crouch is on Ctrl and reload is on R, so the two most-pressed keys in
-      // a firefight spell "reload the browser tab". Chrome lets that one be
-      // prevented (unlike Ctrl+W/Ctrl+T), so take it.
-      if (e.ctrlKey && e.code === "KeyR") e.preventDefault();
+      if (BOUND_CODES.has(e.code) && !isTyping(e.target)) e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
     window.addEventListener("blur", () => {
@@ -310,6 +308,56 @@ export class InputManager {
     }
     return null;
   }
+}
+
+/**
+ * Every `KeyboardEvent.code` the game binds — the list `update()` reads, and
+ * the list whose browser default is suppressed on keydown. Keep the two in
+ * step: a binding missing from here keeps whatever the browser does with it.
+ *
+ * Suppressing the default for a bound key has to be the blanket rule rather
+ * than a list of known-bad combinations, because crouch is Ctrl and the
+ * movement keys are letters, so ordinary play types out browser shortcuts by
+ * accident. Ctrl+D (crouch + strafe right) bookmarks the page, Ctrl+R
+ * (crouch + reload) reloads the tab, Ctrl+S (crouch + back) opens a save
+ * dialog, Ctrl+A (crouch + strafe left) selects the document. Bare keys are
+ * no better: Space scrolls and Tab walks focus off the canvas. Chrome lets
+ * all of those be prevented.
+ *
+ * What it CANNOT save you from is the shortcuts the browser reserves —
+ * Ctrl+W, Ctrl+T, Ctrl+N, Cmd+Q — which no page-level handler ever sees.
+ * Those need `navigator.keyboard.lock()`, which requires fullscreen.
+ */
+const BOUND_CODES = new Set([
+  "KeyW",
+  "KeyA",
+  "KeyS",
+  "KeyD",
+  "KeyR",
+  "KeyC",
+  "Space",
+  "Tab",
+  "Enter",
+  "NumpadEnter",
+  "ArrowLeft",
+  "ArrowRight",
+  "ShiftLeft",
+  "ShiftRight",
+  "ControlLeft",
+  "ControlRight",
+  "AltLeft",
+  "AltRight",
+]);
+
+/**
+ * True when the key is going into a form control, in which case the browser's
+ * default IS the wanted behaviour. The editor's inspector is full of text and
+ * number inputs, and the bound set covers Tab, Enter, Space, the arrows and
+ * most of the alphabet a name is spelled with.
+ */
+function isTyping(target: EventTarget | null): boolean {
+  const tag = (target as HTMLElement | null)?.tagName;
+  return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
 }
 
 function applyDeadzone(v: number, dz: number): number {
