@@ -42,6 +42,7 @@ export interface Placement {
 interface ScatterBase {
   prop:
     | "deadTree"
+    | "pine"
     | "gravestone"
     | "log"
     | "fungus"

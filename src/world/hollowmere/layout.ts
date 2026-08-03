@@ -440,6 +440,11 @@ const scatter: ScatterSpec[] = [
   { prop: "fireDrum", x: 82, z: 22, radius: 4, count: 1, blocking: true, clearance: 0.6 },
   { prop: "fireDrum", x: -112, z: 100, radius: 3, count: 1, blocking: true, clearance: 0.6 },
   { prop: "fireDrum", x: 114, z: -102, radius: 2, count: 1, blocking: true, clearance: 0.6 },
+  // The pinewood under the west ridge — the one stand the blight hasn't taken,
+  // and the only green on the map. Appended rather than filed with the other
+  // woods on purpose: one seeded stream serves the whole build, so inserting a
+  // region rerolls the dressing of every region after it.
+  { prop: "pine", x: -110, z: 46, radius: 8, count: 7, scale: [0.9, 1.3], blocking: true, clearance: 1.2 },
 ];
 
 const controlPoints: ControlPointDef[] = [

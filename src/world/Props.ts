@@ -30,6 +30,8 @@ import type { CelMaterialFactory } from "../shaders/CelShader";
 
 const BARK = "#4a4238";
 const DEAD_BARK = "#3c3730";
+const NEEDLE = "#26402f";
+const NEEDLE_LIT = "#35563d";
 const STONE = "#7a7f7c";
 const IRON = "#2f3338";
 const RUST = "#5d4a3c";
@@ -75,6 +77,64 @@ export function buildDeadTree(
     branch.rotation.x = Math.sin(a) * (0.7 + rng() * 0.5);
     branch.material = mats.get(DEAD_BARK);
   }
+  return trunk;
+}
+
+/**
+ * Living pine: a straight trunk under four stacked cones of needles — the
+ * counterpart to `buildDeadTree`, and the only green thing standing in the
+ * valley.
+ *
+ * Two things about the shape are deliberate. The lean is a fifth of the dead
+ * tree's, because a dead trunk reads as *failing* and a live one has to read as
+ * the thing that hasn't; the whole silhouette is the crown, so a tilt that
+ * looks like character on bare branches just looks like a felled pine here.
+ * And the lowest tier's skirt starts at 1.8 m, clear of the 1.7 m hit sphere:
+ * the collider is the trunk only (see `PROP_BODIES`), so needles hanging at
+ * chest height would be foliage you can shoot straight through — the exact
+ * complaint the prop bodies were measured to fix.
+ */
+export function buildPine(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
+  const trunk = MeshBuilder.CreateCylinder(
+    "pine-trunk",
+    { height: 6.4, diameterTop: 0.3, diameterBottom: 0.62, tessellation: 6 },
+    scene,
+  );
+  trunk.position.y = 3.2;
+  trunk.material = mats.get(BARK);
+  trunk.rotation.z = (rng() - 0.5) * 0.04;
+
+  // Centre height, cone height, bottom and top diameters. The top tier closes
+  // to a point; the rest are truncated so each tier's skirt overhangs the one
+  // above it and the crown steps rather than tapering smoothly.
+  const tiers: [number, number, number, number][] = [
+    [2.9, 2.2, 3.3, 1.9],
+    [4.1, 2.0, 2.6, 1.4],
+    [5.2, 1.7, 1.9, 0.9],
+    [6.1, 1.4, 1.1, 0],
+  ];
+  tiers.forEach(([y, h, bottom, top], i) => {
+    const tier = MeshBuilder.CreateCylinder(
+      `pine-tier${i}`,
+      {
+        height: h * (0.9 + rng() * 0.2),
+        diameterTop: top,
+        diameterBottom: bottom,
+        tessellation: 7,
+      },
+      scene,
+    );
+    tier.parent = trunk;
+    // Local to the trunk's centre, so the tiers ride its lean.
+    tier.position.set((rng() - 0.5) * 0.12, y - 3.2, (rng() - 0.5) * 0.12);
+    tier.rotation.y = rng() * Math.PI * 2;
+    // Moonlight only reaches the top of the crown.
+    tier.material = mats.get(i < 2 ? NEEDLE : NEEDLE_LIT);
+  });
   return trunk;
 }
 

@@ -179,6 +179,10 @@ type ScatterDefaults = Omit<ScatterCircle, "prop" | "x" | "z">;
  */
 export const SCATTER_DEFAULTS: Record<ScatterProp, ScatterDefaults> = {
   deadTree: { radius: 11, count: 10, scale: [0.8, 1.4], blocking: true, clearance: 0.55 },
+  // Wider clearance than the dead tree and a tighter scale range: the crown is
+  // 3.3 m across at scale 1, so the dead tree's 0.55 grows a stand of pines
+  // into one solid green mass.
+  pine: { radius: 12, count: 9, scale: [0.9, 1.3], blocking: true, clearance: 1.2 },
   gravestone: { radius: 5, count: 8, scale: [0.8, 1.3], blocking: true, clearance: 0.6 },
   log: { radius: 12, count: 5, scale: [0.8, 1.2], blocking: true, clearance: 1.4 },
   fungus: { radius: 14, count: 5, scale: [0.8, 1.4] },

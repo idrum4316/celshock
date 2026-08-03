@@ -45,6 +45,7 @@ import {
   buildFungus,
   buildGravestone,
   buildLog,
+  buildPine,
   buildRubble,
 } from "./Props";
 
@@ -194,6 +195,7 @@ export interface GameMap {
 /** Scatter props, keyed by the name the layout data uses. */
 const SCATTER_BUILDERS = {
   deadTree: buildDeadTree,
+  pine: buildPine,
   gravestone: buildGravestone,
   log: buildLog,
   fungus: buildFungus,
@@ -253,6 +255,11 @@ const PROP_BODIES: Record<ScatterSpec["prop"], PropBody> = {
   // Trunk only, at roughly its width around chest height (it tapers 0.85 ->
   // 0.32 over 5.2 m). The branches are 4 cm twigs — nothing should stop on one.
   deadTree: { w: 0.7, d: 0.7, h: 5.2, visualTop: 5.4 },
+  // Trunk only, same as the dead tree — the crown is 3.3 m of needles and
+  // stopping rounds on it would give the map its one piece of cover you can see
+  // daylight through. The builder keeps the lowest tier above the 1.7 m hit
+  // sphere so nothing shootable hides in there. `visualTop` clears the tip.
+  pine: { w: 0.62, d: 0.62, h: 6.4, visualTop: 7.0 },
   // Slab and plinth: wide, and *thin*. The one prop whose orientation matters
   // most — squared off, it blocked five times its own thickness.
   gravestone: { w: 1.15, d: 0.42, h: 1.6, visualTop: 1.7 },
