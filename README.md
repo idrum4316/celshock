@@ -2,8 +2,8 @@
 
 A browser-based, single-player **Conquest** shooter built with **Babylon.js** and
 **TypeScript**. Eight-a-side against bots over five control points in a
-fog-drowned horror village, with a third-person over-the-shoulder camera
-(ADS tightens the shoulder framing — it never goes first-person) and a
+fog-drowned horror village, in **first person** (aiming down sights brings the
+rifle's holo sight onto the centre of the screen and zooms the view) with a
 low-poly cel-shaded look: a near-black valley lit by guttering
 lanterns, burning braziers, muzzle flashes, and your own shoulder lamp.
 
@@ -81,12 +81,11 @@ road approaches and almost no cover.
 
 ## Tech in one paragraph
 
-Everything you see and hear is generated at runtime: every mesh (except the
-player's rigged GLB body) is built from Babylon primitives and merged per
-colour, all audio is synthesized WebAudio, the cel look is a custom
-`ShaderMaterial` with 16 dynamic point-light slots, and the 16 bots steer on a
-precomputed nav grid with one flow field per objective — no pathfinding, no
-physics engine, no asset downloads beyond the one GLB.
+Everything you see and hear is generated at runtime: every mesh is built from
+Babylon primitives and merged per colour, all audio is synthesized WebAudio,
+the cel look is a custom `ShaderMaterial` with 16 dynamic point-light slots,
+and the 16 bots steer on a precomputed nav grid with one flow field per
+objective — no pathfinding and no physics engine.
 
 **Contributor/agent documentation lives in [`CLAUDE.md`](CLAUDE.md)** —
 architecture, load-bearing invariants, and conventions. Every source file also

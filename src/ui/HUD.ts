@@ -389,9 +389,15 @@ export class HUD {
    * Crosshair state, pushed every frame. The ring's diameter IS the current
    * bullet spread in screen pixels, so recoil bloom is visible as the ring
    * opening up and settling as it bleeds off.
+   *
+   * `adsBlend` fades it out rather than switching it off: aimed, the weapon's
+   * own holo reticle sits on the camera axis at the exact centre of the
+   * screen, and two aiming marks stacked on each other read as a smear. The
+   * fade rides the same blend the sight comes up on, so the handover happens
+   * while the rifle is still moving.
    */
-  setCrosshair(ads: boolean, spreadPx: number): void {
-    this.crosshair.classList.toggle("ads", ads);
+  setCrosshair(adsBlend: number, spreadPx: number): void {
+    this.crosshair.style.opacity = `${Math.max(0, 1 - adsBlend * 1.6)}`;
     const size = Math.round(Math.max(10, Math.min(90, spreadPx)));
     this.crosshairRing.style.width = `${size}px`;
     this.crosshairRing.style.height = `${size}px`;

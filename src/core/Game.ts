@@ -210,7 +210,8 @@ export class Game {
     this.battle = new BattleSystem(this.scene, this.mats, this.combat);
     this.conquest = new ConquestSystem();
     this.zones = new CaptureZoneSystem(this.scene, glow);
-    this.player = new Player(this.scene, this.mats);
+    // The weapon is parented to the camera, so the camera has to exist first.
+    this.player = new Player(this.scene, this.mats, this.cameraSys.camera);
     this.player.setBodyHidden(true); // hidden until a round starts
     for (const m of this.scene.meshes) {
       if (m.metadata && m.metadata.noGlow === true) glow.addExcludedMesh(m as Mesh);
@@ -620,8 +621,9 @@ export class Game {
     if (this.input.fire && canFire && this.player.tryShot()) {
       const blend = this.cameraSys.adsBlend;
       const spread = this.player.spread(blend);
-      // Tracers start at the character's rifle — the camera never goes
-      // first-person, so that rifle is always the one on screen.
+      // Tracers, the flash light and the noise all start at the viewmodel's
+      // muzzle — about half a metre in front of the eye. That is the rifle
+      // on screen, so it is the one the shot has to appear to come from.
       const muzzle = this.player.muzzleWorld();
       const shot = this.combat.fire(
         this.cameraSys.camera.position,
@@ -729,7 +731,9 @@ export class Game {
       this.cameraSys.aimPitch,
       this.battle.hittablesAgainst(this.player.team),
     );
-    this.cameraSys.update(dt, this.input, this.player.position, assist);
+    // First person: the camera goes to the eye the bots shoot at, so what a
+    // bot can see of you is exactly what you can see of it.
+    this.cameraSys.update(dt, this.input, this.player.eyePos, assist);
     // Shadows follow the player (biased a little along the view so the
     // window covers what's ahead); outline ink thins with the same camera.
     this.shadowFocus
@@ -806,7 +810,7 @@ export class Game {
       (Math.tan(this.player.spread(this.cameraSys.adsBlend)) /
         Math.tan(this.cameraSys.camera.fov / 2)) *
       (window.innerHeight / 2);
-    this.hud.setCrosshair(this.input.ads, spreadPx);
+    this.hud.setCrosshair(this.cameraSys.adsBlend, spreadPx);
     // Damage arcs are world-anchored, so they need this frame's aim yaw to be
     // re-projected onto the screen — pushed here like every other HUD input.
     this.hud.setViewYaw(this.cameraSys.aimYaw);
@@ -875,6 +879,10 @@ export class Game {
   private enterDeploy(delay: number): void {
     this.respawnT = delay;
     this.minimap.setVisible(false);
+    // `updateGameplay` stops here, so the viewmodel would freeze mid-pose in
+    // front of a dead player's last view. In third person the body simply
+    // stood where it fell; a rifle stuck to the camera has to be put away.
+    this.player.setBodyHidden(true);
     this.hud.clearDamageDirections();
     this.hud.setScoreboard(false);
     // updateHud stops running outside `playing`, so the panel has to be told
@@ -889,6 +897,7 @@ export class Game {
   private endRound(winner: Team): void {
     this.state = "roundover";
     this.deployScreen.hide();
+    this.player.setBodyHidden(true); // same reason as enterDeploy
     this.hud.setScoreboard(false);
     this.hud.clearDamageDirections();
     this.hud.setCapture(null);

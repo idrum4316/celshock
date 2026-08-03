@@ -338,10 +338,12 @@
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
-        transition: opacity 0.1s;
       }
-      /* ADS never leaves third person, so the crosshair stays. The ring's
-         size is set inline every frame from the live bullet spread. */
+      /* Opacity and the ring's size are set inline every frame: the ring IS
+         the live bullet spread, and the whole crosshair fades out as ADS
+         brings the rifle's own holo reticle onto the centre of the screen.
+         No CSS transition on opacity — the ADS blend is already eased, and a
+         second easing on top of it lags the sight it is handing over to. */
       #crosshair .dot {
         width: 4px;
         height: 4px;

@@ -1,19 +1,21 @@
 /**
  * Player.ts — Player controller: movement/sprint/jump physics, health/regen,
  * weapon state (fire/reload/spread), gunfeel dressing (muzzle flash mesh,
- * ejected brass), and the GLB body wiring.
- * Owns: the player Combatant. Body loads async (GlbSoldier) and starts hidden.
+ * ejected brass), and the first-person viewmodel wiring.
+ * Owns: the player Combatant, and the ViewModel hanging off the camera.
  * Invariants: probeGround and step-up ray tests filter metadata.solid === true.
  * Health regenerates after CONFIG.player.regenDelay — with 8 hostile bots and
- * no medics this is load-bearing, not decoration. muzzleWorld() assumes the
- * rifle is loaded. The flash mesh and casing pool are player-only visuals
- * (bots get neither — see CONFIG.gunfeel). Damage flows out via the
- * onDamaged callback wired in Game.
+ * no medics this is load-bearing, not decoration. The player has no world body
+ * mesh at all: the camera is inside the head, so the only thing on screen is
+ * the viewmodel (and the blob shadow ShadowSystem draws underfoot). The flash
+ * mesh and casing pool are player-only visuals (bots get neither — see
+ * CONFIG.gunfeel), and the flash must join VIEWMODEL_GROUP with the rifle it
+ * hangs off. Damage flows out via the onDamaged callback wired in Game.
  */
 import {
-  Color3,
   Mesh,
   MeshBuilder,
+  type Node,
   Ray,
   Scene,
   TransformNode,
@@ -23,8 +25,7 @@ import { CONFIG } from "../config";
 import { CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
-import { buildRifle, RifleParts } from "./RifleModel";
-import { GlbSoldier } from "./GlbSoldier";
+import { ViewModel, VIEWMODEL_GROUP } from "./ViewModel";
 import { TerrainField } from "../world/TerrainField";
 import type { Combatant, Team } from "./Combatant";
 
@@ -35,9 +36,6 @@ export interface PlayerMods {
   maxHpBonus: number;
   magBonus: number;
 }
-
-/** Where the rifle rides until the GLB body arrives and claims it. */
-const RIFLE_REST = new Vector3(0.3, 0.14, 0.28);
 
 /** Ejection port, in rifle-local space (matches RifleModel's ejectPort box). */
 const CASING_PORT = new Vector3(0.05, 0.04, 0.06);
@@ -55,11 +53,12 @@ const _casingDir = new Vector3();
 
 /**
  * Player pawn: movement (walk/jump/gravity) with Babylon collision sliding,
- * weapon state (ammo/reload/fire cooldown), and a cel-shaded humanoid body
- * animated procedurally (walk cycle, jump tuck, aim pitch, reload tilt).
+ * weapon state (ammo/reload/fire cooldown), and the smoothed signals that
+ * drive the first-person weapon (movement, sprint, reload, turn rate, kick).
  *
- * The invisible root capsule stays the physics collider; all visible meshes
- * hang off `body`, a child TransformNode whose joints are posed every frame.
+ * The invisible root capsule stays the physics collider. In first person the
+ * pawn has no visible body — the camera sits at its eye — so the only meshes
+ * it owns are the viewmodel's, the muzzle flash and the brass.
  */
 export class Player implements Combatant {
   root: Mesh;
@@ -74,25 +73,21 @@ export class Player implements Combatant {
    * this is how the flash, the sound, and the death handling still happen.
    */
   onDamaged: (amount: number, died: boolean, from?: Vector3) => void = () => {};
-  private rifle!: RifleParts;
-  private meshes: Mesh[] = [];
-  /** The imported rigged body; null until the async GLB load resolves. */
-  private glb: GlbSoldier | null = null;
-  /** Last visibility state, applied to the GLB meshes when they arrive. */
+  /** The rifle and hands on screen; the only visible thing the player owns. */
+  private view: ViewModel;
+  /** Whether the viewmodel is hidden (menu, deploy screen, editor). */
   private bodyHidden = true;
 
-  // Animation state (smoothed inputs for the GLB pose overlay).
+  // Smoothed inputs for the viewmodel pose.
   private moveBlend = 0;
   private airBlend = 0;
   private reloadBlend = 0;
-  private idleT = 0;
-  /** Smoothed character-space velocity (m/s): strafe/backpedal/lean drives. */
-  private localVelX = 0;
-  private localVelZ = 0;
   private sprintBlend = 0;
-  /** Smoothed camera yaw rate (rad/s): torso follow-through lag. */
+  /** Smoothed camera yaw/pitch rates (rad/s): the weapon trails both. */
   private turnRate = 0;
+  private pitchRate = 0;
   private prevYaw = 0;
+  private prevPitch = 0;
 
   health: number = CONFIG.player.maxHealth;
   alive = true;
@@ -128,7 +123,7 @@ export class Player implements Combatant {
   /** The map's floor, for the probe's miss case. Flat until a map is built. */
   private terrain: TerrainField = new TerrainField();
 
-  constructor(scene: Scene, mats: CelMaterialFactory) {
+  constructor(scene: Scene, mats: CelMaterialFactory, camera: Node) {
     const p = CONFIG.player;
     this.scene = scene;
 
@@ -142,25 +137,15 @@ export class Player implements Combatant {
     this.root.isVisible = false;
     this.root.ellipsoid = new Vector3(p.radius, p.height / 2 - 0.05, p.radius);
 
-    // The rifle exists from frame one (the GLB claims it when it arrives).
-    // Its parts are an order of magnitude smaller than the body's, so a
-    // body-width outline would swallow the whole weapon in black.
-    this.rifle = buildRifle(scene, mats, "player");
-    this.rifle.root.parent = this.root;
-    this.rifle.root.position.copyFrom(RIFLE_REST);
-    this.rifle.root.scaling.setAll(0.85);
-    for (const m of this.rifle.meshes) {
-      m.renderOutline = true;
-      m.outlineColor = Color3.Black();
-      m.outlineWidth = 0.004;
-    }
-    this.meshes.push(...this.rifle.meshes);
+    // The weapon hangs off the camera, not off this capsule: in first person
+    // the rifle you see is a viewmodel, posed in camera space.
+    this.view = new ViewModel(scene, mats, camera);
 
     // --- gunfeel dressing: muzzle flash star + brass pool (player only) ---
     // The flash is three crossed emissive petals at the muzzle; per shot it
     // gets a random roll and scale so no two shots strobe identically.
     this.flashRoot = new TransformNode("player_muzzleFlash", scene);
-    this.flashRoot.parent = this.rifle.muzzle;
+    this.flashRoot.parent = this.view.rifle.muzzle;
     this.flashRoot.setEnabled(false);
     const flashMat = mats.getEmissive("#ffd9a0");
     for (let i = 0; i < 3; i++) {
@@ -176,6 +161,11 @@ export class Player implements Combatant {
       petal.material = flashMat;
       petal.metadata = { noOutline: true };
       petal.isPickable = false;
+      // The flash lives on the viewmodel, so it has to be drawn in the same
+      // depth-cleared pass — left in the world group it would be hidden
+      // behind the very barrel it sits on.
+      petal.renderingGroupId = VIEWMODEL_GROUP;
+      petal.alwaysSelectAsActiveMesh = true;
     }
 
     const casingMat = mats.get("#b99b4e");
@@ -190,21 +180,10 @@ export class Player implements Combatant {
       m.isVisible = false;
       this.casings.push({ mesh: m, vel: new Vector3(), spin: 0, t: 0 });
     }
+    // Brass is thrown into the WORLD, not onto the camera, so it stays in the
+    // ordinary rendering group and is occluded by geometry like anything else.
 
-    // The rigged, textured body loads async; the menu/deploy flow covers the
-    // latency, and until it resolves the player is simply the hidden capsule
-    // plus the rifle (never visible before the first deploy).
-    void GlbSoldier.load(scene, mats)
-      .then((rig) => {
-        this.glb = rig;
-        rig.root.parent = this.root;
-        rig.attachRifle(this.rifle);
-        this.meshes = [...rig.meshes, ...this.rifle.meshes];
-        this.applyVisibility();
-      })
-      .catch((e: unknown) => {
-        console.error("GlbSoldier failed to load — player body missing", e);
-      });
+    this.applyVisibility();
   }
 
   get position(): Vector3 {
@@ -253,6 +232,13 @@ export class Player implements Combatant {
       c.t = 0;
       c.mesh.isVisible = false;
     }
+    this.moveBlend = 0;
+    this.airBlend = 0;
+    this.reloadBlend = 0;
+    this.sprintBlend = 0;
+    this.turnRate = 0;
+    this.pitchRate = 0;
+    this.view.reset();
   }
 
   placeAt(spawn: Vector3): void {
@@ -319,11 +305,6 @@ export class Player implements Combatant {
     if (move.lengthSquared() > 0.0001) {
       this.root.moveWithCollisions(move.scale(speed * dt));
     }
-    // Intended velocity in character space (+x right, +z forward): the pose
-    // overlay's strafe/backpedal/lean signals. The body always faces the
-    // camera yaw, so camera-relative is character-relative.
-    const velX = move.dot(cam.flatRight) * speed;
-    const velZ = move.dot(cam.flatForward) * speed;
 
     // --- jump & gravity, against whatever surface is actually underfoot ---
     if (input.jumpPressed && this.grounded) {
@@ -348,7 +329,10 @@ export class Player implements Combatant {
       this.grounded = false;
     }
 
-    // --- always face the camera yaw (over-the-shoulder aiming) ---
+    // --- the capsule still faces the camera yaw ---
+    // Nothing renders off it any more, but the blob shadow underfoot is
+    // oriented from it, and a capsule that never turned would drag an
+    // unturning oval around with the player.
     this.root.rotation.y = cam.yaw;
 
     // --- health regeneration ---
@@ -376,25 +360,22 @@ export class Player implements Combatant {
 
     this.syncCombatant();
     this.updateGunfeel(dt);
-    this.animate(dt, moveInput, speed, velX, velZ, cam);
+    this.animate(dt, moveInput, cam);
     return jumped;
   }
 
   /**
-   * Feeds the smoothed pose inputs to the GLB body, which applies them on
-   * the next rendered frame (clips + procedural bone overlay). All the
-   * easing stays here so the body's response is frame-rate independent.
+   * Smooths this frame's movement/look into the signals the viewmodel poses
+   * from, and pushes them. All the easing stays here so the weapon's response
+   * is frame-rate independent, the same reason it lived here for the body.
+   *
+   * The bob phase comes back off the camera rather than being integrated
+   * again here: two integrators on the same drive would drift apart and the
+   * weapon would swim against the view. Player runs before the camera in
+   * Game's frame order, so the phase read is one frame old — 16 ms of an
+   * ~0.8 s cycle, against a visible desync if the weapon kept its own.
    */
-  private animate(
-    dt: number,
-    moveInput: number,
-    speed: number,
-    velX: number,
-    velZ: number,
-    cam: CameraSystem,
-  ): void {
-    this.idleT += dt;
-
+  private animate(dt: number, moveInput: number, cam: CameraSystem): void {
     // Smoothed blend weights so poses ease in/out instead of snapping.
     const ease = (current: number, target: number, rate: number) =>
       current + (target - current) * Math.min(1, dt * rate);
@@ -402,36 +383,33 @@ export class Player implements Combatant {
     this.airBlend = ease(this.airBlend, this.grounded ? 0 : 1, 9);
     this.reloadBlend = ease(this.reloadBlend, this.reloading ? 1 : 0, 12);
     this.sprintBlend = ease(this.sprintBlend, this.sprinting ? 1 : 0, 6);
-    // Character-space velocity eases toward intent: the smoothing lag is
-    // what makes the torso lean chase the movement instead of snapping.
-    this.localVelX = ease(this.localVelX, velX, 12);
-    this.localVelZ = ease(this.localVelZ, velZ, 12);
-    // Camera yaw rate, wrapped and smoothed: the torso trails the turn.
+    // Camera yaw/pitch rates, wrapped and smoothed: the weapon trails both.
     let dYaw = cam.yaw - this.prevYaw;
     this.prevYaw = cam.yaw;
     if (dYaw > Math.PI) dYaw -= Math.PI * 2;
     else if (dYaw < -Math.PI) dYaw += Math.PI * 2;
     this.turnRate = ease(this.turnRate, dt > 0 ? dYaw / dt : 0, 8);
+    const dPitch = cam.pitch - this.prevPitch;
+    this.prevPitch = cam.pitch;
+    this.pitchRate = ease(this.pitchRate, dt > 0 ? dPitch / dt : 0, 8);
 
     // Weapon punch: a hard hit that falls off fast (squared, so the spike is
     // at the shot rather than smeared across the recovery).
     this.weaponKickT = Math.max(0, this.weaponKickT - dt / CONFIG.recoil.kickTime);
-    const kick = this.weaponKickT * this.weaponKickT;
 
-    this.glb?.updatePose({
-      groundSpeed: speed * this.moveBlend,
-      moveBlend: this.moveBlend,
-      airBlend: this.airBlend,
-      reloadBlend: this.reloadBlend,
-      aimPitch: cam.aimPitch,
-      kick,
-      idleT: this.idleT,
-      localVelX: this.localVelX,
-      localVelZ: this.localVelZ,
-      velY: this.velY,
-      reloadPhase: this.reloadProgress,
+    // The camera bobs on the same drive the weapon does; it owns the phase.
+    cam.setBobDrive(this.moveBlend, this.grounded);
+    this.view.update(dt, {
+      adsBlend: cam.adsBlend,
+      moveBlend: this.moveBlend * (1 - this.airBlend),
       sprintBlend: this.sprintBlend,
+      reloadBlend: this.reloadBlend,
+      reloadPhase: this.reloadProgress,
+      kick: this.weaponKickT * this.weaponKickT,
       turnRate: this.turnRate,
+      pitchRate: this.pitchRate,
+      bobPhase: cam.bobPhase,
+      velY: this.velY,
     });
   }
 
@@ -476,7 +454,10 @@ export class Player implements Combatant {
     const c = this.casings.find((c) => c.t <= 0);
     if (!c) return;
     const g = CONFIG.gunfeel;
-    const wm = this.rifle.root.getWorldMatrix();
+    // The port is on the viewmodel, so this is a camera-space frame resolved
+    // to world: the brass leaves the gun you can see and then falls in the
+    // world, which is exactly where it should end up.
+    const wm = this.view.rifle.root.getWorldMatrix();
     Vector3.TransformCoordinatesToRef(CASING_PORT, wm, c.mesh.position);
     Vector3.TransformNormalToRef(_casingDir.set(1, 0, -0.2), wm, c.vel);
     c.vel.normalize().scaleInPlace(g.casingEject * (0.8 + Math.random() * 0.4));
@@ -536,7 +517,7 @@ export class Player implements Combatant {
 
   /** World position of the rifle muzzle (tracer origin). */
   muzzleWorld(): Vector3 {
-    return this.rifle.muzzle.getAbsolutePosition().clone();
+    return this.view.muzzleWorld();
   }
 
   /** Returns true if this damage killed the player. */
@@ -567,9 +548,11 @@ export class Player implements Combatant {
   }
 
   /**
-   * Shows/hides the body. Hidden only outside gameplay (menu backdrop);
-   * during play the camera never goes first-person, so the body stays
-   * visible the whole time.
+   * Shows/hides everything the player renders — which in first person is the
+   * viewmodel and its brass, nothing else. Hidden outside gameplay: the menu
+   * and deploy screen sit over a live view of the world, and the editor flies
+   * the same camera the weapon is parented to, so a visible rifle would ride
+   * along in front of it.
    */
   setBodyHidden(hidden: boolean): void {
     this.bodyHidden = hidden;
@@ -577,9 +560,9 @@ export class Player implements Combatant {
   }
 
   private applyVisibility(): void {
-    for (const part of this.meshes) part.isVisible = !this.bodyHidden;
-    // Live brass follows the body; the flash handles itself per shot via
-    // flashRoot.setEnabled, and never fires while the body is hidden anyway.
+    this.view.setVisible(!this.bodyHidden);
+    // Live brass goes with it; the flash handles itself per shot via
+    // flashRoot.setEnabled, and never fires while the weapon is hidden anyway.
     for (const c of this.casings) {
       c.mesh.isVisible = c.t > 0 && !this.bodyHidden;
     }

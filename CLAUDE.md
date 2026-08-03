@@ -5,19 +5,25 @@ repository. `AGENTS.md` is a pointer to this file; `README.md` is user-facing.
 
 ## Project overview
 
-**HOLLOWMERE — Cel-Shaded Conquest**: a browser-based, single-player Conquest
-shooter (8v8 vs bots, five control points, ticket bleed) built with
-**Babylon.js** + **TypeScript**, bundled with **Vite**. ES modules
-(`"type": "module"`), Node 18+, WebGL2 browser required.
+**HOLLOWMERE — Cel-Shaded Conquest**: a browser-based, single-player
+**first-person** Conquest shooter (8v8 vs bots, five control points, ticket
+bleed) built with **Babylon.js** + **TypeScript**, bundled with **Vite**. ES
+modules (`"type": "module"`), Node 18+, WebGL2 browser required.
 
-The game ships **zero audio files and (almost) zero model files** — every mesh
-except one is built from Babylon primitives at runtime and all sound is
-synthesized WebAudio (`src/core/Sfx.ts`). The single exception, added by
-explicit request, is the **player's body**: a rigged GLB (`models/*.glb`)
-driven by `src/entities/GlbSoldier.ts` (own locomotion clips + a procedural
-bone overlay for aim/reload/rifle-carry). Bots and weapons stay primitive —
-do not extend the GLB approach to them (rig pooling/merging rules still
-apply), and do not add further asset files unless explicitly asked.
+The game ships **zero audio files and zero model files** — every mesh is built
+from Babylon primitives at runtime and all sound is synthesized WebAudio
+(`src/core/Sfx.ts`). Do not add asset files unless explicitly asked.
+
+`src/entities/GlbSoldier.ts` and `src/entities/soldier/` are the **one
+exception on disk and are currently unreferenced**: a rigged GLB player body
+(own locomotion clips + a procedural bone overlay for aim/reload/rifle-carry),
+added by explicit request back when the camera was over the shoulder. First
+person retired it — the camera is inside the head, so there is no own-body to
+render — and `Player` no longer imports it, which is what keeps the module and
+its multi-megabyte `models/*.glb` out of the production bundle. Kept, not
+deleted, because it is the only rigged-character work in the tree and a
+killcam or spectator view would want it back. Do not wire it into anything
+new, and do not extend the GLB approach to bots or weapons.
 
 **Every source file has a contract header** at the top stating what it owns,
 its invariants, and what it must never do. Read it before editing that file.
@@ -62,6 +68,13 @@ have already cost time:
 - Killing a spawned `npx vite` can leave an orphan holding the port; free it by
   PID from `ss -tlnp`. Never `pkill -f vite` — it matches the calling shell's own
   command line.
+- **Sight alignment is checkable without looking at a picture**, and should be
+  after anything that touches the viewmodel or the camera: take
+  `scene.getMeshByName("view_reticleDot").getAbsolutePosition()`, subtract
+  `camera.position`, and project onto `cameraSys.forward` / `flatRight`. At
+  `adsBlend === 1` the two cross-axis components must be **0**. The muzzle flash
+  is unhittable at 2 fps (`gunfeel.flashTime` is 0.05 s of game time); force it
+  with `player.flashRoot.setEnabled(true)` instead.
 
 To inspect a model in isolation, drop a throwaway `modelviewer.html` + `.ts` at
 the repo root (Vite serves it as a second page) with an `ArcRotateCamera` driven
@@ -76,18 +89,16 @@ src/
   core/
     Game.ts                 # Orchestrator + game state machine + main loop
     InputManager.ts         # Unified keyboard/mouse + gamepad state + rumble
-    CameraSystem.ts         # Third-person shoulder cam; ADS pulls in + zooms
+    CameraSystem.ts         # First-person cam at the eye; ADS zooms + slows
     Sfx.ts                  # Procedural WebAudio, spatialised and voice-capped
   entities/
-    Player.ts               # Movement, sprint, jump, weapon state, body wiring
-    GlbSoldier.ts           # Player body: rigged GLB (models/*.glb) + the
-                            # procedural bone overlay (aim/reload/rifle carry)
-    soldier/                # GlbSoldier's extracted pieces:
-      tuning.ts             #   asset-measured constants + SoldierPoseParams
-      matrixKit.ts          #   WorldChain memo + why-matrices rationale
-      stance.ts             #   idle stance captured from the Walking clip
-      clipDriver.ts         #   locomotion clip selection/crossfade/speed
+    Player.ts               # Movement, sprint, jump, weapon state, viewmodel
+    ViewModel.ts            # The first-person weapon: rifle + gloved arms on
+                            #   the camera, hip/ADS/sprint/reload, sway, bob
     RifleModel.ts           # Low-poly SCAR-pattern rifle + holo sight builder
+    GlbSoldier.ts           # UNREFERENCED since the first-person conversion —
+    soldier/                #   the retired rigged GLB body and its pieces.
+                            #   See "Project overview". Do not re-wire.
     Combatant.ts            # Team + the shared shootable/shooter interface
     Bot.ts                  # Bot FSM: advance / hunt / engage / takeCover /
                             #   suppressed / retreat / capture, + movement,
@@ -195,6 +206,51 @@ camera must run before them.
 
 `ConquestSystem.update` runs *before* `BattleSystem.update`, so a bot's think
 tick sees this frame's flag ownership rather than last frame's.
+
+### First person, and the weapon on the camera
+
+The camera sits **at `Player.eyePos`** — the same point `CONFIG.camera.eyeHeight`
+defines and the same point bots test line of sight against, so what a bot can
+see of you is what you can see of it. There is no occlusion pick and no pull-in
+any more: the old shoulder camera had to ray-test its way out of walls, and a
+camera inside the head has nothing to be occluded by. There is also **no player
+body mesh at all**. The only things the player renders are the viewmodel, its
+brass, and the blob shadow `ShadowSystem` draws underfoot.
+
+`src/entities/ViewModel.ts` owns the weapon: the rifle plus two gloved arms,
+parented to the camera and posed in camera space. Four things there are
+load-bearing.
+
+- **The aimed pose is derived, not authored.** `adsPos` cancels the rifle's own
+  `sightCenter` offset (times `viewmodel.scale` — the node's position is in the
+  camera's frame while the sight's offset is in the rifle's) so the holo
+  reticle lands on the camera axis at `viewmodel.adsSightDistance`. The reticle
+  then projects to the exact centre of the screen, which is where
+  `CombatSystem` sends the bullets. Hand-tuning that offset — or forgetting the
+  scale factor, which puts the sight a couple of degrees low — gives a sight
+  picture that looks plausible and shoots high. It is verifiable: at
+  `adsBlend === 1` the reticle's offset from the camera axis is exactly zero.
+- **The viewmodel renders in `VIEWMODEL_GROUP` (1).** Babylon clears depth
+  between rendering groups, so the weapon draws over the world instead of
+  intersecting the wall the player is standing against. Anything attached to
+  the weapon has to join that group — Player's muzzle flash does; the ejected
+  brass deliberately does **not**, because it is thrown into the world and
+  should be occluded like anything else.
+- **Scale and stand-off are a framing decision, not realism.** A 54° vertical
+  FOV against a real eye's ~130° means a rifle framed where a rifle actually
+  sits fills the screen. `viewmodel.scale` shrinks it and `hipPos.z` pushes it
+  out until it reads at the size the eye expects.
+- **The camera owns the bob phase; the weapon reads it.** Both bob on the same
+  drive, and two integrators fed the same number drift apart — the weapon would
+  visibly swim against the view. `Player` pushes the drive with
+  `cam.setBobDrive()` and passes `cam.bobPhase` straight through to the
+  viewmodel. Player runs before the camera in the frame order, so that phase is
+  one frame old, which is 16 ms of an ~0.8 s cycle.
+
+The bob and the view punch move the **rendered camera only** — `aimPitch`/
+`aimYaw` never see them, so bullets don't bob. `Player.setBodyHidden` now hides
+the viewmodel, which matters in the editor: it flies the same camera the weapon
+is parented to, so a visible rifle would ride along in front of it.
 
 ### The scene has (almost) no Babylon lights
 
@@ -926,6 +982,15 @@ load-bearing:
   lanterns wastes slots and flattens the darkness. The retired room generator
   enforced this automatically with a sqrt scale — hand authoring means enforcing
   it by eye.
+- Rendering group **1 is the viewmodel's**, and it is there for the depth clear
+  Babylon does between groups — that is what stops the rifle being sliced open
+  by a wall the player walks into. Putting world geometry in group 1 makes it
+  draw through everything; putting the weapon back in group 0 puts the wall
+  through the weapon.
+- The cobblestone texture is 512² over a 1.5 m tile (`textures.ts`). That is
+  sized for a camera **1.55 m above the street**: at the 256 it was authored
+  at, when the camera sat 3.3 m back, looking down at your own feet turned the
+  setts into blobs.
 
 ### The sky
 
@@ -984,15 +1049,19 @@ whenever the moon is behind the camera or off screen, which is most of a round.
 
 ### Procedural models
 
-Every mesh except the player's GLB body is built from Babylon primitives at
-runtime, and all audio is synthesized (`Sfx`). Don't reintroduce asset files
-without being asked.
+Every mesh is built from Babylon primitives at runtime, and all audio is
+synthesized (`Sfx`). Don't reintroduce asset files without being asked.
 
 `RifleModel.buildRifle()` merges its ~50 static boxes into one mesh per color
 (BODY/POLYMER/METAL) — that merge is what makes the outline pass draw one border
 per color group instead of a black shell around every screw. It works only
 because the root is still at identity while building: `MergeMeshes` bakes world
 matrices and returns an identity-transform mesh, which is then re-parented.
+`ViewModel`'s arms follow the same rule, with the one wrinkle `mergeByMaterial`
+already documents: a colour group of **one** mesh has to be baked by hand
+(`bakeCurrentTransformIntoVertices`), and because that call resets the local
+matrix, the part must be detached with `setParent(null)` first or the aim
+node's transform is applied twice.
 
 ## Conventions
 

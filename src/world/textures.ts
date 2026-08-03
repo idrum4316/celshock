@@ -34,8 +34,18 @@ export const COBBLE_METERS_PER_TILE = 1.5;
 /** Value for the cel shader's `texScale` uniform (repeats per metre). */
 export const COBBLE_TEX_SCALE = 1 / COBBLE_METERS_PER_TILE;
 
-/** Canvas size. Must stay a power of two for mipmapping. */
-const SIZE = 256;
+/**
+ * Canvas size. Must stay a power of two for mipmapping.
+ *
+ * 512 over a 1.5 m tile is ~340 texels per metre, which is what a
+ * first-person camera needs: the eye is 1.55 m above the street and the
+ * ground directly underfoot is magnified about 1.3x at that height. At the
+ * 256 this was authored at — fine for a camera 3.3 m back over the
+ * shoulder — looking down at your own feet turned the setts into blobs.
+ */
+const SIZE = 512;
+/** Layout jitter is authored in 256-space pixels; this keeps it proportional. */
+const PX = SIZE / 256;
 const COLS = 4;
 const ROWS = 5;
 
@@ -105,8 +115,8 @@ function cobbleLayout(): Stone[] {
       const w = cw * (0.86 + rng() * 0.1);
       const h = ch * (0.82 + rng() * 0.1);
       stones.push({
-        x: col * cw + shift + (cw - w) / 2 + (rng() - 0.5) * 4,
-        y: row * ch + (ch - h) / 2 + (rng() - 0.5) * 3,
+        x: col * cw + shift + (cw - w) / 2 + (rng() - 0.5) * 4 * PX,
+        y: row * ch + (ch - h) / 2 + (rng() - 0.5) * 3 * PX,
         w,
         h,
         r: Math.min(w, h) * (0.22 + rng() * 0.12),

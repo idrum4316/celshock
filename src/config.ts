@@ -636,7 +636,7 @@ export const CONFIG = {
     bloomPerShot: 0.006,
     maxBloom: 0.03,
     bloomRecovery: 0.02,
-    /** Third-person weapon punch: recovery time (s), slide (m), pitch (rad). */
+    /** Weapon punch on the viewmodel: recovery time (s), slide (m), pitch (rad). */
     kickTime: 0.11,
     kickBack: 0.05,
     kickPitch: 0.12,
@@ -681,27 +681,108 @@ export const CONFIG = {
     stickSensY: 1.8,
     adsStickMult: 0.5,
     /**
-     * Third-person over-the-shoulder framing (hip fire). Tuned so the
-     * character fills roughly half the frame height: ~3.3 m back at chest
-     * height puts head-to-feet at ~0.52 rad against fovHip 0.95.
-     * NOTE: pivotHeight is relative to the player capsule CENTER (~0.9 m
-     * above ground), so 0.55 puts the pivot at ~1.45 m — chest height.
+     * Eye height. The camera sits here (first person), Player.eyePos reports
+     * it, and bot line-of-sight checks against the player use it — one number
+     * for all three, so what a bot can see is what you can see.
      */
-    thirdPersonDistance: 3.3,
-    shoulderOffset: 0.65,
-    pivotHeight: 0.55,
-    /** ADS framing: the shoulder cam pulls in and recentres over the
-     *  shoulder rather than going first-person. */
-    adsDistance: 2.0,
-    adsShoulderOffset: 0.45,
-    /** Eye height — bot line-of-sight checks against the player use this. */
     eyeHeight: 1.55,
     fovHip: 0.95,
     fovAds: 0.62,
     /** How fast the hip<->ADS blend converges (per second). */
     adsBlendSpeed: 10,
-    pitchMin: -0.95,
-    pitchMax: 1.25,
+    /**
+     * Pitch limits. Wider than the third-person camera's, which had to stop
+     * before the shoulder rig clipped the ground or the sky: ±1.45 is ~83°,
+     * far enough to check your feet and the rooftops without ever inverting.
+     */
+    pitchMin: -1.45,
+    pitchMax: 1.45,
+    /**
+     * Head bob. The phase advances with travel, not with time, so it stops
+     * dead when you do; vertical runs at twice the lateral rate because a
+     * stride dips the head once per FOOT and sways it once per PAIR.
+     * Deliberately small — this is a shooter, and bob that reads as motion
+     * on a walk reads as nausea over a round. It moves the rendered camera
+     * only: aimPitch/aimYaw never see it, so bullets don't bob.
+     */
+    bobRate: 8.0,
+    bobVertical: 0.026,
+    bobLateral: 0.018,
+    /** Bob multiplier while aimed — braced, so nearly still. */
+    bobAdsMult: 0.2,
+    /** How fast the bob amplitude follows the movement input (per second). */
+    bobSmooth: 7,
+  },
+
+  /**
+   * The first-person weapon: where the rifle sits in front of the camera, and
+   * everything that moves it there. All positions/rotations are CAMERA-LOCAL
+   * (+x right, +y up, +z forward) and in rifle-model units — the viewmodel
+   * node carries `scale`, so the rifle's own local coordinates and these
+   * offsets are in the same frame.
+   *
+   * `adsSightDistance` is the ONE number that must not be treated as art
+   * direction: ViewModel derives the aimed position from it so the holo
+   * sight's centre lands exactly on the camera axis, which is where the
+   * bullets go. Move the sight off that axis and the reticle stops being the
+   * point of impact.
+   */
+  viewmodel: {
+    /**
+     * Scale and stand-off together decide how much of the frame the rifle
+     * eats. At full size half a metre from the lens it is a wall: this is a
+     * 54° vertical FOV against a real eye's ~130°, so a viewmodel framed the
+     * way a rifle actually sits fills the screen. Shrunk and pushed out, it
+     * reads at the size the eye expects.
+     */
+    scale: 0.62,
+    /** How far in front of the eye the sight glass sits when aimed (m). */
+    adsSightDistance: 0.52,
+    /** Hip-fire pose: sight ~30% right and ~22% down, muzzle turned inboard. */
+    hipPos: { x: 0.184, y: -0.185, z: 0.66 },
+    hipRot: { x: 0.03, y: -0.08, z: 0.06 },
+    /**
+     * Sprint: dropped across the body, out of the way of the view. Dropped
+     * far enough to read as "not ready to shoot" and no further — push it
+     * down much past this and all that is left on screen is the optic
+     * sticking up out of the bottom edge.
+     */
+    sprintPos: { x: 0.04, y: -0.1, z: -0.02 },
+    sprintRot: { x: 0.16, y: 0.44, z: 0.3 },
+    /** Reload: tipped down and rolled toward the magwell. */
+    reloadPos: { x: 0.02, y: -0.1, z: -0.05 },
+    reloadRot: { x: 0.3, y: -0.2, z: 0.42 },
+    /** Where the support hand travels to for the magazine swap. */
+    magHandOffset: { x: -0.02, y: -0.09, z: -0.34 },
+    /** Support-hand window over the reload: leaves the guard, swaps, returns. */
+    magWindow: [0.15, 0.35, 0.6, 0.8],
+    /**
+     * Sway: the weapon lags the view. Position offsets oppose the turn,
+     * rotation follows it, both clamped so a fast flick can't swing the
+     * rifle out of frame, and both eased so the weapon settles after the
+     * camera stops.
+     */
+    swayPos: 0.05,
+    swayRot: 0.1,
+    swayPitchPos: 0.035,
+    /** One ceiling for all four terms — metres for the offsets, radians for
+     *  the rotations. They happen to want the same number. */
+    swayMax: 0.09,
+    swaySmooth: 8,
+    /** Weapon bob, on the camera's own bob phase (see camera.bobRate). */
+    bobLateral: 0.022,
+    bobVertical: 0.014,
+    bobRoll: 0.05,
+    /** Sway/bob multipliers while aimed — a braced weapon barely moves. */
+    adsSwayMult: 0.3,
+    adsBobMult: 0.12,
+    /**
+     * Vertical give while airborne, from the fall speed (m per m/s). The
+     * pose blends themselves need no smoothing constant: Player hands over
+     * adsBlend/sprintBlend/reloadBlend already eased.
+     */
+    airDrop: 0.006,
+    airDropMax: 0.05,
   },
 
   /**

@@ -1,27 +1,26 @@
 /**
- * CameraSystem.ts — Third-person over-the-shoulder camera: aim yaw/pitch, ADS
- * blend (distance/offset/FOV/sensitivity), recoil, per-shot view punch,
- * wall-occlusion pull-in.
- * Owns: the scene's active camera. Never goes first-person.
+ * CameraSystem.ts — First-person camera: aim yaw/pitch, ADS blend (FOV +
+ * sensitivity), recoil, per-shot view punch, head bob.
+ * Owns: the scene's active camera. The camera sits AT the player's eye — it
+ * never leaves the head, so there is no occlusion pick and no pull-in.
  * Invariants: recoil decay uses true Math.exp(-rate*dt) — NOT the frame-lerp
  * idiom — because burst climb must not vary with frame rate. Recoil only
  * partly springs back (CONFIG.recoil.recoverFraction); the rest is pushed into
  * the player's aim permanently — a deliberate product decision, not a bug.
- * The view punch (FOV spike / camera shove / jitter) is pure cosmetics: it is
- * applied only to the rendered camera, never to aimPitch/aimYaw, so bullets
- * and bots never see it. Occlusion pick filters metadata.solid === true.
+ * The view punch (FOV spike / camera shove / jitter) and the head bob are pure
+ * cosmetics: they are applied only to the rendered camera, never to
+ * aimPitch/aimYaw, so bullets and bots never see them.
  * Must run before mats.updateCamera()/lighting.update()/sfx.setListener()
  * in Game's frame order.
  */
-import { FreeCamera, Ray, Scene, Vector3 } from "@babylonjs/core";
+import { FreeCamera, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { InputManager } from "./InputManager";
 
 /**
- * Third-person over-the-shoulder camera. Aiming down sights never goes
- * first-person: the shoulder framing tightens instead — the camera pulls in
- * closer, recentres over the shoulder, and the FOV zooms. One blend drives
- * distance, offset, FOV, and look sensitivity together so the transition
+ * First-person camera. Aiming down sights brings the weapon's sight onto the
+ * camera axis (ViewModel's job) while this system zooms the FOV, slows the
+ * look, and damps the bob — one blend drives all three so the transition
  * reads as a single motion.
  */
 export class CameraSystem {
@@ -30,6 +29,18 @@ export class CameraSystem {
   pitch = 0.12;
   /** 0 = hip, 1 = fully aimed (ADS). */
   adsBlend = 0;
+
+  /**
+   * Head-bob phase, in radians, advanced by travel rather than by time.
+   * Public because the viewmodel bobs on the SAME phase — two integrators fed
+   * the same drive would drift apart and the weapon would swim against the
+   * view. ViewModel reads it one frame late (Player updates before the
+   * camera does), which is 16 ms of a 0.8 s cycle.
+   */
+  bobPhase = 0;
+  /** Smoothed 0..1 movement drive for the bob, pushed by Player each frame. */
+  private bobAmount = 0;
+  private bobTarget = 0;
 
   /**
    * The springy part of the recoil, stacked on top of the player's own aim
@@ -44,7 +55,10 @@ export class CameraSystem {
    */
   private punchT = 0;
 
-  constructor(private scene: Scene) {
+  /** Scratch for the rendered camera position — no per-frame allocation. */
+  private readonly eye = new Vector3();
+
+  constructor(scene: Scene) {
     this.camera = new FreeCamera("mainCamera", new Vector3(0, 3, -8), scene);
     this.camera.minZ = 0.05;
     this.camera.fov = CONFIG.camera.fovHip;
@@ -88,6 +102,18 @@ export class CameraSystem {
     this.recoilPitch = 0;
     this.recoilYaw = 0;
     this.punchT = 0;
+    this.bobPhase = 0;
+    this.bobAmount = 0;
+    this.bobTarget = 0;
+  }
+
+  /**
+   * This frame's bob drive: 0 standing, 1 at full ground speed. Pushed by
+   * Player (which owns the movement) before the camera updates; airborne is
+   * simply zero, because feet that aren't on the ground aren't striding.
+   */
+  setBobDrive(speed01: number, grounded: boolean): void {
+    this.bobTarget = grounded ? Math.max(0, Math.min(1, speed01)) : 0;
   }
 
   /**
@@ -122,6 +148,9 @@ export class CameraSystem {
   }
 
   /**
+   * `eyePos` is the player's eye in world space — the camera goes there
+   * outright, offset only by the cosmetic bob and punch.
+   *
    * `assist` is the gamepad aim-assist frame from `AimAssistSystem` (null
    * when inactive). Its slowdown is multiplied into the stick terms ONLY —
    * the mouse look path is deliberately never scaled — and its rotation is
@@ -130,7 +159,7 @@ export class CameraSystem {
   update(
     dt: number,
     input: InputManager,
-    playerPos: Vector3,
+    eyePos: Vector3,
     assist: { stickMult: number; yaw: number; pitch: number } | null = null,
   ): void {
     const c = CONFIG.camera;
@@ -166,41 +195,32 @@ export class CameraSystem {
     this.adsBlend += (target - this.adsBlend) * Math.min(1, dt * c.adsBlendSpeed);
     const t = smoothstep(this.adsBlend);
 
-    // --- positions: ADS tightens the shoulder framing (closer, slightly
-    // less offset) rather than jumping to the eye. ---
+    // --- head bob: phase advances with travel, amplitude eases with intent ---
+    this.bobAmount +=
+      (this.bobTarget - this.bobAmount) * Math.min(1, dt * c.bobSmooth);
+    this.bobPhase = (this.bobPhase + dt * c.bobRate * this.bobAmount) % (Math.PI * 2);
+    const bobW = this.bobAmount * (1 - (1 - c.bobAdsMult) * t);
+
+    // --- position: the eye, plus the two cosmetic offsets ---
     const dir = this.forward;
-    const pivot = playerPos.add(new Vector3(0, c.pivotHeight, 0));
-    const dist =
-      c.thirdPersonDistance + (c.adsDistance - c.thirdPersonDistance) * t;
-    const shoulder =
-      c.shoulderOffset + (c.adsShoulderOffset - c.shoulderOffset) * t;
-    const desired = pivot
-      .subtract(dir.scale(dist))
-      .add(this.flatRight.scale(shoulder));
-
-    // Pull the camera in when a wall would occlude it.
-    let pos = desired;
-    const toCam = desired.subtract(pivot);
-    const len = toCam.length();
-    if (len > 0.001) {
-      const rayDir = toCam.scale(1 / len);
-      const ray = new Ray(pivot, rayDir, len + 0.3);
-      const hit = this.scene.pickWithRay(ray, (m) => !!m.metadata && m.metadata.solid === true);
-      if (hit && hit.hit && hit.distance < len + 0.3) {
-        pos = pivot.add(rayDir.scale(Math.max(0.4, hit.distance - 0.35)));
-      }
+    this.eye.copyFrom(eyePos);
+    if (bobW > 0.001) {
+      // Vertical at twice the lateral rate: one dip per footfall, one sway
+      // per stride. The lateral term rides the flat right axis so it stays
+      // level with the horizon when looking up or down.
+      const right = this.flatRight;
+      this.eye.y += Math.sin(this.bobPhase * 2) * c.bobVertical * bobW;
+      this.eye.addInPlace(
+        right.scale(Math.sin(this.bobPhase) * c.bobLateral * bobW),
+      );
     }
-
-    // --- view punch: FOV spike, backward shove, and jitter on the rendered
-    // camera only. aimPitch/aimYaw are untouched, so tracers, hitscan, and
-    // the audio listener never see the shake. ---
     const r = CONFIG.recoil;
     const punch = this.punchT * this.punchT;
     if (punch > 0) {
-      pos = pos.subtract(dir.scale(r.camPush * punch));
+      this.eye.subtractInPlace(dir.scale(r.camPush * punch));
     }
 
-    this.camera.position.copyFrom(pos);
+    this.camera.position.copyFrom(this.eye);
     if (punch > 0) {
       const shPitch = (Math.random() * 2 - 1) * r.shakePitch * punch;
       const shYaw = (Math.random() * 2 - 1) * r.shakeYaw * punch;
@@ -208,10 +228,12 @@ export class CameraSystem {
       const sy = this.aimYaw + shYaw;
       const cp = Math.cos(sp);
       this.camera.setTarget(
-        pos.add(new Vector3(cp * Math.sin(sy), Math.sin(sp), cp * Math.cos(sy))),
+        this.eye.add(
+          new Vector3(cp * Math.sin(sy), Math.sin(sp), cp * Math.cos(sy)),
+        ),
       );
     } else {
-      this.camera.setTarget(pos.add(dir));
+      this.camera.setTarget(this.eye.add(dir));
     }
     this.camera.fov = c.fovHip + (c.fovAds - c.fovHip) * t + r.fovPunch * punch;
   }
