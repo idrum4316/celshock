@@ -70,7 +70,12 @@ const KEY_ORDER: Record<string, string[]> = {
     "prop",
     "x",
     "z",
+    // A region carries `radius` or `width`/`depth`, never both; listing all
+    // three keeps whichever it has in the same slot on the line.
     "radius",
+    "width",
+    "depth",
+    "rotY",
     "count",
     "y",
     "scale",

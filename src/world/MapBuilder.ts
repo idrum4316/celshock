@@ -30,7 +30,7 @@ import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
 import type { LightingSystem } from "../systems/LightingSystem";
 import { BUILDERS, type BoxSpec, type Structure } from "./BuildingKit";
 import type { EnvironmentSpec } from "./environment";
-import type { MapLayout, ScatterSpec } from "./layout";
+import { isScatterRect, type MapLayout, type ScatterSpec } from "./layout";
 import { TerrainField, terrainPatches } from "./TerrainField";
 import { NavGrid } from "./NavGrid";
 import { CoverMap } from "./CoverMap";
@@ -527,16 +527,26 @@ export class MapBuilder {
   }
 
   /**
-   * Sprinkles a prop through a circular region by rejection sampling against
-   * what is already there. Counts are authored per region rather than scaled
-   * from floor area the way the retired room generator did it.
+   * Sprinkles a prop through a region — a disc or an oriented rectangle — by
+   * rejection sampling against what is already there. Counts are authored per
+   * region rather than scaled from floor area the way the retired room
+   * generator did it.
+   *
+   * Like a builder, this assembles **at the region's origin, unrotated**, and
+   * the merged result is transformed into place afterwards. A rectangle is
+   * therefore sampled in its own local frame and turned bodily by `rotY`, prop
+   * yaws included, which is what lets the editor move and rotate a region by
+   * writing one transform (`repositionItem`) instead of rebuilding it. The
+   * rebuild then lands on the same offsets — bar the props whose new
+   * surroundings reject them, which is the point of `findSpot`.
    *
    * Every instance in a region is merged into one mesh per colour. A stand of
    * sixteen dead trees becomes two draws instead of ninety-six — the trees do
    * not touch, so the outline pass still traces each trunk separately. The
-   * cost is that the region culls as a unit, which is free in practice: a
-   * region is ~25 m across and the fog reaches 78 m, so it is all visible
-   * together or not at all.
+   * cost is that the region culls as a unit, and is filed under the block its
+   * CENTRE falls in: fine for a disc, and the reason to break a tree belt much
+   * longer than the 78 m fog wall into a few rectangles rather than authoring
+   * one that spans the map.
    */
   private scatterRegion(
     spec: ScatterSpec,
@@ -552,22 +562,32 @@ export class MapBuilder {
     const [minS, maxS] = spec.scale ?? [1, 1];
     const placed: { x: number; z: number; r: number }[] = [];
     const parts: Mesh[] = [];
+    // A disc has no orientation, so this is zero for every circular region —
+    // which is every region on the shipped map.
+    const rot = isScatterRect(spec) ? (spec.rotY ?? 0) : 0;
+    const origin = new Vector3(
+      spec.x,
+      (spec.y ?? 0) + terrain.heightAt(spec.x, spec.z),
+      spec.z,
+    );
 
     for (let i = 0; i < spec.count; i++) {
       const scale = minS + rng() * (maxS - minS);
       const clearance = (spec.clearance ?? 0.8) * scale;
-      const spot = this.findSpot(spec, clearance, placed, rng);
+      const spot = this.findSpot(spec, rot, clearance, placed, rng);
       if (!spot) continue;
-      placed.push({ ...spot, r: clearance });
+      placed.push({ x: spot.x, z: spot.z, r: clearance });
 
       // Sampled per prop, not per region: a stand of trees straddling a bank
-      // should follow the bank rather than share one height and float.
-      const base = (spec.y ?? 0) + terrain.heightAt(spot.x, spot.z);
+      // should follow the bank rather than share one height and float. Stored
+      // relative to the region's own floor, since that is what the transform
+      // below adds back.
+      const base = (spec.y ?? 0) + terrain.heightAt(spot.x, spot.z) - origin.y;
 
       const prop = build(this.scene, this.mats, rng);
       prop.scaling.setAll(scale);
-      prop.position.x = spot.x;
-      prop.position.z = spot.z;
+      prop.position.x = spot.lx;
+      prop.position.z = spot.lz;
       prop.position.y = prop.position.y * scale + base;
       // Drawn here and not a line earlier: `build` consumes the same seeded
       // stream, so moving this draw would reroll the whole dressing field.
@@ -582,7 +602,7 @@ export class MapBuilder {
 
       if (light) {
         this.lighting.add(
-          new Vector3(spot.x, base + light.y * scale, spot.z),
+          new Vector3(spot.x, origin.y + base + light.y * scale, spot.z),
           light.color,
           light.range * scale,
           light.intensity,
@@ -594,21 +614,25 @@ export class MapBuilder {
         // clearance squared off. See PROP_BODIES.
         const body = PROP_BODIES[spec.prop];
         const h = body.h * scale;
-        colliders.push(
-          this.collider(`${spec.prop}-col`, {
-            w: body.w * scale,
-            h,
-            d: body.d * scale,
-            x: spot.x,
-            y: base + h / 2,
-            z: spot.z,
-            rotY: yaw,
-          }),
-        );
+        const box = {
+          w: body.w * scale,
+          h,
+          d: body.d * scale,
+          x: spot.lx,
+          y: base + h / 2,
+          z: spot.lz,
+          rotY: yaw,
+        };
+        const mesh = this.collider(`${spec.prop}-col`, box, origin, rot);
+        // The region's own frame, so the editor can turn the field as a unit.
+        if (item) item.localBoxes.push(box);
+        colliders.push(mesh);
       }
     }
 
     for (const merged of mergeByMaterial(parts, `${spec.prop}-field`)) {
+      merged.rotation.y = rot;
+      merged.position.addInPlace(origin);
       if (item) {
         tag(merged, { list: "scatter", index });
         addOutline(merged, 0.05);
@@ -623,19 +647,37 @@ export class MapBuilder {
    * A free spot inside the region: 14 tries, rejecting anything that overlaps
    * an earlier prop or lands inside a structure's collider. Returns null to
    * skip.
+   *
+   * Both shapes draw exactly two numbers per attempt, in the same order, so
+   * adding rectangles left every existing region's dressing field untouched.
+   *
+   * Returns the spot twice over: `lx`/`lz` in the region's own unrotated frame,
+   * which is where the geometry is assembled, and `x`/`z` in the world, which
+   * is what the rejection tests and the terrain sample need.
    */
   private findSpot(
     spec: ScatterSpec,
+    rot: number,
     clearance: number,
     placed: { x: number; z: number; r: number }[],
     rng: () => number,
-  ): { x: number; z: number } | null {
+  ): { x: number; z: number; lx: number; lz: number } | null {
     for (let attempt = 0; attempt < 14; attempt++) {
-      // sqrt keeps the distribution even rather than clumped at the centre.
-      const a = rng() * Math.PI * 2;
-      const r = Math.sqrt(rng()) * spec.radius;
-      const x = spec.x + Math.cos(a) * r;
-      const z = spec.z + Math.sin(a) * r;
+      let lx: number;
+      let lz: number;
+      if (isScatterRect(spec)) {
+        lx = (rng() - 0.5) * spec.width;
+        lz = (rng() - 0.5) * spec.depth;
+      } else {
+        // sqrt keeps the distribution even rather than clumped at the centre.
+        const a = rng() * Math.PI * 2;
+        const r = Math.sqrt(rng()) * spec.radius;
+        lx = Math.cos(a) * r;
+        lz = Math.sin(a) * r;
+      }
+      const at = rotateY(lx, 0, lz, rot);
+      const x = spec.x + at.x;
+      const z = spec.z + at.z;
 
       let ok = true;
       for (const p of placed) {
@@ -647,7 +689,7 @@ export class MapBuilder {
         }
       }
       if (ok && this.insideCollider(spec, x, z, clearance)) ok = false;
-      if (ok) return { x, z };
+      if (ok) return { x, z, lx, lz };
     }
     return null;
   }
@@ -918,7 +960,12 @@ function mergeByMaterial(meshes: Mesh[], tag: string): Mesh[] {
   for (const [mat, group] of groups) {
     const merged =
       group.length === 1
-        ? group[0]
+        ? // A merge of two or more bakes their world matrices; a group of one
+          // has to be baked by hand or the promise above is a lie for exactly
+          // the colours only one mesh uses — and the caller, which positions
+          // and rotates what it gets back, would clobber that mesh's own
+          // transform instead of composing with it.
+          group[0].bakeCurrentTransformIntoVertices()
         : Mesh.MergeMeshes(group, true, true, undefined, false, false);
     if (!merged) continue;
     merged.name = `${tag}-${mat.name}`;

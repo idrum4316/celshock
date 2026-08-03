@@ -25,7 +25,7 @@
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { BuilderKind } from "../world/BuildingKit";
-import type { MapLayout } from "../world/layout";
+import { isScatterRect, type MapLayout } from "../world/layout";
 import { repositionItem, type GameMap } from "../world/MapBuilder";
 import { waterY, type TerrainField } from "../world/TerrainField";
 import { NavGrid } from "../world/NavGrid";
@@ -86,11 +86,23 @@ export function originOf(
 export function rotationOf(layout: MapLayout, ref: SelectionRef): number {
   if (ref.list === "placements") return layout.placements[ref.index]?.rotY ?? 0;
   if (ref.list === "spawns") return layout.spawns[ref.index]?.yaw ?? 0;
+  if (ref.list === "scatter") {
+    const s = layout.scatter[ref.index];
+    return s && isScatterRect(s) ? (s.rotY ?? 0) : 0;
+  }
   return 0;
 }
 
-/** Only placements and spawns carry a rotation worth showing a ring for. */
-export function isRotatable(ref: SelectionRef): boolean {
+/**
+ * Whether to show the rotation ring. Placements and spawns always; a scatter
+ * region only when it is a rectangle — turning a disc does nothing, and a
+ * handle that visibly does nothing reads as a broken one.
+ */
+export function isRotatable(layout: MapLayout, ref: SelectionRef): boolean {
+  if (ref.list === "scatter") {
+    const s = layout.scatter[ref.index];
+    return s !== undefined && isScatterRect(s);
+  }
   return ref.list === "placements" || ref.list === "spawns";
 }
 
@@ -182,6 +194,12 @@ export function applyTransform(
       s.z = at.z;
       if (rel === 0) delete s.y;
       else s.y = rel;
+      // Only a rectangle has a facing; a disc's `rotY` would be noise in the
+      // file describing nothing.
+      if (isScatterRect(s)) {
+        if (rotY === 0) delete s.rotY;
+        else s.rotY = rotY;
+      }
       return;
     }
     case "controlPoints": {
@@ -338,6 +356,35 @@ function setParam(entry: EntryRecord, key: string, value: FieldValue): void {
   else delete entry.params;
 }
 
+/**
+ * A scatter region's shape. `radius` and `width`/`depth` are alternatives and
+ * never coexist — the presence of `width` is what makes a region rectangular —
+ * so this writes one set and removes the other, rather than leaving a stale
+ * field behind for the next reader to trip over.
+ *
+ * The new extents keep the footprint recognisable: a disc becomes the square
+ * that contains it and a rectangle becomes the disc that contains its longer
+ * side, so the count spread over it still reads as roughly the same field
+ * rather than jumping density on the way through the control.
+ */
+function setShape(entry: EntryRecord, shape: string): void {
+  const wantRect = shape === "rect";
+  if (wantRect === (entry.width !== undefined)) return;
+  if (wantRect) {
+    const r = Number(entry.radius ?? 8);
+    entry.width = q(r * 2);
+    entry.depth = q(r * 2);
+    delete entry.radius;
+  } else {
+    const w = Number(entry.width ?? 16);
+    const d = Number(entry.depth ?? 16);
+    entry.radius = q(Math.max(w, d) / 2);
+    delete entry.width;
+    delete entry.depth;
+    delete entry.rotY;
+  }
+}
+
 /** A `[min, max]` scale pair, dropped entirely when it is back at 1..1. */
 function setScale(entry: EntryRecord, index: number, value: FieldValue): void {
   const current = entry.scale as [number, number] | undefined;
@@ -364,8 +411,8 @@ function setOwner(entry: EntryRecord, owner: string): void {
 
 /**
  * Applies one inspector field to the layout. `key` is the dotted path the
- * field was built with (see `fields.ts`); the two compound keys — `kind` and
- * `owner` — write more than one field each.
+ * field was built with (see `fields.ts`); the three compound keys — `kind`,
+ * `owner` and `shape` — write more than one field each.
  *
  * The layout entry is mutated in place, and Vector3s are written component-wise
  * rather than replaced: `controlPoints[i].pos` is shared by reference into
@@ -386,6 +433,7 @@ export function setField(
 
   if (key === "kind") return setKind(entry, String(value));
   if (key === "owner") return setOwner(entry, String(value));
+  if (key === "shape") return setShape(entry, String(value));
   if (head === "params") return setParam(entry, tail, value);
   if (head === "scale") return setScale(entry, Number(tail), value);
   if (head === "pos") {
@@ -511,6 +559,7 @@ export function deleteItem(layout: MapLayout, ref: SelectionRef): boolean {
  */
 export function repositionScene(
   map: GameMap,
+  layout: MapLayout,
   ref: SelectionRef,
   at: Vector3,
   rotY: number,
@@ -521,8 +570,11 @@ export function repositionScene(
   const item = index[ref.list][ref.index];
   if (!item) return;
   // Scatter props were baked into their merged field at their sampled offsets,
-  // so a region moves as a unit and its own rotation is meaningless.
-  repositionItem(item, map.colliderBoxes, at, ref.list === "scatter" ? 0 : rotY);
+  // so a region moves as a unit — and turns as one too, which is exactly what
+  // MapBuilder would rebuild for a rectangle at this angle. A disc has no
+  // angle, hence `rotationOf` rather than the raw handle value.
+  const turn = ref.list === "scatter" ? rotationOf(layout, ref) : rotY;
+  repositionItem(item, map.colliderBoxes, at, turn);
 }
 
 /**

@@ -320,7 +320,7 @@ export class EditorSession {
     this.highlight.show(this.meshesFor(ref));
     this.refreshInspector();
     if (ref) {
-      this.gizmos.setRotatable(isRotatable(ref));
+      this.gizmos.setRotatable(isRotatable(this.deps.layout, ref));
       this.gizmos.attachTo(
         originOf(this.deps.layout, ref, this.map.terrain),
         rotationOf(this.deps.layout, ref),
@@ -357,7 +357,10 @@ export class EditorSession {
     this.dirty = true;
     this.refreshInspector();
     // Typing a coordinate has to move the handles too, or the next drag snaps
-    // the item back to where the gizmo still thinks it is.
+    // the item back to where the gizmo still thinks it is. Which handles there
+    // are can change with the value as well — a scatter region gains a rotation
+    // ring the moment it becomes a rectangle.
+    this.gizmos.setRotatable(isRotatable(this.deps.layout, ref));
     this.gizmos.attachTo(
       originOf(this.deps.layout, ref, this.map.terrain),
       rotationOf(this.deps.layout, ref),
@@ -507,7 +510,7 @@ export class EditorSession {
     // Quantise once, then use the same numbers for the data and the geometry.
     const { at, rotY } = quantize(raw, rawRotY);
     applyTransform(this.deps.layout, ref, at, rotY, this.map.terrain);
-    repositionScene(this.map, ref, at, rotY);
+    repositionScene(this.map, this.deps.layout, ref, at, rotY);
     if (ref.list !== "placements" && ref.list !== "scatter") {
       // Proxies carry their own geometry; rebuild the cheap layer wholesale
       // rather than tracking which mesh stands for which field.

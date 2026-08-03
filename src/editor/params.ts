@@ -17,7 +17,7 @@
  */
 import type { BuilderKind } from "../world/BuildingKit";
 import type { BuildParams } from "../world/kit/core";
-import type { ScatterSpec } from "../world/layout";
+import type { ScatterCircle, ScatterSpec } from "../world/layout";
 
 /** One editable field. `step` is the drag/nudge granularity for numbers. */
 export type ParamSpec =
@@ -159,8 +159,12 @@ export function paramKeys(kind: BuilderKind): Set<string> {
 
 type ScatterProp = ScatterSpec["prop"];
 
-/** What a fresh scatter region of each prop starts as. */
-type ScatterDefaults = Omit<ScatterSpec, "prop" | "x" | "z">;
+/**
+ * What a fresh scatter region of each prop starts as. Circular: a disc is the
+ * shape you can judge from a single click, and the shape control turns it into
+ * a rectangle around the same footprint.
+ */
+type ScatterDefaults = Omit<ScatterCircle, "prop" | "x" | "z">;
 
 /**
  * Starting values for a newly added scatter region, per prop.

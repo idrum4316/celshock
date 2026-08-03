@@ -38,8 +38,8 @@ export interface Placement {
   params?: BuildParams;
 }
 
-/** Loose dressing sprinkled inside a circular region by rejection sampling. */
-export interface ScatterSpec {
+/** Everything a scatter region carries whatever shape it is. */
+interface ScatterBase {
   prop:
     | "deadTree"
     | "gravestone"
@@ -52,8 +52,6 @@ export interface ScatterSpec {
     | "barrel";
   x: number;
   z: number;
-  /** Region radius. */
-  radius: number;
   count: number;
   y?: number;
   scale?: [number, number];
@@ -61,6 +59,46 @@ export interface ScatterSpec {
   blocking?: boolean;
   /** Collider half-extent at scale 1. */
   clearance?: number;
+}
+
+/** Loose dressing sprinkled inside a disc of `radius` around (x, z). */
+export interface ScatterCircle extends ScatterBase {
+  /** Region radius. */
+  radius: number;
+}
+
+/**
+ * The same dressing sprinkled inside an oriented rectangle centred on (x, z):
+ * `width` along the region's local X, `depth` along its local Z, the whole
+ * thing turned by `rotY`.
+ *
+ * A belt of trees down one side of a road is a rectangle, and spelling it as a
+ * chain of overlapping discs is both tedious to author and uneven where the
+ * discs meet. Rotation is what makes it usable — Hollowmere's streets do not
+ * run along the axes.
+ */
+export interface ScatterRect extends ScatterBase {
+  /** Extent along the region's local X, before rotation. */
+  width: number;
+  /** Extent along the region's local Z, before rotation. */
+  depth: number;
+  rotY?: number;
+}
+
+/**
+ * One region of loose dressing, placed by rejection sampling.
+ *
+ * The two shapes are distinguished by which extent fields are present, not by
+ * a tag: a region with a `width` is a rectangle and one with a `radius` is a
+ * disc. That keeps the shipped layout lines exactly as they were — every
+ * existing region is a circle and gains nothing — and gives the editor a
+ * discriminated union to narrow on.
+ */
+export type ScatterSpec = ScatterCircle | ScatterRect;
+
+/** True when a region is the rectangular kind. See `ScatterSpec`. */
+export function isScatterRect(s: ScatterSpec): s is ScatterRect {
+  return (s as ScatterRect).width !== undefined;
 }
 
 /**

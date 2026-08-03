@@ -13,7 +13,7 @@
  * and leaving them unset is what keeps the layout line short.
  */
 import { CONFIG } from "../config";
-import type { MapLayout } from "../world/layout";
+import { isScatterRect, type MapLayout } from "../world/layout";
 import {
   boolean,
   choice,
@@ -121,13 +121,36 @@ export function inspect(layout: MapLayout, ref: SelectionRef | null): Inspection
     case "scatter": {
       const s = layout.scatter[ref.index];
       if (!s) break;
+      // The shape decides which extents mean anything, so only those are
+      // offered: a rect has no radius and a disc has no facing to rotate.
+      const shape: FieldSpec[] = isScatterRect(s)
+        ? [
+            number("width", "width", s.width, 1, 200, 1),
+            number("depth", "depth", s.depth, 1, 200, 1),
+            number(
+              "rotY",
+              "rotY°",
+              s.rotY === undefined ? null : toDegrees(s.rotY),
+              -360,
+              360,
+              15,
+              0,
+            ),
+          ]
+        : [number("radius", "radius", s.radius, 1, 60, 0.5)];
       return {
         title: `${s.prop} field #${ref.index}`,
         deletable: true,
         fields: [
           choice("prop", "prop", s.prop, options(SCATTER_PROPS)),
+          choice(
+            "shape",
+            "shape",
+            isScatterRect(s) ? "rect" : "circle",
+            options(["circle", "rect"]),
+          ),
           ...place(s.x, s.y ?? null, s.z, true),
-          number("radius", "radius", s.radius, 1, 60, 0.5),
+          ...shape,
           number("count", "count", s.count, 0, 120, 1),
           number("scale.0", "scale min", s.scale?.[0] ?? null, 0.2, 4, 0.1, 1),
           number("scale.1", "scale max", s.scale?.[1] ?? null, 0.2, 4, 0.1, 1),

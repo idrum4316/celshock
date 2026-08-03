@@ -26,6 +26,7 @@ import {
   Vector3,
   type GlowLayer,
 } from "@babylonjs/core";
+import { isScatterRect, type ScatterSpec } from "../world/layout";
 import type { GameMap } from "../world/MapBuilder";
 import { waterY, type TerrainField } from "../world/TerrainField";
 import type { SelectionRef } from "./selection";
@@ -88,13 +89,18 @@ export class ProxyLayer {
    * Scatter regions are drawn separately because they come from the layout,
    * not from the built map — `GameMap` keeps no record of them.
    */
-  buildScatter(
-    regions: readonly { x: number; z: number; y?: number; radius: number }[],
-    terrain: TerrainField,
-  ): void {
+  buildScatter(regions: readonly ScatterSpec[], terrain: TerrainField): void {
     regions.forEach((s, i) => {
       const at = new Vector3(s.x, (s.y ?? 0) + terrain.heightAt(s.x, s.z), s.z);
-      this.ring(at, s.radius, EDITOR.colors.scatter, { list: "scatter", index: i });
+      const ref: SelectionRef = { list: "scatter", index: i };
+      // A boundary either way, never a filled sheet: a scatter region is drawn
+      // over the ground it dresses, and water and grass already own the
+      // translucent-rectangle reading.
+      if (isScatterRect(s)) {
+        this.frame(at, s.width, s.depth, s.rotY ?? 0, EDITOR.colors.scatter, ref);
+      } else {
+        this.ring(at, s.radius, EDITOR.colors.scatter, ref);
+      }
     });
   }
 
@@ -141,6 +147,40 @@ export class ProxyLayer {
     );
     m.position.set(at.x, at.y + LIFT, at.z);
     this.adopt(m, ref, hex, 0.85);
+  }
+
+  /**
+   * The ring's rectangular twin: four bars along the edges of an oriented
+   * rectangle. Four meshes rather than one merged frame because `meshesFor`
+   * already gathers every proxy carrying a ref — a flag is a ring plus a pole —
+   * and each bar is one box.
+   */
+  private frame(
+    at: Vector3,
+    width: number,
+    depth: number,
+    rotY: number,
+    hex: string,
+    ref: SelectionRef,
+  ): void {
+    const t = 0.35;
+    const c = Math.cos(rotY);
+    const s = Math.sin(rotY);
+    const bars: [number, number, number, number][] = [
+      // [local x, local z, size along local x, size along local z]
+      [0, depth / 2, width + t, t],
+      [0, -depth / 2, width + t, t],
+      [width / 2, 0, t, depth],
+      [-width / 2, 0, t, depth],
+    ];
+    for (const [lx, lz, w, d] of bars) {
+      const m = MeshBuilder.CreateBox("ed-frame", { width: w, height: t, depth: d }, this.scene);
+      // The same left-handed convention as MapBuilder's rotateY, so a region
+      // and its proxy turn the same way.
+      m.position.set(at.x + lx * c + lz * s, at.y + LIFT, at.z - lx * s + lz * c);
+      m.rotation.y = rotY;
+      this.adopt(m, ref, hex, 0.85);
+    }
   }
 
   private pole(at: Vector3, height: number, hex: string, ref: SelectionRef): void {

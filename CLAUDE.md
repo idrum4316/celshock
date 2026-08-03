@@ -335,13 +335,32 @@ not cosmetic: blocking scatter emits colliders, colliders feed `NavGrid` and
 `ObstacleField`, so an unseeded scatter means the navigation graph differs
 between page loads and a bot wedged on a boulder is only reproducible on some
 boots. Never call `Math.random()` in world-building code. Changing the seed
-rerolls the whole dressing field, which is a visible change to the level.
+rerolls the whole dressing field, which is a visible change to the level. One
+stream serves the whole build, so **inserting a region rerolls every region
+after it** — append rather than insert if you want a diff you can read.
+
+**A scatter region is a disc or an oriented rectangle** (`ScatterCircle` /
+`ScatterRect`, discriminated by which extents are present — `radius`, or
+`width`/`depth` plus `rotY`). A belt of trees down one side of a street is a
+rectangle; spelling it as a chain of overlapping discs is tedious to author and
+lumpy where they meet. Both shapes draw the same two random numbers per
+placement attempt, so the shipped map's dressing is bit-identical to what the
+circle-only sampler produced. A region is still filed under the map block its
+**centre** falls in, so break a belt longer than the 78 m fog wall into a few
+rectangles rather than authoring one that spans the map.
 
 Builders assemble geometry **at the origin, unrotated**, and return three
 parallel lists (`meshes`, `colliders`, `lights`) in local space. `MapBuilder`
 merges the meshes per colour and then transforms all three into place. Building
 at identity is what makes the merge safe — `MergeMeshes` bakes world matrices and
 returns an identity-transform mesh, the same trick `RifleModel.buildRifle` uses.
+**A scatter region obeys the same rule**: it samples in its own frame and is
+transformed afterwards, which is what lets the editor move and turn one by
+writing a transform. A merge of *one* mesh is the exception `MergeMeshes` will
+not handle for you — `mergeByMaterial` bakes those by hand, and before it did,
+every colour used by a single part of a rotated building (the tavern's sign, the
+smithy's forge glow, the boathouse lamp) was translated into place without being
+rotated.
 
 A **second merge pass** (`BlockMerge`) then collapses neighbouring structures
 and scatter fields into one mesh per (48 m map block, material). The village is
@@ -489,10 +508,10 @@ rebuild immediately instead of leaving stale indices addressable.
 
 Property editing is driven by three files that must agree on what a field key
 means: `fields.ts` declares the vocabulary (dotted paths like `params.width`,
-plus the two compound keys `kind` and `owner` that write more than one field),
-`inspect.ts` produces the controls, `mutate.setField` applies them. Two rules
-there keep the layout terse: **a value equal to the builder's own default is
-removed, not written**, and absent-means-default fields (`y`, `rotY`,
+plus the three compound keys `kind`, `owner` and `shape` that write more than
+one field), `inspect.ts` produces the controls, `mutate.setField` applies them.
+Two rules there keep the layout terse: **a value equal to the builder's own
+default is removed, not written**, and absent-means-default fields (`y`, `rotY`,
 `blocking`, `clearance`, `density`, `scale`) disappear when cleared rather than
 being written as an explicit zero. Angles are edited in degrees and stored in
 radians so `Math.PI / 2` survives — see `qAngle`.
