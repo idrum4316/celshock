@@ -54,11 +54,37 @@ export class InputManager {
   /** Edge-triggered "confirm" (Enter / click / gamepad A / Start). */
   confirmPressed = false;
   /**
+   * Edge-triggered confirm with the MOUSE LEFT OUT (Enter / gamepad A).
+   *
+   * The menu and the deploy screen treat any click as a confirm, because there
+   * the click is the action — you click the map to deploy. A list of buttons
+   * is the opposite case: the mouse has its own targets there, and a click on
+   * the empty half of the screen must not fire whatever the keyboard selection
+   * happened to be resting on. Start is left out too; that is the pause key.
+   */
+  menuConfirmPressed = false;
+  /**
    * Edge-triggered menu navigation (arrow keys / gamepad D-pad). Menus only —
    * nothing in gameplay reads these.
    */
   menuLeftPressed = false;
   menuRightPressed = false;
+  menuUpPressed = false;
+  menuDownPressed = false;
+  /**
+   * Edge-triggered pause/resume (Escape / gamepad Start).
+   *
+   * Escape is deliberately NOT in `BOUND_CODES`: its browser default is to
+   * drop pointer lock, which is exactly what a pause wants, and a page cannot
+   * suppress it anyway. It is also not the only trigger — a locked pointer is
+   * the browser's to release, and some browsers swallow the keydown that
+   * releases it, so `Game` pauses on losing the lock as well as on this.
+   *
+   * Start doubles as `confirmPressed` (it is the menus' "deploy" button), so
+   * both flags come up on the same frame. Game resolves that by handling pause
+   * first and ignoring the confirm behind it.
+   */
+  pausePressed = false;
   pointerLocked = false;
   gamepadConnected = false;
   /**
@@ -89,8 +115,12 @@ export class InputManager {
   private prevJump = false;
   private prevReload = false;
   private prevConfirm = false;
+  private prevMenuConfirm = false;
   private prevMenuLeft = false;
   private prevMenuRight = false;
+  private prevMenuUp = false;
+  private prevMenuDown = false;
+  private prevPause = false;
   private prevPadSprint = false;
   /** Latched L3 sprint state — toggled on each L3 press, cleared on blur. */
   private padSprintOn = false;
@@ -143,6 +173,11 @@ export class InputManager {
     });
     document.addEventListener("pointerlockchange", () => {
       this.pointerLocked = document.pointerLockElement === canvas;
+      // Escape is the browser's own gesture for dropping the lock, and the
+      // keyup that follows it can land on a different focus target. Clearing
+      // the key here means a swallowed keyup cannot leave the pause key stuck
+      // down, which would eat every later press of it.
+      this.keys.delete("Escape");
     });
   }
 
@@ -243,17 +278,34 @@ export class InputManager {
     this.confirmPressed = confirmNow && !this.prevConfirm;
     this.prevConfirm = confirmNow;
 
-    // Menu navigation. D-pad left/right are buttons 14/15 on the standard
-    // mapping. Edge-triggered like everything else here, so holding the key
-    // steps one tier rather than scrolling through the whole list.
+    const menuConfirmNow =
+      this.keys.has("Enter") || this.keys.has("NumpadEnter") || padJump;
+    this.menuConfirmPressed = menuConfirmNow && !this.prevMenuConfirm;
+    this.prevMenuConfirm = menuConfirmNow;
+
+    // Menu navigation. D-pad up/down/left/right are buttons 12/13/14/15 on the
+    // standard mapping. Edge-triggered like everything else here, so holding
+    // the key steps one item rather than scrolling through the whole list.
     const leftNow =
       this.keys.has("ArrowLeft") || (pad ? buttonHeld(pad, 14, trig) : false);
     const rightNow =
       this.keys.has("ArrowRight") || (pad ? buttonHeld(pad, 15, trig) : false);
+    const upNow =
+      this.keys.has("ArrowUp") || (pad ? buttonHeld(pad, 12, trig) : false);
+    const downNow =
+      this.keys.has("ArrowDown") || (pad ? buttonHeld(pad, 13, trig) : false);
     this.menuLeftPressed = leftNow && !this.prevMenuLeft;
     this.menuRightPressed = rightNow && !this.prevMenuRight;
+    this.menuUpPressed = upNow && !this.prevMenuUp;
+    this.menuDownPressed = downNow && !this.prevMenuDown;
     this.prevMenuLeft = leftNow;
     this.prevMenuRight = rightNow;
+    this.prevMenuUp = upNow;
+    this.prevMenuDown = downNow;
+
+    const pauseNow = this.keys.has("Escape") || padStart;
+    this.pausePressed = pauseNow && !this.prevPause;
+    this.prevPause = pauseNow;
   }
 
   /**
@@ -341,6 +393,8 @@ const BOUND_CODES = new Set([
   "NumpadEnter",
   "ArrowLeft",
   "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
   "ShiftLeft",
   "ShiftRight",
   "ControlLeft",

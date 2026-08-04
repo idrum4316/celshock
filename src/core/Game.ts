@@ -58,12 +58,24 @@ import { Sfx } from "./Sfx";
  * `menu` -> `deploy` -> `playing`, with `deploy` re-entered on every death,
  * and `roundover` when one side runs out of tickets.
  *
+ * `paused` is the other side state, and unlike the rest it remembers where it
+ * came from (`pausedFrom`): a pause is a lid over `playing` or `deploy`, and
+ * resuming puts the state back exactly as it was rather than moving the game
+ * on. Nothing simulates while it is up — the scene still renders, which is what
+ * makes a paused round look held rather than gone.
+ *
  * `editor` sits outside that cycle: it is a dev-only side state reachable from
  * anywhere with F2, and leaving it always restarts the round rather than
  * resuming, because the systems that cache the GameMap cannot be handed a map
  * that was rebuilt underneath them.
  */
-type GameState = "menu" | "deploy" | "playing" | "roundover" | "editor";
+type GameState =
+  | "menu"
+  | "deploy"
+  | "playing"
+  | "paused"
+  | "roundover"
+  | "editor";
 
 /** Grass bends around combatants; in the editor there are none. */
 const EMPTY_PUSHERS: readonly Combatant[] = [];
@@ -138,6 +150,14 @@ export class Game {
   private editor: EditorSession | null = null;
 
   private state: GameState = "menu";
+  /** Which state the pause menu is a lid over; where `resume()` puts it back. */
+  private pausedFrom: "playing" | "deploy" = "playing";
+  /**
+   * Whether the pointer was locked as of the last `pointerlockchange`. Losing
+   * the lock is what pauses the game, and only a *transition* out of it counts
+   * — a pad player who never took the lock has none to lose.
+   */
+  private hadPointerLock = false;
   private map: GameMap | null = null;
   /** Small delay so overlay confirms aren't triggered by held buttons. */
   private overlayT = 0;
@@ -298,8 +318,23 @@ export class Game {
     document.addEventListener("pointerdown", () => {
       this.sfx.unlock();
       if (!this.input.pointerLocked && this.state === "playing") {
-        canvas.requestPointerLock();
+        this.requestLock();
       }
+    });
+
+    // Losing the pointer lock is the pause trigger, and it has to be, because
+    // Escape belongs to the browser: it is the UA's own gesture for dropping
+    // the lock and the keydown behind it is not reliably delivered to the page.
+    // This catches every way out of a locked pointer — Escape, alt-tab, a
+    // focus change — which is the same set of things that should stop the
+    // round. `input.pausePressed` is the second trigger, for the pad player
+    // (Start) and for the keyboard player who was not locked to begin with.
+    document.addEventListener("pointerlockchange", () => {
+      const locked = document.pointerLockElement === canvas;
+      if (!locked && this.hadPointerLock && this.state === "playing") {
+        this.pause();
+      }
+      this.hadPointerLock = locked;
     });
     window.addEventListener("keydown", () => this.sfx.unlock(), { once: true });
     window.addEventListener("resize", () => this.engine.resize());
@@ -316,6 +351,13 @@ export class Game {
     }
 
     this.hud.onDifficulty = (tier) => this.setDifficulty(tier);
+    this.hud.onPauseAction = (action) => {
+      // Restart needs nothing put back by hand: `startRound` lifts the lid,
+      // hides the overlay and ends in `enterDeploy`, which sets the state.
+      if (action === "resume") this.resume();
+      else if (action === "restart") this.startRound();
+      else this.enterMenu();
+    };
     this.showMenu();
     // Debug/test handle (used by automated smoke tests).
     (window as unknown as { __celshock: Game }).__celshock = this;
@@ -388,6 +430,10 @@ export class Game {
         }
         break;
       case "deploy":
+        if (this.input.pausePressed) {
+          this.pause();
+          break;
+        }
         this.respawnT -= dt;
         this.deployScreen.update(this.respawnT);
         // Enter / gamepad A deploys at the current selection; clicking the map
@@ -395,14 +441,36 @@ export class Game {
         if (this.input.confirmPressed) this.deployScreen.confirm();
         break;
       case "playing":
+        if (this.input.pausePressed) {
+          this.pause();
+          break;
+        }
         this.updateGameplay(dt);
+        break;
+      case "paused":
+        // Pause is checked first and breaks: Start raises `pausePressed` and
+        // `confirmPressed` on the same frame, and resuming must not also fire
+        // whichever item the selection happens to be on.
+        if (this.input.pausePressed) {
+          this.resume();
+          break;
+        }
+        if (this.input.menuUpPressed) this.hud.movePauseSelection(-1);
+        if (this.input.menuDownPressed) this.hud.movePauseSelection(1);
+        // Keyboard/pad confirm only — the buttons handle their own clicks, and
+        // a click on the empty half of the screen is not a menu choice.
+        if (this.input.menuConfirmPressed) this.hud.activatePause();
         break;
       case "editor":
         this.updateEditor(dt);
         break;
     }
 
-    this.hud.update(dt);
+    // A pause stops the HUD's clock too: the killfeed, the toasts and the
+    // damage vignette are all part of the frozen frame, and a fight fading off
+    // the screen while nothing in the world moves is the tell that the pause
+    // is only skin deep. Every other state passes the real dt.
+    this.hud.update(this.state === "paused" ? 0 : dt);
     this.post.update(dt);
     this.sky.update(dt);
     // After every state has had its go at the camera, and before the render
@@ -419,6 +487,97 @@ export class Game {
     // authoring tool.
     this.motionBlur.update(this.cameraSys.aimYaw, this.cameraSys.aimPitch);
     this.scene.render();
+  }
+
+  /**
+   * Takes the pointer lock back, tolerating the browser saying no.
+   *
+   * Chrome refuses a fresh lock for about a second after the user pressed
+   * Escape to leave one — which is precisely the sequence a pause menu ends
+   * with — and reports it by rejecting the promise. That is not an error worth
+   * surfacing: the lock hint is already on screen and the player's next click
+   * takes the lock through the `pointerdown` handler above. Older browsers
+   * return nothing at all from this call, hence the shape of the check.
+   */
+  private requestLock(): void {
+    const pending = this.canvas.requestPointerLock() as unknown as
+      | Promise<void>
+      | undefined;
+    if (pending && typeof pending.catch === "function") {
+      pending.catch(() => {});
+    }
+  }
+
+  /**
+   * Puts a lid on the round. Reachable from `playing` and from `deploy` — a
+   * player waiting out a respawn timer should not have to watch it run down
+   * before they can leave — and it remembers which, because resuming has to
+   * put the game back where it was rather than moving it on.
+   *
+   * Nothing here stops the render loop: `tick` simply stops calling
+   * `updateGameplay`, so the scene, the sky and the post chain all keep
+   * drawing the frozen frame. That is what the menu and the round-over screen
+   * already do, and it is why a paused round reads as held rather than gone.
+   */
+  private pause(): void {
+    if (this.state !== "playing" && this.state !== "deploy") return;
+    this.pausedFrom = this.state;
+    this.state = "paused";
+    this.hud.setPaused(true);
+    this.hud.showPause();
+    // Suspends the audio clock, so the tail of the last shot is still there
+    // when the round starts again instead of ringing out over the menu.
+    this.sfx.setSuspended(true);
+    document.exitPointerLock();
+  }
+
+  /**
+   * Lifts the lid without deciding where the game goes next. Every exit from
+   * `paused` owes this — including F2 into the editor, which is why it is a
+   * method and not three lines repeated in `resume`.
+   */
+  private clearPause(): void {
+    this.hud.setPaused(false);
+    this.sfx.setSuspended(false);
+  }
+
+  private resume(): void {
+    if (this.state !== "paused") return;
+    this.hud.hideOverlay();
+    this.clearPause();
+    this.state = this.pausedFrom;
+    if (this.state === "playing") {
+      // The click that chose "Resume" is still held, and it is about to become
+      // the click that takes the pointer lock back — the same trap the deploy
+      // map's click documents in `spawnPlayer`.
+      this.input.consumeFire();
+      this.requestLock();
+    }
+  }
+
+  /**
+   * Back to the main menu, from the pause screen. Mirrors `endRound` minus a
+   * result: the round is abandoned rather than finished, so there is no winner
+   * to show and nothing to keep.
+   *
+   * The map is deliberately left standing. `startRound` rebuilds it anyway,
+   * and disposing it here would only trade a live backdrop for an empty one.
+   */
+  private enterMenu(): void {
+    this.state = "menu";
+    this.clearPause();
+    this.deployScreen.hide();
+    this.minimap.setVisible(false);
+    this.player.setBodyHidden(true);
+    this.hud.setScoreboard(false);
+    this.hud.clearDamageDirections();
+    this.hud.setCapture(null);
+    this.battle.reset();
+    document.exitPointerLock();
+    // Same gate the round-over screen uses: the confirm that got here must not
+    // fall through into starting the next round.
+    this.overlayT = 0;
+    this.showMenu();
   }
 
   /**
@@ -460,6 +619,9 @@ export class Game {
     this.state = "editor";
     const map = this.buildEditorMap();
     this.hud.hideOverlay();
+    // F2 is reachable from the pause menu, and an editor session that inherited
+    // a suspended audio context and a hidden crosshair would be a puzzle.
+    this.clearPause();
     this.hud.setEditing(true);
     this.deployScreen.hide();
     this.minimap.setVisible(false);
@@ -544,6 +706,9 @@ export class Game {
 
   private startRound(): void {
     this.hud.hideOverlay();
+    // Reachable straight from the pause menu ("Restart round"), and harmless
+    // from anywhere else.
+    this.clearPause();
     // Re-draw skills for the chosen tier. The rig pool is never disposed, so
     // this is the only place the roster's difficulty can change.
     this.battle.setDifficulty(this.difficulty);

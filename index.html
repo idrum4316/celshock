@@ -940,10 +940,15 @@
       }
       #lock-hint b { color: var(--hot); }
 
-      /* --- overlays (menu / round over) --- */
+      /* --- overlays (menu / round over / pause) --- */
       #overlay {
         position: absolute;
         inset: 0;
+        /* The minimap and the deploy screen are appended to #hud AFTER its
+           markup, so in DOM order they paint over this. The pause menu can be
+           opened with either of them on screen, and an overlay you can see
+           through a map is not an overlay. */
+        z-index: 10;
         background:
           radial-gradient(ellipse at center, rgba(6, 8, 14, 0.78), rgba(2, 3, 6, 0.96)),
           repeating-linear-gradient(
@@ -968,6 +973,10 @@
         color: var(--hot);
         text-shadow: 5px 5px 0 #000, -2px -2px 0 #35f0ff;
       }
+      /* The pause title is deliberately smaller than the menu's and the result
+         screen's: those hide the HUD, this one is a header inside a running
+         round and has to clear the flag strip along the top of it. */
+      #overlay h1.pause-title { font-size: 44px; }
       #overlay h1.dead { color: var(--theirs); text-shadow: 5px 5px 0 #000; }
       #overlay h1.win { color: var(--good); text-shadow: 5px 5px 0 #000; }
       #overlay .tagline {
@@ -1021,6 +1030,42 @@
         color: var(--hot);
       }
       #overlay .difficulty button.tier.on {
+        color: #12141a;
+        background: var(--hot);
+      }
+
+      /* The pause menu's action list. Same carve-out as the difficulty row —
+         the buttons take pointer events, the overlay around them does not. */
+      #overlay .pause-actions {
+        pointer-events: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 280px;
+      }
+      #overlay button.pact {
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        padding: 12px 22px;
+        color: #cdd6e6;
+        background: rgba(255, 255, 255, 0.05);
+        border: 0;
+        cursor: pointer;
+        clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+        transition: background 0.12s, color 0.12s;
+      }
+      /* Selection is filled, hover is only warm: the keyboard's idea of where
+         it is has to stay readable while the mouse is somewhere else. Hover
+         moves the selection anyway (see HUD.showPause), so the two only differ
+         for the frame between entering a button and the class landing. */
+      #overlay button.pact:hover {
+        background: rgba(255, 230, 128, 0.18);
+        color: var(--hot);
+      }
+      #overlay button.pact.on {
         color: #12141a;
         background: var(--hot);
       }
@@ -1117,6 +1162,24 @@
       #hud.overlaid #killfeed,
       #hud.overlaid #message,
       #hud.overlaid #toasts { display: none; }
+
+      /* --- paused ---
+         Unlike .overlaid, this keeps the gauges, the flag strip and the vitals:
+         under a pause they are this round's and still true, and the frozen
+         scene behind them is the one they describe. What goes is what would be
+         lying — a crosshair with nothing to shoot, a hitmarker and damage arcs
+         stopped mid-decay, and the hint telling you to click for a mouse you
+         have already got. */
+      /* The pause overlay is the one that swallows clicks. Everywhere else the
+         overlay stays inert and only its buttons opt in — but the deploy map
+         underneath takes pointer events of its own, and a click through the
+         empty half of a pause screen must not deploy the player. */
+      #hud.paused #overlay { pointer-events: auto; }
+      #hud.paused #crosshair,
+      #hud.paused #hitmarker,
+      #hud.paused #damage-dirs,
+      #hud.paused #capture-status,
+      #hud.paused #lock-hint { display: none; }
 
       /* --- map editor (dev only) --- */
       /* The gameplay chrome is meaningless with no player, and the crosshair

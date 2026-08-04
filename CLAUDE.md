@@ -198,6 +198,41 @@ on every death and `roundover` when a side runs out of tickets. The 3D scene
 renders in every state, which is what lets the deploy screen and the menu sit
 over a live view.
 
+**`paused` is a lid over `playing` or `deploy`, not a step in that cycle.** It
+records which one it covered (`pausedFrom`) and puts it back, so a pause taken
+while waiting out a respawn returns to the deploy map rather than dropping the
+player into the world. Pausing is just `tick` not calling `updateGameplay` —
+everything else still renders, so the round reads as held rather than gone —
+plus two things that would otherwise leak past it: `Sfx.setSuspended` stops the
+audio clock (the tail of the last shot is still there when you come back, and
+the voice counter stays honest because nothing ends while the clock is
+stopped), and the HUD is ticked with `dt = 0` so the killfeed and the toasts
+freeze with the world instead of fading off a frozen screen.
+
+**Losing the pointer lock is the trigger, and it has to be.** Escape belongs to
+the browser — it is the UA's own gesture for dropping the lock and the keydown
+behind it is not reliably delivered — so `Game` listens for the lock going away
+and pauses on the *transition* out of it, which also covers alt-tab and any
+other focus loss. A player who never took the lock (a pad player) has none to
+lose, hence the transition test rather than a bare "not locked". `Escape` and
+gamepad Start are the second trigger, through `input.pausePressed`. Start also
+raises `confirmPressed` (it is the menus' deploy button), so the paused branch
+handles pause first and breaks. The list is confirmed with
+`menuConfirmPressed` — Enter and pad A but *not* the mouse — because a click on
+the empty half of a pause screen is not a menu choice, unlike the deploy map
+where the click is the action.
+
+`#hud.paused` is deliberately **not** `.overlaid`: the menu and the round-over
+card hide the gauges because what is under them is last round's, while under a
+pause the tickets, flags and vitals are current and frozen with the scene. What
+it does hide is what would be lying — the crosshair, the hitmarker, the damage
+arcs and the "click to capture the mouse" hint. It is also the one overlay that
+takes pointer events across its whole area, because the deploy screen
+underneath takes them too and a click through the backdrop would deploy the
+player. Re-taking the lock on resume tolerates a rejection: Chrome refuses one
+for about a second after Escape released it, which is exactly the sequence a
+pause ends with, and the next click gets it.
+
 `Game.updateGameplay` has a load-bearing order at the end of the frame: camera
 update → `mats.updateCamera()` → carried-light updates → `lighting.update(dt,
 camera.position, mats)` → `sfx.setListener()`. Light slot selection, shader fog,

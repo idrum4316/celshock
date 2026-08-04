@@ -119,6 +119,15 @@ const CONTROLS: readonly [string, string, string][] = [
   ["Reload", "X", "R"],
   ["Sprint", "L3", "Shift"],
   ["Crouch", "B", "Ctrl"],
+  ["Pause", "Start", "Esc"],
+];
+
+/** What the pause menu can do, and the label for each. In screen order. */
+export type PauseAction = "resume" | "restart" | "quit";
+const PAUSE_ITEMS: readonly [PauseAction, string][] = [
+  ["resume", "Resume"],
+  ["restart", "Restart round"],
+  ["quit", "Quit to menu"],
 ];
 
 /**
@@ -165,6 +174,10 @@ export class HUD {
     fill: HTMLElement;
     state: HTMLElement;
   };
+
+  /** The pause menu's buttons and which one is selected; empty when closed. */
+  private pauseButtons: HTMLElement[] = [];
+  private pauseIndex = 0;
 
   private hitT = 0;
   private vignetteT = 0;
@@ -699,9 +712,100 @@ export class HUD {
     `;
   }
 
+  /**
+   * The pause menu: a short action list, the controls table, and nothing else.
+   *
+   * It deliberately does NOT call `setOverlaid`. The menu and the round-over
+   * card hide the gameplay chrome because what is under them is last round's
+   * and no longer true; under a pause everything on screen is this round's and
+   * frozen exactly as it stood, so the tickets, the flags and your own vitals
+   * are worth reading. `#hud.paused` takes away only the things that would be
+   * lying — the crosshair, the hitmarker, the damage arcs and the lock hint.
+   *
+   * The action list is the one part of the overlay that takes pointer events,
+   * the same carve-out the difficulty row gets. Selection is a class on a
+   * button that already exists rather than a re-render, so arrowing down the
+   * list does not restart the prompt's animation or drop the hover state.
+   */
+  showPause(): void {
+    this.overlay.classList.remove("hidden");
+    const items = PAUSE_ITEMS.map(
+      ([action, label]) =>
+        `<button class="pact" data-action="${action}">${label}</button>`,
+    ).join("");
+    this.overlay.innerHTML = `
+      <div class="ov-title">
+        <h1 class="pause-title">PAUSED</h1>
+        <p class="tagline">The round is held &mdash; nothing moves until you resume</p>
+      </div>
+      <div class="pause-actions">${items}</div>
+      <div class="ov-controls frame">
+        <div class="ov-controls-head">
+          <span>Controls</span><span>Keyboard &amp; mouse</span><span>Gamepad</span>
+        </div>
+        ${CONTROLS.map(
+          ([action, pad, key]) => `
+        <div class="ctl">
+          <span class="ctl-act">${action}</span>
+          <span class="ctl-keys">${key
+            .split(" ")
+            .map((k) => `<kbd>${k}</kbd>`)
+            .join("")}</span>
+          <span class="ctl-pad"><kbd class="pad">${pad}</kbd></span>
+        </div>`,
+        ).join("")}
+      </div>
+      <p class="prompt">Esc or Start to resume</p>
+    `;
+    this.pauseButtons = [];
+    this.overlay
+      .querySelectorAll<HTMLElement>("button.pact")
+      .forEach((btn, i) => {
+        btn.onclick = () => this.onPauseAction(btn.dataset.action as PauseAction);
+        // Hovering moves the keyboard selection with it, so the highlighted
+        // item and the one a click is about to fire can never disagree.
+        btn.onmouseenter = () => this.setPauseSelection(i);
+        this.pauseButtons.push(btn);
+      });
+    this.setPauseSelection(0);
+  }
+
+  /** Steps the pause selection, wrapping at both ends. */
+  movePauseSelection(delta: number): void {
+    const n = this.pauseButtons.length;
+    if (n === 0) return;
+    this.setPauseSelection((this.pauseIndex + delta + n) % n);
+  }
+
+  /** Fires the selected pause item — Enter / gamepad A. */
+  activatePause(): void {
+    const btn = this.pauseButtons[this.pauseIndex];
+    if (btn) this.onPauseAction(btn.dataset.action as PauseAction);
+  }
+
+  /** Wired by Game: the player picked something from the pause menu. */
+  onPauseAction: (action: PauseAction) => void = () => {};
+
+  private setPauseSelection(i: number): void {
+    this.pauseIndex = i;
+    this.pauseButtons.forEach((b, k) => b.classList.toggle("on", k === i));
+  }
+
+  /**
+   * Takes away the chrome that would be lying while the game is held: the
+   * crosshair (nothing to shoot), the hitmarker and damage arcs (frozen
+   * mid-decay), and the lock hint (the pause is why the mouse is free).
+   */
+  setPaused(on: boolean): void {
+    this.root.classList.toggle("paused", on);
+  }
+
   hideOverlay(): void {
     this.overlay.classList.add("hidden");
     this.setOverlaid(false);
+    // The buttons live in the overlay's markup, so they die with it.
+    this.pauseButtons = [];
+    this.pauseIndex = 0;
   }
 
   /**

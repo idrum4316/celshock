@@ -61,6 +61,8 @@ export class Sfx {
   private reverb: ConvolverNode | null = null;
   /** Currently-playing one-shots, for the voice cap. */
   private voices = 0;
+  /** True while the game is paused and the context is suspended. */
+  private paused = false;
   /** Last listener position, for propagation delay and air absorption. */
   private lx = 0;
   private ly = 0;
@@ -111,9 +113,29 @@ export class Sfx {
         this.ctx = null;
       }
     }
-    if (this.ctx && this.ctx.state === "suspended") {
+    if (this.ctx && this.ctx.state === "suspended" && !this.paused) {
       void this.ctx.resume();
     }
+  }
+
+  /**
+   * Freezes or thaws the whole graph — the pause menu, and nothing else.
+   *
+   * Suspending the context rather than muting a gain is what makes this
+   * correct for free: anything already scheduled (the tail of the shot that
+   * was in the air, a reload two clacks in) stops where it is and carries on
+   * from there, and the `voices` counter stays honest because nothing ends
+   * while the clock is stopped.
+   *
+   * The flag is also what stops `unlock()` from thawing it behind our back:
+   * the click on the pause menu is a pointer gesture like any other, and Game
+   * unlocks audio on every one of those.
+   */
+  setSuspended(on: boolean): void {
+    if (this.paused === on) return;
+    this.paused = on;
+    if (!this.ctx) return;
+    void (on ? this.ctx.suspend() : this.ctx.resume());
   }
 
   /**
