@@ -31,6 +31,13 @@ import { Bot } from "../entities/Bot";
 import { difficultyNames } from "../entities/BotSkill";
 import type { Combatant, Team } from "../entities/Combatant";
 import { Player } from "../entities/Player";
+import {
+  DEFAULT_SIGHT,
+  isSightId,
+  SIGHT_IDS,
+  sightSetup,
+  type SightId,
+} from "../entities/sights";
 import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
@@ -82,6 +89,8 @@ const EMPTY_PUSHERS: readonly Combatant[] = [];
 
 /** Where the chosen enemy-skill tier is remembered between sessions. */
 const DIFFICULTY_KEY = "hollowmere.difficulty";
+/** …and the fitted optic. Same store, same tolerance for it not working. */
+const SIGHT_KEY = "hollowmere.sight";
 
 function readDifficulty(): number {
   try {
@@ -99,6 +108,29 @@ function writeDifficulty(tier: number): void {
     window.localStorage.setItem(DIFFICULTY_KEY, String(tier));
   } catch {
     // Not being able to remember the setting is not worth failing over.
+  }
+}
+
+/**
+ * The remembered optic. Validated rather than trusted: the value is a string
+ * out of a store the player can edit, and a sight that no longer exists would
+ * otherwise index the assembly table with `undefined`.
+ */
+function readSight(): SightId {
+  try {
+    const raw = window.localStorage.getItem(SIGHT_KEY);
+    if (raw !== null && isSightId(raw)) return raw;
+  } catch {
+    // As above.
+  }
+  return DEFAULT_SIGHT;
+}
+
+function writeSight(id: SightId): void {
+  try {
+    window.localStorage.setItem(SIGHT_KEY, id);
+  } catch {
+    // As above.
   }
 }
 
@@ -167,6 +199,12 @@ export class Game {
    * leave a difficulty setting alone.
    */
   private difficulty = readDifficulty();
+  /**
+   * The fitted optic. Unlike the difficulty tier this applies immediately —
+   * changing it re-poses a weapon that is put away in both places it can be
+   * changed from, so there is nothing to defer to the next round.
+   */
+  private sight: SightId = readSight();
   /** Reused each frame: the player plus every bot, for objective occupancy. */
   private readonly combatants: Combatant[] = [];
   /** Scratch for the shadow focus point — no per-frame allocation. */
@@ -351,6 +389,8 @@ export class Game {
     }
 
     this.hud.onDifficulty = (tier) => this.setDifficulty(tier);
+    this.hud.onSight = (id) => this.setSight(id);
+    this.deployScreen.onSight = (id) => this.setSight(id);
     this.hud.onPauseAction = (action) => {
       // Restart needs nothing put back by hand: `startRound` lifts the lid,
       // hides the overlay and ends in `enterDeploy`, which sets the state.
@@ -358,6 +398,10 @@ export class Game {
       else if (action === "restart") this.startRound();
       else this.enterMenu();
     };
+    // Fit the remembered optic before anything is drawn: the viewmodel is
+    // built with the default and the camera's zoom follows from the fit, so
+    // deploying straight off a reload must not start on the wrong sight.
+    this.applySight();
     this.showMenu();
     // Debug/test handle (used by automated smoke tests).
     (window as unknown as { __celshock: Game }).__celshock = this;
@@ -394,7 +438,46 @@ export class Game {
    * -over screen shares that overlay, so there is nothing to keep in sync.
    */
   private showMenu(): void {
-    this.hud.showMenu(difficultyNames(), this.difficulty);
+    this.hud.showMenu(difficultyNames(), this.difficulty, this.sight);
+  }
+
+  /**
+   * Fits an optic, from the main menu or from the deploy screen.
+   *
+   * Deliberately NOT reachable from the pause menu: a round you are already
+   * standing in is not somewhere you get to change what you are carrying, and
+   * the pause overlay simply does not render the row. Nothing here enforces
+   * that — the states that can reach it are the states that draw it.
+   */
+  private setSight(id: SightId): void {
+    if (id === this.sight) return;
+    this.sight = id;
+    writeSight(id);
+    this.applySight();
+    // Redraw whichever editor is on screen. The menu rewrites its whole
+    // overlay; the deploy screen patches its own row.
+    if (this.state === "menu") this.showMenu();
+    this.deployScreen.setSight(id);
+  }
+
+  /**
+   * Pushes the fit to the three things that read it: the weapon (which pose
+   * ADS aims to), the camera (how far it zooms and how much it slows), and
+   * the ammo caption. Split from `setSight` because the constructor owes the
+   * same push for a sight nobody just picked.
+   */
+  private applySight(): void {
+    this.player.setSight(this.sight);
+    this.cameraSys.setSight(this.sight);
+    this.hud.setWeaponSight(sightSetup(this.sight).name);
+    this.deployScreen.setSight(this.sight);
+  }
+
+  /** Steps the fitted optic, wrapping at both ends — the menu's up/down. */
+  private cycleSight(delta: number): void {
+    const n = SIGHT_IDS.length;
+    const i = SIGHT_IDS.indexOf(this.sight);
+    this.setSight(SIGHT_IDS[((i < 0 ? 0 : i) + delta + n) % n]);
   }
 
   /**
@@ -424,6 +507,11 @@ export class Game {
         if (this.state === "menu") {
           if (this.input.menuLeftPressed) this.setDifficulty(this.difficulty - 1);
           if (this.input.menuRightPressed) this.setDifficulty(this.difficulty + 1);
+          // The two pickers split the d-pad between them: left/right is the
+          // difficulty row, up/down the loadout. Neither is a list to walk, so
+          // there is nothing for a shared focus to be on.
+          if (this.input.menuUpPressed) this.cycleSight(-1);
+          if (this.input.menuDownPressed) this.cycleSight(1);
         }
         if (this.input.confirmPressed && this.overlayT > 0.5) {
           this.startRound();
@@ -436,6 +524,11 @@ export class Game {
         }
         this.respawnT -= dt;
         this.deployScreen.update(this.respawnT);
+        // Same split as the menu, and the reason the deploy screen carries a
+        // loadout row at all: the wait for reinforcements is the one moment
+        // inside a round when the weapon is already put away.
+        if (this.input.menuUpPressed) this.cycleSight(-1);
+        if (this.input.menuDownPressed) this.cycleSight(1);
         // Enter / gamepad A deploys at the current selection; clicking the map
         // picks a different one.
         if (this.input.confirmPressed) this.deployScreen.confirm();

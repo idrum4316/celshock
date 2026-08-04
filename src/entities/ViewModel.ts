@@ -6,10 +6,17 @@
  *
  * Invariants:
  * - The ADS pose is DERIVED, never authored: `adsPos` places the rifle so
- *   that its `sightCenter` lands on the camera's own axis at
- *   `viewmodel.adsSightDistance`. The holo reticle then projects to the exact
- *   centre of the screen, which is where CombatSystem sends the bullets. Hand
- *   -tuning that offset breaks the one guarantee ADS is for.
+ *   that the FITTED sight's own `sightCenter` lands on the camera's axis at
+ *   that sight's `eyeRelief`. The reticle then projects to the exact centre
+ *   of the screen, which is where CombatSystem sends the bullets. Hand-tuning
+ *   that offset breaks the one guarantee ADS is for, and it has to be
+ *   re-derived every time the loadout changes — `setSight` is the only place
+ *   that may write it.
+ * - The aimed pose is also scaled by the sight's `zoomComp`, which is a
+ *   uniform scale about the camera's origin: `adsPos` and the node's own
+ *   scaling take the same factor, so no ray direction moves and the sight
+ *   stays exactly on the axis. Scaling one without the other is what would
+ *   break it.
  * - Everything here is cosmetic. It reads the camera; it never writes it, and
  *   it never touches aim, spread or damage.
  * - Meshes render in VIEWMODEL_GROUP with the depth buffer cleared first, so
@@ -32,6 +39,7 @@ import {
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import { buildRifle, type RifleParts } from "./RifleModel";
+import { DEFAULT_SIGHT, sightSetup, type SightId, type SightSetup } from "./sights";
 
 /**
  * Rendering group for everything that hangs off the camera. Babylon clears
@@ -89,8 +97,10 @@ export class ViewModel {
   /** The support arm, which leaves the handguard for the magazine swap. */
   private readonly supportArm: TransformNode;
 
-  /** Aimed position, derived from the sight's own offset (see the header). */
-  private readonly adsPos: Vector3;
+  /** Aimed position, derived from the fitted sight's offset (see the header). */
+  private readonly adsPos = new Vector3();
+  /** The fitted optic. Written only by `setSight`. */
+  private sight: SightSetup = sightSetup(DEFAULT_SIGHT);
   /** The authored hip pose, as vectors (CONFIG is plain readonly numbers). */
   private readonly hipPos: Vector3;
   private readonly hipRot: Vector3;
@@ -105,6 +115,20 @@ export class ViewModel {
   /** Scratch — the pose is rebuilt every frame and must not allocate. */
   private readonly pos = new Vector3();
   private readonly rot = new Vector3();
+  /**
+   * Every positional offset laid on TOP of the base pose — sprint, reload,
+   * sway, bob, the airborne give and the per-shot kick. Kept apart from
+   * `pos` so the zoom compensation can be applied to it: these are metres in
+   * the camera's frame, and a compensated weapon is a weapon drawn closer,
+   * where the same metre is a much bigger angle. Left unscaled, a flick of
+   * sway that nudges the holo's picture would swing a 3.5x scope's bore
+   * clean off the axis.
+   *
+   * Rotations deliberately do NOT get the same treatment: the weapon turns
+   * about its own root, so the displacement a given angle produces already
+   * scales with the model, and the angle at the eye comes out unchanged.
+   */
+  private readonly off = new Vector3();
 
   constructor(scene: Scene, mats: CelMaterialFactory, camera: Node) {
     const v = CONFIG.viewmodel;
@@ -119,21 +143,7 @@ export class ViewModel {
 
     this.rifle = buildRifle(scene, mats, "view");
     this.rifle.root.parent = this.weapon;
-
-    // The aimed pose puts sightCenter on the camera axis at adsSightDistance.
-    // sightCenter is a child of the rifle root, which sits at identity under
-    // `weapon`, so its local offset is the offset to cancel — scaled, because
-    // `weapon.position` is in the camera's frame while the sight's offset is
-    // in the rifle's, and `scale` is exactly what separates the two. Dropping
-    // that factor drops the reticle a couple of degrees below the point of
-    // impact: a sight picture that looks plausible and shoots high.
-    const s = v.scale;
-    const sight = this.rifle.sightCenter.position;
-    this.adsPos = new Vector3(
-      -sight.x * s,
-      -sight.y * s,
-      v.adsSightDistance - sight.z * s,
-    );
+    this.setSight(DEFAULT_SIGHT);
 
     this.meshes.push(...this.rifle.meshes);
     this.meshes.push(...buildArm(scene, mats, "trigger", GRIP_HAND, GRIP_ELBOW, this.weapon));
@@ -160,6 +170,40 @@ export class ViewModel {
     // Start in the hip pose so the first rendered frame is already right.
     this.weapon.position.copyFrom(this.hipPos);
     this.weapon.rotation.copyFrom(this.hipRot);
+  }
+
+  /**
+   * Fits an optic: shows that assembly, hides the rest, and re-derives the
+   * aimed pose from the sight it just fitted.
+   *
+   * The derivation is the one thing here that is not art direction. The
+   * sight's own centre is a child of the rifle root, which sits at identity
+   * under `weapon`, so its local offset is exactly what has to be cancelled —
+   * scaled, because `weapon.position` is in the camera's frame while the
+   * sight's offset is in the rifle's, and `scale` is what separates the two.
+   * Dropping that factor drops the reticle a couple of degrees below the
+   * point of impact: a sight picture that looks plausible and shoots high.
+   *
+   * `zoomComp` then shrinks the whole aimed configuration — the stand-off and
+   * the model together — about the camera's origin, which cannot move the
+   * sight off the axis because a scale about the origin preserves directions.
+   * It is how a 3.5x optic magnifies the world without magnifying the rifle.
+   *
+   * The rifle itself is untouched, which is what keeps Player's muzzle flash
+   * (parented to `rifle.muzzle`) attached across a loadout change.
+   */
+  setSight(id: SightId): void {
+    this.sight = sightSetup(id);
+    for (const [key, assembly] of Object.entries(this.rifle.sights)) {
+      assembly.root.setEnabled(key === id);
+    }
+    const s = CONFIG.viewmodel.scale * this.sight.zoomComp;
+    const centre = this.rifle.sights[id].sightCenter.position;
+    this.adsPos.set(
+      -centre.x * s,
+      -centre.y * s,
+      this.sight.eyeRelief * this.sight.zoomComp - centre.z * s,
+    );
   }
 
   /** World position of the rifle muzzle (tracer and flash origin). */
@@ -189,14 +233,15 @@ export class ViewModel {
     // starts mid-sprint bends out of one and into the other with no pop.
     Vector3.LerpToRef(this.hipPos, this.adsPos, t, this.pos);
     this.rot.copyFrom(this.hipRot).scaleInPlace(1 - t);
+    this.off.setAll(0);
     const sprintW = p.sprintBlend;
     if (sprintW > 0.001) {
-      addScaled(this.pos, v.sprintPos, sprintW);
+      addScaled(this.off, v.sprintPos, sprintW);
       addScaled(this.rot, v.sprintRot, sprintW);
     }
     const reloadW = p.reloadBlend;
     if (reloadW > 0.001) {
-      addScaled(this.pos, v.reloadPos, reloadW);
+      addScaled(this.off, v.reloadPos, reloadW);
       addScaled(this.rot, v.reloadRot, reloadW);
     }
 
@@ -210,32 +255,40 @@ export class ViewModel {
       (clamp(-p.turnRate * v.swayRot, -v.swayMax, v.swayMax) - this.swayYaw) * s;
     this.swayPitch +=
       (clamp(p.pitchRate * v.swayRot, -v.swayMax, v.swayMax) - this.swayPitch) * s;
-    this.pos.x += this.swayX * swayMult;
-    this.pos.y += this.swayY * swayMult;
+    this.off.x += this.swayX * swayMult;
+    this.off.y += this.swayY * swayMult;
     this.rot.y += this.swayYaw * swayMult;
     this.rot.x += this.swayPitch * swayMult;
 
     // --- bob: the camera's phase, so the weapon strides with the view ---
     const bobW = p.moveBlend * (1 - (1 - v.adsBobMult) * t);
     if (bobW > 0.001) {
-      this.pos.x += Math.sin(p.bobPhase) * v.bobLateral * bobW;
-      this.pos.y += Math.sin(p.bobPhase * 2) * v.bobVertical * bobW;
+      this.off.x += Math.sin(p.bobPhase) * v.bobLateral * bobW;
+      this.off.y += Math.sin(p.bobPhase * 2) * v.bobVertical * bobW;
       this.rot.z += Math.sin(p.bobPhase) * v.bobRoll * bobW;
     }
 
     // --- airborne give: the weapon lags the body through a jump ---
-    this.pos.y -= clamp(p.velY * v.airDrop, -v.airDropMax, v.airDropMax);
+    this.off.y -= clamp(p.velY * v.airDrop, -v.airDropMax, v.airDropMax);
 
     // --- per-shot kick: back, up, and nose-high ---
     if (p.kick > 0.001) {
       const r = CONFIG.recoil;
-      this.pos.z -= r.kickBack * p.kick;
-      this.pos.y += r.kickBack * 0.25 * p.kick;
+      this.off.z -= r.kickBack * p.kick;
+      this.off.y += r.kickBack * 0.25 * p.kick;
       this.rot.x -= r.kickPitch * p.kick;
     }
 
+    // The zoom compensation rides the same blend as the pose, so the weapon
+    // shrinks into the aim exactly as the FOV closes around it and its
+    // apparent size never jumps. At t = 0 this is 1 and the hip pose is
+    // untouched; with a sight at or under the reference magnification it is 1
+    // throughout and both lines below are a multiply by one.
+    const k = 1 + (this.sight.zoomComp - 1) * t;
+    this.pos.addInPlace(this.off.scaleInPlace(k));
     this.weapon.position.copyFrom(this.pos);
     this.weapon.rotation.copyFrom(this.rot);
+    this.weapon.scaling.setAll(v.scale * k);
 
     // --- support hand: off the handguard, to the magwell, and back ---
     const magW = this.magWindow(p);

@@ -1,11 +1,16 @@
 /**
- * RifleModel.ts — Builds the low-poly rifle + optic from primitives.
- * Returns RifleParts: pose root plus alignment landmarks (muzzle, grip, ...).
+ * RifleModel.ts — Builds the low-poly rifle from primitives, plus one
+ * assembly per fittable optic (irons / holo / scope).
+ * Returns RifleParts: pose root, alignment landmarks (muzzle), and the sight
+ * assemblies, of which exactly one is ever enabled.
  * Invariants: buildRifle() merges its ~150 parts into one mesh per color while
  * the root is still at identity — MergeMeshes bakes world matrices, so the
  * merge only works unrotated at the origin (same trick as BuildingKit). The
  * merge is what makes the outline pass draw one border per color group.
- * Emissive parts (reticle, glass) MUST carry metadata.noOutline/noGlow or they
+ * Each optic is merged into its OWN meshes rather than into the rifle's, which
+ * is what lets one be swapped for another without rebuilding the weapon — and
+ * is why `muzzle` survives a loadout change (Player's flash hangs off it).
+ * Emissive parts (reticles, glass) MUST carry metadata.noOutline/noGlow or they
  * get black shells and glow-scan artifacts.
  * Nothing here may be scaled non-uniformly: MergeMeshes transforms normals
  * without re-normalising them, and `renderOutline` extrudes along those
@@ -23,14 +28,31 @@ import {
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
+import { SIGHT_IDS, type SightId } from "./sights";
+
+/**
+ * One fittable optic: everything it adds to the rifle, under a node that is
+ * switched off while a different sight is fitted.
+ */
+export interface SightAssembly {
+  root: TransformNode;
+  /**
+   * The optic's eye reference — the rear aperture, the holo window, the
+   * scope's ocular. ADS puts THIS point on the camera axis, so it is what
+   * makes the reticle the point of impact.
+   */
+  sightCenter: TransformNode;
+  meshes: Mesh[];
+}
 
 /** Handles into a built rifle: the pose root plus alignment landmarks. */
 export interface RifleParts {
   root: TransformNode;
   /** Barrel tip — tracer/muzzle-flash origin. */
   muzzle: TransformNode;
-  /** Center of the optic's bore; the ADS camera axis passes through it. */
-  sightCenter: TransformNode;
+  /** One per optic. Exactly one is enabled; see `ViewModel.setSight`. */
+  sights: Record<SightId, SightAssembly>;
+  /** Every visible mesh, every optic's included. */
   meshes: Mesh[];
 }
 
@@ -52,11 +74,11 @@ const SECTIONS: ReadonlyArray<readonly [string, string]> = [
   ["rubber", RUBBER],
 ];
 
-/** Sight window center, in rifle-local space (also the ADS aim axis). */
+/** Holo sight window center, in rifle-local space (also its ADS aim axis). */
 const WIN_Y = 0.185;
 const WIN_Z = 0.02;
 /**
- * The optic's clear bore and wall. The shooter looks PAST the wall, so every
+ * The holo's clear bore and wall. The shooter looks PAST the wall, so every
  * millimetre of it costs sight picture — keep it near the outline width and
  * let the bore carry the size. Outer radius is `(BORE + WALL * 2) / 2`, which
  * is what the turrets and the mount stand off from.
@@ -65,6 +87,47 @@ const BORE = 0.1;
 const WALL = 0.009;
 /** Facets around a round shell. 14 reads round at arm's length and stays cheap. */
 const FACETS = 14;
+
+/**
+ * Iron sights. `IRON_Y` is the aperture/post line — the rear ring's centre and
+ * the front post's TIP are both on it, so the two land on the camera axis
+ * together and the sight picture is correct by construction rather than by
+ * eye. It is as low as the rear ring's outer radius allows: sitting the
+ * aperture on the rail is the whole appeal of irons.
+ */
+const IRON_Y = 0.145;
+const IRON_REAR_Z = -0.185;
+const IRON_FRONT_Z = 0.53;
+/** Top face of the receiver's rail — what both sight bases stand on. */
+const RAIL_TOP = 0.084;
+/**
+ * The two stations share a bore, which is what gives the picture its depth:
+ * the rear ring is a third of the eye's distance to the front one, so it
+ * reads as twice the size and the front hood floats inside it.
+ */
+const IRON_BORE = 0.07;
+
+/**
+ * The 3.5x scope. A telescope here is a real tube the eye looks down — there
+ * is no lens and no post-process, so how much of the frame is clear glass is
+ * decided by the OBJECTIVE rim's angular size, and the bore has to be wide
+ * enough to be worth looking through. `SCOPE_Y` is then forced: the tube's
+ * outer radius has to clear the rail.
+ */
+const SCOPE_BORE = 0.15;
+const SCOPE_WALL = 0.008;
+const SCOPE_OCULAR_Z = -0.13;
+/**
+ * The tube's height and length are set by ONE constraint, and it is not
+ * appearance: a straight tube's view cone spreads with distance, and where it
+ * spreads far enough it runs onto the rifle's own barrel — a bright muzzle
+ * device sitting inside the bottom of the sight picture. The mount is high
+ * enough, and the tube long enough, to keep the cone's lower edge clear of the
+ * gas block, the folded front sight and the flash hider all the way out. Lower
+ * the rings or shorten the body and the rifle appears in its own scope.
+ */
+const SCOPE_Y = 0.205;
+const SCOPE_OBJECTIVE_Z = 0.16;
 
 /**
  * Builds a low-poly cel-styled SCAR-pattern battle rifle with a tube optic.
@@ -91,8 +154,16 @@ export function buildRifle(
   prefix: string,
 ): RifleParts {
   const root = new TransformNode(`${prefix}_rifle`, scene);
-  const groups = new Map<string, Mesh[]>();
   const pivots: TransformNode[] = [];
+
+  /**
+   * Which colour-group map `collect` is filling. The rifle and each optic are
+   * merged separately — swapped here rather than threaded through every
+   * builder helper, because the alternative is an extra argument on `box`,
+   * `tube`, `pin` and `shell` that would be the same value for 150 calls out
+   * of 170.
+   */
+  let target = new Map<string, Mesh[]>();
 
   const collect = (color: string, m: Mesh): Mesh => {
     // The small metal parts are the rifle's only glossy surface — a hard
@@ -103,9 +174,9 @@ export function buildRifle(
         ? mats.getGlossy(color, CONFIG.graphics.spec.rifle)
         : mats.get(color);
     m.isPickable = false;
-    const g = groups.get(color);
+    const g = target.get(color);
     if (g) g.push(m);
-    else groups.set(color, [m]);
+    else target.set(color, [m]);
     return m;
   };
 
@@ -233,6 +304,54 @@ export function buildRifle(
     return n;
   };
 
+  /**
+   * Merges everything `collect` has gathered since the last call into one mesh
+   * per colour, hangs the results off `parent`, and arms a fresh group for the
+   * next caller. Run once for the rifle and once per optic, which is what
+   * keeps a loadout change from touching the weapon underneath it.
+   *
+   * Everything is still at identity under `root` here, so the bake leaves the
+   * geometry exactly where it was built.
+   */
+  const mergeCollected = (suffix: string, parent: TransformNode): Mesh[] => {
+    const groups = target;
+    target = new Map();
+    const out: Mesh[] = [];
+    for (const [name, color] of SECTIONS) {
+      const parts = groups.get(color);
+      if (!parts || parts.length === 0) continue;
+      // A colour group of ONE is the case MergeMeshes will not do for you —
+      // it hands the mesh straight back with its transform intact, which the
+      // new parent would then apply a second time. Bake it by hand instead,
+      // detached first because the bake resets the local matrix. Same rule,
+      // and same reason, as ViewModel's arms and MapBuilder's mergeByMaterial.
+      const merged =
+        parts.length === 1
+          ? (parts[0].setParent(null), parts[0].bakeCurrentTransformIntoVertices())
+          : Mesh.MergeMeshes(parts, true, true);
+      if (!merged) continue;
+      merged.name = `${prefix}_${suffix}_${name}`;
+      merged.parent = parent;
+      merged.isPickable = false;
+      out.push(merged);
+    }
+    return out;
+  };
+
+  /**
+   * Dresses a reticle part: unlit, un-outlined, and deliberately NOT run
+   * through `collect` — an emissive mesh merged into a colour group would take
+   * that group's cel material, and an outline shell around a glowing dot is a
+   * black smudge where the aim point should be.
+   */
+  const lit = (m: Mesh, parent: TransformNode): Mesh => {
+    m.parent = parent;
+    m.material = mats.getEmissive(RETICLE);
+    m.metadata = { noOutline: true };
+    m.isPickable = false;
+    return m;
+  };
+
   // --- upper receiver: one run from the stock hinge to the muzzle end, topped
   // by a continuous ribbed rail (the SCAR's defining line) ---
   // Two stacked slabs rather than one: the narrower top deck reads as the
@@ -343,14 +462,6 @@ export function buildRifle(
   box("foregrip", POLYMER, 0.048, 0.1, 0.055, 0, -0.05, 0, foregripPivot);
   box("foregripCap", RUBBER, 0.05, 0.016, 0.057, 0, -0.104, 0, foregripPivot);
 
-  // Back-up irons, both folded flat the way they would be with an optic
-  // mounted — standing them up puts pillars in the middle of the sight
-  // picture, which is exactly what the housing is trying to keep clear.
-  box("fsBase", METAL, 0.038, 0.02, 0.03, 0, 0.086, 0.482);
-  box("fsLeaf", METAL, 0.03, 0.009, 0.07, 0, 0.0925, 0.53);
-  box("rsBase", METAL, 0.04, 0.02, 0.036, 0, 0.086, -0.14);
-  box("rsLeaf", METAL, 0.032, 0.012, 0.07, 0, 0.094, -0.185);
-
   // --- barrel: gas block, exposed barrel, birdcage flash hider ---
   box("gasBlock", BODY, 0.052, 0.055, 0.07, 0, 0, 0.575);
   box("gasPort", METAL, 0.022, 0.014, 0.026, 0, 0.032, 0.575);
@@ -371,98 +482,251 @@ export function buildRifle(
   box("mzWeb", BODY, 0.021, 0.011, 0.048, 0, -0.0205, 0.711);
   shell("crown", METAL, 0.032, 0.011, 0.013, 0, 0.742, 10);
 
-  // --- optic: rail mount plus a round tube housing around the sight axis ---
-  // The mount's top face meets the housing's underside exactly, so the two
-  // read as one assembly rather than a sight balanced on a block.
-  box("opticMount", POLYMER, 0.062, 0.045, 0.13, 0, 0.1055, WIN_Z);
-  box("opticFoot", METAL, 0.07, 0.012, 0.134, 0, 0.089, WIN_Z);
-  box("opticLever", METAL, 0.018, 0.03, 0.05, 0.038, 0.1, WIN_Z + 0.026);
-  pin("opticNut", METAL, 0.012, 0.076, 0, 0.1, WIN_Z - 0.042);
-  // The housing: a shell of `FACETS` slabs about the sight axis, with a
-  // heavier rim at each end. The bore is the sight picture — the rims are
-  // sized OUTWARD from it so a wider rim never eats into what you can see.
-  shell("sightTube", POLYMER, BORE, WALL, 0.052, WIN_Y, WIN_Z);
-  shell("sightRimF", POLYMER, BORE + 0.004, 0.013, 0.014, WIN_Y, WIN_Z + 0.031);
-  shell("sightRimR", POLYMER, BORE + 0.004, 0.013, 0.014, WIN_Y, WIN_Z - 0.031);
-  // Turrets and battery cap, standing off the housing's outer radius.
-  const rOut = BORE / 2 + WALL;
-  pin("elevTurret", METAL, 0.03, 0.018, 0, WIN_Y + rOut + 0.009, WIN_Z, "y");
-  pin("elevCap", METAL, 0.022, 0.008, 0, WIN_Y + rOut + 0.022, WIN_Z, "y");
-  pin("windTurret", METAL, 0.03, 0.018, rOut + 0.009, WIN_Y, WIN_Z, "x");
-  pin("battery", METAL, 0.026, 0.016, -(rOut + 0.008), WIN_Y - 0.008, WIN_Z, "x");
+  // The rifle itself is finished. Merge it before any optic is built, so a
+  // sight's parts can never end up inside the weapon's colour groups.
+  const meshes: Mesh[] = mergeCollected("rifle", root);
 
-  // Merge each color group. The root is still at identity here, so baking the
-  // world matrices and re-parenting the results leaves the geometry in place.
-  const meshes: Mesh[] = [];
-  for (const [name, color] of SECTIONS) {
-    const parts = groups.get(color);
-    if (!parts || parts.length === 0) continue;
-    const merged = Mesh.MergeMeshes(parts, true, true);
-    if (!merged) continue;
-    merged.name = `${prefix}_rifle_${name}`;
-    merged.parent = root;
-    merged.isPickable = false;
-    meshes.push(merged);
+  // --- the optics ---
+  // Each one is built at the origin under `root` exactly like the rifle was,
+  // merged into its own meshes, and hung off its own node. Everything below
+  // therefore obeys the same rule as the weapon above it: build at identity,
+  // merge, and only then move.
+
+  /**
+   * The back-up irons, folded flat the way they would be with an optic
+   * mounted — standing them up would put pillars in the middle of the sight
+   * picture the housing exists to keep clear. Part of each OPTIC rather than
+   * of the rifle, so the iron loadout can stand its own sights up in the same
+   * place without two sets of leaves fighting over it.
+   */
+  const foldedIrons = (front: boolean): void => {
+    box("rsBase", METAL, 0.04, 0.02, 0.036, 0, 0.086, -0.14);
+    box("rsLeaf", METAL, 0.032, 0.012, 0.07, 0, 0.094, -0.185);
+    // The front pair is the last thing the scope's view cone runs onto — see
+    // SCOPE_Y. A rifle wearing a scope this size is set up around it rather
+    // than over a set of irons, so it simply does not carry them.
+    if (!front) return;
+    box("fsBase", METAL, 0.038, 0.02, 0.03, 0, 0.086, 0.482);
+    box("fsLeaf", METAL, 0.03, 0.009, 0.07, 0, 0.0925, 0.53);
+  };
+
+  /**
+   * Irons: a rear aperture on a low block and a hooded front post. The post's
+   * TIP and the aperture's centre both sit on `IRON_Y`, which is where the
+   * sight centre goes — so aiming lines all three up at once and the picture
+   * is right by construction.
+   */
+  const buildIron = (node: TransformNode): Vector3 => {
+    // Both bases stand from the rail to the BORE's floor, never into it. The
+    // bore's lower edge is only a few millimetres above the receiver from the
+    // eye's point of view, so a base sized by hand blocks the bottom of the
+    // aperture — which reads as a sight with a bite taken out of it.
+    const floor = IRON_Y - IRON_BORE / 2;
+    const baseH = floor - RAIL_TOP;
+    const baseY = (RAIL_TOP + floor) / 2;
+    // Rear: a ring standing just clear of the rail on its own base.
+    box("ironRearBase", METAL, 0.032, baseH, 0.03, 0, baseY, IRON_REAR_Z);
+    shell("ironRearRing", METAL, IRON_BORE, 0.006, 0.012, IRON_Y, IRON_REAR_Z, 10);
+    // Front: the same ring as a hood, with the post rising from its floor to
+    // the axis. The bead is the aim point — a tritium dot, and the only thing
+    // on this sight that is visible against a dark treeline.
+    box("ironFrontBase", METAL, 0.034, baseH, 0.032, 0, baseY, IRON_FRONT_Z);
+    shell("ironFrontHood", METAL, IRON_BORE, 0.005, 0.014, IRON_Y, IRON_FRONT_Z, 10);
+    const postH = IRON_BORE / 2;
+    box("ironPost", METAL, 0.006, postH, 0.008, 0, IRON_Y - postH / 2, IRON_FRONT_Z);
+    mergeCollected("iron", node);
+    const bead = lit(
+      MeshBuilder.CreateSphere(
+        `${prefix}_ironBead`,
+        { diameter: 0.0065, segments: 6 },
+        scene,
+      ),
+      node,
+    );
+    bead.position.set(0, IRON_Y, IRON_FRONT_Z);
+    // The eye reference is the REAR aperture: that is the hole you look
+    // through, and the front post lands on the axis behind it for free.
+    return new Vector3(0, IRON_Y, IRON_REAR_Z);
+  };
+
+  /**
+   * The holographic sight: rail mount plus a round tube housing around the
+   * sight axis, with a lit ring and dot floating in the bore.
+   *
+   * The mount's top face meets the housing's underside exactly, so the two
+   * read as one assembly rather than a sight balanced on a block.
+   */
+  const buildHolo = (node: TransformNode): Vector3 => {
+    foldedIrons(true);
+    box("opticMount", POLYMER, 0.062, 0.045, 0.13, 0, 0.1055, WIN_Z);
+    box("opticFoot", METAL, 0.07, 0.012, 0.134, 0, 0.089, WIN_Z);
+    box("opticLever", METAL, 0.018, 0.03, 0.05, 0.038, 0.1, WIN_Z + 0.026);
+    pin("opticNut", METAL, 0.012, 0.076, 0, 0.1, WIN_Z - 0.042);
+    // The housing: a shell of `FACETS` slabs about the sight axis, with a
+    // heavier rim at each end. The bore is the sight picture — the rims are
+    // sized OUTWARD from it so a wider rim never eats into what you can see.
+    shell("sightTube", POLYMER, BORE, WALL, 0.052, WIN_Y, WIN_Z);
+    shell("sightRimF", POLYMER, BORE + 0.004, 0.013, 0.014, WIN_Y, WIN_Z + 0.031);
+    shell("sightRimR", POLYMER, BORE + 0.004, 0.013, 0.014, WIN_Y, WIN_Z - 0.031);
+    // Turrets and battery cap, standing off the housing's outer radius.
+    const rOut = BORE / 2 + WALL;
+    pin("elevTurret", METAL, 0.03, 0.018, 0, WIN_Y + rOut + 0.009, WIN_Z, "y");
+    pin("elevCap", METAL, 0.022, 0.008, 0, WIN_Y + rOut + 0.022, WIN_Z, "y");
+    pin("windTurret", METAL, 0.03, 0.018, rOut + 0.009, WIN_Y, WIN_Z, "x");
+    pin("battery", METAL, 0.026, 0.016, -(rOut + 0.008), WIN_Y - 0.008, WIN_Z, "x");
+    mergeCollected("holo", node);
+
+    // Reticle: emissive ring + center dot.
+    const ring = lit(
+      MeshBuilder.CreateTorus(
+        `${prefix}_reticleRing`,
+        { diameter: 0.022, thickness: 0.0028, tessellation: 24 },
+        scene,
+      ),
+      node,
+    );
+    ring.rotation.x = Math.PI / 2; // face down the barrel axis
+    ring.position.set(0, WIN_Y, WIN_Z - 0.004);
+
+    const dot = lit(
+      MeshBuilder.CreateSphere(
+        `${prefix}_reticleDot`,
+        { diameter: 0.0045, segments: 6 },
+        scene,
+      ),
+      node,
+    );
+    dot.position.set(0, WIN_Y, WIN_Z - 0.004);
+
+    // Faint holo glass filling the bore (own material — alpha must not leak
+    // into the shared emissive cache). A disc, not a quad: the corners of a
+    // square lens would poke through a round housing.
+    const glassMat = new StandardMaterial(`${prefix}_holoGlass`, scene);
+    glassMat.emissiveColor = Color3.FromHexString("#35f0ff");
+    glassMat.diffuseColor = Color3.Black();
+    glassMat.specularColor = Color3.Black();
+    glassMat.disableLighting = true;
+    glassMat.alpha = 0.12;
+    const glass = MeshBuilder.CreateDisc(
+      `${prefix}_holoGlass`,
+      { radius: BORE / 2, tessellation: FACETS, sideOrientation: Mesh.DOUBLESIDE },
+      scene,
+    );
+    glass.parent = node;
+    glass.position.set(0, WIN_Y, WIN_Z + 0.012);
+    glass.material = glassMat;
+    // noGlow: the GlowLayer would turn the faint tint into a cyan haze that
+    // obscures the sight picture.
+    glass.metadata = { noOutline: true, noGlow: true };
+    glass.isPickable = false;
+
+    return new Vector3(0, WIN_Y, WIN_Z);
+  };
+
+  /**
+   * The 3.5x scope: a long tube in two clamp rings, with a duplex reticle
+   * hung near the objective end.
+   *
+   * There is no glass and no post-process here — the eye genuinely looks down
+   * a hollow tube, and what it can see through it is set by the far rim. That
+   * is why the bore is half again the holo's: at 3.5x a narrow tube is a
+   * keyhole. The reticle's arms are cut to just inside that far rim, so they
+   * run out to the edge of the visible circle and stop.
+   */
+  const buildScope = (node: TransformNode): Vector3 => {
+    foldedIrons(false);
+    const rOut = SCOPE_BORE / 2 + SCOPE_WALL;
+    const bodyLen = SCOPE_OBJECTIVE_Z - SCOPE_OCULAR_Z;
+    const midZ = (SCOPE_OCULAR_Z + SCOPE_OBJECTIVE_Z) / 2;
+    shell("scopeTube", POLYMER, SCOPE_BORE, SCOPE_WALL, bodyLen, SCOPE_Y, midZ);
+    // Eyepiece and objective bell, both sized outward from the bore so
+    // neither can narrow the sight picture.
+    shell("scopeOcular", POLYMER, SCOPE_BORE + 0.006, 0.014, 0.018, SCOPE_Y, SCOPE_OCULAR_Z - 0.005);
+    shell("scopeDiopter", METAL, SCOPE_BORE + 0.004, 0.011, 0.012, SCOPE_Y, SCOPE_OCULAR_Z + 0.03, 10);
+    shell("scopeBell", POLYMER, SCOPE_BORE + 0.012, 0.01, 0.03, SCOPE_Y, SCOPE_OBJECTIVE_Z + 0.015);
+    // Two clamp rings, on bases tall enough to bridge the gap the objective
+    // needs (see SCOPE_Y) — a big front lens is exactly why a scope stands off
+    // its rail as far as this one does.
+    for (const z of [-0.02, 0.14] as const) {
+      box("scopeRingBase", METAL, 0.05, 0.034, 0.028, 0, 0.098, z);
+      shell("scopeRing", METAL, SCOPE_BORE + SCOPE_WALL * 2, 0.008, 0.024, SCOPE_Y, z, 10);
+    }
+    pin("scopeElev", METAL, 0.034, 0.02, 0, SCOPE_Y + rOut + 0.01, 0.03, "y");
+    pin("scopeElevCap", METAL, 0.024, 0.008, 0, SCOPE_Y + rOut + 0.024, 0.03, "y");
+    pin("scopeWind", METAL, 0.034, 0.02, rOut + 0.01, SCOPE_Y, 0.03, "x");
+    pin("scopeParallax", METAL, 0.028, 0.016, -(rOut + 0.008), SCOPE_Y, 0.03, "x");
+    mergeCollected("scope", node);
+
+    // Duplex reticle: four arms in from the tube wall, and a centre dot. Built
+    // as one merged emissive mesh — five separate draws for a crosshair is
+    // five too many on the one model that is always on screen.
+    const retZ = SCOPE_OBJECTIVE_Z - 0.07;
+    const armIn = 0.016;
+    const armOut = SCOPE_BORE / 2 - 0.007;
+    const armLen = armOut - armIn;
+    const armMid = (armIn + armOut) / 2;
+    const bars: Mesh[] = [];
+    for (const side of [-1, 1] as const) {
+      const v = MeshBuilder.CreateBox(
+        `${prefix}_scopeRetV`,
+        { width: 0.0022, height: armLen, depth: 0.0015 },
+        scene,
+      );
+      v.position.set(0, SCOPE_Y + side * armMid, retZ);
+      bars.push(v);
+      const h = MeshBuilder.CreateBox(
+        `${prefix}_scopeRetH`,
+        { width: armLen, height: 0.0022, depth: 0.0015 },
+        scene,
+      );
+      h.position.set(side * armMid, SCOPE_Y, retZ);
+      bars.push(h);
+    }
+    const centre = MeshBuilder.CreateSphere(
+      `${prefix}_scopeRetDot`,
+      { diameter: 0.004, segments: 6 },
+      scene,
+    );
+    centre.position.set(0, SCOPE_Y, retZ);
+    bars.push(centre);
+    const reticle = Mesh.MergeMeshes(bars, true, true);
+    if (reticle) {
+      reticle.name = `${prefix}_scopeReticle`;
+      lit(reticle, node);
+    }
+
+    // The eye reference is the ocular rim — a scope's eye relief is measured
+    // to the glass you put your eye behind, not to the middle of the tube.
+    return new Vector3(0, SCOPE_Y, SCOPE_OCULAR_Z);
+  };
+
+  const BUILDERS: Record<SightId, (node: TransformNode) => Vector3> = {
+    iron: buildIron,
+    holo: buildHolo,
+    scope: buildScope,
+  };
+
+  const sights = {} as Record<SightId, SightAssembly>;
+  for (const id of SIGHT_IDS) {
+    const node = new TransformNode(`${prefix}_sight_${id}`, scene);
+    node.parent = root;
+    const centre = BUILDERS[id](node);
+    const sightCenter = new TransformNode(`${prefix}_${id}_sightCenter`, scene);
+    sightCenter.parent = node;
+    sightCenter.position = centre;
+    // The builder has already parented its merged colour groups and its
+    // reticle to `node`, so the node itself is the list — no bookkeeping to
+    // keep in step with it.
+    const own = node.getChildMeshes(true) as Mesh[];
+    meshes.push(...own);
+    sights[id] = { root: node, sightCenter, meshes: own };
   }
+
   for (const p of pivots) p.dispose();
-
-  // Reticle: emissive ring + center dot. Tagged noOutline so the outline
-  // pass never wraps black borders around the glow.
-  const ring = MeshBuilder.CreateTorus(
-    `${prefix}_reticleRing`,
-    { diameter: 0.022, thickness: 0.0028, tessellation: 24 },
-    scene,
-  );
-  ring.parent = root;
-  ring.rotation.x = Math.PI / 2; // face down the barrel axis
-  ring.position.set(0, WIN_Y, WIN_Z - 0.004);
-  ring.material = mats.getEmissive(RETICLE);
-  ring.metadata = { noOutline: true };
-  ring.isPickable = false;
-  meshes.push(ring);
-
-  const dot = MeshBuilder.CreateSphere(
-    `${prefix}_reticleDot`,
-    { diameter: 0.0045, segments: 6 },
-    scene,
-  );
-  dot.parent = root;
-  dot.position.set(0, WIN_Y, WIN_Z - 0.004);
-  dot.material = mats.getEmissive(RETICLE);
-  dot.metadata = { noOutline: true };
-  dot.isPickable = false;
-  meshes.push(dot);
-
-  // Faint holo glass filling the bore (own material — alpha must not
-  // leak into the shared emissive cache). A disc, not a quad: the corners of
-  // a square lens would poke through a round housing.
-  const glassMat = new StandardMaterial(`${prefix}_holoGlass`, scene);
-  glassMat.emissiveColor = Color3.FromHexString("#35f0ff");
-  glassMat.diffuseColor = Color3.Black();
-  glassMat.specularColor = Color3.Black();
-  glassMat.disableLighting = true;
-  glassMat.alpha = 0.12;
-  const glass = MeshBuilder.CreateDisc(
-    `${prefix}_holoGlass`,
-    { radius: BORE / 2, tessellation: FACETS, sideOrientation: Mesh.DOUBLESIDE },
-    scene,
-  );
-  glass.parent = root;
-  glass.position.set(0, WIN_Y, WIN_Z + 0.012);
-  glass.material = glassMat;
-  // noGlow: the GlowLayer would turn the faint tint into a cyan haze that
-  // obscures the sight picture.
-  glass.metadata = { noOutline: true, noGlow: true };
-  glass.isPickable = false;
-  meshes.push(glass);
 
   const muzzle = new TransformNode(`${prefix}_muzzle`, scene);
   muzzle.parent = root;
   muzzle.position = new Vector3(0, 0, 0.75);
 
-  const sightCenter = new TransformNode(`${prefix}_sightCenter`, scene);
-  sightCenter.parent = root;
-  sightCenter.position = new Vector3(0, WIN_Y, WIN_Z);
-
-  return { root, muzzle, sightCenter, meshes };
+  return { root, muzzle, sights, meshes };
 }

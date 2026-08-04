@@ -705,12 +705,9 @@ export const CONFIG = {
     /** Mouse sensitivity (radians per pixel). */
     sensX: 0.0022,
     sensY: 0.002,
-    /** ADS mouse sensitivity multiplier. */
-    adsMouseMult: 0.6,
     /** Gamepad look speed (radians per second at full deflection). */
     stickSensX: 2.8,
     stickSensY: 1.8,
-    adsStickMult: 0.5,
     /**
      * Eye height, standing. The camera sits here (first person), Player.eyePos
      * reports it, and bot line-of-sight checks against the player use it — one
@@ -719,9 +716,16 @@ export const CONFIG = {
      * the same number doing the same three jobs, just lower.
      */
     eyeHeight: 1.55,
+    /**
+     * Hip-fire vertical FOV (radians). The AIMED field of view is not here —
+     * it belongs to whichever optic is fitted, so it lives in `sights` below
+     * and is derived from that sight's magnification against this number.
+     */
     fovHip: 0.95,
-    fovAds: 0.62,
-    /** How fast the hip<->ADS blend converges (per second). */
+    /**
+     * How fast the hip<->ADS blend converges (per second), before the fitted
+     * sight's own `adsSpeedMult` is applied.
+     */
     adsBlendSpeed: 10,
     /**
      * Pitch limits. Wider than the third-person camera's, which had to stop
@@ -741,6 +745,17 @@ export const CONFIG = {
     bobRate: 8.0,
     bobVertical: 0.026,
     bobLateral: 0.018,
+    /**
+     * ADS look sensitivity, as a multiplier on the hip-fire rates BEFORE the
+     * fitted optic's magnification is divided out (see `sights`). Aiming
+     * therefore moves the crosshair across the SCREEN at a near-constant rate
+     * whatever is bolted to the rail — a 3.5x scope that kept the hip-fire
+     * rates would be unusable, and one tuned by hand per optic would drift.
+     * The shipped holo is 1.6x, so these reproduce the 0.6 / 0.5 the camera
+     * used when the sight was not a choice.
+     */
+    adsLookMouse: 0.96,
+    adsLookStick: 0.8,
     /** Bob multiplier while aimed — braced, so nearly still. */
     bobAdsMult: 0.2,
     /**
@@ -755,17 +770,77 @@ export const CONFIG = {
   },
 
   /**
+   * The optics the player can fit, and everything that differs between them.
+   * The keys ARE the sight ids — `SightId` in `entities/sights.ts` is derived
+   * from this table, so adding an optic here and a builder in `RifleModel`
+   * is the whole job.
+   *
+   * Every sight fires the same bullets: damage, spread and recoil are the
+   * rifle's, not the optic's. What an optic changes is what you can SEE and
+   * how fast you can bring it to bear, which is the trade the loadout screen
+   * is asking you to make.
+   *
+   * `magnification` is the one number the rest is derived from — the aimed
+   * FOV (`2*atan(tan(fovHip/2) / magnification)`), the look sensitivity (see
+   * `camera.adsLookMouse`) and the viewmodel's zoom compensation
+   * (`viewmodel.adsMagReference`) all fall out of it. Holo is 1.6, which is
+   * exactly the 0.62 rad the camera used before optics were a choice, so
+   * fitting it reproduces the shipped weapon frame for frame.
+   */
+  sights: {
+    /**
+     * Irons: a rear aperture and a hooded front post. No glass, the least
+     * zoom, the widest picture and the fastest to the shoulder — the choice
+     * for close work, where a magnified sight is a liability.
+     */
+    iron: {
+      name: "Iron",
+      magnification: 1.35,
+      /** Distance from the eye to the sight's own eye reference, aimed (m). */
+      eyeRelief: 0.42,
+      /** Multiplier on `camera.adsBlendSpeed` — how fast it comes up. */
+      adsSpeedMult: 1.2,
+    },
+    /** The shipped holographic sight: a lit ring and dot on a tube optic. */
+    holo: {
+      name: "Holo",
+      magnification: 1.6,
+      eyeRelief: 0.52,
+      adsSpeedMult: 1,
+    },
+    /**
+     * A 3.5x telescopic sight with a duplex reticle. Slow to raise and a
+     * tunnel to look down, and the only thing on the rifle that will show you
+     * a body at the far end of the valley.
+     */
+    scope: {
+      name: "Scope",
+      magnification: 3.5,
+      /**
+       * Short, and that is what makes it a scope rather than a pipe. The eye
+       * looks down a real hollow tube here, so how much of the frame is clear
+       * is set by the OBJECTIVE rim's angular size — pull the eye back and
+       * the far rim shrinks until the sight picture is a keyhole. Close in,
+       * the near rim passes off the top and bottom of the screen and what is
+       * left is a magnified circle in a dark surround.
+       */
+      eyeRelief: 0.28,
+      adsSpeedMult: 0.75,
+    },
+  },
+
+  /**
    * The first-person weapon: where the rifle sits in front of the camera, and
    * everything that moves it there. All positions/rotations are CAMERA-LOCAL
    * (+x right, +y up, +z forward) and in rifle-model units — the viewmodel
    * node carries `scale`, so the rifle's own local coordinates and these
    * offsets are in the same frame.
    *
-   * `adsSightDistance` is the ONE number that must not be treated as art
-   * direction: ViewModel derives the aimed position from it so the holo
-   * sight's centre lands exactly on the camera axis, which is where the
-   * bullets go. Move the sight off that axis and the reticle stops being the
-   * point of impact.
+   * The aimed stand-off is NOT here — it is `sights[id].eyeRelief`, and it is
+   * the one number that must not be treated as art direction: ViewModel
+   * derives the aimed position from it so the fitted sight's own centre lands
+   * exactly on the camera axis, which is where the bullets go. Move the sight
+   * off that axis and the reticle stops being the point of impact.
    */
   viewmodel: {
     /**
@@ -776,8 +851,18 @@ export const CONFIG = {
      * reads at the size the eye expects.
      */
     scale: 0.62,
-    /** How far in front of the eye the sight glass sits when aimed (m). */
-    adsSightDistance: 0.52,
+    /**
+     * The magnification the weapon is FRAMED at. Aiming narrows the FOV, and
+     * a narrower FOV magnifies the rifle along with the world — harmless at
+     * the holo's 1.6x, and at 3.5x a receiver across the whole screen. Past
+     * this reference the viewmodel is scaled down and drawn in proportionally
+     * closer, which is a uniform scale about the camera's own origin: it
+     * changes no ray direction, so the sight picture and the point of impact
+     * are untouched and only the apparent size of the weapon is held still.
+     * Set it to the largest magnification on offer to disable the whole
+     * mechanism.
+     */
+    adsMagReference: 1.6,
     /** Hip-fire pose: sight ~30% right and ~22% down, muzzle turned inboard. */
     hipPos: { x: 0.184, y: -0.185, z: 0.66 },
     hipRot: { x: 0.03, y: -0.08, z: 0.06 },

@@ -367,7 +367,10 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 18px;
+        /* Tighter than it looks like it wants to be: the map, the status line
+           and the loadout editor together have to clear a 720p window, and
+           this screen has no scroll to fall back on. */
+        gap: 14px;
         pointer-events: auto;
       }
       #deploy h2 {
@@ -396,9 +399,12 @@
       /* Same hull-behind-canvas trick as the minimap, and for the same reason:
          a canvas cannot draw its own chamfered edge or corner brackets. */
       #deploy .map-wrap { position: relative; z-index: 0; line-height: 0; }
+      /* Height-led rather than square-led: the column above and below it is
+         all fixed-height, so the viewport's height is the only thing the map
+         can give ground to. */
       #deploy-map {
-        width: min(62vh, 62vw);
-        height: min(62vh, 62vw);
+        width: min(56vh, 60vw);
+        height: min(56vh, 60vw);
         display: block;
         cursor: crosshair;
         image-rendering: auto;
@@ -960,7 +966,10 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 26px;
+        /* The menu now stacks title, difficulty, loadout, controls and prompt.
+           There is no scroll here either, so the gap is what keeps all five
+           inside a 720p window. */
+        gap: 20px;
         text-align: center;
       }
       #overlay .ov-title { display: flex; flex-direction: column; gap: 10px; }
@@ -1032,6 +1041,103 @@
       #overlay .difficulty button.tier.on {
         color: #12141a;
         background: var(--hot);
+      }
+
+      /* --- loadout editor ---
+         Rendered into two different overlays (the main menu and the deploy
+         screen) from one markup builder, so it is styled by class rather than
+         under an id. #deploy already opts into pointer events for its whole
+         area; #overlay does not, so the panel claims them for itself — the
+         same carve-out the difficulty row and the pause actions get.
+
+         It is deliberately absent from the pause menu. A round you are
+         standing in is not somewhere you get to change what you are carrying,
+         and that is enforced by not rendering it there. */
+      .loadout {
+        --cham: 14px;
+        pointer-events: auto;
+        width: min(560px, 78vw);
+        padding: 12px 20px 13px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        text-align: left;
+      }
+      .loadout .lo-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+      }
+      .loadout .lo-title {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: var(--hot);
+      }
+      .loadout .lo-hint {
+        font-size: 10px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.35);
+      }
+      .loadout .lo-slot { display: flex; align-items: center; gap: 14px; }
+      .loadout .lo-slot-name {
+        flex: 0 0 auto;
+        width: 52px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.42);
+      }
+      .loadout .lo-opts { display: flex; gap: 6px; flex: 1 1 auto; }
+      .loadout button.lo-opt {
+        font: inherit;
+        flex: 1 1 0;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        padding: 8px 14px;
+        color: #cdd6e6;
+        background: rgba(255, 255, 255, 0.05);
+        border: 0;
+        cursor: pointer;
+        clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+        transition: background 0.12s, color 0.12s;
+      }
+      .loadout button.lo-opt b {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+      /* The magnification, as a lens is marked. Tabular so the three buttons
+         line their figures up rather than shuffling by a pixel each. */
+      .loadout button.lo-opt i {
+        font-style: normal;
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        font-variant-numeric: tabular-nums;
+        color: rgba(255, 255, 255, 0.4);
+      }
+      .loadout button.lo-opt:hover {
+        background: rgba(255, 230, 128, 0.18);
+        color: var(--hot);
+      }
+      .loadout button.lo-opt.on { color: #12141a; background: var(--hot); }
+      .loadout button.lo-opt.on i { color: rgba(18, 20, 26, 0.6); }
+      /* Held at three lines: the three blurbs are different lengths, and a
+         panel that changes height as you arrow across it drags the whole
+         centred column up and down with it. */
+      .loadout .lo-blurb {
+        min-height: 44px;
+        font-size: 11px;
+        line-height: 1.55;
+        color: rgba(255, 255, 255, 0.5);
       }
 
       /* The pause menu's action list. Same carve-out as the difficulty row —

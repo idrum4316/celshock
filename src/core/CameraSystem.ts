@@ -3,6 +3,9 @@
  * sensitivity), recoil, per-shot view punch, head bob.
  * Owns: the scene's active camera. The camera sits AT the player's eye — it
  * never leaves the head, so there is no occlusion pick and no pull-in.
+ * How far ADS zooms, how much it slows the look, and how fast it gets there
+ * all belong to the FITTED OPTIC (`setSight`), not to CONFIG.camera — the
+ * camera's own numbers are the hip-fire ones.
  * Invariants: recoil decay uses true Math.exp(-rate*dt) — NOT the frame-lerp
  * idiom — because burst climb must not vary with frame rate. Recoil only
  * partly springs back (CONFIG.recoil.recoverFraction); the rest is pushed into
@@ -15,6 +18,12 @@
  */
 import { FreeCamera, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
+import {
+  DEFAULT_SIGHT,
+  sightSetup,
+  type SightId,
+  type SightSetup,
+} from "../entities/sights";
 import type { InputManager } from "./InputManager";
 
 /**
@@ -29,6 +38,13 @@ export class CameraSystem {
   pitch = 0.12;
   /** 0 = hip, 1 = fully aimed (ADS). */
   adsBlend = 0;
+
+  /**
+   * The fitted optic's resolved numbers: aimed FOV, look multipliers, and how
+   * fast the blend converges. Everything ADS does about zoom comes from here
+   * rather than from CONFIG.camera, so a loadout change is one assignment.
+   */
+  private sight: SightSetup = sightSetup(DEFAULT_SIGHT);
 
   /**
    * Head-bob phase, in radians, advanced by travel rather than by time.
@@ -64,6 +80,11 @@ export class CameraSystem {
     this.camera.fov = CONFIG.camera.fovHip;
     this.camera.inputs.clear(); // fully driven by this system
     scene.activeCamera = this.camera;
+  }
+
+  /** Fits an optic. Cheap enough to call whenever the loadout changes. */
+  setSight(id: SightId): void {
+    this.sight = sightSetup(id);
   }
 
   /** Where the weapon is actually pointed: the player's aim plus recoil. */
@@ -166,8 +187,8 @@ export class CameraSystem {
 
     // --- look ---
     const aiming = this.adsBlend > 0.5;
-    const mouseMult = aiming ? c.adsMouseMult : 1;
-    const stickMult = aiming ? c.adsStickMult : 1;
+    const mouseMult = aiming ? this.sight.mouseMult : 1;
+    const stickMult = aiming ? this.sight.stickMult : 1;
     const assistMult = assist ? assist.stickMult : 1;
     this.yaw += input.mouseLookX * c.sensX * mouseMult;
     this.pitch -= input.mouseLookY * c.sensY * mouseMult;
@@ -192,7 +213,8 @@ export class CameraSystem {
 
     // --- ADS blend (exponential ease toward target) ---
     const target = input.ads ? 1 : 0;
-    this.adsBlend += (target - this.adsBlend) * Math.min(1, dt * c.adsBlendSpeed);
+    this.adsBlend +=
+      (target - this.adsBlend) * Math.min(1, dt * this.sight.blendSpeed);
     const t = smoothstep(this.adsBlend);
 
     // --- head bob: phase advances with travel, amplitude eases with intent ---
@@ -235,7 +257,8 @@ export class CameraSystem {
     } else {
       this.camera.setTarget(this.eye.add(dir));
     }
-    this.camera.fov = c.fovHip + (c.fovAds - c.fovHip) * t + r.fovPunch * punch;
+    this.camera.fov =
+      c.fovHip + (this.sight.fovAds - c.fovHip) * t + r.fovPunch * punch;
   }
 }
 

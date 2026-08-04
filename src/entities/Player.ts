@@ -31,6 +31,7 @@ import { CONFIG } from "../config";
 import { CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
+import type { SightId } from "./sights";
 import { ViewModel, VIEWMODEL_GROUP } from "./ViewModel";
 import { TerrainField } from "../world/TerrainField";
 import type { Combatant, Team } from "./Combatant";
@@ -257,6 +258,15 @@ export class Player implements Combatant {
 
   get damage(): number {
     return CONFIG.weapon.damage * this.mods.damageMult;
+  }
+
+  /**
+   * Fits an optic. Pure pass-through to the viewmodel — the sight changes
+   * what the player can see, never what the rifle does, so nothing about
+   * damage, spread or recoil is downstream of this.
+   */
+  setSight(id: SightId): void {
+    this.view.setSight(id);
   }
 
   /**

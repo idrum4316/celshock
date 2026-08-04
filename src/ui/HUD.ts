@@ -16,7 +16,9 @@
  * the ones that fire on a state change instead.
  */
 import { CONFIG } from "../config";
+import type { SightId } from "../entities/sights";
 import type { ControlPoint } from "../systems/ConquestSystem";
+import { loadoutMarkup, wireLoadout } from "./loadout";
 
 /**
  * Geometry of one damage arc, in the pixels of its own SVG box. Art constants,
@@ -144,6 +146,7 @@ export class HUD {
   private ammoCap: HTMLElement;
   private magStrip: HTMLElement;
   private hudRight: HTMLElement;
+  private weaponLabel: HTMLElement;
   /** One tick per round in the magazine; rebuilt only when the size changes. */
   private magTicks: HTMLElement[] = [];
   private magBuilt = -1;
@@ -229,7 +232,7 @@ export class HUD {
           </div>
           <div id="mag-strip"></div>
           <div class="cap-row">
-            <span class="cap">RIFLE &middot; AUTO</span>
+            <span class="cap" id="weapon-label">RIFLE &middot; AUTO</span>
             <span class="reload-note">RELOADING</span>
           </div>
         </div>
@@ -243,6 +246,7 @@ export class HUD {
     this.ammoCap = document.getElementById("ammo-cap")!;
     this.magStrip = document.getElementById("mag-strip")!;
     this.hudRight = document.getElementById("hud-right")!;
+    this.weaponLabel = document.getElementById("weapon-label")!;
     this.flagStrip = document.getElementById("flag-strip")!;
     this.crosshair = document.getElementById("crosshair")!;
     this.hitmarker = document.getElementById("hitmarker")!;
@@ -631,19 +635,32 @@ export class HUD {
     this.root.classList.toggle("editing", on);
   }
 
+  /**
+   * The weapon caption over the magazine strip. Pushed when the loadout
+   * changes rather than every frame — it is one of the few strings on the HUD
+   * that only moves when the player moves it.
+   */
+  setWeaponSight(name: string): void {
+    this.weaponLabel.textContent = `RIFLE · ${name.toUpperCase()}`;
+  }
+
   setLockHint(visible: boolean): void {
     this.lockHint.classList.toggle("hidden", !visible);
   }
 
   /**
-   * The main menu, including the difficulty picker.
+   * The main menu: the difficulty picker and the loadout editor.
    *
    * `#overlay` is inside a `pointer-events: none` HUD and does not opt back in
-   * (only `#deploy` does), so the difficulty row asks for pointer events on
-   * itself alone — the rest of the overlay stays inert and a stray click can
-   * never be mistaken for a UI action.
+   * (only `#deploy` does), so the difficulty row and the loadout row ask for
+   * pointer events on themselves alone — the rest of the overlay stays inert
+   * and a stray click can never be mistaken for a UI action.
    */
-  showMenu(difficulties: readonly string[], selected: number): void {
+  showMenu(
+    difficulties: readonly string[],
+    selected: number,
+    sight: SightId,
+  ): void {
     this.overlay.classList.remove("hidden");
     this.setOverlaid(true);
     const tiers = difficulties
@@ -673,6 +690,7 @@ export class HUD {
         <div class="tiers">${tiers}</div>
         <span class="hint">&larr; &rarr; / D-pad</span>
       </div>
+      ${loadoutMarkup(sight)}
       <div class="ov-controls frame">
         <div class="ov-controls-head">
           <span>Controls</span><span>Keyboard &amp; mouse</span><span>Gamepad</span>
@@ -686,10 +704,14 @@ export class HUD {
       .forEach((btn) => {
         btn.onclick = () => this.onDifficulty(Number(btn.dataset.tier));
       });
+    wireLoadout(this.overlay, (id) => this.onSight(id));
   }
 
   /** Wired by Game: the player picked a difficulty tier from the menu. */
   onDifficulty: (tier: number) => void = () => {};
+
+  /** Wired by Game: the player fitted a different optic from the menu. */
+  onSight: (id: SightId) => void = () => {};
 
   showRoundOver(
     winnerName: string,
