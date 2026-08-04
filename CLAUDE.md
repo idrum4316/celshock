@@ -75,8 +75,12 @@ have already cost time:
   `scene.getTransformNodeByName("view_<weapon>_<sight>_sightCenter")
   .getAbsolutePosition()` (`weapon` is `rifle`/`smg`/`dmr`, `sight` is
   `iron`/`holo`/`scope` — all nine combinations, since a weapon change moves the
-  optic too), subtract `camera.position`, and project onto
-  `cameraSys.forward` / `flatRight`. At `adsBlend === 1` the two cross-axis
+  optic too), subtract `camera.position`, and project onto `cameraSys.forward`
+  and a right vector built from `aimYaw` — `(cos(aimYaw), 0, -sin(aimYaw))`.
+  **Not `flatRight`**, which is deliberately the un-recoiled *and un-swayed*
+  yaw (see `camera.aimSway`) and is therefore not perpendicular to `forward`
+  while either is live; through it a correct sight reads a couple of
+  millimetres off. At `adsBlend === 1` the two cross-axis
   components must be **0**, and the along-axis one is that sight's `eyeRelief`
   times its `zoomComp`. Give the weapon time to settle first: the sway spring is
   a real offset that decays over several seconds at headless frame rates, and
@@ -451,7 +455,29 @@ load-bearing.
   the contact frame.
 
 The bob and the view punch move the **rendered camera only** — `aimPitch`/
-`aimYaw` never see them, so bullets don't bob. `Player.setBodyHidden` now hides
+`aimYaw` never see them, so bullets don't bob.
+
+**The aimed hold sway is the one thing on the camera that is not cosmetic, and
+it has to be.** An aimed weapon wanders — two sines an axis, the pitch term
+breathing at ~0.23 Hz and the yaw term at half that, so the pair traces a slow
+figure-eight rather than a line — and it is added to `aimPitch`/`aimYaw`, where
+the bullets, the aim assist and the damage arcs all see it. The alternative is
+the trap: the viewmodel is parented to the camera, so a wander applied to the
+rendered camera alone would slide the *world* behind a sight that is still
+welded to the axis the rounds fly down. The reticle would look alive and lie.
+Applied to the aim, the same picture is honest — the sight stays centred, the
+world drifts, and what you shoot is what is under the reticle. It rides the ADS
+blend, so hip fire is untouched (a drift you have to fight while running is
+nausea, not texture), and it is an *offset*, never integrated into `pitch`/
+`yaw`, or a held aim would walk away on its own. Three things scale it:
+`CONFIG.weapons[id].swayMult` (mass in the hands — the DMR is steadiest at 0.7
+because sway is angular and its scope magnifies it 3.5x), and the stance
+multipliers `Player` pushes through `setSwayDrive` — moving costs, crouching
+buys. It is deliberately **not** normalised by magnification the way the ADS
+look rates are: a sight magnifying your unsteadiness is the trade it is asking
+you to make.
+
+`Player.setBodyHidden` now hides
 the viewmodel, which matters in the editor: it flies the same camera the weapon
 is parented to, so a visible rifle would ride along in front of it.
 
@@ -471,6 +497,9 @@ in exactly two places, and both are deliberate: the aimed pose (the optic's
 `sightCenter` on *this* weapon's rail) and the ADS blend RATE, which is the
 product of the optic's `adsSpeedMult` and the weapon's — how fast a sight comes
 up is a fact about the weight in your hands as well as the glass on top.
+`swayMult` is the third weapon number that leaves `Player`, and it is not a
+meeting: how steady a weapon is to hold is the weapon's alone, and the optic
+only decides how much of that wander you are shown.
 
 Everything about an optic still falls out of one number, `magnification`: the
 aimed FOV is `2*atan(tan(fovHip/2) / mag)`, the ADS look multipliers are

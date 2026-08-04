@@ -585,6 +585,17 @@ export class Player implements Combatant {
       this.grounded,
     );
 
+    // How steady the stance is, for the camera's hold sway. Off the same two
+    // blends the bob uses and for the same reason — movement owns them — but
+    // it is a multiplier around 1 rather than a 0..1 drive: a player standing
+    // still still breathes. Crouching is the one thing that buys steadiness,
+    // which is what makes it worth doing for a shot rather than only for cover.
+    const sw = CONFIG.camera.aimSway;
+    cam.setSwayDrive(
+      (1 + (sw.moveMult - 1) * this.moveBlend) *
+        (1 - (1 - sw.crouchMult) * this.crouchBlend),
+    );
+
     // --- footfalls, off that same phase ---
     // The phase read here is a frame behind (the camera has not run yet), the
     // same 16 ms the viewmodel's bob is behind, and for the same reason.

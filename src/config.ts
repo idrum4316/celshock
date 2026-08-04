@@ -695,6 +695,12 @@ export const CONFIG = {
        * being held out at arm's length.
        */
       hipZ: 0,
+      /**
+       * Scales `camera.aimSway` — how steady this weapon is to hold. Mass and
+       * where the hands sit, nothing else: a heavier weapon wanders less and
+       * a light one carried high wanders more. The rifle is the reference.
+       */
+      swayMult: 1,
       /** Report pitch, as a multiplier on the shot's own frequencies. */
       sfxPitch: 1,
     },
@@ -727,6 +733,8 @@ export const CONFIG = {
       bloomMult: 1.3,
       adsSpeedMult: 1.3,
       hipZ: -0.07,
+      /** Light, short, and held high — the liveliest thing in the kit. */
+      swayMult: 1.2,
       sfxPitch: 1.35,
     },
     /**
@@ -781,6 +789,15 @@ export const CONFIG = {
       /** Longer than the rifle, so it sits further out or the muzzle fills the
        *  frame — the SMG's offset, in the other direction. */
       hipZ: 0.06,
+      /**
+       * The steadiest weapon here, and it has to be. Sway is angular, so the
+       * scope this weapon exists to carry magnifies it 3.5x; at the rifle's
+       * figure the shot the DMR is for — one deliberate round at range —
+       * would be a matter of timing the wander rather than of aiming. Mass
+       * and a cheek on the comb are the excuse, the two-shot kill is the
+       * reason. Crouched with a scope this is ~0.13 deg.
+       */
+      swayMult: 0.7,
       /** A heavier charge in a longer barrel: lower, and (see `Sfx.shoot`,
        *  where level tracks 1/pitch) louder, because it fires far less often. */
       sfxPitch: 0.82,
@@ -962,6 +979,52 @@ export const CONFIG = {
        * so they are the half worth suppressing when it matters.
        */
       adsMult: 0.35,
+    },
+    /**
+     * Hold sway: the wander of an aimed weapon that nobody's arms can hold
+     * still. Everything else the camera does for show — the bob, the punch,
+     * the landing nod — is kept out of aimPitch/aimYaw so the bullets never
+     * see it. This one is the opposite on purpose: it is part of the aim, so
+     * the sight picture and the point of impact drift TOGETHER. The weapon is
+     * parented to the camera, so what you see is the world sliding behind a
+     * reticle that stays on the axis — which is what a hold actually looks
+     * like, and the only version that does not make the reticle lie.
+     *
+     * It is scaled by the ADS blend, so hip fire is untouched: a drift the
+     * player has to fight while running around is nausea, not texture.
+     *
+     * Angular, and deliberately NOT normalised by magnification the way the
+     * look rates are (see `adsLookMouse`). A sight magnifies your unsteadiness
+     * along with everything else — that is the trade a 3.5x optic is asking
+     * you to make, and the answer to it is crouching, a heavier weapon, or
+     * standing still.
+     */
+    aimSway: {
+      /**
+       * Peak offsets (rad) at full weight, before the state multipliers. The
+       * pitch term breathes; the yaw term runs at half its rate, which is what
+       * makes the pair trace a slow figure-eight rather than a diagonal line.
+       * ~0.33 deg and ~0.42 deg — at 3.5x that reads as about a degree of
+       * screen movement, and at 25 m it is ~15 cm of point of aim.
+       */
+      pitch: 0.0045,
+      yaw: 0.006,
+      /**
+       * Breathing rate (Hz) — ~14 a minute. The secondary terms are fixed
+       * half-integer multiples of it (see `CameraSystem.update`), which is
+       * what lets the phase wrap at 4pi without a discontinuity.
+       */
+      rate: 0.23,
+      /**
+       * Aiming on the move: the drive is movement INTENT, like the bob's, so
+       * a crouch-shuffle does not count as a jog. Aiming while walking is
+       * meant to cost something.
+       */
+      moveMult: 1.9,
+      /** Crouched, with the elbows somewhere: the steadiest a player gets. */
+      crouchMult: 0.55,
+      /** How fast the weight follows a change of state (per second). */
+      smooth: 3,
     },
   },
 

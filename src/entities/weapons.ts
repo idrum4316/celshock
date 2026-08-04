@@ -59,6 +59,8 @@ export interface WeaponSetup {
   bloomMult: number;
   /** Multiplier on the ADS blend rate, alongside the fitted optic's own. */
   adsSpeedMult: number;
+  /** Scales the aimed hold sway — how steady this weapon is in the hands. */
+  swayMult: number;
   /** Hip-pose shift along the camera axis, for a weapon of a different length. */
   hipZ: number;
   sfxPitch: number;
@@ -87,6 +89,7 @@ export function weaponSetup(id: WeaponId): WeaponSetup {
     recoilMult: w.recoilMult,
     bloomMult: w.bloomMult,
     adsSpeedMult: w.adsSpeedMult,
+    swayMult: w.swayMult,
     hipZ: w.hipZ,
     sfxPitch: w.sfxPitch,
     shotInterval: 1 / w.fireRate,

@@ -16,6 +16,10 @@
  * The view punch (FOV spike / camera shove / jitter), the head bob and the
  * landing absorb are pure cosmetics: they are applied only to the rendered
  * camera, never to aimPitch/aimYaw, so bullets and bots never see them.
+ * The aimed hold sway is the ONE exception, and deliberately so: it is part of
+ * aimPitch/aimYaw, because the weapon hangs off this camera and a sight
+ * picture that drifts while the rounds fly down an undrifted axis is a reticle
+ * that lies. See CONFIG.camera.aimSway.
  * The landing absorb is a damped spring this system owns and the viewmodel
  * READS (`landDip`) — one integrator per impact, the same rule as the bob
  * phase. It is also the only thing that writes the camera's roll.
@@ -59,6 +63,8 @@ export class CameraSystem {
    * else about the gun reaches the camera.
    */
   private weaponAdsMult = weaponSetup(DEFAULT_WEAPON).adsSpeedMult;
+  /** The carried weapon's steadiness in the hands, scaling the hold sway. */
+  private weaponSwayMult = weaponSetup(DEFAULT_WEAPON).swayMult;
 
   /**
    * Head-bob phase, in radians, advanced by travel rather than by time.
@@ -84,6 +90,24 @@ export class CameraSystem {
    * Squared before use so the spike is at the impact frame.
    */
   private punchT = 0;
+
+  /**
+   * The aimed hold sway: this frame's offsets, and the free-running breath
+   * phase they are drawn from. Part of the AIM (see the header) — the weapon
+   * wanders and the rounds wander with it.
+   *
+   * The phase runs whether or not anything is aiming, so bringing a sight up
+   * does not restart the same wander from the same place every time; it wraps
+   * at 4pi rather than at 2pi because the slowest term runs at half rate, and
+   * every term's multiplier is a half-integer so all four are continuous
+   * across the wrap.
+   */
+  private swayPhase = 0;
+  private swayPitch = 0;
+  private swayYaw = 0;
+  /** Eased weight from the player's stance, 1 = standing still. */
+  private swayAmount = 1;
+  private swayTarget = 1;
 
   /**
    * The landing absorb: how far the eye has sunk into a touchdown, in metres
@@ -124,16 +148,23 @@ export class CameraSystem {
   /** Takes the whole loadout. Cheap enough to call on every change. */
   setLoadout(weapon: WeaponId, sight: SightId): void {
     this.sight = sightSetup(sight);
-    this.weaponAdsMult = weaponSetup(weapon).adsSpeedMult;
+    const w = weaponSetup(weapon);
+    this.weaponAdsMult = w.adsSpeedMult;
+    this.weaponSwayMult = w.swayMult;
   }
 
-  /** Where the weapon is actually pointed: the player's aim plus recoil. */
+  /**
+   * Where the weapon is actually pointed: the player's aim, plus recoil, plus
+   * the hold sway. Everything downstream — the shot, the aim assist, the
+   * damage arcs — reads the aim through here, so the sway is honest by
+   * construction rather than by anyone remembering to add it.
+   */
   get aimPitch(): number {
-    return this.pitch + this.recoilPitch;
+    return this.pitch + this.recoilPitch + this.swayPitch;
   }
 
   get aimYaw(): number {
-    return this.yaw + this.recoilYaw;
+    return this.yaw + this.recoilYaw + this.swayYaw;
   }
 
   /** World-space aim direction (through the crosshair). */
@@ -163,6 +194,13 @@ export class CameraSystem {
     this.recoilPitch = 0;
     this.recoilYaw = 0;
     this.punchT = 0;
+    // The phase deliberately survives a respawn — it is a body breathing, not
+    // a round starting, and restarting it would put every life's first aimed
+    // shot at the same point of the same wander.
+    this.swayPitch = 0;
+    this.swayYaw = 0;
+    this.swayAmount = 1;
+    this.swayTarget = 1;
     this.bobPhase = 0;
     this.bobAmount = 0;
     this.bobTarget = 0;
@@ -194,6 +232,17 @@ export class CameraSystem {
    */
   setBobDrive(speed01: number, grounded: boolean): void {
     this.bobTarget = grounded ? Math.max(0, Math.min(1, speed01)) : 0;
+  }
+
+  /**
+   * How steady the player is standing, as a multiplier on the hold sway: 1 is
+   * standing still, above it is moving, below it is crouched. Pushed by Player
+   * (which owns the stance) for the same reason the bob drive is — the stance
+   * blends are movement's, and the camera has no business re-deriving them.
+   * Eased here rather than there, because it is this system's offset.
+   */
+  setSwayDrive(steadiness: number): void {
+    this.swayTarget = Math.max(0, steadiness);
   }
 
   /**
@@ -296,6 +345,29 @@ export class CameraSystem {
       (target - this.adsBlend) *
       Math.min(1, dt * this.sight.blendSpeed * this.weaponAdsMult);
     const t = smoothstep(this.adsBlend);
+
+    // --- hold sway: the wander of an aimed weapon ---
+    // Two sines per axis. The pitch term is the breath and the yaw term runs
+    // at half its rate, which is what draws the slow figure-eight instead of a
+    // diagonal; the smaller pair, at 2.5x and 3.5x the breath, is what keeps
+    // it from reading as a machine tracing the same loop. Every multiplier is
+    // a half-integer of the phase, so all four are continuous where it wraps.
+    //
+    // It is scaled by the ADS blend, so it eases in with the sight and hip
+    // fire is left exactly as it was. This is an offset ON TOP of the player's
+    // aim, never integrated into `pitch`/`yaw`: it has to average out to where
+    // they were pointing, or a held aim would simply drift away.
+    const sw = c.aimSway;
+    this.swayAmount +=
+      (this.swayTarget - this.swayAmount) * Math.min(1, dt * sw.smooth);
+    this.swayPhase =
+      (this.swayPhase + Math.PI * 2 * sw.rate * dt) % (Math.PI * 4);
+    const b = this.swayPhase;
+    const swayW = t * this.swayAmount * this.weaponSwayMult;
+    this.swayPitch =
+      sw.pitch * (Math.sin(b) + 0.28 * Math.sin(b * 2.5 + 0.6)) * swayW;
+    this.swayYaw =
+      sw.yaw * (Math.sin(b * 0.5 + 1) + 0.22 * Math.sin(b * 3.5 + 2.4)) * swayW;
 
     // --- head bob: phase advances with travel, amplitude eases with intent ---
     this.bobAmount +=
