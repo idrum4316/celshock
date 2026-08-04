@@ -2,8 +2,8 @@
  * base.css — The document reset, the canvas, the #hud root, and the primitives
  * more than one screen draws itself out of.
  * Owns: everything shared. A rule belongs here only when two or more of
- * hud/minimap/deploy/loadout use it — anything one screen owns lives in that
- * screen's own sheet, next to the module that writes the markup.
+ * hud/overlay/minimap/deploy/loadout use it — anything one screen owns lives
+ * in that screen's own sheet, next to the module that writes the markup.
  * Imported first, from main.ts, so the screens' sheets can override it.
  */
 
@@ -11,7 +11,7 @@
    HOLLOWMERE HUD
    ---------------------------------------------------------------------
    The interface is split one sheet per module that writes markup —
-   base (this file), hud, minimap, deploy, loadout, and the editor's
+   base (this file), hud, overlay, minimap, deploy, loadout, and the editor's
    panel under src/editor. Each is imported by its own module, so a
    screen's rules and the code that writes its classes move together and
    the editor's sheet rides the dynamic import out of the build.

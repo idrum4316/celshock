@@ -1,0 +1,292 @@
+/**
+ * overlay.css — The three full-screen cards: the menu, the round-over result
+ * and the pause list.
+ * Owns: #overlay and everything under it — the shell, the title block, the
+ * settings grid, the Deploy button, the pause action list, the controls table
+ * and the result bar.
+ * The state rules keyed on #hud (.overlaid, and the pause's pointer-events
+ * carve-out) stay in hud.css: a class belongs to whoever raises it, and those
+ * two are the HUD's own chrome getting out of a card's way.
+ */
+
+/* --- overlays (menu / round over / pause) --- */
+#overlay {
+  position: absolute;
+  inset: 0;
+  /* The minimap and the deploy screen are appended to #hud AFTER its
+     markup, so in DOM order they paint over this. The pause menu can be
+     opened with either of them on screen, and an overlay you can see
+     through a map is not an overlay. */
+  z-index: 10;
+  background:
+    radial-gradient(ellipse at center, rgba(6, 8, 14, 0.78), rgba(2, 3, 6, 0.96)),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.025) 0 1px,
+      transparent 1px 3px
+    );
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* The menu stacks title, difficulty, the kit button, controls and
+     prompt. There is no scroll here either, so the gap is what keeps
+     all five inside a 720p window. */
+  gap: 18px;
+  text-align: center;
+  /* ONE content width, and everything below the title takes it.
+     Every block here used to size itself to its own contents and centre
+     on that, so five stacked blocks had five widths and no two shared an
+     edge — which is what read as clutter rather than as a screen. The
+     title is the deliberate exception: it is a symmetric block of text,
+     and a heading wider than the column it heads is a typographic
+     choice, not a misalignment. */
+  --col: min(600px, 92vw);
+}
+#overlay .ov-settings,
+#overlay button.ov-start,
+#overlay .ov-controls,
+#overlay .pause-actions,
+#overlay .ov-result { width: var(--col); }
+#overlay .ov-title { display: flex; flex-direction: column; gap: 10px; }
+#overlay h1 {
+  font-size: 76px;
+  font-weight: 900;
+  letter-spacing: 0.22em;
+  /* Indented so the tracking doesn't push the block off-centre. */
+  text-indent: 0.22em;
+  color: var(--hot);
+  text-shadow: 5px 5px 0 #000, -2px -2px 0 #35f0ff;
+}
+/* The pause title is deliberately smaller than the menu's and the result
+   screen's: those hide the HUD, this one is a header inside a running
+   round and has to clear the flag strip along the top of it. */
+#overlay h1.pause-title { font-size: 44px; }
+#overlay h1.dead { color: var(--theirs); text-shadow: 5px 5px 0 #000; }
+#overlay h1.win { color: var(--good); text-shadow: 5px 5px 0 #000; }
+#overlay .tagline {
+  font-size: 13px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+#overlay .prompt {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #35f0ff;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+/* --- the settings block: two rows, one grid ---
+   Both rows are label / control / hint, so they share the grid's three
+   columns instead of each centring on its own contents. `display:
+   contents` is what lets the rows keep their own class (the tier and kit
+   rules below still scope to them) while their children sit in the
+   parent's tracks.
+
+   The control column is `1fr`, so the four tier buttons and the kit
+   button all span it — same left edge, same right edge, and the row of
+   tiers stops being a ragged strip in the middle of the screen.
+
+   The overlay stays pointer-events:none (inherited from #hud); only the
+   CONTROLS opt back in, never the rows, so the labels, the hints and the
+   grid's gaps stay inert and a click there is still the confirm. */
+#overlay .ov-settings {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 8px;
+}
+#overlay .ov-settings > div { display: contents; }
+#overlay .ov-settings .label { text-align: right; }
+#overlay .ov-settings .hint { text-align: right; }
+#overlay .difficulty .tiers { display: flex; gap: 6px; }
+#overlay .ov-settings .label,
+#overlay .ov-settings .hint {
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+}
+#overlay .difficulty button.tier {
+  pointer-events: auto;
+  /* Equal shares of the control column, so four tiers measure the same
+     as the one kit button under them. The padding is what keeps four of
+     them inside `--col`: at 18px the row's min-content was 584 against a
+     560 column and the grid quietly overflowed at every viewport size. */
+  flex: 1 1 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  color: #cdd6e6;
+  background: rgba(255, 255, 255, 0.05);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  transition: background 0.12s, color 0.12s;
+}
+#overlay .difficulty button.tier:hover {
+  background: rgba(255, 230, 128, 0.18);
+  color: var(--hot);
+}
+#overlay .difficulty button.tier.on {
+  color: #12141a;
+  background: var(--hot);
+}
+
+/* --- the deploy button, on the menu and on the round-over card ---
+   The one control on either screen that is the action rather than a
+   setting, so it is the only one painted in the hot colour filled in
+   rather than outlined. Same pointer-events carve-out as the difficulty
+   row: the overlay around it stays inert. The glyph line names all three
+   inputs, which is what it replaced — a line of prose telling a pad
+   player to click. */
+#overlay button.ov-start {
+  font: inherit;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 13px 52px;
+  color: #12141a;
+  background: var(--hot);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+  transition: background 0.12s, transform 0.12s;
+}
+#overlay button.ov-start b {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.26em;
+  text-indent: 0.26em;
+  text-transform: uppercase;
+}
+#overlay button.ov-start i {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(18, 20, 26, 0.62);
+}
+#overlay button.ov-start:hover {
+  background: #fff3c4;
+  transform: translateY(-1px);
+}
+
+/* The pause menu's action list. Same carve-out as the difficulty row —
+   the buttons take pointer events, the overlay around them does not. */
+#overlay .pause-actions {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#overlay button.pact {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  padding: 12px 22px;
+  color: #cdd6e6;
+  background: rgba(255, 255, 255, 0.05);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  transition: background 0.12s, color 0.12s;
+}
+/* Selection is filled, hover is only warm: the keyboard's idea of where
+   it is has to stay readable while the mouse is somewhere else. Hover
+   moves the selection anyway (see HUD.showPause), so the two only differ
+   for the frame between entering a button and the class landing. */
+#overlay button.pact:hover {
+  background: rgba(255, 230, 128, 0.18);
+  color: var(--hot);
+}
+#overlay button.pact.on {
+  color: #12141a;
+  background: var(--hot);
+}
+
+/* Controls as a key-cap table: three columns, action / keyboard / pad. */
+#overlay .ov-controls {
+  --cham: 16px;
+  padding: 16px 26px 18px;
+  /* Reference material, and the last thing on either screen — set back
+     from the block above it so the action reads as the end of the page
+     and this reads as a footnote under it. */
+  margin-top: 6px;
+}
+#overlay .ov-controls-head,
+#overlay .ctl {
+  display: grid;
+  grid-template-columns: 1fr 168px 96px;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+}
+#overlay .ov-controls-head {
+  padding-bottom: 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+}
+#overlay .ctl { padding: 3px 0; }
+#overlay .ctl-act {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #dfe5ee;
+}
+#overlay .ctl-keys,
+#overlay .ctl-pad { display: flex; gap: 4px; }
+#overlay kbd {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 4px 8px;
+  min-width: 26px;
+  text-align: center;
+  color: #cfd6e2;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+#overlay kbd.pad { color: var(--hot); box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3); }
+
+#overlay .ov-result {
+  --cham: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 26px;
+}
+#overlay .ov-result .lbl {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  color: rgba(255, 255, 255, 0.45);
+}
+#overlay .ov-result .vals { display: flex; align-items: baseline; gap: 10px; }
+#overlay .ov-result b { font-size: 24px; font-weight: 800; }
+#overlay .ov-result b:first-of-type { color: var(--mine); }
+#overlay .ov-result b:last-of-type { color: var(--theirs); }
+#overlay .ov-result i {
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.3);
+}

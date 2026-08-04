@@ -234,10 +234,12 @@ src/
                             #   primitives two or more screens share (.frame,
                             #   .brackets, .hidden, --ov-scale, @keyframes
                             #   pulse, the kit button). Imported by main.ts.
-    HUD.ts / hud.css        # DOM overlay: tickets, flags, capture-zone panel,
-                            # killfeed, scoreboard, world-anchored damage arcs,
-                            #   plus the menu/round-over/pause screens and the
-                            #   .overlaid/.paused/.editing state rules
+    HUD.ts / hud.css        # The gameplay chrome ONLY: tickets, flags,
+                            #   capture-zone panel, vitals, ammo, crosshair,
+                            #   killfeed, scoreboard, world-anchored damage
+                            #   arcs, + the .paused/.editing state rules
+    OverlayScreen.ts        # The three full-screen cards — menu, round-over,
+      overlay.css           #   pause — and the .overlaid class they raise
     DeployScreen.ts         # Top-down deploy map — click a marker or step the
       deploy.css            #   selection with the arrows/d-pad — + the deploy
                             #   and kit buttons
@@ -603,10 +605,42 @@ left/right for difficulty. Enter, pad **A**, pad **B** and `L`/pad X all close
 it — every pick is already applied, so there is nothing for a confirm and a
 cancel to disagree about, and B is what a pad player reaches for.
 
-### The interface's CSS
+### The interface is four screens and the chrome
+
+`src/ui/` holds one class per thing on screen, and `HUD` is not the place a new
+one goes. `OverlayScreen` owns the three full-screen cards (menu, round-over,
+pause), `DeployScreen` the deploy map, `LoadoutScreen` the kit, `Minimap` the
+corner map, and `HUD` **only** the gameplay chrome — vitals, ammo, the ticket
+gauge, the flag strip, the capture panel, the crosshair, the killfeed, the
+scoreboard and the damage arcs. HUD was the overlay screens as well for a long
+time, which is why it grew with every screen that was added; it does not any
+more.
+
+Each screen builds its own root element and appends it to `#hud`, which is why
+construction order in `Game`'s constructor matters exactly once: `HUD` writes
+`#hud.innerHTML` and would wipe anything already appended, so it is built
+first. Stacking is not DOM order — `#overlay` (10) and `#loadout` (11) carry
+z-indices, because a pause can be taken with the deploy map on screen and a
+card you can see a map through is not a card.
+
+**The three cards are one class because they are one element.** They share the
+shell, the title block, the controls table and — between the menu and the
+round-over card — the Deploy button, so splitting them further buys three files
+that can never be shown together at the cost of a base class or a duplicated
+stylesheet. The bar for a screen of its own is *state*: the deploy map has a
+selection and a canvas, the kit screen has two slots and a turntable, and a
+card that is markup plus a button has not earned one.
+
+**A class on `#hud` belongs to whoever raises it.** `OverlayScreen` sets
+`.overlaid`, `LoadoutScreen` sets `.kitting`, and `HUD` sets `.paused` and
+`.editing` because those two hide the HUD's own chrome. That is also why a
+pause is two calls from `Game` rather than one: the card goes up and the
+crosshair comes down, and they are not the same decision — `.overlaid` would
+take the tickets and vitals with it, which under a pause are still true.
 
 **One stylesheet per module that writes markup, imported by that module.**
-`HUD.ts` imports `hud.css`, `DeployScreen.ts` imports `deploy.css`,
+`HUD.ts` imports `hud.css`, `OverlayScreen.ts` imports `overlay.css`,
+`DeployScreen.ts` imports `deploy.css`,
 `LoadoutScreen.ts` imports `loadout.css`, `Minimap.ts` imports `minimap.css`,
 and `editor/EditorPanel.ts` imports `editor/panel.css`. `main.ts` imports
 `base.css` first. Vite bundles them into one hashed stylesheet that the built
@@ -674,8 +708,8 @@ Three things there are worth keeping:
   width is also why every input hint on the screen lives in the one hint row
   and the buttons carry only what they do.
 
-**The menu and the round-over card carry a `Deploy` button** (`HUD.bindStart`
-→ `Game.onStart`). It is redundant with the confirm — a click anywhere on
+**The menu and the round-over card carry a `Deploy` button**
+(`OverlayScreen.bindStart` → `Game.onStart`). It is redundant with the confirm — a click anywhere on
 either screen already starts the round — and that is why it has to exist: an
 instruction in prose is not a target, and "click, press Enter, or press Start"
 made a pad player work out which of the three was theirs. The glyph line on the

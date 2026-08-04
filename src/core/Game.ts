@@ -61,6 +61,7 @@ import { DEFAULT_MAP, type MapDef } from "../world/maps";
 import { MapBuilder, type BuildOptions, type GameMap } from "../world/MapBuilder";
 import { DeployScreen } from "../ui/DeployScreen";
 import { HUD, type CaptureStatus } from "../ui/HUD";
+import { OverlayScreen } from "../ui/OverlayScreen";
 import { kitLabel, LoadoutScreen } from "../ui/LoadoutScreen";
 import { Minimap } from "../ui/Minimap";
 import { enterFullscreenOnTouch } from "../pwa/register";
@@ -184,6 +185,8 @@ export class Game {
   private input: InputManager;
   private cameraSys: CameraSystem;
   private hud: HUD;
+  /** The menu, the round-over card and the pause list. */
+  private overlayScreen: OverlayScreen;
   private deployScreen: DeployScreen;
   private loadoutScreen: LoadoutScreen;
   private minimap: Minimap;
@@ -312,6 +315,8 @@ export class Game {
     this.post = new HorrorPost(this.scene, this.cameraSys.camera);
     this.sfx = new Sfx();
     this.hud = new HUD();
+    // After the HUD: its root is the element every screen appends to.
+    this.overlayScreen = new OverlayScreen();
     this.deployScreen = new DeployScreen();
     this.loadoutScreen = new LoadoutScreen();
     this.minimap = new Minimap();
@@ -452,20 +457,20 @@ export class Game {
       });
     }
 
-    this.hud.onDifficulty = (tier) => this.setDifficulty(tier);
-    this.hud.onOpenLoadout = () => this.openLoadout();
+    this.overlayScreen.onDifficulty = (tier) => this.setDifficulty(tier);
+    this.overlayScreen.onOpenLoadout = () => this.openLoadout();
     // The menu's and the round-over card's Deploy button. Guarded on the state
     // rather than trusted, because the overlay's markup outlives neither: the
     // handler is bound to a button that `hideOverlay` throws away, and a click
     // landing between that and the next repaint must not start a second round.
-    this.hud.onStart = () => {
+    this.overlayScreen.onStart = () => {
       if (this.state === "menu" || this.state === "roundover") this.startRound();
     };
     this.deployScreen.onOpenLoadout = () => this.openLoadout();
     this.loadoutScreen.onWeapon = (id) => this.setWeapon(id);
     this.loadoutScreen.onSight = (id) => this.setSight(id);
     this.loadoutScreen.onClose = () => this.closeLoadout();
-    this.hud.onPauseAction = (action) => {
+    this.overlayScreen.onPauseAction = (action) => {
       // Restart needs nothing put back by hand: `startRound` lifts the lid,
       // hides the overlay and ends in `enterDeploy`, which sets the state.
       if (action === "resume") this.resume();
@@ -513,7 +518,7 @@ export class Game {
    * -over screen shares that overlay, so there is nothing to keep in sync.
    */
   private showMenu(): void {
-    this.hud.showMenu(
+    this.overlayScreen.showMenu(
       difficultyNames(),
       this.difficulty,
       kitLabel(this.weapon, this.sight),
@@ -783,11 +788,11 @@ export class Game {
           this.resume();
           break;
         }
-        if (this.input.menuUpPressed) this.hud.movePauseSelection(-1);
-        if (this.input.menuDownPressed) this.hud.movePauseSelection(1);
+        if (this.input.menuUpPressed) this.overlayScreen.movePauseSelection(-1);
+        if (this.input.menuDownPressed) this.overlayScreen.movePauseSelection(1);
         // Keyboard/pad confirm only — the buttons handle their own clicks, and
         // a click on the empty half of the screen is not a menu choice.
-        if (this.input.menuConfirmPressed) this.hud.activatePause();
+        if (this.input.menuConfirmPressed) this.overlayScreen.activatePause();
         break;
       case "editor":
         this.updateEditor(dt);
@@ -852,7 +857,7 @@ export class Game {
     this.pausedFrom = this.state;
     this.state = "paused";
     this.hud.setPaused(true);
-    this.hud.showPause();
+    this.overlayScreen.showPause();
     // Suspends the audio clock, so the tail of the last shot is still there
     // when the round starts again instead of ringing out over the menu.
     this.sfx.setSuspended(true);
@@ -871,7 +876,7 @@ export class Game {
 
   private resume(): void {
     if (this.state !== "paused") return;
-    this.hud.hideOverlay();
+    this.overlayScreen.hide();
     this.clearPause();
     this.state = this.pausedFrom;
     if (this.state === "playing") {
@@ -947,7 +952,7 @@ export class Game {
 
     this.state = "editor";
     const map = this.buildEditorMap();
-    this.hud.hideOverlay();
+    this.overlayScreen.hide();
     // F2 is reachable from the pause menu, and an editor session that inherited
     // a suspended audio context and a hidden crosshair would be a puzzle.
     this.clearPause();
@@ -1064,7 +1069,7 @@ export class Game {
   }
 
   private startRound(): void {
-    this.hud.hideOverlay();
+    this.overlayScreen.hide();
     // Reachable from the menu, so the kit screen may still be up over it.
     this.stowKit();
     // Reachable straight from the pause menu ("Restart round"), and harmless
@@ -1474,7 +1479,7 @@ export class Game {
     this.battle.reset();
     document.exitPointerLock();
     const won = winner === this.player.team;
-    this.hud.showRoundOver(
+    this.overlayScreen.showRoundOver(
       CONFIG.teams[winner].name,
       won,
       this.conquest.tickets[0],
