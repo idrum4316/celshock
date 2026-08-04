@@ -1,0 +1,14 @@
+# Everything the image build must not carry. The build stage COPYs explicit
+# paths, so this is belt-and-braces plus a smaller build context.
+.git
+.gitignore
+node_modules
+dist
+tmp_shots
+undefined
+models
+specs
+scripts
+*.md
+Dockerfile
+.dockerignore
