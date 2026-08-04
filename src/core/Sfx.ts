@@ -179,31 +179,42 @@ export class Sfx {
    * voices — cheaper than the version it replaces, because the tail that used
    * to be a per-shot voice is now the shared bus.
    */
-  shoot(): void {
+  shoot(pitch = 1): void {
     // Two rounds from the same rifle are never the same report, and eight a
     // second of one recording is the loudest tell that a gun is synthesized.
+    //
+    // `pitch` is the carried weapon's own voice — a pistol-calibre SMG is a
+    // smaller charge in a shorter barrel, which is a sharper, thinner crack
+    // rather than a quieter one. It scales the frequencies and leaves the
+    // envelope alone, because what makes it read as a different weapon is the
+    // rate the shots arrive at and the colour of each one, not the level.
     const v = 0.92 + Math.random() * 0.16;
+    const f = v * pitch;
+    // Level falls as the pitch rises, and it has to: the weapon that gets a
+    // thinner crack is also the one firing half again as often, and a report
+    // mixed for 8 rounds a second is a wall of noise at 13.
+    const level = 1 / pitch;
     // The blast. Broadband and gone in 20 ms — this is the crack, and it is
     // the loudest thing in the mix by a wide margin.
     this.burst({
-      dur: 0.022, vol: 0.44 * v, type: "highpass", freq: 1400 * v, q: 0.6,
+      dur: 0.022, vol: 0.44 * v * level, type: "highpass", freq: 1400 * f, q: 0.6,
       send: 0.5,
     });
     // The body of the report, sweeping down as the gas column collapses. A
     // lowpass throws away most of a noise slice's amplitude, so its gain is
     // set well above the level it actually plays at.
     this.burst({
-      dur: 0.12, vol: 0.6, type: "lowpass", freq: 2600 * v, freqEnd: 260,
-      send: 1,
+      dur: 0.12, vol: 0.6 * level, type: "lowpass", freq: 2600 * f,
+      freqEnd: 260 * pitch, send: 1,
     });
     // Chest thump: the low pressure wave, and the one part of a gunshot that
     // really is a single frequency. A sine's peak is its gain exactly.
-    this.tone(96 * v, 0.17, "sine", 0.26, 0.45, null, { send: 0.7 });
+    this.tone(96 * f, 0.17, "sine", 0.26 * level, 0.45, null, { send: 0.7 });
     // The bolt riding home, behind the shot rather than under it — mechanism,
     // so it has to sit far below the blast.
     this.burst({
-      dur: 0.04, vol: 0.16, type: "bandpass", freq: 2900, q: 1.3, delay: 0.045,
-      send: 0.25,
+      dur: 0.04, vol: 0.16 * level, type: "bandpass", freq: 2900 * pitch, q: 1.3,
+      delay: 0.045, send: 0.25,
     });
   }
 
@@ -242,8 +253,8 @@ export class Sfx {
    * on silence — which is why the offsets are fractions of the config value
    * and not absolute times.
    */
-  reload(): void {
-    const t = CONFIG.weapon.reloadTime;
+  reload(duration: number): void {
+    const t = duration;
     this.clack(2600, 0.9, 0);
     this.clack(1500, 0.5, t * 0.18);
     this.clack(760, 1, t * 0.55);

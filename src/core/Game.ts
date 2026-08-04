@@ -34,10 +34,13 @@ import { Player } from "../entities/Player";
 import {
   DEFAULT_SIGHT,
   isSightId,
-  SIGHT_IDS,
-  sightSetup,
   type SightId,
 } from "../entities/sights";
+import {
+  DEFAULT_WEAPON,
+  isWeaponId,
+  type WeaponId,
+} from "../entities/weapons";
 import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
@@ -56,6 +59,7 @@ import { HollowmereLayout } from "../world/hollowmere/layout";
 import { MapBuilder, type GameMap } from "../world/MapBuilder";
 import { DeployScreen } from "../ui/DeployScreen";
 import { HUD, type CaptureStatus } from "../ui/HUD";
+import { kitLabel, LoadoutScreen } from "../ui/LoadoutScreen";
 import { Minimap } from "../ui/Minimap";
 import { CameraSystem } from "./CameraSystem";
 import { InputManager } from "./InputManager";
@@ -81,6 +85,7 @@ type GameState =
   | "deploy"
   | "playing"
   | "paused"
+  | "loadout"
   | "roundover"
   | "editor";
 
@@ -89,8 +94,9 @@ const EMPTY_PUSHERS: readonly Combatant[] = [];
 
 /** Where the chosen enemy-skill tier is remembered between sessions. */
 const DIFFICULTY_KEY = "hollowmere.difficulty";
-/** …and the fitted optic. Same store, same tolerance for it not working. */
+/** …and the loadout. Same store, same tolerance for it not working. */
 const SIGHT_KEY = "hollowmere.sight";
+const WEAPON_KEY = "hollowmere.weapon";
 
 function readDifficulty(): number {
   try {
@@ -134,6 +140,26 @@ function writeSight(id: SightId): void {
   }
 }
 
+/** The remembered weapon. Validated exactly as the optic is, and for the
+ *  same reason: it indexes a table of built models. */
+function readWeapon(): WeaponId {
+  try {
+    const raw = window.localStorage.getItem(WEAPON_KEY);
+    if (raw !== null && isWeaponId(raw)) return raw;
+  } catch {
+    // As above.
+  }
+  return DEFAULT_WEAPON;
+}
+
+function writeWeapon(id: WeaponId): void {
+  try {
+    window.localStorage.setItem(WEAPON_KEY, id);
+  } catch {
+    // As above.
+  }
+}
+
 /**
  * Top-level orchestrator: owns the engine/scene, all systems, the game state
  * machine, and the per-frame update loop.
@@ -149,6 +175,7 @@ export class Game {
   private cameraSys: CameraSystem;
   private hud: HUD;
   private deployScreen: DeployScreen;
+  private loadoutScreen: LoadoutScreen;
   private minimap: Minimap;
   private sfx: Sfx;
   private mapBuilder: MapBuilder;
@@ -200,11 +227,14 @@ export class Game {
    */
   private difficulty = readDifficulty();
   /**
-   * The fitted optic. Unlike the difficulty tier this applies immediately —
-   * changing it re-poses a weapon that is put away in both places it can be
-   * changed from, so there is nothing to defer to the next round.
+   * The kit. Unlike the difficulty tier this applies immediately — both halves
+   * of it re-pose a weapon that is put away everywhere the loadout screen can
+   * be opened from, so there is nothing to defer to the next round.
    */
   private sight: SightId = readSight();
+  private weapon: WeaponId = readWeapon();
+  /** Which state the loadout screen is a lid over; where closing it returns. */
+  private loadoutFrom: "menu" | "deploy" = "menu";
   /** Reused each frame: the player plus every bot, for objective occupancy. */
   private readonly combatants: Combatant[] = [];
   /** Scratch for the shadow focus point — no per-frame allocation. */
@@ -263,6 +293,7 @@ export class Game {
     this.sfx = new Sfx();
     this.hud = new HUD();
     this.deployScreen = new DeployScreen();
+    this.loadoutScreen = new LoadoutScreen();
     this.minimap = new Minimap();
     this.lighting = new LightingSystem();
     this.atmosphere = new Atmosphere(this.scene);
@@ -389,8 +420,11 @@ export class Game {
     }
 
     this.hud.onDifficulty = (tier) => this.setDifficulty(tier);
-    this.hud.onSight = (id) => this.setSight(id);
-    this.deployScreen.onSight = (id) => this.setSight(id);
+    this.hud.onOpenLoadout = () => this.openLoadout();
+    this.deployScreen.onOpenLoadout = () => this.openLoadout();
+    this.loadoutScreen.onWeapon = (id) => this.setWeapon(id);
+    this.loadoutScreen.onSight = (id) => this.setSight(id);
+    this.loadoutScreen.onClose = () => this.closeLoadout();
     this.hud.onPauseAction = (action) => {
       // Restart needs nothing put back by hand: `startRound` lifts the lid,
       // hides the overlay and ends in `enterDeploy`, which sets the state.
@@ -398,10 +432,10 @@ export class Game {
       else if (action === "restart") this.startRound();
       else this.enterMenu();
     };
-    // Fit the remembered optic before anything is drawn: the viewmodel is
-    // built with the default and the camera's zoom follows from the fit, so
-    // deploying straight off a reload must not start on the wrong sight.
-    this.applySight();
+    // Apply the remembered kit before anything is drawn: the viewmodel is
+    // built with the defaults and the camera's zoom follows from the fit, so
+    // deploying straight off a reload must not start on the wrong weapon.
+    this.applyLoadout();
     this.showMenu();
     // Debug/test handle (used by automated smoke tests).
     (window as unknown as { __celshock: Game }).__celshock = this;
@@ -438,46 +472,83 @@ export class Game {
    * -over screen shares that overlay, so there is nothing to keep in sync.
    */
   private showMenu(): void {
-    this.hud.showMenu(difficultyNames(), this.difficulty, this.sight);
+    this.hud.showMenu(
+      difficultyNames(),
+      this.difficulty,
+      kitLabel(this.weapon, this.sight),
+    );
   }
 
   /**
-   * Fits an optic, from the main menu or from the deploy screen.
+   * Opens the loadout screen over whatever is on top of it, and remembers
+   * which so closing it puts that back — the same lid-and-return shape the
+   * pause menu has, and for the same reason: it is not a step in the
+   * menu -> deploy -> playing cycle, it is a thing laid over two of them.
    *
-   * Deliberately NOT reachable from the pause menu: a round you are already
-   * standing in is not somewhere you get to change what you are carrying, and
-   * the pause overlay simply does not render the row. Nothing here enforces
-   * that — the states that can reach it are the states that draw it.
+   * Deliberately unreachable from `playing` and from the pause menu: a round
+   * you are already standing in is not somewhere you get to change what you
+   * are carrying. Nothing here enforces that — the states that offer the
+   * button are the states that read `loadoutPressed`.
    */
+  private openLoadout(): void {
+    if (this.state !== "menu" && this.state !== "deploy") return;
+    this.loadoutFrom = this.state;
+    this.state = "loadout";
+    this.loadoutScreen.setFit(this.weapon, this.sight);
+    this.loadoutScreen.show();
+  }
+
+  private closeLoadout(): void {
+    if (this.state !== "loadout") return;
+    this.loadoutScreen.hide();
+    this.state = this.loadoutFrom;
+    // The menu paints the kit into its own markup and was covered while it
+    // changed, so it is redrawn on the way out. The deploy screen's caption is
+    // a text node `applyLoadout` already patched.
+    if (this.state === "menu") this.showMenu();
+  }
+
+  /**
+   * Picks up a weapon, from the loadout screen and nowhere else.
+   *
+   * Applied immediately, magazine and all: it is only reachable from the menu
+   * and the deploy screen, where the gun is already put away, so there is no
+   * round in flight for a swap to interrupt.
+   */
+  private setWeapon(id: WeaponId): void {
+    if (id === this.weapon) return;
+    this.weapon = id;
+    writeWeapon(id);
+    this.applyLoadout();
+  }
+
+  /** Fits an optic. Same reachability, same immediacy. */
   private setSight(id: SightId): void {
     if (id === this.sight) return;
     this.sight = id;
     writeSight(id);
-    this.applySight();
-    // Redraw whichever editor is on screen. The menu rewrites its whole
-    // overlay; the deploy screen patches its own row.
-    if (this.state === "menu") this.showMenu();
-    this.deployScreen.setSight(id);
+    this.applyLoadout();
   }
 
   /**
-   * Pushes the fit to the three things that read it: the weapon (which pose
-   * ADS aims to), the camera (how far it zooms and how much it slows), and
-   * the ammo caption. Split from `setSight` because the constructor owes the
-   * same push for a sight nobody just picked.
+   * Pushes the kit to everything that reads it: the player (what the rounds
+   * do, and which model ADS poses), the camera (how far it zooms, how much it
+   * slows, how fast it gets there), and the three captions. Split from the
+   * setters because the constructor owes the same push for a kit nobody just
+   * picked, and because both halves of the loadout owe all of it — a weapon
+   * change re-derives the aimed pose exactly as an optic change does.
    */
-  private applySight(): void {
+  private applyLoadout(): void {
+    this.player.setWeapon(this.weapon);
     this.player.setSight(this.sight);
-    this.cameraSys.setSight(this.sight);
-    this.hud.setWeaponSight(sightSetup(this.sight).name);
-    this.deployScreen.setSight(this.sight);
-  }
-
-  /** Steps the fitted optic, wrapping at both ends — the menu's up/down. */
-  private cycleSight(delta: number): void {
-    const n = SIGHT_IDS.length;
-    const i = SIGHT_IDS.indexOf(this.sight);
-    this.setSight(SIGHT_IDS[((i < 0 ? 0 : i) + delta + n) % n]);
+    this.cameraSys.setLoadout(this.weapon, this.sight);
+    const label = kitLabel(this.weapon, this.sight);
+    this.hud.setKit(label);
+    this.deployScreen.setKit(label);
+    this.loadoutScreen.setFit(this.weapon, this.sight);
+    // The menu draws the kit into its own markup, so it has to be rebuilt;
+    // the other two were just patched above.
+    if (this.state === "menu") this.showMenu();
   }
 
   /**
@@ -505,13 +576,14 @@ export class Game {
         // Menu only: `roundover` shares the overlay element but shows the
         // victory text, and redrawing the picker over it would wipe the result.
         if (this.state === "menu") {
+          // Left/right is the difficulty row — the only picker left on this
+          // screen now that the kit has one of its own. `L` (pad X) opens it.
           if (this.input.menuLeftPressed) this.setDifficulty(this.difficulty - 1);
           if (this.input.menuRightPressed) this.setDifficulty(this.difficulty + 1);
-          // The two pickers split the d-pad between them: left/right is the
-          // difficulty row, up/down the loadout. Neither is a list to walk, so
-          // there is nothing for a shared focus to be on.
-          if (this.input.menuUpPressed) this.cycleSight(-1);
-          if (this.input.menuDownPressed) this.cycleSight(1);
+          if (this.input.loadoutPressed) {
+            this.openLoadout();
+            break;
+          }
         }
         if (this.input.confirmPressed && this.overlayT > 0.5) {
           this.startRound();
@@ -522,16 +594,38 @@ export class Game {
           this.pause();
           break;
         }
+        // The same key, and the reason the deploy screen offers it at all:
+        // the wait for reinforcements is the one moment inside a round when
+        // the weapon is already put away.
+        if (this.input.loadoutPressed) {
+          this.openLoadout();
+          break;
+        }
         this.respawnT -= dt;
         this.deployScreen.update(this.respawnT);
-        // Same split as the menu, and the reason the deploy screen carries a
-        // loadout row at all: the wait for reinforcements is the one moment
-        // inside a round when the weapon is already put away.
-        if (this.input.menuUpPressed) this.cycleSight(-1);
-        if (this.input.menuDownPressed) this.cycleSight(1);
         // Enter / gamepad A deploys at the current selection; clicking the map
         // picks a different one.
         if (this.input.confirmPressed) this.deployScreen.confirm();
+        break;
+      case "loadout":
+        // Two axes, two slots: up/down chooses which half of the kit is being
+        // edited, left/right steps through it. Confirm and pause both close —
+        // there is nothing to confirm here, every pick has already been
+        // applied to the weapon behind the screen. The mouse is left out of
+        // the confirm (`menuConfirmPressed`) because a click on the empty half
+        // of the screen is not a choice, the same rule the pause menu follows.
+        if (
+          this.input.pausePressed ||
+          this.input.menuConfirmPressed ||
+          this.input.loadoutPressed
+        ) {
+          this.closeLoadout();
+          break;
+        }
+        if (this.input.menuUpPressed) this.loadoutScreen.moveSlot(-1);
+        if (this.input.menuDownPressed) this.loadoutScreen.moveSlot(1);
+        if (this.input.menuLeftPressed) this.loadoutScreen.cycle(-1);
+        if (this.input.menuRightPressed) this.loadoutScreen.cycle(1);
         break;
       case "playing":
         if (this.input.pausePressed) {
@@ -660,6 +754,7 @@ export class Game {
     this.state = "menu";
     this.clearPause();
     this.deployScreen.hide();
+    this.loadoutScreen.hide();
     this.minimap.setVisible(false);
     this.player.setBodyHidden(true);
     this.hud.setScoreboard(false);
@@ -717,6 +812,9 @@ export class Game {
     this.clearPause();
     this.hud.setEditing(true);
     this.deployScreen.hide();
+    // F2 is reachable from the loadout screen too, and it would sit over the
+    // editor's own panel.
+    this.loadoutScreen.hide();
     this.minimap.setVisible(false);
     this.player.setBodyHidden(true);
     if (document.pointerLockElement) document.exitPointerLock();
@@ -799,6 +897,8 @@ export class Game {
 
   private startRound(): void {
     this.hud.hideOverlay();
+    // Reachable from the menu, so the kit screen may still be up over it.
+    this.loadoutScreen.hide();
     // Reachable straight from the pause menu ("Restart round"), and harmless
     // from anywhere else.
     this.clearPause();
@@ -916,7 +1016,9 @@ export class Game {
         );
       }
     }
-    if (this.input.reloadPressed && this.player.startReload()) this.sfx.reload();
+    if (this.input.reloadPressed && this.player.startReload()) {
+      this.sfx.reload(this.player.reloadTime);
+    }
 
     // --- shooting (hitscan from the camera through the crosshair) ---
     // Mouse fire requires pointer lock so UI clicks never discharge the gun.
@@ -937,6 +1039,7 @@ export class Game {
         this.player.damage,
         muzzle,
         this.battle.hittablesAgainst(this.player.team),
+        this.player.range,
       );
       // Bots hear the player's rifle the same way they hear each other's. This
       // is the only place the player's own gunfire enters the world, so it is
@@ -944,8 +1047,11 @@ export class Game {
       this.battle.hearGunshot(muzzle, this.player.team);
       // Recoil: kick the aim up and off to a random side, softened while
       // braced in ADS. It decays on its own, so the burst climbs and settles.
+      // The weapon's own multiplier rides on top of the ADS damping: a
+      // 13-round-a-second SMG on the rifle's per-shot kick walks the muzzle
+      // off the screen inside half a magazine.
       const rc = CONFIG.recoil;
-      const kickMult = 1 - (1 - rc.adsMult) * blend;
+      const kickMult = (1 - (1 - rc.adsMult) * blend) * this.player.recoilMult;
       this.cameraSys.addRecoil(
         rc.pitchPerShot * kickMult,
         (Math.random() * 2 - 1) * rc.yawPerShot * kickMult,
@@ -963,7 +1069,7 @@ export class Game {
         lc.muzzleIntensity,
         lc.muzzleLife,
       );
-      this.sfx.shoot();
+      this.sfx.shoot(this.player.sfxPitch);
       const haptic = CONFIG.rumble;
       this.input.rumble(haptic.shotStrong, haptic.shotWeak, haptic.shotMs);
       if (shot.target) {
@@ -986,7 +1092,7 @@ export class Game {
           this.hud.addKill("YOU", CONFIG.teams[shot.target.team].name, true);
         }
       }
-      if (this.player.reloading) this.sfx.reload();
+      if (this.player.reloading) this.sfx.reload(this.player.reloadTime);
     }
 
     // --- objectives ---

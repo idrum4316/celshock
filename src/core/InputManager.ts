@@ -85,6 +85,12 @@ export class InputManager {
    * first and ignoring the confirm behind it.
    */
   pausePressed = false;
+  /**
+   * Edge-triggered "open the loadout" (L / gamepad X). Menus only: it is read
+   * in the menu and deploy states and nowhere else, which is what keeps the
+   * kit out of reach inside a round you are already standing in.
+   */
+  loadoutPressed = false;
   pointerLocked = false;
   gamepadConnected = false;
   /**
@@ -121,6 +127,7 @@ export class InputManager {
   private prevMenuUp = false;
   private prevMenuDown = false;
   private prevPause = false;
+  private prevLoadout = false;
   private prevPadSprint = false;
   /** Latched L3 sprint state — toggled on each L3 press, cleared on blur. */
   private padSprintOn = false;
@@ -306,6 +313,14 @@ export class InputManager {
     const pauseNow = this.keys.has("Escape") || padStart;
     this.pausePressed = pauseNow && !this.prevPause;
     this.prevPause = pauseNow;
+
+    // The loadout screen's own key. On the pad it is Y/Triangle — button 3 is
+    // the one face button nothing else claims (A jumps and confirms, B
+    // crouches, X reloads), and the loadout is only ever reachable from a
+    // screen where the face buttons mean menu things anyway.
+    const loadoutNow = this.keys.has("KeyL") || (pad ? buttonHeld(pad, 3, trig) : false);
+    this.loadoutPressed = loadoutNow && !this.prevLoadout;
+    this.prevLoadout = loadoutNow;
   }
 
   /**
@@ -387,6 +402,7 @@ const BOUND_CODES = new Set([
   "KeyD",
   "KeyR",
   "KeyC",
+  "KeyL",
   "Space",
   "Tab",
   "Enter",

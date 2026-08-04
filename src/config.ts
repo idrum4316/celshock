@@ -86,6 +86,15 @@ export const CONFIG = {
     acquireRayBudget: 3,
     /** Bots will not open fire beyond this distance. */
     engageRange: 55,
+    /**
+     * How far a bot's round carries. NOT `engageRange` — that is when a bot
+     * decides to shoot, this is where the ray stops, and it also bounds the
+     * wall pick behind `losBrokenShots` and the near-miss sweep that
+     * suppresses whoever the round went past. Was the player's own range back
+     * when there was one rifle in the game and `CombatSystem` could read it
+     * out of the config; now every shooter brings its own.
+     */
+    range: 120,
     /** Below this, a bot backs off toward cover instead of closing. */
     minEngageRange: 6,
     /** Separation distance for the crowd-avoidance pass. */
@@ -115,10 +124,12 @@ export const CONFIG = {
      */
     combat: {
       /**
-       * Rounds before a reload. Matched to the player's magazine so the rhythm
+       * Rounds before a reload. Matched to the RIFLE's magazine so the rhythm
        * of a firefight is symmetrical — and so the gap is a window the player
        * can learn to push into, which is the whole point of bots reloading at
        * all. Before this they had infinite ammo and only the burst pause.
+       * Bots carry one weapon whatever the player picked; the loadout is the
+       * player's choice to make, not a thing the roster answers.
        */
       magSize: 24,
       /**
@@ -623,17 +634,91 @@ export const CONFIG = {
     stepHeight: 0.6,
   },
 
-  weapon: {
-    /** 30 per hit against 100 HP = 4 shots to kill. */
-    damage: 30,
-    /** Rounds per second (full auto). */
-    fireRate: 8,
-    magSize: 24,
-    reloadTime: 1.4,
-    /** Bullet spread half-angle (radians). */
-    spreadHip: 0.045,
-    spreadAds: 0.006,
-    range: 120,
+  /**
+   * The weapons the player can carry, and everything that differs between
+   * them. The keys ARE the weapon ids — `WeaponId` in `entities/weapons.ts`
+   * is derived from this table, so adding a weapon here and a model builder
+   * beside `RifleModel` is the whole job.
+   *
+   * Both fire the same hitscan round through the same `CombatSystem.fire`,
+   * and both take any of the three optics below — an optic is bolted to a
+   * rail and both weapons have one. What separates them is the trade this
+   * table spells out: the rifle hits hard enough to kill in four and holds a
+   * line across the valley, the SMG empties a bigger magazine half again as
+   * fast and cannot be trusted past the far side of a street.
+   *
+   * The time to kill is deliberately close (rifle 4 rounds at 8/s = 0.375 s,
+   * SMG 6 at 13/s = 0.385 s). What you are choosing is not damage per second,
+   * it is how much of the screen a burst covers.
+   *
+   * `recoilMult` and `bloomMult` SCALE `CONFIG.recoil` rather than restating
+   * it: the shape of recoil — how much springs back, how fast, where it is
+   * capped — belongs to the game, not to the weapon. Bloom is multiplied at
+   * its ceiling too, or a weapon that blooms faster would pay nothing for it
+   * after the second shot.
+   */
+  weapons: {
+    rifle: {
+      name: "Assault Rifle",
+      /** For the magazine caption, where the full name will not fit. */
+      short: "Rifle",
+      /** 30 per hit against 100 HP = 4 shots to kill. */
+      damage: 30,
+      /** Rounds per second (full auto). */
+      fireRate: 8,
+      magSize: 24,
+      reloadTime: 1.4,
+      /** Bullet spread half-angle (radians). */
+      spreadHip: 0.045,
+      spreadAds: 0.006,
+      range: 120,
+      /** Scales `recoil.pitchPerShot`/`yawPerShot`. */
+      recoilMult: 1,
+      /** Scales `recoil.bloomPerShot` AND `recoil.maxBloom`. */
+      bloomMult: 1,
+      /** Multiplies `camera.adsBlendSpeed` alongside the optic's own — a
+       *  light weapon comes up faster whatever is bolted to it. */
+      adsSpeedMult: 1,
+      /**
+       * Shifts the hip pose along the camera axis (m, before `viewmodel
+       * .scale`). The authored pose in `viewmodel.hipPos` is framed for this
+       * weapon's length, so a shorter one has to sit closer or it reads as
+       * being held out at arm's length.
+       */
+      hipZ: 0,
+      /** Report pitch, as a multiplier on the shot's own frequencies. */
+      sfxPitch: 1,
+    },
+    /**
+     * The SMG: a pistol-calibre burst weapon. Higher rate, bigger magazine,
+     * quicker to raise and quicker to reload; a third less damage per round,
+     * spread half again as wide aimed and much wider from the hip, and a
+     * range cap that runs out well inside the map.
+     *
+     * The recoil multiplier is the number that keeps it usable — at 13 rounds
+     * a second the rifle's own per-shot kick would walk the muzzle off the
+     * screen in half a magazine. Even at 0.55 it climbs faster than the rifle
+     * does (0.19 rad/s against 0.21 — near enough the same), so the price of
+     * the rate is paid in spread rather than in climb.
+     */
+    smg: {
+      name: "Submachine Gun",
+      short: "SMG",
+      /** 18 against 100 HP = 6 shots to kill. */
+      damage: 18,
+      fireRate: 13,
+      magSize: 34,
+      reloadTime: 1.15,
+      spreadHip: 0.07,
+      spreadAds: 0.016,
+      /** Past this a round simply stops; the optic on top cannot change it. */
+      range: 70,
+      recoilMult: 0.55,
+      bloomMult: 1.3,
+      adsSpeedMult: 1.3,
+      hipZ: -0.07,
+      sfxPitch: 1.35,
+    },
   },
 
   /**
@@ -693,8 +778,14 @@ export const CONFIG = {
   gunfeel: {
     /** Seconds the muzzle flash mesh stays visible per shot. */
     flashTime: 0.05,
-    /** Ejected brass: pool size, lifetime (s), launch speeds (m/s), gravity. */
-    casingPool: 12,
+    /**
+     * Ejected brass: pool size, lifetime (s), launch speeds (m/s), gravity.
+     *
+     * The pool has to cover the fastest weapon's rate over one casing's
+     * lifetime — 13/s x 0.9 s is 11.7 — or a held trigger runs it dry and the
+     * brass simply stops coming out halfway through the magazine.
+     */
+    casingPool: 16,
     casingLife: 0.9,
     casingGravity: 12,
     casingEject: 1.8,

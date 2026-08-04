@@ -8,17 +8,15 @@
  */
 import { CONFIG } from "../config";
 import type { Team } from "../entities/Combatant";
-import { DEFAULT_SIGHT, type SightId } from "../entities/sights";
 import type { ConquestSystem } from "../systems/ConquestSystem";
 import type { GameMap, SpawnPointDef } from "../world/MapBuilder";
-import { loadoutMarkup, wireLoadout } from "./loadout";
 
 /**
  * The between-lives screen: a top-down view of Hollowmere with the flags you
- * hold, where you can pick a spawn and drop back in — and change what you are
- * carrying before you do. Waiting out a respawn is the natural moment to
- * reconsider the optic, and it is the only moment inside a round when
- * changing it costs nothing: the weapon is already put away.
+ * hold, where you can pick a spawn and drop back in — and a way through to the
+ * loadout screen before you do. Waiting out a respawn is the natural moment to
+ * reconsider the kit, and it is the only moment inside a round when changing
+ * it costs nothing: the weapon is already put away.
  *
  * The map is drawn straight from the collider boxes rather than from a separate
  * authored minimap. That keeps the two from ever disagreeing — if a building
@@ -33,14 +31,13 @@ export class DeployScreen {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private statusEl: HTMLElement;
-  /** Holds the loadout editor's markup; rewritten when the fit changes. */
-  private loadoutEl: HTMLElement;
-  private sight: SightId = DEFAULT_SIGHT;
+  /** The kit button's caption; rewritten when the fit changes. */
+  private kitEl: HTMLElement;
 
   /** Wired by Game. */
   onDeploy: (spawn: SpawnPointDef) => void = () => {};
-  /** Wired by Game: the player fitted a different optic before dropping in. */
-  onSight: (id: SightId) => void = () => {};
+  /** Wired by Game: the player wants the loadout screen before dropping in. */
+  onOpenLoadout: () => void = () => {};
 
   private map: GameMap | null = null;
   private conquest: ConquestSystem | null = null;
@@ -64,33 +61,30 @@ export class DeployScreen {
         <canvas id="deploy-map" width="620" height="620"></canvas>
       </div>
       <div id="deploy-status"></div>
-      <div id="deploy-loadout"></div>
+      <button id="deploy-kit"><span class="lbl">Loadout</span><b></b><i>L / Y</i></button>
     `;
     document.getElementById("hud")!.appendChild(this.root);
     this.canvas = this.root.querySelector("#deploy-map")!;
     this.ctx = this.canvas.getContext("2d")!;
     this.statusEl = this.root.querySelector("#deploy-status")!;
-    this.loadoutEl = this.root.querySelector("#deploy-loadout")!;
-    this.drawLoadout();
+    const kitBtn = this.root.querySelector<HTMLElement>("#deploy-kit")!;
+    this.kitEl = kitBtn.querySelector("b")!;
+    // Pointerdown rather than click, for the same reason the menu's kit button
+    // uses it: the deploy confirm is a mouse-down anywhere, read a tick later,
+    // so the state has to change on the down edge or the click that opened the
+    // loadout also drops the player into the map behind it.
+    kitBtn.onpointerdown = () => this.onOpenLoadout();
 
     this.canvas.addEventListener("pointerdown", (e) => this.click(e));
   }
 
   /**
-   * Shows a different optic as fitted. Called by Game once it has actually
-   * changed the loadout, never straight from the click — the row reports the
-   * choice and is redrawn by whoever acted on it, so the highlight cannot get
-   * ahead of the rifle.
+   * Shows what is being carried. Called by Game once it has actually changed
+   * the loadout, never straight from the screen that asked for the change —
+   * so the caption cannot get ahead of the weapon.
    */
-  setSight(id: SightId): void {
-    if (id === this.sight) return;
-    this.sight = id;
-    this.drawLoadout();
-  }
-
-  private drawLoadout(): void {
-    this.loadoutEl.innerHTML = loadoutMarkup(this.sight);
-    wireLoadout(this.loadoutEl, (id) => this.onSight(id));
+  setKit(label: string): void {
+    this.kitEl.textContent = label;
   }
 
   show(map: GameMap, conquest: ConquestSystem, team: Team): void {

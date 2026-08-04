@@ -3,6 +3,9 @@
  * health/regen, weapon state (fire/reload/spread), gunfeel dressing (muzzle
  * flash mesh, ejected brass), and the first-person viewmodel wiring.
  * Owns: the player Combatant, and the ViewModel hanging off the camera.
+ * The carried weapon is a resolved `WeaponSetup`, never CONFIG read at the
+ * use site: damage, rate, magazine, spread, range and the recoil multipliers
+ * all come off it, so swapping guns is one assignment in `setWeapon`.
  * Invariants: probeGround and step-up ray tests filter metadata.solid === true.
  * Crouch moves `eyePos` AND `center` on one blend — the eye is the camera, the
  * LOS target and the bots' aim point at once, so lowering it without lowering
@@ -32,6 +35,7 @@ import { CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
 import type { SightId } from "./sights";
+import { DEFAULT_WEAPON, weaponSetup, type WeaponId, type WeaponSetup } from "./weapons";
 import { ViewModel, VIEWMODEL_GROUP } from "./ViewModel";
 import { TerrainField } from "../world/TerrainField";
 import type { Combatant, Team } from "./Combatant";
@@ -43,9 +47,6 @@ export interface PlayerMods {
   maxHpBonus: number;
   magBonus: number;
 }
-
-/** Ejection port, in rifle-local space (matches RifleModel's ejectPort box). */
-const CASING_PORT = new Vector3(0.05, 0.04, 0.06);
 
 /** One live brass case: world-space ballistic, despawned on `t` expiry. */
 interface Casing {
@@ -143,7 +144,13 @@ export class Player implements Combatant {
   alive = true;
   grounded = true;
 
-  ammo: number = CONFIG.weapon.magSize;
+  /**
+   * The carried weapon, resolved once per loadout change. Everything about
+   * how the gun behaves is read from here rather than from CONFIG directly,
+   * which is what makes "the player carries an SMG" a single assignment.
+   */
+  private weapon: WeaponSetup = weaponSetup(DEFAULT_WEAPON);
+  ammo: number = this.weapon.magSize;
   reloading = false;
   /** True while the sprint key is held and the player is actually running. */
   sprinting = false;
@@ -203,7 +210,9 @@ export class Player implements Combatant {
     // The flash is three crossed emissive petals at the muzzle; per shot it
     // gets a random roll and scale so no two shots strobe identically.
     this.flashRoot = new TransformNode("player_muzzleFlash", scene);
-    this.flashRoot.parent = this.view.rifle.muzzle;
+    // The viewmodel's own muzzle node, not the carried model's: the model can
+    // be switched off under a loadout change and the flash must not go with it.
+    this.flashRoot.parent = this.view.muzzle;
     this.flashRoot.setEnabled(false);
     const flashMat = mats.getEmissive("#ffd9a0");
     for (let i = 0; i < 3; i++) {
@@ -253,16 +262,56 @@ export class Player implements Combatant {
   }
 
   get magSize(): number {
-    return CONFIG.weapon.magSize + this.mods.magBonus;
+    return this.weapon.magSize + this.mods.magBonus;
   }
 
   get damage(): number {
-    return CONFIG.weapon.damage * this.mods.damageMult;
+    return this.weapon.damage * this.mods.damageMult;
+  }
+
+  /** Where a round from the carried weapon stops (m). */
+  get range(): number {
+    return this.weapon.range;
+  }
+
+  /** Scales the per-shot aim kick Game hands the camera. */
+  get recoilMult(): number {
+    return this.weapon.recoilMult;
+  }
+
+  /** How the shot is voiced, and how long the reload's clicks are spread. */
+  get sfxPitch(): number {
+    return this.weapon.sfxPitch;
+  }
+
+  get reloadTime(): number {
+    return this.weapon.reloadTime;
+  }
+
+  /** The weapon's caption on the HUD's magazine strip. */
+  get weaponName(): string {
+    return this.weapon.short;
+  }
+
+  /**
+   * Picks up a weapon. The magazine comes with it — this is only reachable
+   * from the menu and the deploy screen, where the gun is already put away,
+   * so there is no half-spent magazine to carry across and no reload to
+   * interrupt.
+   */
+  setWeapon(id: WeaponId): void {
+    this.weapon = weaponSetup(id);
+    this.view.setWeapon(id);
+    this.reloading = false;
+    this.reloadT = 0;
+    this.fireCooldown = 0;
+    this.spreadBloom = 0;
+    this.ammo = this.magSize;
   }
 
   /**
    * Fits an optic. Pure pass-through to the viewmodel — the sight changes
-   * what the player can see, never what the rifle does, so nothing about
+   * what the player can see, never what the weapon does, so nothing about
    * damage, spread or recoil is downstream of this.
    */
   setSight(id: SightId): void {
@@ -279,7 +328,7 @@ export class Player implements Combatant {
    * help least (hip fire, deep into a burst).
    */
   spread(adsBlend: number): number {
-    const w = CONFIG.weapon;
+    const w = this.weapon;
     const base = w.spreadHip + (w.spreadAds - w.spreadHip) * adsBlend;
     const bloomMult = 1 - (1 - CONFIG.recoil.adsMult) * adsBlend;
     const crouchMult =
@@ -554,10 +603,16 @@ export class Player implements Combatant {
     }
     const r = CONFIG.recoil;
     this.ammo -= 1;
-    this.fireCooldown = 1 / CONFIG.weapon.fireRate;
+    this.fireCooldown = this.weapon.shotInterval;
     // Weapon-side recoil: the spread bloom the next shot inherits, and the
     // punch the body rides out. The aim kick itself belongs to the camera.
-    this.spreadBloom = Math.min(r.maxBloom, this.spreadBloom + r.bloomPerShot);
+    // The ceiling takes the weapon's multiplier along with the per-shot term:
+    // a weapon that blooms faster has to be allowed to bloom further, or the
+    // extra rounds per second cost it nothing after the second shot.
+    this.spreadBloom = Math.min(
+      r.maxBloom * this.weapon.bloomMult,
+      this.spreadBloom + r.bloomPerShot * this.weapon.bloomMult,
+    );
     this.weaponKickT = 1;
     // Muzzle flash: a single-frame-scale strobe with a random roll and scale,
     // so full-auto reads as flicker rather than one static sprite.
@@ -581,10 +636,15 @@ export class Player implements Combatant {
     const g = CONFIG.gunfeel;
     // The port is on the viewmodel, so this is a camera-space frame resolved
     // to world: the brass leaves the gun you can see and then falls in the
-    // world, which is exactly where it should end up.
-    const wm = this.view.rifle.root.getWorldMatrix();
-    Vector3.TransformCoordinatesToRef(CASING_PORT, wm, c.mesh.position);
-    Vector3.TransformNormalToRef(_casingDir.set(1, 0, -0.2), wm, c.vel);
+    // world, which is exactly where it should end up. The node is the
+    // viewmodel's rather than the model's, so it follows a weapon swap.
+    const port = this.view.ejectPort;
+    c.mesh.position.copyFrom(port.getAbsolutePosition());
+    Vector3.TransformNormalToRef(
+      _casingDir.set(1, 0, -0.2),
+      port.getWorldMatrix(),
+      c.vel,
+    );
     c.vel.normalize().scaleInPlace(g.casingEject * (0.8 + Math.random() * 0.4));
     c.vel.y += g.casingUp * (0.7 + Math.random() * 0.6);
     c.spin = (Math.random() * 2 - 1) * 25;
@@ -632,12 +692,12 @@ export class Player implements Combatant {
   startReload(): boolean {
     if (this.reloading || this.ammo >= this.magSize) return false;
     this.reloading = true;
-    this.reloadT = CONFIG.weapon.reloadTime;
+    this.reloadT = this.weapon.reloadTime;
     return true;
   }
 
   get reloadProgress(): number {
-    return this.reloading ? 1 - this.reloadT / CONFIG.weapon.reloadTime : 1;
+    return this.reloading ? 1 - this.reloadT / this.weapon.reloadTime : 1;
   }
 
   /** World position of the rifle muzzle (tracer origin). */

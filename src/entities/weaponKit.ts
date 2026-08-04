@@ -1,0 +1,326 @@
+/**
+ * weaponKit.ts — The shared vocabulary every weapon model is built in: the
+ * colour groups, the primitive helpers, the merge, and the shape of what a
+ * builder returns.
+ * Owns: the build accumulator (`weaponBuild`) and the `WeaponParts` contract.
+ * Owns no geometry of its own — `RifleModel` and `SmgModel` are the builders,
+ * and `optics.ts` is the third.
+ *
+ * Invariants:
+ * - A builder assembles at the ORIGIN with its root at identity and merges
+ *   before anything is moved. `MergeMeshes` bakes world matrices, so a merge
+ *   under a transformed root bakes that transform in twice. Same rule, same
+ *   reason, as `BuildingKit` and `MapBuilder.mergeByMaterial`.
+ * - Nothing may be scaled non-uniformly. `VertexData.transform` carries
+ *   normals across without re-normalising them and `renderOutline` extrudes
+ *   each vertex along its own normal, so a squashed part grows an ink shell
+ *   that is fat on the squashed axis. Round shells are faceted slab rings
+ *   (`shell`) for exactly that reason.
+ * - A colour absent from `SECTIONS` is silently never merged: anything handed
+ *   to `collect` has to appear there.
+ * - Emissive parts go through `lit`, never `collect` — merged into a colour
+ *   group they would take that group's cel material, and an outline shell
+ *   around a glowing dot is a black smudge where the aim point should be.
+ *
+ * The landmarks a builder returns are POSITIONS, not nodes, because two
+ * weapons are built at once and only one is enabled: the muzzle flash and the
+ * ejection port have to hang off something that survives a loadout change, so
+ * `ViewModel` owns those nodes and moves them to whichever weapon is fitted.
+ */
+import {
+  Mesh,
+  MeshBuilder,
+  Scene,
+  TransformNode,
+  Vector3,
+} from "@babylonjs/core";
+import { CONFIG } from "../config";
+import type { CelMaterialFactory } from "../shaders/CelShader";
+import type { SightId } from "./sights";
+
+export const BODY = "#2b2b33"; // aluminium upper receiver, barrel, hinge block
+export const POLYMER = "#1d232c"; // lower receiver, grip, magazine, handguard, stock
+export const METAL = "#454e5e"; // rails, sights, charging handle, small fittings
+export const RUBBER = "#15181d"; // the contact surfaces: butt pad, grip cap, foregrip
+export const RETICLE = "#ff3b30";
+
+/**
+ * Colour groups, merged into one mesh each. Order fixes the merged names, and
+ * a colour absent from this list is silently never merged.
+ */
+const SECTIONS: ReadonlyArray<readonly [string, string]> = [
+  ["body", BODY],
+  ["polymer", POLYMER],
+  ["metal", METAL],
+  ["rubber", RUBBER],
+];
+
+/** Facets around a round shell. 14 reads round at arm's length and stays cheap. */
+export const FACETS = 14;
+
+/**
+ * One fittable optic: everything it adds to the weapon, under a node that is
+ * switched off while a different sight is fitted.
+ */
+export interface SightAssembly {
+  root: TransformNode;
+  /**
+   * The optic's eye reference — the rear aperture, the holo window, the
+   * scope's ocular. ADS puts THIS point on the camera axis, so it is what
+   * makes the reticle the point of impact.
+   */
+  sightCenter: TransformNode;
+  meshes: Mesh[];
+}
+
+/** Where one hand grips, and where its elbow trails, in weapon-local units. */
+export interface GripSpec {
+  hand: Vector3;
+  elbow: Vector3;
+}
+
+/** Handles into a built weapon: the pose root plus alignment landmarks. */
+export interface WeaponParts {
+  /** The whole weapon, at identity. Enabled only while this one is carried. */
+  root: TransformNode;
+  /** Barrel tip, weapon-local — tracer and muzzle-flash origin. */
+  muzzle: Vector3;
+  /** Ejection port, weapon-local — where the brass leaves. */
+  ejectPort: Vector3;
+  /** The trigger hand, and the support hand on the handguard. */
+  grip: GripSpec;
+  support: GripSpec;
+  /** One per optic. Exactly one is enabled; see `ViewModel.setSight`. */
+  sights: Record<SightId, SightAssembly>;
+  /** Every visible mesh, every optic's included. */
+  meshes: Mesh[];
+}
+
+/** What a weapon model builder is: geometry at the origin, landmarks out. */
+export type WeaponBuilder = (
+  scene: Scene,
+  mats: CelMaterialFactory,
+  prefix: string,
+) => WeaponParts;
+
+/**
+ * The primitive helpers a weapon model is written in, bound to one scene,
+ * material factory, name prefix and root.
+ *
+ * `collect` gathers into the CURRENT colour-group map, which `merge` swaps out
+ * — the weapon is merged before any optic is built, so a sight's parts can
+ * never end up inside the weapon's colour groups.
+ */
+export class WeaponBuild {
+  private target = new Map<string, Mesh[]>();
+  private readonly pivots: TransformNode[] = [];
+
+  constructor(
+    readonly scene: Scene,
+    private readonly mats: CelMaterialFactory,
+    private readonly prefix: string,
+    readonly root: TransformNode,
+  ) {}
+
+  private collect(color: string, m: Mesh): Mesh {
+    // The small metal parts are a weapon's only glossy surface — a hard moon
+    // glint on the rails/fittings sells them as steel against the matte
+    // receiver and polymer.
+    m.material =
+      color === METAL
+        ? this.mats.getGlossy(color, CONFIG.graphics.spec.rifle)
+        : this.mats.get(color);
+    m.isPickable = false;
+    const g = this.target.get(color);
+    if (g) g.push(m);
+    else this.target.set(color, [m]);
+    return m;
+  }
+
+  /** `rotZ` cants a part in the xy plane; `pivot` is the rotX equivalent. */
+  box(
+    name: string,
+    color: string,
+    w: number,
+    h: number,
+    d: number,
+    x: number,
+    y: number,
+    z: number,
+    parent: TransformNode = this.root,
+    rotZ = 0,
+  ): Mesh {
+    const m = MeshBuilder.CreateBox(
+      `${this.prefix}_${name}`,
+      { width: w, height: h, depth: d },
+      this.scene,
+    );
+    m.parent = parent;
+    m.position.set(x, y, z);
+    m.rotation.z = rotZ;
+    return this.collect(color, m);
+  }
+
+  /** Cylinder laid along the barrel axis. */
+  tube(
+    name: string,
+    color: string,
+    dFront: number,
+    dRear: number,
+    len: number,
+    x: number,
+    y: number,
+    z: number,
+  ): Mesh {
+    const m = MeshBuilder.CreateCylinder(
+      `${this.prefix}_${name}`,
+      { height: len, diameterTop: dFront, diameterBottom: dRear, tessellation: 10 },
+      this.scene,
+    );
+    m.parent = this.root;
+    m.rotation.x = Math.PI / 2; // +y axis -> +z barrel axis
+    m.position.set(x, y, z);
+    return this.collect(color, m);
+  }
+
+  /** Cylinder across the weapon: pins, hinges, turrets, battery caps. */
+  pin(
+    name: string,
+    color: string,
+    dia: number,
+    len: number,
+    x: number,
+    y: number,
+    z: number,
+    axis: "x" | "y" = "x",
+  ): Mesh {
+    const m = MeshBuilder.CreateCylinder(
+      `${this.prefix}_${name}`,
+      { height: len, diameter: dia, tessellation: 10 },
+      this.scene,
+    );
+    m.parent = this.root;
+    if (axis === "x") m.rotation.z = Math.PI / 2; // +y axis -> +x
+    m.position.set(x, y, z);
+    return this.collect(color, m);
+  }
+
+  /**
+   * A round shell around the barrel axis at x = 0: `sides` slabs, each turned
+   * to face its own facet. Used for optic housings and muzzle cages.
+   *
+   * Built from slabs rather than from a primitive because a hollow tube is the
+   * one shape the primitives will not give you. A capped cylinder has no bore;
+   * an uncapped one is a single-sided shell whose far wall vanishes when you
+   * look through it, which is precisely the view an optic is for; and a torus
+   * stretched along the axis would need a non-uniform scale, whose un-
+   * normalised normals `renderOutline` then extrudes into a lopsided shell.
+   * Facets are what the cel shader wants anyway — it flat-shades from
+   * screen-space derivatives, so a smooth ring would read as a faceted one.
+   *
+   * Slabs are cut to meet at the OUTER radius, so they overlap inward and the
+   * shell has no seams. `span` below 1 opens those joints into slots (the
+   * muzzle cage); `a0` turns the whole ring, which is what puts a slot rather
+   * than a strut at top dead centre.
+   */
+  shell(
+    name: string,
+    color: string,
+    bore: number,
+    wall: number,
+    len: number,
+    y: number,
+    z: number,
+    sides = FACETS,
+    a0 = 0,
+    span = 1,
+  ): void {
+    const rMid = bore / 2 + wall / 2;
+    const w = 2 * (bore / 2 + wall) * Math.tan(Math.PI / sides) * span;
+    for (let i = 0; i < sides; i++) {
+      const a = a0 + (i / sides) * Math.PI * 2;
+      // rotZ = -a puts the slab's own +y (its thickness axis) on the radius.
+      this.box(
+        `${name}${i}`,
+        color,
+        w,
+        wall,
+        len,
+        Math.sin(a) * rMid,
+        y + Math.cos(a) * rMid,
+        z,
+        this.root,
+        -a,
+      );
+    }
+  }
+
+  /** Raked sub-assembly (grip, magazine, foregrip) hung off its own pivot. */
+  pivot(
+    name: string,
+    x: number,
+    y: number,
+    z: number,
+    rotX: number,
+    parent: TransformNode = this.root,
+  ): TransformNode {
+    const n = new TransformNode(`${this.prefix}_${name}`, this.scene);
+    n.parent = parent;
+    n.position.set(x, y, z);
+    n.rotation.x = rotX;
+    this.pivots.push(n);
+    return n;
+  }
+
+  /**
+   * Merges everything `collect` has gathered since the last call into one mesh
+   * per colour, hangs the results off `parent`, and arms a fresh group for the
+   * next caller. Run once for the weapon and once per optic, which is what
+   * keeps a loadout change from touching the weapon underneath it.
+   *
+   * Everything is still at identity under `root` here, so the bake leaves the
+   * geometry exactly where it was built.
+   */
+  merge(suffix: string, parent: TransformNode): Mesh[] {
+    const groups = this.target;
+    this.target = new Map();
+    const out: Mesh[] = [];
+    for (const [name, color] of SECTIONS) {
+      const parts = groups.get(color);
+      if (!parts || parts.length === 0) continue;
+      // A colour group of ONE is the case MergeMeshes will not do for you —
+      // it hands the mesh straight back with its transform intact, which the
+      // new parent would then apply a second time. Bake it by hand instead,
+      // detached first because the bake resets the local matrix. Same rule,
+      // and same reason, as ViewModel's arms and MapBuilder's mergeByMaterial.
+      const merged =
+        parts.length === 1
+          ? (parts[0].setParent(null), parts[0].bakeCurrentTransformIntoVertices())
+          : Mesh.MergeMeshes(parts, true, true);
+      if (!merged) continue;
+      merged.name = `${this.prefix}_${suffix}_${name}`;
+      merged.parent = parent;
+      merged.isPickable = false;
+      out.push(merged);
+    }
+    return out;
+  }
+
+  /**
+   * Dresses a reticle or a tritium bead: unlit, un-outlined, and deliberately
+   * NOT run through `collect` — see the header.
+   */
+  lit(m: Mesh, parent: TransformNode): Mesh {
+    m.parent = parent;
+    m.material = this.mats.getEmissive(RETICLE);
+    m.metadata = { noOutline: true };
+    m.isPickable = false;
+    return m;
+  }
+
+  /** Drops the raking pivots once their children have been merged out. */
+  disposePivots(): void {
+    for (const p of this.pivots) p.dispose();
+    this.pivots.length = 0;
+  }
+}

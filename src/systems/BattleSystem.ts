@@ -488,6 +488,7 @@ export class BattleSystem {
       CONFIG.bots.damage,
       muzzle,
       this.hittablesAgainst(bot.team),
+      CONFIG.bots.range,
     );
     const at = muzzle.clone();
     this.muzzleFlashes.push(at);

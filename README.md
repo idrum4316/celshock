@@ -3,7 +3,7 @@
 A browser-based, single-player **Conquest** shooter built with **Babylon.js** and
 **TypeScript**. Eight-a-side against bots over five control points in a
 fog-drowned horror village, in **first person** (aiming down sights brings the
-rifle's holo sight onto the centre of the screen and zooms the view) with a
+the fitted sight onto the centre of the screen and zooms the view) with a
 low-poly cel-shaded look: a near-black valley lit by guttering
 lanterns, burning braziers, muzzle flashes, and your own shoulder lamp.
 
@@ -36,6 +36,7 @@ Requires Node 18+ and a WebGL2-capable browser (Chrome/Edge/Firefox/Safari).
 | Jump       | A / ✕               | Space            |
 | Reload     | X / ▢               | R                |
 | Scoreboard | Back / Share        | Tab              |
+| Loadout    | Y / △ (menus)       | L (menus)        |
 | Confirm    | A or Start          | Enter / Click    |
 
 Click the page once to capture the mouse (pointer lock). Gamepads use the

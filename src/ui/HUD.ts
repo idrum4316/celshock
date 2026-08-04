@@ -16,9 +16,7 @@
  * the ones that fire on a state change instead.
  */
 import { CONFIG } from "../config";
-import type { SightId } from "../entities/sights";
 import type { ControlPoint } from "../systems/ConquestSystem";
-import { loadoutMarkup, wireLoadout } from "./loadout";
 
 /**
  * Geometry of one damage arc, in the pixels of its own SVG box. Art constants,
@@ -636,12 +634,12 @@ export class HUD {
   }
 
   /**
-   * The weapon caption over the magazine strip. Pushed when the loadout
-   * changes rather than every frame — it is one of the few strings on the HUD
-   * that only moves when the player moves it.
+   * The kit caption over the magazine strip. Pushed when the loadout changes
+   * rather than every frame — it is one of the few strings on the HUD that
+   * only moves when the player moves it.
    */
-  setWeaponSight(name: string): void {
-    this.weaponLabel.textContent = `RIFLE · ${name.toUpperCase()}`;
+  setKit(label: string): void {
+    this.weaponLabel.textContent = label.toUpperCase();
   }
 
   setLockHint(visible: boolean): void {
@@ -649,17 +647,23 @@ export class HUD {
   }
 
   /**
-   * The main menu: the difficulty picker and the loadout editor.
+   * The main menu: the difficulty picker and the way into the loadout screen.
+   *
+   * The kit itself is not edited here — it is two slots and a stat chart now,
+   * which is a screen rather than a strip of buttons under a title. What sits
+   * here is the button that opens it and a reminder of what is currently in
+   * the player's hands, which is the part of the old row that was worth
+   * keeping on the menu.
    *
    * `#overlay` is inside a `pointer-events: none` HUD and does not opt back in
-   * (only `#deploy` does), so the difficulty row and the loadout row ask for
+   * (only `#deploy` does), so the difficulty row and the kit button ask for
    * pointer events on themselves alone — the rest of the overlay stays inert
    * and a stray click can never be mistaken for a UI action.
    */
   showMenu(
     difficulties: readonly string[],
     selected: number,
-    sight: SightId,
+    kit: string,
   ): void {
     this.overlay.classList.remove("hidden");
     this.setOverlaid(true);
@@ -690,7 +694,11 @@ export class HUD {
         <div class="tiers">${tiers}</div>
         <span class="hint">&larr; &rarr; / D-pad</span>
       </div>
-      ${loadoutMarkup(sight)}
+      <div class="kit">
+        <span class="label">Loadout</span>
+        <button class="kit-open"><b>${kit}</b><i>Change kit</i></button>
+        <span class="hint">L / Y</span>
+      </div>
       <div class="ov-controls frame">
         <div class="ov-controls-head">
           <span>Controls</span><span>Keyboard &amp; mouse</span><span>Gamepad</span>
@@ -704,14 +712,21 @@ export class HUD {
       .forEach((btn) => {
         btn.onclick = () => this.onDifficulty(Number(btn.dataset.tier));
       });
-    wireLoadout(this.overlay, (id) => this.onSight(id));
+    // POINTERDOWN, not click. The menu's own confirm is "a mouse button went
+    // down anywhere", read from the button mask on the next tick — which
+    // happens before a `click` (that lands on mouse UP) ever fires. Opening
+    // the loadout on the down edge changes the state first, so the confirm
+    // arrives in a state that ignores the mouse instead of deploying the
+    // player out from under the screen they just asked for.
+    const kitBtn = this.overlay.querySelector<HTMLElement>("button.kit-open");
+    if (kitBtn) kitBtn.onpointerdown = () => this.onOpenLoadout();
   }
 
   /** Wired by Game: the player picked a difficulty tier from the menu. */
   onDifficulty: (tier: number) => void = () => {};
 
-  /** Wired by Game: the player fitted a different optic from the menu. */
-  onSight: (id: SightId) => void = () => {};
+  /** Wired by Game: the player asked for the loadout screen. */
+  onOpenLoadout: () => void = () => {};
 
   showRoundOver(
     winnerName: string,

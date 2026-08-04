@@ -134,6 +134,12 @@ export class CombatSystem {
    *
    * `targets` is whatever the shooter is allowed to hit, so friendly fire is
    * excluded by construction rather than by a team check in here.
+   *
+   * `range` comes from the shooter rather than from CONFIG: the player's two
+   * weapons carry different distances, and this used to read the one rifle's
+   * out of the config directly. It bounds the wall pick behind `hitWall` and
+   * the near-miss sweep as well as the damage, so it is the whole reach of
+   * the round, not just where the tracer stops.
    */
   fire(
     origin: Vector3,
@@ -142,9 +148,9 @@ export class CombatSystem {
     damage: number,
     muzzle: Vector3,
     targets: Hittable[],
+    range: number,
   ): ShotResult {
     const dir = jitterDirection(aimDir, spread);
-    const range = CONFIG.weapon.range;
 
     // Wall/prop/floor hit distance caps the shot.
     const ray = new Ray(origin, dir, range);

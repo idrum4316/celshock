@@ -71,8 +71,10 @@ have already cost time:
 - **Sight alignment is checkable without looking at a picture**, and should be
   after anything that touches the viewmodel or the camera — for **every** optic,
   since each carries its own eye reference: take
-  `scene.getTransformNodeByName("view_<id>_sightCenter").getAbsolutePosition()`
-  (`id` is `iron`/`holo`/`scope`), subtract `camera.position`, and project onto
+  `scene.getTransformNodeByName("view_<weapon>_<sight>_sightCenter")
+  .getAbsolutePosition()` (`weapon` is `rifle`/`smg`, `sight` is
+  `iron`/`holo`/`scope` — all six combinations, since a weapon change moves the
+  optic too), subtract `camera.position`, and project onto
   `cameraSys.forward` / `flatRight`. At `adsBlend === 1` the two cross-axis
   components must be **0**, and the along-axis one is that sight's `eyeRelief`
   times its `zoomComp`. Give the weapon time to settle first: the sway spring is
@@ -101,14 +103,24 @@ src/
     Game.ts                 # Orchestrator + game state machine + main loop
     InputManager.ts         # Unified keyboard/mouse + gamepad state + rumble
     CameraSystem.ts         # First-person cam at the eye; ADS zooms + slows
-                            #   by whatever optic is fitted
+                            #   by whatever optic is fitted, and comes up at
+                            #   the carried weapon's own rate
     Sfx.ts                  # Procedural WebAudio, spatialised and voice-capped
   entities/
     Player.ts               # Movement, sprint, jump, weapon state, viewmodel
-    ViewModel.ts            # The first-person weapon: rifle + gloved arms on
-                            #   the camera, hip/ADS/sprint/reload, sway, bob
-    RifleModel.ts           # Low-poly SCAR-pattern rifle, plus one merged
-                            #   assembly per fittable optic (irons/holo/scope)
+    ViewModel.ts            # The first-person weapon: the carried gun + gloved
+                            #   arms on the camera, hip/ADS/sprint/reload,
+                            #   sway, bob. Builds every weapon, enables one.
+    weaponKit.ts            # The build accumulator every weapon model is
+                            #   written in (colours, box/tube/pin/shell, the
+                            #   per-colour merge) + the WeaponParts contract
+    RifleModel.ts           # Low-poly SCAR-pattern battle rifle
+    SmgModel.ts             # Low-poly compact SMG — same contract, so the
+                            #   viewmodel carries either
+    optics.ts               # The three optic assemblies, built onto whichever
+                            #   weapon's OpticMount asked for them
+    weapons.ts              # WeaponId + the resolved WeaponSetup the player
+                            #   and the camera run on
     sights.ts               # SightId + the derivation from a sight's
                             #   magnification to FOV, sensitivity and the
                             #   viewmodel's zoom compensation
@@ -188,9 +200,9 @@ src/
   ui/
     HUD.ts                  # DOM overlay: tickets, flags, capture-zone panel,
                             # killfeed, scoreboard, world-anchored damage arcs
-    DeployScreen.ts         # Clickable top-down deploy map + loadout editor
-    loadout.ts              # The loadout editor's markup + wiring, shared by
-                            #   the main menu and the deploy screen
+    DeployScreen.ts         # Clickable top-down deploy map + the kit button
+    LoadoutScreen.ts        # The kit screen: weapon slot, optic slot, and the
+                            #   stat chart derived from CONFIG.weapons
     Minimap.ts              # Corner minimap: flags, friendlies, firing enemies
   shaders/
     CelShader.ts            # Custom cel ShaderMaterial + outline helper
@@ -216,11 +228,15 @@ on every death and `roundover` when a side runs out of tickets. The 3D scene
 renders in every state, which is what lets the deploy screen and the menu sit
 over a live view.
 
-**`paused` is a lid over `playing` or `deploy`, not a step in that cycle.** It
-records which one it covered (`pausedFrom`) and puts it back, so a pause taken
-while waiting out a respawn returns to the deploy map rather than dropping the
-player into the world. Pausing is just `tick` not calling `updateGameplay` —
-everything else still renders, so the round reads as held rather than gone —
+**`loadout` and `paused` are lids, not steps in that cycle.** Each records
+which state it covered (`loadoutFrom` / `pausedFrom`) and puts it back. The
+loadout screen covers `menu` or `deploy`; a pause covers `playing` or `deploy`.
+
+A pause taken while waiting out a respawn therefore returns to the deploy map
+rather than dropping the player into the world.
+
+Pausing is just `tick` not calling `updateGameplay` — everything else still
+renders, so the round reads as held rather than gone —
 plus two things that would otherwise leak past it: `Sfx.setSuspended` stops the
 audio clock (the tail of the last shot is still there when you come back, and
 the voice counter stays honest because nothing ends while the clock is
@@ -288,21 +304,22 @@ camera inside the head has nothing to be occluded by. There is also **no player
 body mesh at all**. The only things the player renders are the viewmodel, its
 brass, and the blob shadow `ShadowSystem` draws underfoot.
 
-`src/entities/ViewModel.ts` owns the weapon: the rifle plus two gloved arms,
-parented to the camera and posed in camera space. Four things there are
+`src/entities/ViewModel.ts` owns the weapon: the carried gun plus two gloved
+arms, parented to the camera and posed in camera space. Four things there are
 load-bearing.
 
 - **The aimed pose is derived, not authored.** `adsPos` cancels the FITTED
   sight's own `sightCenter` offset (times `viewmodel.scale` — the node's
-  position is in the camera's frame while the sight's offset is in the rifle's)
+  position is in the camera's frame while the sight's offset is in the weapon's)
   so that sight's reticle lands on the camera axis at its own
   `CONFIG.sights[id].eyeRelief`. The reticle then projects to the exact centre
   of the screen, which is where `CombatSystem` sends the bullets. Hand-tuning
   that offset — or forgetting the scale factor, which puts the sight a couple
   of degrees low — gives a sight picture that looks plausible and shoots high.
   It is verifiable: at `adsBlend === 1` the reticle's offset from the camera
-  axis is exactly zero. `setSight` is the only thing allowed to write it, and
-  it owes a re-derivation on every loadout change.
+  axis is exactly zero. `applyFit` is the only thing allowed to write it, and
+  it owes a re-derivation on every loadout change — **including a change of
+  weapon**, because the same optic sits at a different height on each one.
 - **The viewmodel renders in `VIEWMODEL_GROUP` (1).** Babylon clears depth
   between rendering groups, so the weapon draws over the world instead of
   intersecting the wall the player is standing against. Anything attached to
@@ -312,7 +329,9 @@ load-bearing.
 - **Scale and stand-off are a framing decision, not realism.** A 54° vertical
   FOV against a real eye's ~130° means a rifle framed where a rifle actually
   sits fills the screen. `viewmodel.scale` shrinks it and `hipPos.z` pushes it
-  out until it reads at the size the eye expects.
+  out until it reads at the size the eye expects. That pose is authored for the
+  rifle's length, so a shorter weapon adds its own `hipZ` to pull it back in —
+  otherwise an SMG reads as being held out at arm's length.
 - **The camera owns the bob phase; the weapon reads it.** Both bob on the same
   drive, and two integrators fed the same number drift apart — the weapon would
   visibly swim against the view. `Player` pushes the drive with
@@ -339,34 +358,63 @@ The bob and the view punch move the **rendered camera only** — `aimPitch`/
 the viewmodel, which matters in the editor: it flies the same camera the weapon
 is parented to, so a visible rifle would ride along in front of it.
 
-### The loadout: three optics, one rifle
+### The loadout: two weapons, three optics
 
-`CONFIG.sights` declares the fittable optics and `src/entities/sights.ts`
-derives `SightId` **from that table**, so a sight is declared in exactly one
-place. Everything else falls out of one number per sight, `magnification`: the
+Two tables, two slots, and neither knows about the other. `CONFIG.weapons`
+declares what can be carried and `CONFIG.sights` what can be bolted to it;
+`entities/weapons.ts` and `entities/sights.ts` derive `WeaponId`/`SightId`
+**from those tables**, so each is declared in exactly one place. Both weapons
+take all three optics, which is not a shortcut — an optic is a thing on a rail,
+and both weapons have one.
+
+**A weapon owns the round; an optic owns the picture.** Damage, rate, magazine,
+spread, range and the recoil multipliers are the weapon's and reach nothing but
+`Player`; magnification, eye relief and the aimed FOV are the optic's. They meet
+in exactly two places, and both are deliberate: the aimed pose (the optic's
+`sightCenter` on *this* weapon's rail) and the ADS blend RATE, which is the
+product of the optic's `adsSpeedMult` and the weapon's — how fast a sight comes
+up is a fact about the weight in your hands as well as the glass on top.
+
+Everything about an optic still falls out of one number, `magnification`: the
 aimed FOV is `2*atan(tan(fovHip/2) / mag)`, the ADS look multipliers are
 `camera.adsLookMouse|Stick / mag` (so the crosshair crosses the *screen* at the
 same rate through any optic — a 3.5x scope on the hip-fire rates is unusable),
 and the viewmodel's zoom compensation is `adsMagReference / mag`. The holo is
 1.6, which is exactly the 0.62 rad the camera used before optics were a choice,
-so fitting it reproduces the shipped weapon frame for frame.
+so the rifle with a holo reproduces the shipped weapon frame for frame.
 
-**Every sight fires the same bullets.** Damage, spread and recoil belong to the
-rifle; an optic changes what you can see and how fast you can bring it to bear,
-and nothing else is downstream of `setSight`.
+A weapon's own numbers work the same way, against `CONFIG.recoil` rather than
+restating it: `recoilMult` and `bloomMult` SCALE the per-shot terms, because the
+shape of recoil (how much springs back, how fast, where it is capped) belongs to
+the game. `bloomMult` multiplies the *ceiling* as well as the per-shot term —
+a weapon that blooms faster has to be allowed to bloom further, or the extra
+rounds per second cost it nothing after the second shot.
 
-Four things are load-bearing:
+The two are balanced on time to kill, not on damage per second: 4 rifle rounds
+at 8/s is 0.375 s, 6 SMG rounds at 13/s is 0.385 s. What the choice actually
+buys is how much of the screen a burst covers, and how far away it still means
+anything.
 
-- **Each optic is merged into its own meshes, not into the rifle's.** All three
-  are built at construction and all but one are `setEnabled(false)`, so a
-  loadout change is three boolean writes and a re-derived `adsPos` — no rebuild,
-  and `rifle.muzzle` survives it, which is what keeps Player's muzzle flash
-  attached. `RifleModel`'s `mergeCollected` swaps the colour-group map to do it.
+Six things are load-bearing:
+
+- **Every weapon and every optic is built once, and all but one of each is
+  `setEnabled(false)`.** A loadout change is a handful of boolean writes and a
+  re-derived `adsPos` — never a rebuild, which would have to happen inside a
+  deploy screen and would drop Player's muzzle flash on the floor.
+- **The muzzle and the ejection port are the VIEWMODEL's nodes, not the
+  model's.** A model's landmarks are `Vector3`s and `ViewModel` moves its own
+  two nodes to whichever weapon is carried. Player's flash is parented to one
+  and its brass thrown from the other, and neither may hang off a rig that can
+  be switched off underneath it.
+- **Each weapon carries its own arms.** Where a hand grips is the model's
+  business (`WeaponParts.grip`/`support`), and the forearm's geometry is baked
+  along the hand-to-elbow line, so an arm cannot simply be translated onto a
+  shorter gun. Two pairs of merged meshes, one enabled.
 - **Zoom compensation is a uniform scale about the camera's origin.** Past
   `viewmodel.adsMagReference` the weapon is scaled down *and* drawn
   proportionally closer — `adsPos` and `weapon.scaling` take the same factor —
   which changes no ray direction, so the sight stays exactly on the axis and
-  only the apparent size of the rifle is held still. Without it a 3.5x optic
+  only the apparent size of the weapon is held still. Without it a 3.5x optic
   magnifies the receiver across the whole screen along with the world.
 - **The additive pose offsets take that factor too** (`ViewModel.off`). Sway,
   bob, the airborne give and the kick are metres in the *camera's* frame, and a
@@ -375,26 +423,50 @@ Four things are load-bearing:
   swings the scope's bore clean off the axis. Rotations are deliberately
   exempt: the weapon turns about its own root, so the displacement a given
   angle produces already scales with the model.
-- **The scope is a real hollow tube, so its own rifle can get into the picture.**
-  A straight tube's view cone spreads with distance and runs onto the barrel —
-  a lit muzzle device sitting inside the sight picture. `SCOPE_Y`, the tube's
-  length and the scope's omission of the folded front iron are all set by that
-  one constraint, not by looks. How much of the frame is clear is set by the
-  *objective* rim's angular size, which is why a long eye relief turns the
-  sight picture into a keyhole.
+- **The scope is a real hollow tube, so its own weapon can get into the
+  picture.** A straight tube's view cone spreads with distance and runs onto the
+  barrel — a lit muzzle device sitting inside the sight picture. The tube's
+  height above the rail, its length and the scope's omission of the folded front
+  iron are all set by that one constraint, not by looks. How much of the frame
+  is clear is set by the *objective* rim's angular size, which is why a long eye
+  relief turns the sight picture into a keyhole.
 
-The editor itself (`src/ui/loadout.ts`) is a markup string plus a wiring pass
-rather than a component, because it has to live in two overlays that manage
-their DOM in opposite ways: `HUD.showMenu` rewrites `#overlay.innerHTML`
-wholesale, while `DeployScreen` builds once and patches. It is reachable from
-the **main menu and the deploy screen** and deliberately not from the pause
-menu — a round you are already standing in is not somewhere you get to change
-what you are carrying. Nothing enforces that with a flag; the states that can
-reach it are the states that render it. Both drive `Game.setSight`, which
-applies immediately (the weapon is put away in both places) and persists to
-`localStorage` the same way the difficulty tier does. On the keyboard and the
-d-pad the two pickers split the axes: left/right is difficulty, up/down the
-optic.
+**The optics are built against the weapon, not for it.** `optics.ts` takes an
+`OpticMount` — the height of that weapon's rail, where along it the sight sits,
+and its two back-up iron stations — and measures everything from those four
+numbers. So the SMG's lower receiver carries the same three sights with nothing
+re-tuned, and the derived `adsPos` puts each one on the axis wherever it lands.
+Adding a weapon is a config entry, a model builder returning `WeaponParts`, and
+an `OpticMount`; adding an optic is a config entry and a builder in `optics.ts`.
+
+The screen itself (`src/ui/LoadoutScreen.ts`) owns its own DOM under `#hud` and
+is a `loadout` game state — a lid over `menu` or `deploy` that remembers which
+(`loadoutFrom`) and puts it back, the same shape as `paused` and for the same
+reason. It is reachable from the **main menu and the deploy screen** (a button,
+`L`, or gamepad X) and deliberately not from the pause menu: a round you are
+already standing in is not somewhere you get to change what you are carrying.
+Nothing enforces that with a flag; the states that offer the button are the
+states that read `loadoutPressed`. Every pick applies immediately through
+`Game.applyLoadout` and persists to `localStorage` the same way the difficulty
+tier does — there is nothing to confirm, so confirm just closes.
+
+Two details there are not decoration:
+
+- **The stat bars are derived from the table**, each weapon's figure against the
+  best any weapon has, so a third weapon re-scales the chart instead of dating
+  it. Accuracy is the aimed spread *inverted* — a bar that grew with the number
+  would rank the SMG as the accurate one.
+- **The buttons that OPEN the screen fire on `pointerdown`, not on click.** The
+  menu's confirm and the deploy screen's are "a mouse button went down
+  anywhere", read from the button mask on the next tick, which happens before a
+  `click` (which lands on mouse *up*) ever fires. Changing the state on the down
+  edge is what stops the click that asked for the loadout from also deploying
+  the player out from under it. Buttons *inside* the screen can use `click`
+  safely, because by then the button is already back up.
+
+On the keyboard and the d-pad the screen splits the axes: up/down chooses which
+slot is being edited, left/right steps through it. The menu behind it keeps
+left/right for difficulty.
 
 ### The scene has (almost) no Babylon lights
 
@@ -1239,7 +1311,9 @@ node's transform is applied twice.
   version was rejected.
 - **Everyone** is hitscan — player and bots share `CombatSystem.fire()`, which
   takes the shooter's target list so friendly fire is excluded by construction
-  rather than by a team check inside. There is no projectile pool to thrash in a
+  rather than by a team check inside, and the shooter's own `range` (two player
+  weapons carry different distances, and it bounds the wall pick and the
+  near-miss sweep as well as the damage). There is no projectile pool to thrash in a
   16-bot firefight. Tracers and sparks are pooled; add effects to a pool rather
   than allocating per shot.
 - TypeScript is strict with `noUnusedLocals`/`noUnusedParameters` — the

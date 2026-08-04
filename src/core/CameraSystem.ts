@@ -4,8 +4,11 @@
  * Owns: the scene's active camera. The camera sits AT the player's eye — it
  * never leaves the head, so there is no occlusion pick and no pull-in.
  * How far ADS zooms, how much it slows the look, and how fast it gets there
- * all belong to the FITTED OPTIC (`setSight`), not to CONFIG.camera — the
- * camera's own numbers are the hip-fire ones.
+ * all belong to the LOADOUT (`setLoadout`), not to CONFIG.camera — the
+ * camera's own numbers are the hip-fire ones. Zoom and sensitivity are the
+ * optic's alone; only the blend RATE is shared with the weapon, because how
+ * fast a sight comes up is a fact about the weight in your hands as well as
+ * about the glass on top of it.
  * Invariants: recoil decay uses true Math.exp(-rate*dt) — NOT the frame-lerp
  * idiom — because burst climb must not vary with frame rate. Recoil only
  * partly springs back (CONFIG.recoil.recoverFraction); the rest is pushed into
@@ -24,6 +27,7 @@ import {
   type SightId,
   type SightSetup,
 } from "../entities/sights";
+import { DEFAULT_WEAPON, weaponSetup, type WeaponId } from "../entities/weapons";
 import type { InputManager } from "./InputManager";
 
 /**
@@ -45,6 +49,13 @@ export class CameraSystem {
    * rather than from CONFIG.camera, so a loadout change is one assignment.
    */
   private sight: SightSetup = sightSetup(DEFAULT_SIGHT);
+  /**
+   * The carried weapon's share of the ADS blend rate. How fast a sight comes
+   * up is the optic's `adsSpeedMult` times this — a scope is slow on either
+   * weapon, and either weapon raises the same scope at its own pace. Nothing
+   * else about the gun reaches the camera.
+   */
+  private weaponAdsMult = weaponSetup(DEFAULT_WEAPON).adsSpeedMult;
 
   /**
    * Head-bob phase, in radians, advanced by travel rather than by time.
@@ -82,9 +93,10 @@ export class CameraSystem {
     scene.activeCamera = this.camera;
   }
 
-  /** Fits an optic. Cheap enough to call whenever the loadout changes. */
-  setSight(id: SightId): void {
-    this.sight = sightSetup(id);
+  /** Takes the whole loadout. Cheap enough to call on every change. */
+  setLoadout(weapon: WeaponId, sight: SightId): void {
+    this.sight = sightSetup(sight);
+    this.weaponAdsMult = weaponSetup(weapon).adsSpeedMult;
   }
 
   /** Where the weapon is actually pointed: the player's aim plus recoil. */
@@ -214,7 +226,8 @@ export class CameraSystem {
     // --- ADS blend (exponential ease toward target) ---
     const target = input.ads ? 1 : 0;
     this.adsBlend +=
-      (target - this.adsBlend) * Math.min(1, dt * this.sight.blendSpeed);
+      (target - this.adsBlend) *
+      Math.min(1, dt * this.sight.blendSpeed * this.weaponAdsMult);
     const t = smoothstep(this.adsBlend);
 
     // --- head bob: phase advances with travel, amplitude eases with intent ---

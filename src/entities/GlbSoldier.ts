@@ -30,7 +30,7 @@ import type { PBRMaterial } from "@babylonjs/core";
 import type { BaseTexture } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { addOutline, CelMaterialFactory } from "../shaders/CelShader";
-import type { RifleParts } from "./RifleModel";
+import type { WeaponParts } from "./weaponKit";
 import glbUrl from "../../models/Meshy_AI_A_modern_soldier_with_biped_Meshy_AI_Meshy_Merged_Animations.glb?url";
 import {
   AIR_BASE_KNEE,
@@ -121,7 +121,7 @@ export class GlbSoldier {
    * here so its local matrix keeps a positive determinant. */
   private gltfRoot: TransformNode | null = null;
   private clips: ClipDriver | null = null;
-  private rifle: RifleParts | null = null;
+  private rifle: WeaponParts | null = null;
 
   /** All joint nodes by name (the animation targets). */
   private readonly joints = new Map<string, TransformNode>();
@@ -259,7 +259,7 @@ export class GlbSoldier {
   }
 
   /** The rifle re-posed onto the right hand each frame from now on. */
-  attachRifle(rifle: RifleParts): void {
+  attachRifle(rifle: WeaponParts): void {
     this.rifle = rifle;
     // Under the mirrored glTF root: the per-frame local matrix then has a
     // positive determinant (see followRifle), and Babylon flips winding for
