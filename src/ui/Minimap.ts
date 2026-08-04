@@ -5,6 +5,7 @@
  * they fire. That's a deliberate information-rule, not a missing feature.
  * setMap() must be called once per round to rebuild the backdrop.
  */
+import "./minimap.css";
 import type { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { Bot } from "../entities/Bot";

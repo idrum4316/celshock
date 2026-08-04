@@ -20,6 +20,7 @@
  * values into the existing controls instead, and skips the focused one so a
  * half-typed number is never overwritten.
  */
+import "./panel.css";
 import type { FieldSpec, FieldValue } from "./fields";
 
 /** The subset of a validation finding the panel needs to render it. */

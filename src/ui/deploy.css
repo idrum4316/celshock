@@ -1,0 +1,199 @@
+/**
+ * deploy.css — The between-lives deploy screen: the map, its status line, the
+ * input hint row and the two action buttons.
+ * Owns: #deploy and everything under it. The one screen inside #hud that opts
+ * back into pointer events, because its map and buttons take their own clicks.
+ * Every block on it takes --map, the screen's one content width.
+ */
+
+/* --- deploy screen --- */
+/* #hud is pointer-events:none so the HUD never eats a game click; this
+   overlay is the one thing that has to opt back in. */
+#deploy {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at center, rgba(6, 8, 14, 0.72), rgba(3, 4, 8, 0.94)),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.022) 0 1px,
+      transparent 1px 3px
+    );
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* Tighter than it looks like it wants to be: the map, the status line
+     and the kit button together have to clear a 720p window, and this
+     screen has no scroll to fall back on. */
+  gap: 14px;
+  pointer-events: auto;
+  /* The map's size, hoisted so its siblings can share it. Everything
+     below the map used to size itself to its own contents and centre on
+     that, so the status line, the hints and the buttons each floated at
+     their own width under a map none of them touched. One width, four
+     shared edges, and the column reads as a panel with a map in it.
+
+     Divided by `--ov-scale` because `vh` is the VIEWPORT's, while this
+     box is `100% / scale` across and then scaled back down — so on a
+     short viewport a raw `56vh` was scaled a second time and the map came
+     out at a quarter of the height it asked for. At scale 1, which is
+     every desktop, the divide is the identity. */
+  --map: calc(min(56vh, 60vw) / var(--ov-scale));
+}
+#deploy-status,
+#deploy-nav,
+#deploy-actions { width: var(--map); }
+#deploy h2 {
+  position: relative;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.55em;
+  color: var(--hot);
+  padding: 0 26px;
+}
+/* Rules either side of the heading — a title bar without a box. */
+#deploy h2::before,
+#deploy h2::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 54px;
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgba(255, 230, 128, 0.55));
+}
+#deploy h2::before { right: 100%; }
+#deploy h2::after {
+  left: 100%;
+  background: linear-gradient(to left, transparent, rgba(255, 230, 128, 0.55));
+}
+/* Same hull-behind-canvas trick as the minimap, and for the same reason:
+   a canvas cannot draw its own chamfered edge or corner brackets. */
+#deploy .map-wrap { position: relative; z-index: 0; line-height: 0; }
+/* Height-led rather than square-led: the column above and below it is
+   all fixed-height, so the viewport's height is the only thing the map
+   can give ground to. */
+#deploy-map {
+  width: var(--map);
+  height: var(--map);
+  display: block;
+  cursor: crosshair;
+  image-rendering: auto;
+  clip-path: polygon(
+    22px 0, 100% 0, 100% calc(100% - 22px),
+    calc(100% - 22px) 100%, 0 100%, 0 22px
+  );
+}
+#deploy .map-wrap .hull {
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  background: var(--edge);
+  clip-path: polygon(
+    23px 0, 100% 0, 100% calc(100% - 23px),
+    calc(100% - 23px) 100%, 0 100%, 0 23px
+  );
+}
+#deploy-status {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  color: rgba(255, 255, 255, 0.55);
+  padding: 7px 18px;
+  border-left: 2px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+}
+#deploy-status.ready {
+  color: var(--hot);
+  border-left-color: var(--hot);
+  background: rgba(255, 230, 128, 0.1);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+/* The map takes a click, and before this row nothing said the arrows and
+   the d-pad move the selection too — which on a pad left the confirm
+   deploying at whichever spawn the list started on. */
+#deploy-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 22px;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+}
+#deploy-nav kbd {
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 3px 7px;
+  margin-right: 4px;
+  color: #cfd6e2;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+#deploy-nav kbd.pad {
+  color: var(--hot);
+  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
+}
+/* Side by side rather than stacked: this column has the map, a status
+   line, a hint row and two buttons to fit inside a 720p window, and the
+   two buttons are the only pair that reads as a row. They share the map's
+   width rather than measuring whatever the weapon happens to be called.
+
+   WRAPPING IS THE SAFETY, and it is needed: the map is height-led, so on
+   a 768-tall laptop it is 430 px wide and the longest kit
+   ("Marksman rifle · Scope") does not fit beside a Deploy button. Both
+   grow, so a row that breaks gives two full-width buttons stacked rather
+   than one button hanging over the edge of the map above it. */
+#deploy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 12px;
+}
+#deploy-go,
+#deploy-kit { flex: 1 1 auto; }
+#deploy-go {
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  /* Narrow enough that the kit button beside it still fits the map's
+     width without wrapping — the pair has 448 px to live in. */
+  padding: 8px 26px;
+  color: #12141a;
+  background: var(--hot);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  transition: background 0.12s;
+}
+#deploy-go b {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.24em;
+  text-indent: 0.24em;
+  text-transform: uppercase;
+}
+#deploy-go i {
+  font-style: normal;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(18, 20, 26, 0.6);
+}
+#deploy-go:hover { background: #fff3c4; }
+/* Still there, still readable, visibly not yet yours — the reinforcement
+   countdown is on the status line right above it. */
+#deploy-go.waiting {
+  color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: default;
+}
+#deploy-go.waiting i { color: rgba(255, 255, 255, 0.25); }
+#deploy-go.waiting:hover { background: rgba(255, 255, 255, 0.06); }

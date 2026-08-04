@@ -9,6 +9,9 @@
  * ConquestSystem.update runs before BattleSystem.update (bots see this frame's
  * flag ownership). Muzzle-flash light budget is spent here
  * (spendMuzzleLightBudget) — new per-bot transient lights need the same treatment.
+ * The map is a `MapDef` held in one field (`mapDef`) and built in one method
+ * (`installMap`), which both a round start and an editor rebuild go through —
+ * no map's layout or environment may be named anywhere else in here.
  * Also owns: GlowLayer scan (construction-time only; metadata.noGlow contract),
  * ShadowSystem wiring (casters re-registered per round from map.visuals),
  * pipeline.imageProcessingEnabled === false, window.__celshock debug handle.
@@ -54,9 +57,8 @@ import { Sky } from "../systems/Sky";
 import { WaterSystem } from "../systems/WaterSystem";
 import { applyEnvironment, type EnvironmentSpec } from "../world/environment";
 import type { EditorSession } from "../editor";
-import { HollowmereEnvironment } from "../world/hollowmere/environment";
-import { HollowmereLayout } from "../world/hollowmere/layout";
-import { MapBuilder, type GameMap } from "../world/MapBuilder";
+import { DEFAULT_MAP, type MapDef } from "../world/maps";
+import { MapBuilder, type BuildOptions, type GameMap } from "../world/MapBuilder";
 import { DeployScreen } from "../ui/DeployScreen";
 import { HUD, type CaptureStatus } from "../ui/HUD";
 import { kitLabel, LoadoutScreen } from "../ui/LoadoutScreen";
@@ -215,6 +217,14 @@ export class Game {
   private glow: GlowLayer;
   /** Non-null only while the state is "editor". Dev builds only. */
   private editor: EditorSession | null = null;
+  /**
+   * The map being played, as the layout/environment pair `src/world/maps.ts`
+   * keeps together. The single place either half is named: everything from the
+   * round start to the editor session reads it off here, so a second map is a
+   * `MapDef` in that registry and a write to this field, not a hunt through the
+   * orchestrator for the fourteen places the old constants were spelled out.
+   */
+  private mapDef: MapDef = DEFAULT_MAP;
 
   private state: GameState = "menu";
   /** Which state the pause menu is a lid over; where `resume()` puts it back. */
@@ -481,12 +491,13 @@ export class Game {
    * Called on every round start, and deliberately a no-op when the environment
    * has not changed. `Sky.apply` repaints an 8-megapixel dome (two thousand
    * stars, a galactic band, a stretched halo) and two fBm cloud masks, and the
-   * sky over Hollowmere is the same sky it was last round — unlike the map,
-   * which genuinely has to be rebuilt. A second map, with a spec object of its
-   * own, repaints as it should.
+   * sky over the same map is the same sky it was last round — unlike the map
+   * itself, which genuinely has to be rebuilt. The test is object identity,
+   * which is why a `MapDef` has to be a module constant; switching maps brings
+   * a different spec object and repaints, as it should.
    */
   private applySky(): void {
-    const env = HollowmereEnvironment;
+    const env = this.mapDef.environment;
     if (this.skyEnv === env) return;
     this.skyEnv = env;
     this.sky.apply(env);
@@ -957,8 +968,8 @@ export class Game {
       glow: this.glow,
       map,
       rebuildMap: () => this.buildEditorMap(),
-      layout: HollowmereLayout,
-      environment: HollowmereEnvironment,
+      layout: this.mapDef.layout,
+      environment: this.mapDef.environment,
       fixtures: this.lighting.fixtures,
       applyEnvironment: (env) => applyEnvironment(this.scene, env, this.mats),
       invalidateShadows: () => this.shadows.invalidate(),
@@ -972,41 +983,68 @@ export class Game {
   }
 
   /**
-   * Builds the map the editor works on, from whatever the layout currently
-   * says, and re-points everything here that caches it.
+   * Throws the standing map away, builds `this.mapDef` afresh, and hands the
+   * result to everything that reads geometry or environment off it.
    *
-   * Per-item rather than block-merged: the shipped merge collapses neighbouring
-   * structures into one mesh, which is exactly what makes an individual
-   * placement unselectable. It costs ~10x the draw calls, which is why the
-   * editor panel says never to judge performance there.
+   * THE ONE PLACE A MAP IS BUILT. Both callers — a round starting and an editor
+   * rebuild — owe this whole sequence, and before it was one method they were
+   * two copies of it that had already drifted apart. The failure mode is silent
+   * in the worst way: a system added to the round's copy and forgotten in the
+   * editor's keeps a cached pointer into a disposed map, so the editor renders
+   * last build's water over this build's terrain and nothing throws. Anything
+   * new that consumes a `GameMap` or an `EnvironmentSpec` goes here, and both
+   * callers get it.
    *
-   * Called on entry and again whenever the editor changes something the
-   * builders read — a param, a kind, an added or deleted entry. Deliberately
-   * does NOT touch battle/conquest/minimap: those keep pointing at a map that
-   * is now disposed, which is safe only because leaving the editor always runs
-   * `startRound` and re-points them at a fresh, properly merged build.
+   * What deliberately stays with the callers is what they genuinely disagree
+   * about: the round applies the environment and repaints the sky, while the
+   * editor drives `applyEnvironment` itself so it can toggle its work light;
+   * and the round alone owns the things that are about a FIGHT rather than a
+   * map — battle, conquest, the flag markers and the minimap.
+   *
+   * The particle field is the one thing the editor gains by being folded in
+   * here, and it is a fix rather than a side effect: `atmosphere.apply` used to
+   * be the round's alone, so an editor opened from a live round drifted ash and
+   * one opened from the main menu did not. It is the map's own weather and it
+   * now runs in both. What strips the night back for authoring is the work
+   * light, which is the editor's to toggle.
+   *
+   * `editor: true` keeps geometry per layout item instead of block-merging it,
+   * which is what makes an individual placement selectable. It costs ~10x the
+   * draw calls — never judge frame cost from the editor.
    */
-  private buildEditorMap(): GameMap {
+  private installMap(opts?: BuildOptions): GameMap {
+    const { layout, environment } = this.mapDef;
     this.map?.dispose();
     this.combat.clearTransient();
-    // The editor draws its own flag proxies, and its terrain moves under them;
-    // leaving the play markers up would double every ring. Leaving the editor
-    // always runs startRound, which builds them again.
+    // The flag markers are geometry hung off the old map's terrain. The editor
+    // draws proxies of its own and would double every ring; a round rebuilds
+    // them below. Either way they cannot survive the map they were placed on.
     this.zones.dispose();
-    const map = this.mapBuilder.build(HollowmereLayout, HollowmereEnvironment, {
-      editor: true,
-    });
+    const map = this.mapBuilder.build(layout, environment, opts);
     this.map = map;
+    // The shadow camera follows the environment's key light, and its casters
+    // are the fresh map's visuals — last build's meshes are now disposed.
+    this.shadows.setLightDirection(environment.lighting.direction);
+    this.shadows.setFogRange(environment.fogStart, environment.fogEnd);
     this.shadows.setCasters(map.visuals);
-    this.water.build(map.water, HollowmereEnvironment, map.terrain);
-    this.grass.build(
-      map.grass,
-      HollowmereEnvironment,
-      map.colliderBoxes,
-      map.terrain,
-    );
+    this.atmosphere.apply(environment.particles, map.size, map.size);
+    this.water.build(map.water, environment, map.terrain);
+    this.grass.build(map.grass, environment, map.colliderBoxes, map.terrain);
     this.player.setTerrain(map.terrain);
     return map;
+  }
+
+  /**
+   * The editor's rebuild. Called on entry and again whenever it changes
+   * something the builders read — a param, a kind, an added or deleted entry.
+   *
+   * Deliberately does NOT re-point battle/conquest/minimap: those keep pointing
+   * at a map that is now disposed, which is safe only because leaving the
+   * editor always runs `startRound` and hands them a fresh, properly merged
+   * build.
+   */
+  private buildEditorMap(): GameMap {
+    return this.installMap({ editor: true });
   }
 
   /**
@@ -1036,48 +1074,23 @@ export class Game {
     // this is the only place the roster's difficulty can change.
     this.battle.setDifficulty(this.difficulty);
 
-    this.map?.dispose();
-    this.combat.clearTransient();
-
-    applyEnvironment(this.scene, HollowmereEnvironment, this.mats);
+    // The environment goes on before the build: the sky is painted from it,
+    // and the cel materials the map's meshes are created against read their
+    // fog and key light off the uniforms this writes.
+    const env = this.mapDef.environment;
+    applyEnvironment(this.scene, env, this.mats);
     this.applySky();
-    this.map = this.mapBuilder.build(HollowmereLayout, HollowmereEnvironment);
-    // The shadow camera follows the environment's key light, and its casters
-    // are the fresh map's visuals — last round's meshes are now disposed.
-    this.shadows.setLightDirection(HollowmereEnvironment.lighting.direction);
-    this.shadows.setFogRange(
-      HollowmereEnvironment.fogStart,
-      HollowmereEnvironment.fogEnd,
-    );
-    this.shadows.setCasters(this.map.visuals);
-    this.atmosphere.apply(
-      HollowmereEnvironment.particles,
-      this.map.size,
-      this.map.size,
-    );
-    this.water.build(this.map.water, HollowmereEnvironment, this.map.terrain);
-    this.grass.build(
-      this.map.grass,
-      HollowmereEnvironment,
-      this.map.colliderBoxes,
-      this.map.terrain,
-    );
-    this.player.setTerrain(this.map.terrain);
+    const map = this.installMap();
 
-    this.battle.setMap(this.map);
+    this.battle.setMap(map);
     this.battle.reset();
-    this.conquest.start(this.map);
+    this.conquest.start(map);
     // The flags' markers read the same radius ConquestSystem tests against,
     // and follow the same terrain the ring is drawn across.
-    this.zones.build(
-      this.map.controlPoints,
-      this.map.terrain,
-      this.map.nav,
-      HollowmereEnvironment,
-    );
+    this.zones.build(map.controlPoints, map.terrain, map.nav, env);
     this.player.fullReset();
     this.player.team = 0;
-    this.minimap.setMap(this.map, this.player.team);
+    this.minimap.setMap(map, this.player.team);
     this.kills[0] = this.kills[1] = 0;
     this.losses[0] = this.losses[1] = 0;
     this.playerKills = 0;
@@ -1368,6 +1381,7 @@ export class Game {
     this.hud.setFlags(this.conquest.points, this.player.team);
     this.hud.setCapture(this.captureStatus());
     this.hud.setScoreboard(this.input.scoreboard, {
+      map: this.mapDef.name,
       teams: [CONFIG.teams[0].name, CONFIG.teams[1].name],
       tickets: this.conquest.tickets,
       flags: [this.conquest.flagsHeld(0), this.conquest.flagsHeld(1)],
@@ -1465,6 +1479,7 @@ export class Game {
       won,
       this.conquest.tickets[0],
       this.conquest.tickets[1],
+      this.mapDef.name,
     );
   }
 

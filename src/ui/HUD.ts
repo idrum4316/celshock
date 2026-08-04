@@ -15,6 +15,7 @@
  * markup-rebuilding calls (`setScoreboard`, `showMenu`, `showRoundOver`) are
  * the ones that fire on a state change instead.
  */
+import "./hud.css";
 import { CONFIG } from "../config";
 import type { ControlPoint } from "../systems/ConquestSystem";
 
@@ -578,6 +579,8 @@ export class HUD {
   setScoreboard(
     visible: boolean,
     rows?: {
+      /** What is being played on — passed in, never named here. */
+      map: string;
       teams: readonly string[];
       tickets: readonly number[];
       flags: readonly number[];
@@ -608,7 +611,7 @@ export class HUD {
     this.scoreboard.innerHTML = `
       <div class="sb-head">
         <span class="sb-mode">CONQUEST</span>
-        <span class="sb-map">HOLLOWMERE</span>
+        <span class="sb-map">${rows.map.toUpperCase()}</span>
       </div>
       <div class="sb-cols">
         <span></span><span>REINFORCEMENTS</span><span>FLAGS</span>
@@ -766,13 +769,14 @@ export class HUD {
     playerWon: boolean,
     tickets0: number,
     tickets1: number,
+    mapName: string,
   ): void {
     this.overlay.classList.remove("hidden");
     this.setOverlaid(true);
     this.overlay.innerHTML = `
       <div class="ov-title">
         <h1 class="${playerWon ? "win" : "dead"}">${playerWon ? "VICTORY" : "DEFEAT"}</h1>
-        <p class="tagline">${winnerName} hold Hollowmere</p>
+        <p class="tagline">${winnerName} hold ${mapName}</p>
       </div>
       <div class="ov-result frame">
         <span class="lbl">REINFORCEMENTS REMAINING</span>

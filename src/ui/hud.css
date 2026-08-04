@@ -1,0 +1,1031 @@
+/**
+ * hud.css — Everything HUD.ts writes markup for: the gameplay chrome (scrim,
+ * killfeed, scoreboard, ticket gauge, flag strip, capture panel, vitals, ammo,
+ * crosshair, hitmarker, vignette, damage arcs, messages, toasts, lock hint) and
+ * the full-screen overlay screens (menu, round over, pause).
+ * Owns: the .overlaid / .paused / .editing state rules too — HUD sets those
+ * classes on #hud, so the rules keyed off them live with it even where they
+ * reach an element another screen owns (#hud.paused #deploy).
+ */
+
+/* --- edge scrim ---
+   Gameplay readouts live in the top and bottom bands, and the scene
+   behind them is not reliably dark — snow-lit cobbles under the moon
+   will swallow white text outright. A gradient at each edge buys the
+   contrast without putting a box around anything. */
+#scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent 15%),
+    linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent 20%);
+}
+
+/* --- killfeed ---
+   Flat lines with a colour flag on the outer edge, not bordered boxes:
+   six stacked cards is a wall, six stacked lines is chatter you can
+   ignore until one of them has your name on it. */
+#killfeed {
+  position: absolute;
+  top: 104px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  /* Names arrive as CONFIG.teams entries ("The Blight"), and mixed case
+     against an all-caps HUD reads as a different piece of software. */
+  text-transform: uppercase;
+}
+.kill {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 9px 4px 14px;
+  border-right: 2px solid rgba(255, 255, 255, 0.28);
+  background: linear-gradient(to right, transparent, rgba(6, 8, 13, 0.72));
+  transition: opacity 0.6s ease-out;
+  animation: killIn 0.18s ease-out;
+}
+.kill.fade { opacity: 0; }
+.kill .k { color: #e6ebf3; }
+.kill .v { color: #9aa3b1; }
+/* The kill glyph as a chamfered chip: it reads as a slot on the line
+   rather than as a piece of punctuation between two names. */
+.kill .x {
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 5px;
+  color: #cfd6e2;
+  background: rgba(255, 255, 255, 0.1);
+  clip-path: polygon(3px 0, 100% 0, 100% calc(100% - 3px), calc(100% - 3px) 100%, 0 100%, 0 3px);
+}
+/* Anything the player did or had done to them reads brighter. */
+.kill.mine {
+  border-right-color: var(--mine);
+  background: linear-gradient(to right, transparent, rgba(255, 196, 107, 0.16));
+}
+.kill.mine .k { color: var(--hot); }
+.kill.mine .x { background: rgba(255, 196, 107, 0.25); color: var(--hot); }
+@keyframes killIn {
+  from { opacity: 0; transform: translateX(16px); }
+}
+
+/* --- scoreboard (hold Tab) --- */
+#scoreboard {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cham: 20px;
+  --frame-fill: rgba(6, 8, 13, 0.94);
+  min-width: 620px;
+  padding: 0 0 15px;
+}
+#scoreboard .sb-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 26px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+#scoreboard .sb-mode {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.32em;
+  color: var(--hot);
+}
+#scoreboard .sb-map {
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  color: rgba(255, 255, 255, 0.4);
+}
+#scoreboard .sb-cols,
+#scoreboard .sb-row {
+  display: grid;
+  grid-template-columns: 1fr 190px 74px 74px 74px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 26px;
+}
+#scoreboard .sb-cols {
+  padding-top: 11px;
+  padding-bottom: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: rgba(255, 255, 255, 0.38);
+  text-align: right;
+}
+#scoreboard .sb-row {
+  position: relative;
+  padding-top: 9px;
+  padding-bottom: 9px;
+  font-size: 17px;
+  font-weight: 700;
+  text-align: right;
+}
+/* A colour flag down the left of the row, the way a team is marked in a
+   real scoreboard — the row itself stays neutral so the numbers read. */
+#scoreboard .sb-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 4px;
+  background: currentColor;
+}
+#scoreboard .sb-row.mine { color: var(--mine); }
+#scoreboard .sb-row.theirs { color: var(--theirs); }
+#scoreboard .sb-row.mine { background: rgba(255, 196, 107, 0.06); }
+#scoreboard .sb-row.theirs { background: rgba(255, 90, 79, 0.06); }
+#scoreboard .sb-name {
+  text-align: left;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+#scoreboard .sb-n { color: #dfe5ee; }
+#scoreboard .sb-tickets {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+#scoreboard .sb-gauge {
+  display: block;
+  width: 108px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  transform: skewX(-20deg);
+}
+#scoreboard .sb-gauge u { display: block; height: 100%; background: currentColor; }
+#scoreboard .sb-you {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  margin: 12px 26px 0;
+  padding-top: 11px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  color: rgba(255, 255, 255, 0.55);
+}
+#scoreboard .sb-you .sb-label { color: var(--hot); font-weight: 700; }
+#scoreboard .sb-you b {
+  font-size: 17px;
+  color: #fff;
+  margin-right: 5px;
+}
+
+/* --- conquest: the reinforcement gauge ---
+   Two counts with a gauge each, draining away from the centre. The bar
+   is the fraction of the round's starting pool still standing, so "we
+   are losing" is a shape rather than a subtraction. */
+#ticket-bar {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+#ticket-bar .side {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 168px;
+}
+#ticket-bar .side.mine { justify-content: flex-end; }
+#ticket-bar .tag {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: rgba(255, 255, 255, 0.55);
+}
+#ticket-bar .n {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  line-height: 1;
+}
+#ticket-bar .side.mine .n { color: var(--mine); }
+#ticket-bar .side.theirs .n { color: var(--theirs); }
+/* Running out is the round ending, so it gets the one animated readout
+   in the top band. */
+#ticket-bar .n.critical { animation: pulse 0.9s ease-in-out infinite; }
+#ticket-bar .gauge { display: flex; gap: 5px; }
+#ticket-bar .track {
+  position: relative;
+  width: 108px;
+  height: 7px;
+  background: rgba(255, 255, 255, 0.11);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  transform: skewX(-20deg);
+}
+#ticket-bar .track i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+  transition: width 0.4s linear;
+}
+/* Both fills are anchored at the centre of the pair, so the two teams
+   meet in the middle at full strength and retreat outward as they bleed. */
+#ticket-bar .track.mine i { right: 0; background: var(--mine); }
+#ticket-bar .track.theirs i { left: 0; background: var(--theirs); }
+
+/* --- conquest: the A..E flag strip ---
+   A hexagon per point, filling from the bottom with the capture meter.
+   `clip-path` clips a border away, so the coloured hull IS the outer
+   element and `.core` is the dark inset that leaves a 2px rim. */
+#flag-strip {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 7px;
+}
+.flag {
+  --hex: polygon(50% 0, 100% 26%, 100% 74%, 50% 100%, 0 74%, 0 26%);
+  position: relative;
+  width: 36px;
+  height: 42px;
+  clip-path: var(--hex);
+  background: var(--neutral);
+}
+.flag.mine { background: var(--mine); }
+.flag.theirs { background: var(--theirs); }
+.flag .core {
+  position: absolute;
+  inset: 2px;
+  clip-path: var(--hex);
+  background: rgba(6, 8, 13, 0.88);
+  overflow: hidden;
+}
+.flag .cap-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0;
+  opacity: 0.55;
+  transition: height 0.15s linear;
+}
+.flag .cap-fill.mine { background: var(--mine); }
+.flag .cap-fill.theirs { background: var(--theirs); }
+.flag .id {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #d3d9e2;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+.flag.mine .id { color: var(--mine); }
+.flag.theirs .id { color: var(--theirs); }
+/* A contested flag pulses so it reads from the corner of the eye. It has
+   to be `drop-shadow` and not `box-shadow`: the hull is clipped to the
+   hexagon, and a box shadow is clipped away with the corners.
+   `#capture-status` borrows the same keyframes for the same reason. */
+.flag.contested { animation: flagPulse 0.7s ease-in-out infinite alternate; }
+@keyframes flagPulse {
+  from { filter: drop-shadow(0 0 0 rgba(255, 255, 255, 0)); }
+  to { filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.85)); }
+}
+
+/* --- conquest: the "you are standing in it" panel ---
+   Shown only while the player is inside a capture zone. The ring drawn
+   on the ground says where the boundary is; this says which side of it
+   you are on, so it sits low and centred, under the crosshair and clear
+   of the vitals and ammo. */
+#capture-status {
+  position: absolute;
+  left: 50%;
+  bottom: 104px;
+  transform: translateX(-50%);
+  width: 288px;
+  padding: 8px 12px 9px;
+  text-align: center;
+  --cham: 11px;
+}
+#capture-status .cap-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+/* The letter as a chamfered chip, matching the flag strip's cells. */
+#capture-status .cap-id {
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 4px 7px;
+  color: #12141a;
+  background: var(--neutral);
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+#capture-status .cap-name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  color: rgba(255, 255, 255, 0.85);
+}
+#capture-status.mine .cap-id { background: var(--mine); }
+#capture-status.theirs .cap-id { background: var(--theirs); }
+#capture-status .cap-meter {
+  position: relative;
+  height: 7px;
+  margin: 7px 0 6px;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+#capture-status .cap-meter-fill {
+  height: 100%;
+  width: 0;
+  transition: width 0.15s linear;
+}
+#capture-status .cap-meter-fill.mine { background: var(--mine); }
+#capture-status .cap-meter-fill.theirs { background: var(--theirs); }
+/* Notches over the fill: a segmented meter reads as an instrument, and
+   the ticks give the eye something to measure progress against. */
+#capture-status .cap-meter .ticks {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0 10px,
+    rgba(0, 0, 0, 0.5) 10px 11px
+  );
+}
+#capture-status .cap-state {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: rgba(255, 255, 255, 0.9);
+}
+#capture-status.contested {
+  --frame-edge: rgba(255, 90, 79, 0.75);
+  animation: flagPulse 0.7s ease-in-out infinite alternate;
+}
+#capture-status.contested .cap-state { color: var(--theirs); }
+
+/* --- bottom band: vitals and ammunition ---
+   Deliberately un-panelled. The old version was two bordered cards, and
+   a bordered card over a 3D scene is the single thing that makes a HUD
+   look like a web page. The scrim carries the legibility instead. */
+#hud-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 26px 34px;
+}
+#hud-left { display: flex; flex-direction: column; gap: 5px; }
+#hud-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+#hud-left .cap-row,
+#hud-right .cap-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+/* The skew is the signature of the set: bars, gauges and magazine ticks
+   all lean the same 20 degrees, which is what ties the top band to the
+   bottom one without drawing a single box. */
+.hp-bar {
+  position: relative;
+  width: 224px;
+  height: 11px;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  transform: skewX(-20deg);
+}
+#health-fill {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(to bottom, #b6ffc4, var(--good));
+  transition: width 0.12s ease-out;
+}
+.hp-bar .segs {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0 21px,
+    rgba(0, 0, 0, 0.5) 21px 23px
+  );
+}
+.hp-bar.low #health-fill { background: linear-gradient(to bottom, #ff9a92, var(--theirs)); }
+.hp-bar.low { animation: lowPulse 0.8s ease-in-out infinite alternate; }
+@keyframes lowPulse {
+  from { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.55); }
+  to { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 10px rgba(255, 90, 79, 0.65); }
+}
+.hp-num { display: flex; align-items: baseline; gap: 6px; }
+#health-text {
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 0.9;
+  letter-spacing: 0.02em;
+}
+#health-text.low { color: var(--theirs); }
+.hp-num em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+#hud-right .ammo { display: flex; align-items: baseline; gap: 8px; }
+#ammo-mag {
+  font-size: 46px;
+  font-weight: 800;
+  line-height: 0.85;
+  letter-spacing: 0.01em;
+}
+#ammo-mag.low { color: var(--theirs); }
+#ammo-cap {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.42);
+}
+/* One tick per round left in the magazine. The count is legible without
+   reading the number, which is what the strip is for — the number is the
+   confirmation, not the reading. */
+#mag-strip {
+  position: relative;
+  display: flex;
+  gap: 2px;
+  height: 13px;
+  overflow: hidden;
+  transform: skewX(-20deg);
+}
+#mag-strip i {
+  display: block;
+  width: 5px;
+  height: 100%;
+  background: var(--hot);
+  box-shadow: 0 0 4px rgba(255, 230, 128, 0.35);
+}
+#mag-strip i.spent {
+  background: rgba(255, 255, 255, 0.13);
+  box-shadow: none;
+}
+#hud-right .reload-note {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.26em;
+  color: var(--hot);
+  opacity: 0;
+}
+#hud-right.reloading .reload-note { opacity: 1; }
+#hud-right.reloading .ammo { opacity: 0.3; }
+/* A sweep across the strip while the magazine is being changed. The 1.4s
+   cycle mirrors the RIFLE's `CONFIG.weapons.rifle.reloadTime` so one
+   pass ≈ one reload; the SMG's is a little shorter and the sweep simply
+   runs on. It is cosmetic, and nothing reads it back. */
+#hud-right.reloading #mag-strip::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(255, 230, 128, 0.75),
+    transparent
+  );
+  animation: magSweep 1.4s linear infinite;
+}
+@keyframes magSweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+/* --- crosshair ---
+   Four ticks around a centre dot. The GAP between them is the live
+   bullet spread: HUD.setCrosshair writes `--sp` once per frame and all
+   four ticks read it off, so recoil bloom is the crosshair opening up.
+   No transition on opacity — the ADS blend is already eased, and a
+   second easing on top of it lags the sight it is handing over to. */
+#crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  --sp: 26px;
+}
+#crosshair i {
+  position: absolute;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65), 0 0 3px rgba(0, 0, 0, 0.9);
+  transition: transform 0.08s linear;
+}
+#crosshair i.t,
+#crosshair i.b { width: 2px; height: 9px; margin: -4.5px 0 0 -1px; }
+#crosshair i.l,
+#crosshair i.r { width: 9px; height: 2px; margin: -1px 0 0 -4.5px; }
+#crosshair i.t { transform: translateY(calc(var(--sp) / -2 - 5px)); }
+#crosshair i.b { transform: translateY(calc(var(--sp) / 2 + 5px)); }
+#crosshair i.l { transform: translateX(calc(var(--sp) / -2 - 5px)); }
+#crosshair i.r { transform: translateX(calc(var(--sp) / 2 + 5px)); }
+#crosshair .dot {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  margin: -1.5px 0 0 -1.5px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
+}
+
+/* --- hitmarker ---
+   Four diagonal ticks, the shooter convention. The kill variant is red
+   and is the cue to stop shooting a body that is already going down.
+   The pop is written as a transform by HUD.update rather than run as a
+   keyframe: at full auto it re-triggers several times a second, and
+   restarting a CSS animation needs a forced reflow each time. */
+#hitmarker {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  transform: translate(-50%, -50%);
+}
+#hitmarker i {
+  position: absolute;
+  width: 2px;
+  height: 9px;
+  margin: -4.5px 0 0 -1px;
+  background: #fff;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.95);
+}
+#hitmarker i:nth-child(1) { transform: rotate(45deg) translateY(-11px); }
+#hitmarker i:nth-child(2) { transform: rotate(135deg) translateY(-11px); }
+#hitmarker i:nth-child(3) { transform: rotate(225deg) translateY(-11px); }
+#hitmarker i:nth-child(4) { transform: rotate(315deg) translateY(-11px); }
+#hitmarker.kill i {
+  background: var(--theirs);
+  height: 11px;
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.95);
+}
+
+/* --- damage vignette --- */
+#vignette {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 45%, rgba(255, 30, 30, 0.85) 100%);
+}
+
+/* --- directional damage arcs ---
+   One pooled element per live arc, centred on the crosshair and rotated
+   by HUD.update() every frame; opacity and rotation are the only things
+   written per frame, so this stays a compositor-only change. */
+#damage-dirs {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+}
+#damage-dirs .arc {
+  position: absolute;
+  top: -150px;
+  left: -150px;
+  width: 300px;
+  height: 300px;
+  display: none;
+  opacity: 0;
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.9));
+}
+#damage-dirs .arc path {
+  fill: #a5120a;
+  stroke: rgba(0, 0, 0, 0.7);
+  stroke-width: 1.2;
+}
+
+/* --- centre message (flag captured, and so on) --- */
+#message {
+  position: absolute;
+  top: 24%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 9px 0;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.28em;
+  text-align: center;
+  white-space: nowrap;
+  border-top: 1px solid rgba(255, 255, 255, 0.22);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+  animation: msgIn 0.25s ease-out;
+}
+@keyframes msgIn {
+  from { opacity: 0; letter-spacing: 0.5em; }
+}
+
+/* --- toasts ---
+   The bottom-centre column is a stack, and the offsets have to clear
+   each other because all three can be on screen at once: the lock hint
+   at 58, the capture panel at 104 (about 72 tall), toasts above that.
+   The vitals and ammo are anchored to the corners, so the centre lane is
+   theirs alone. */
+#toasts {
+  position: absolute;
+  bottom: 194px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+.toast {
+  padding: 6px 15px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  /* Same reason as the killfeed: the text is a ControlPoint's own name. */
+  text-transform: uppercase;
+  color: var(--hot);
+  background: rgba(6, 8, 13, 0.72);
+  border-left: 2px solid var(--hot);
+  transition: opacity 0.7s;
+  animation: killIn 0.2s ease-out;
+}
+.toast.fade { opacity: 0; }
+
+#lock-hint {
+  position: absolute;
+  bottom: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  color: rgba(255, 255, 255, 0.65);
+}
+#lock-hint b { color: var(--hot); }
+
+/* --- overlays (menu / round over / pause) --- */
+#overlay {
+  position: absolute;
+  inset: 0;
+  /* The minimap and the deploy screen are appended to #hud AFTER its
+     markup, so in DOM order they paint over this. The pause menu can be
+     opened with either of them on screen, and an overlay you can see
+     through a map is not an overlay. */
+  z-index: 10;
+  background:
+    radial-gradient(ellipse at center, rgba(6, 8, 14, 0.78), rgba(2, 3, 6, 0.96)),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.025) 0 1px,
+      transparent 1px 3px
+    );
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* The menu stacks title, difficulty, the kit button, controls and
+     prompt. There is no scroll here either, so the gap is what keeps
+     all five inside a 720p window. */
+  gap: 18px;
+  text-align: center;
+  /* ONE content width, and everything below the title takes it.
+     Every block here used to size itself to its own contents and centre
+     on that, so five stacked blocks had five widths and no two shared an
+     edge — which is what read as clutter rather than as a screen. The
+     title is the deliberate exception: it is a symmetric block of text,
+     and a heading wider than the column it heads is a typographic
+     choice, not a misalignment. */
+  --col: min(600px, 92vw);
+}
+#overlay .ov-settings,
+#overlay button.ov-start,
+#overlay .ov-controls,
+#overlay .pause-actions,
+#overlay .ov-result { width: var(--col); }
+#overlay .ov-title { display: flex; flex-direction: column; gap: 10px; }
+#overlay h1 {
+  font-size: 76px;
+  font-weight: 900;
+  letter-spacing: 0.22em;
+  /* Indented so the tracking doesn't push the block off-centre. */
+  text-indent: 0.22em;
+  color: var(--hot);
+  text-shadow: 5px 5px 0 #000, -2px -2px 0 #35f0ff;
+}
+/* The pause title is deliberately smaller than the menu's and the result
+   screen's: those hide the HUD, this one is a header inside a running
+   round and has to clear the flag strip along the top of it. */
+#overlay h1.pause-title { font-size: 44px; }
+#overlay h1.dead { color: var(--theirs); text-shadow: 5px 5px 0 #000; }
+#overlay h1.win { color: var(--good); text-shadow: 5px 5px 0 #000; }
+#overlay .tagline {
+  font-size: 13px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+#overlay .prompt {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #35f0ff;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+/* --- the settings block: two rows, one grid ---
+   Both rows are label / control / hint, so they share the grid's three
+   columns instead of each centring on its own contents. `display:
+   contents` is what lets the rows keep their own class (the tier and kit
+   rules below still scope to them) while their children sit in the
+   parent's tracks.
+
+   The control column is `1fr`, so the four tier buttons and the kit
+   button all span it — same left edge, same right edge, and the row of
+   tiers stops being a ragged strip in the middle of the screen.
+
+   The overlay stays pointer-events:none (inherited from #hud); only the
+   CONTROLS opt back in, never the rows, so the labels, the hints and the
+   grid's gaps stay inert and a click there is still the confirm. */
+#overlay .ov-settings {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 8px;
+}
+#overlay .ov-settings > div { display: contents; }
+#overlay .ov-settings .label { text-align: right; }
+#overlay .ov-settings .hint { text-align: right; }
+#overlay .difficulty .tiers { display: flex; gap: 6px; }
+#overlay .ov-settings .label,
+#overlay .ov-settings .hint {
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+}
+#overlay .difficulty button.tier {
+  pointer-events: auto;
+  /* Equal shares of the control column, so four tiers measure the same
+     as the one kit button under them. The padding is what keeps four of
+     them inside `--col`: at 18px the row's min-content was 584 against a
+     560 column and the grid quietly overflowed at every viewport size. */
+  flex: 1 1 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  color: #cdd6e6;
+  background: rgba(255, 255, 255, 0.05);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  transition: background 0.12s, color 0.12s;
+}
+#overlay .difficulty button.tier:hover {
+  background: rgba(255, 230, 128, 0.18);
+  color: var(--hot);
+}
+#overlay .difficulty button.tier.on {
+  color: #12141a;
+  background: var(--hot);
+}
+
+/* --- the deploy button, on the menu and on the round-over card ---
+   The one control on either screen that is the action rather than a
+   setting, so it is the only one painted in the hot colour filled in
+   rather than outlined. Same pointer-events carve-out as the difficulty
+   row: the overlay around it stays inert. The glyph line names all three
+   inputs, which is what it replaced — a line of prose telling a pad
+   player to click. */
+#overlay button.ov-start {
+  font: inherit;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 13px 52px;
+  color: #12141a;
+  background: var(--hot);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+  transition: background 0.12s, transform 0.12s;
+}
+#overlay button.ov-start b {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.26em;
+  text-indent: 0.26em;
+  text-transform: uppercase;
+}
+#overlay button.ov-start i {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(18, 20, 26, 0.62);
+}
+#overlay button.ov-start:hover {
+  background: #fff3c4;
+  transform: translateY(-1px);
+}
+
+/* The pause menu's action list. Same carve-out as the difficulty row —
+   the buttons take pointer events, the overlay around them does not. */
+#overlay .pause-actions {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#overlay button.pact {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  padding: 12px 22px;
+  color: #cdd6e6;
+  background: rgba(255, 255, 255, 0.05);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  transition: background 0.12s, color 0.12s;
+}
+/* Selection is filled, hover is only warm: the keyboard's idea of where
+   it is has to stay readable while the mouse is somewhere else. Hover
+   moves the selection anyway (see HUD.showPause), so the two only differ
+   for the frame between entering a button and the class landing. */
+#overlay button.pact:hover {
+  background: rgba(255, 230, 128, 0.18);
+  color: var(--hot);
+}
+#overlay button.pact.on {
+  color: #12141a;
+  background: var(--hot);
+}
+
+/* Controls as a key-cap table: three columns, action / keyboard / pad. */
+#overlay .ov-controls {
+  --cham: 16px;
+  padding: 16px 26px 18px;
+  /* Reference material, and the last thing on either screen — set back
+     from the block above it so the action reads as the end of the page
+     and this reads as a footnote under it. */
+  margin-top: 6px;
+}
+#overlay .ov-controls-head,
+#overlay .ctl {
+  display: grid;
+  grid-template-columns: 1fr 168px 96px;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+}
+#overlay .ov-controls-head {
+  padding-bottom: 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+}
+#overlay .ctl { padding: 3px 0; }
+#overlay .ctl-act {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #dfe5ee;
+}
+#overlay .ctl-keys,
+#overlay .ctl-pad { display: flex; gap: 4px; }
+#overlay kbd {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 4px 8px;
+  min-width: 26px;
+  text-align: center;
+  color: #cfd6e2;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+#overlay kbd.pad { color: var(--hot); box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3); }
+
+#overlay .ov-result {
+  --cham: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 26px;
+}
+#overlay .ov-result .lbl {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  color: rgba(255, 255, 255, 0.45);
+}
+#overlay .ov-result .vals { display: flex; align-items: baseline; gap: 10px; }
+#overlay .ov-result b { font-size: 24px; font-weight: 800; }
+#overlay .ov-result b:first-of-type { color: var(--mine); }
+#overlay .ov-result b:last-of-type { color: var(--theirs); }
+#overlay .ov-result i {
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* --- behind a full-screen overlay ---
+   The menu and the round-over card sit over a live scene, so last
+   round's gauges and killfeed read through them and make the HUD look
+   like it is still running. HUD.setOverlaid() puts .overlaid on #hud;
+   the deploy screen deliberately does not use it — tickets and flags are
+   what you are picking a spawn against. */
+#hud.overlaid #ticket-bar,
+#hud.overlaid #flag-strip,
+#hud.overlaid #capture-status,
+#hud.overlaid #crosshair,
+#hud.overlaid #hitmarker,
+#hud.overlaid #damage-dirs,
+#hud.overlaid #hud-bottom,
+#hud.overlaid #killfeed,
+#hud.overlaid #message,
+#hud.overlaid #toasts { display: none; }
+
+/* --- paused ---
+   Unlike .overlaid, this keeps the gauges, the flag strip and the vitals:
+   under a pause they are this round's and still true, and the frozen
+   scene behind them is the one they describe. What goes is what would be
+   lying — a crosshair with nothing to shoot, a hitmarker and damage arcs
+   stopped mid-decay, and the hint telling you to click for a mouse you
+   have already got. */
+/* The pause overlay is the one that swallows clicks. Everywhere else the
+   overlay stays inert and only its buttons opt in — but the deploy map
+   underneath takes pointer events of its own, and a click through the
+   empty half of a pause screen must not deploy the player. */
+#hud.paused #overlay { pointer-events: auto; }
+/* A pause taken while waiting out a respawn lands on top of the deploy
+   screen, and that screen is a full column of its own headed chrome —
+   "SELECT DEPLOYMENT" landed across "PAUSED" and its Deploy button sat
+   under the resume prompt. Dimmed rather than hidden: the map behind a
+   pause is still context worth having, it just is not the thing being
+   read. The overlay above it already swallows the clicks. */
+#hud.paused #deploy { opacity: 0.18; }
+#hud.paused #crosshair,
+#hud.paused #hitmarker,
+#hud.paused #damage-dirs,
+#hud.paused #capture-status,
+#hud.paused #lock-hint { display: none; }
+
+/* --- map editor (dev only) --- */
+/* The gameplay chrome is meaningless with no player, and the crosshair
+   actively gets in the way of clicking things. HUD.setEditing() puts
+   .editing on #hud; hiding here rather than per element means update()
+   can keep writing to those nodes without fighting the toggle. */
+#hud.editing #scrim,
+#hud.editing #ticket-bar,
+#hud.editing #flag-strip,
+#hud.editing #capture-status,
+#hud.editing #crosshair,
+#hud.editing #hitmarker,
+#hud.editing #damage-dirs,
+#hud.editing #hud-bottom,
+#hud.editing #killfeed,
+#hud.editing #lock-hint { display: none; }

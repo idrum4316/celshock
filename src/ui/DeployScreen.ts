@@ -7,13 +7,14 @@
  * opts back in; don't break that or gameplay clicks die. Re-checks map/
  * conquest readiness every update; the 3D scene renders live behind it.
  */
+import "./deploy.css";
 import { CONFIG } from "../config";
 import type { Team } from "../entities/Combatant";
 import type { ConquestSystem } from "../systems/ConquestSystem";
 import type { GameMap, SpawnPointDef } from "../world/MapBuilder";
 
 /**
- * The between-lives screen: a top-down view of Hollowmere with the flags you
+ * The between-lives screen: a top-down view of the map with the flags you
  * hold, where you can pick a spawn and drop back in — and a way through to the
  * loadout screen before you do. Waiting out a respawn is the natural moment to
  * reconsider the kit, and it is the only moment inside a round when changing

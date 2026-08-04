@@ -1,0 +1,271 @@
+/**
+ * base.css — The document reset, the canvas, the #hud root, and the primitives
+ * more than one screen draws itself out of.
+ * Owns: everything shared. A rule belongs here only when two or more of
+ * hud/minimap/deploy/loadout use it — anything one screen owns lives in that
+ * screen's own sheet, next to the module that writes the markup.
+ * Imported first, from main.ts, so the screens' sheets can override it.
+ */
+
+/* =====================================================================
+   HOLLOWMERE HUD
+   ---------------------------------------------------------------------
+   The interface is split one sheet per module that writes markup —
+   base (this file), hud, minimap, deploy, loadout, and the editor's
+   panel under src/editor. Each is imported by its own module, so a
+   screen's rules and the code that writes its classes move together and
+   the editor's sheet rides the dynamic import out of the build.
+
+   House rules for anything added to ANY of them, learned the hard way:
+
+   - NO `border-radius` on gameplay chrome. A rounded rectangle reads as
+     a web card; a military HUD is cut corners and hard edges. Panels get
+     their shape from `.frame` (a chamfered hull) or from `clip-path`.
+   - `clip-path` clips a CSS border away with everything else outside the
+     polygon, so a chamfered panel draws its edge as a coloured layer
+     with the fill inset 1px on top. `.frame` does that with two
+     pseudo-elements; the flag hexagons do it with a nested `.core`.
+   - Legibility comes from the scrim and text shadows, not from opaque
+     panel backgrounds. The scene behind the HUD is dark, moonlit and
+     moving; a solid box over it is the thing that looks bolted on.
+   - Anything written every frame is a text node, a class flag or a CSS
+     custom property (see HUD.ts). Per-frame `innerHTML` is a bug.
+   ===================================================================== */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  /* Phone browser chrome: `dvh` is the viewport as it stands with the
+     URL bar showing, so the canvas is never sized to a screen that is
+     partly covered. `overscroll-behavior` kills pull-to-refresh, which
+     on a first-person shooter is a swipe up to look up. */
+  overscroll-behavior: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+@supports (height: 100dvh) {
+  html, body { height: 100dvh; }
+}
+body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+
+#game-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+  touch-action: none;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  color: #fff;
+  user-select: none;
+  /* The gauges are positioned against #hud's PADDING box, so one rule
+     here keeps every one of them out from under a notch or a home
+     indicator. Resolves to 0 everywhere that has neither, so the desktop
+     layout is untouched. The canvas is deliberately not inset: the scene
+     should run to the glass. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+  /* A condensed grotesque is what separates a military HUD from a web
+     page, and every one of these ships with some desktop OS — the game
+     carries no font files, the same rule as its meshes and its audio.
+     Whichever lands first, the fallbacks are all narrow. */
+  --font: "Bahnschrift", "DIN Alternate", "DIN Condensed",
+    "Roboto Condensed", "Oswald", "Ubuntu Condensed",
+    "Franklin Gothic Medium", "Arial Narrow", "Liberation Sans Narrow",
+    "Nimbus Sans Narrow", "DejaVu Sans Condensed", "Segoe UI", sans-serif;
+  /* Friend/foe, matching CONFIG.teams' eye colours and the minimap's
+     canvas constants — warm amber against cold crimson. */
+  --mine: #ffc46b;
+  --theirs: #ff5a4f;
+  --neutral: #aeb6c2;
+  --hot: #ffe680;
+  --good: #7ff08a;
+  --edge: rgba(255, 255, 255, 0.22);
+  --ink: rgba(8, 10, 15, 0.82);
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The whole HUD sits on the scene, so everything on it carries its own
+   separation from a bright cobbled street or a muzzle flash. */
+#hud .cap,
+#hud .tag,
+#ticket-bar .n,
+#hud-left,
+#hud-right,
+#message,
+#killfeed,
+#lock-hint {
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.9);
+}
+
+/* --- reusable chamfered panel hull ---
+   ::before is the edge, ::after the fill inset 1px inside it. Both sit
+   at z-index -1 in the element's own stacking context, so they paint
+   behind its content and nowhere else. The cut corners are opposite
+   (top-left / bottom-right): four cuts reads as a sticker, two reads as
+   a machined plate. */
+.frame {
+  position: relative;
+  z-index: 0;
+  --cham: 14px;
+  --frame-edge: var(--edge);
+  --frame-fill: rgba(6, 8, 13, 0.9);
+}
+.frame::before,
+.frame::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  clip-path: polygon(
+    var(--cham) 0,
+    100% 0,
+    100% calc(100% - var(--cham)),
+    calc(100% - var(--cham)) 100%,
+    0 100%,
+    0 var(--cham)
+  );
+}
+.frame::before { inset: 0; background: var(--frame-edge); }
+.frame::after { inset: 1px; background: var(--frame-fill); }
+
+/* Corner ticks, for things that own a rectangle of their own (the
+   minimap, the deploy map). Cheaper than a frame and reads as a sight
+   bracket rather than as a border. */
+.brackets::before,
+.brackets::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--edge);
+  pointer-events: none;
+}
+.brackets::before { top: -5px; left: -5px; border-right: 0; border-bottom: 0; }
+.brackets::after { bottom: -5px; right: -5px; border-left: 0; border-top: 0; }
+
+/* Micro-captions: the small all-caps labels that name a readout. */
+#hud .cap {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* --- short viewports (a phone held sideways) ---
+   The menu and the deploy map stack a title, a picker, a table and a
+   prompt, they are sized in px for a 720p window, and NOTHING in this
+   HUD scrolls — so on a 350px-tall landscape phone the stack simply
+   runs off both ends. The fix is to draw the whole screen at the size
+   it was authored for and scale it down: the box is grown by 1/s so
+   that scaling it by s about the top-left lands exactly on the
+   viewport again, which keeps the backdrop full-bleed. At the default
+   s = 1 both the size and the transform are identities, so a desktop
+   layout is untouched pixel for pixel.
+
+   `#loadout` is deliberately NOT in this list. Its stage is a hole in
+   the scrim that the 3D turntable is placed through, back-projected
+   from the SAME viewport fractions the CSS uses (see
+   CONFIG.viewmodel.inspect) — a transform would move the hole and
+   leave the weapon behind it. */
+#hud { --ov-scale: 1; }
+@media (max-height: 620px) { #hud { --ov-scale: 0.75; } }
+@media (max-height: 430px) { #hud { --ov-scale: 0.45; } }
+#overlay, #deploy {
+  width: calc(100% / var(--ov-scale));
+  height: calc(100% / var(--ov-scale));
+  transform: scale(var(--ov-scale));
+  transform-origin: top left;
+}
+
+/* --- the loadout button, on the menu and on the deploy screen ---
+   Both open the same screen, so both read the same: a label, the kit
+   currently in the player's hands, and the key that gets there. The
+   menu's `#overlay` is pointer-events:none (inherited from #hud), so
+   the button claims them for itself — the same carve-out the tier
+   buttons and the pause actions get. #deploy already opts in for its
+   whole area. */
+#overlay button.kit-open,
+#deploy-kit {
+  font: inherit;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 20px;
+  color: #cdd6e6;
+  background: rgba(255, 255, 255, 0.05);
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  transition: background 0.12s, color 0.12s;
+}
+#overlay button.kit-open b,
+#deploy-kit b {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+#overlay button.kit-open i,
+#deploy-kit i {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+}
+#overlay button.kit-open:hover,
+#deploy-kit:hover {
+  background: rgba(255, 230, 128, 0.18);
+  color: var(--hot);
+}
+/* Both are rows spread across the width they were given rather than
+   columns hugging their text: on the menu the kit button spans the
+   settings grid's control column (the same width as the four tier
+   buttons above it), and on the deploy screen it takes whatever the
+   Deploy button leaves of the map's width. Left to shrink-wrap, each was
+   a small box adrift in a large gap. `nowrap` because the widest kit
+   ("Marksman rifle · Scope") is within a few pixels of the space, and a
+   wrapped caption makes the button taller than the one beside it. */
+#overlay button.kit-open,
+#deploy-kit {
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+#overlay button.kit-open b,
+#overlay button.kit-open i,
+#deploy-kit b,
+#deploy-kit i,
+#deploy-kit .lbl { white-space: nowrap; }
+#deploy-kit { padding: 8px 16px; }
+#deploy-kit .lbl {
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* How every screen is put away — HUD's overlay, the deploy map, the kit screen
+   and the minimap all toggle this rather than writing `style.display`. It is
+   `!important` because the thing it hides always carries an id rule setting a
+   display of its own, and it lives here because all four use it. */
+.hidden { display: none !important; }
+
+

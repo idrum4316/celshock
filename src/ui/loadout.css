@@ -1,0 +1,383 @@
+/**
+ * loadout.css — The kit screen: the slot column, the option lists, the stat
+ * chart, and the turntable stage.
+ * Owns: #loadout and the #hud.kitting rule that hides every other screen while
+ * it is up.
+ * Deliberately NOT scaled by --ov-scale (see base.css): the stage is a hole
+ * the 3D turntable is back-projected through from the same viewport fractions,
+ * so a transform would move the hole and leave the weapon behind it. That is
+ * why this is the one screen carrying a short-viewport media query of its own.
+ */
+
+/* --- the loadout screen ---
+   A screen of its own rather than a row under the menu: there are two
+   slots and a stat chart now, and both places it is reachable from (the
+   main menu and the deploy screen) already have a column of their own
+   that will not take another panel.
+
+   Above #overlay's z-index, because the menu is one of the things it
+   covers. It is deliberately absent from the pause menu: a round you
+   are standing in is not somewhere you get to change what you carry.
+
+   TWO COLUMNS, and the right one is a hole. The weapon on the stage is
+   the live viewmodel drawn by the scene on the canvas UNDER this whole
+   overlay, so the stage half carries no background of its own — the
+   scrim stops before it and only a vignette frames it.
+
+   `--panel` is therefore load-bearing outside this file: the stage takes
+   the rest of the width, so its centre sits `(1 + panel) / 2` across,
+   which in NDC (2x - 1) is exactly `panel` — 0.46, the anchor
+   `CONFIG.viewmodel.inspect` places the weapon at. Both are fractions of
+   the viewport, so a resize moves them together; change one without the
+   other and the weapon drifts off its own stage. */
+#loadout {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  --panel: 46%;
+  display: flex;
+  align-items: stretch;
+  pointer-events: auto;
+}
+/* The scrim is a child rather than #loadout's own background because it
+   has to stop: opaque under the panel, gone before the stage. A backdrop
+   over the stage would dim the weapon along with the world behind it —
+   everything here is above the canvas.
+
+   It ends on a rule rather than fading out over the stage. A soft ramp
+   across a live scene is a soft ramp against whatever brightness happens
+   to be behind it, which reads as a smear the width of a hand; a hard
+   edge with a lit line on it reads as the side of a panel. */
+#loadout .lo-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      to right,
+      rgba(2, 3, 6, 0.985) 0%,
+      rgba(4, 6, 13, 0.97) 70%,
+      rgba(4, 6, 13, 0.94) 100%
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.025) 0 1px,
+      transparent 1px 3px
+    );
+  right: calc(100% - var(--panel));
+  border-right: 1px solid rgba(255, 255, 255, 0.09);
+}
+#loadout .lo-panel {
+  position: relative;
+  flex: 0 0 var(--panel);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 0 26px;
+}
+/* The stage: a frame around a hole, and the drag handle for the weapon in
+   it. The vignette darkens the world at the edges without touching the
+   middle, where the weapon is — a flat wash over it would dim the
+   weapon just as much as the village behind. */
+#loadout .lo-stage {
+  position: relative;
+  flex: 1 1 auto;
+  cursor: grab;
+  background: radial-gradient(
+    ellipse 44% 48% at 50% 44%,
+    rgba(3, 4, 10, 0.5) 42%,
+    rgba(3, 4, 10, 0.93) 100%
+  );
+}
+#loadout .lo-stage.turning { cursor: grabbing; }
+/* Corner ticks, so the hole reads as a bay the weapon is standing in
+   rather than as a gap where the panel failed to load. */
+#loadout .lo-stage::before,
+#loadout .lo-stage::after {
+  content: "";
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(255, 230, 128, 0.3);
+}
+#loadout .lo-stage::before {
+  top: 15%;
+  left: 8%;
+  border-right: 0;
+  border-bottom: 0;
+}
+#loadout .lo-stage::after {
+  bottom: 15%;
+  right: 8%;
+  border-left: 0;
+  border-top: 0;
+}
+#loadout .lo-stage-cap,
+#loadout .lo-stage-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+  text-transform: uppercase;
+}
+#loadout .lo-stage-cap {
+  bottom: 21%;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  color: var(--hot);
+}
+#loadout .lo-stage-hint {
+  bottom: 17%;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: rgba(255, 255, 255, 0.34);
+}
+/* While the kit is up, everything else under #hud goes dark — the menu,
+   the deploy map, the gauges, the crosshair, all of it. The weapon on the
+   stage is NOT DOM: it is drawn by the scene on the canvas below every
+   one of these, so anything left standing paints over it. The menu's own
+   backdrop is nearly opaque, which is why its ghost through the scrim was
+   never doing any work anyway; the crosshair sitting in the middle of a
+   kit screen was doing worse than nothing. */
+#hud.kitting > *:not(#loadout) { visibility: hidden; }
+/* Same rules-either-side heading as the deploy screen's. */
+#loadout h2 {
+  position: relative;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.55em;
+  color: var(--hot);
+  padding: 0 26px;
+}
+#loadout h2::before,
+#loadout h2::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 54px;
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgba(255, 230, 128, 0.55));
+}
+#loadout h2::before { right: 100%; }
+#loadout h2::after {
+  left: 100%;
+  background: linear-gradient(to left, transparent, rgba(255, 230, 128, 0.55));
+}
+/* Sized to the panel column it now sits in rather than to the viewport:
+   the stage owns the other half of the screen. */
+#loadout .lo-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 620px;
+  text-align: left;
+}
+#loadout .lo-slots { display: flex; flex-direction: column; gap: 6px; }
+/* The active row is the one the arrow keys are stepping. It is marked
+   with a bar and a wash rather than with a focus ring, because the
+   selection is the screen's own and not the browser's. */
+#loadout .lo-slot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  border-left: 2px solid transparent;
+  transition: background 0.12s, border-color 0.12s;
+}
+#loadout .lo-slot.active {
+  border-left-color: var(--hot);
+  background: rgba(255, 255, 255, 0.045);
+}
+#loadout .lo-slot-name {
+  flex: 0 0 auto;
+  width: 62px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+}
+#loadout .lo-opts { display: flex; gap: 6px; flex: 1 1 auto; }
+#loadout button.lo-opt {
+  font: inherit;
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  /* Tall enough for the one name that wraps to two lines ("Submachine
+     gun"), so the weapon row and the optic row are the same height
+     whatever is in them — otherwise the two rows of the same control
+     measure differently and the column looks accidental. */
+  min-height: 52px;
+  gap: 2px;
+  padding: 8px 14px;
+  /* A <button>'s UA default is centred, and `.lo-body`'s `text-align:
+     left` does not reach inside one. Only the names long enough to wrap
+     showed it, which read as two of the three buttons being centred. */
+  text-align: left;
+  color: #cdd6e6;
+  background: rgba(255, 255, 255, 0.05);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  transition: background 0.12s, color 0.12s;
+}
+#loadout button.lo-opt b {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+/* The figures under each name — the magnification as a lens is marked,
+   and the weapon's damage, rate and fire mode. Tabular so the buttons
+   line their numbers up rather than shuffling by a pixel each. */
+#loadout button.lo-opt i {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+}
+#loadout button.lo-opt:hover {
+  background: rgba(255, 230, 128, 0.18);
+  color: var(--hot);
+}
+#loadout button.lo-opt.on { color: #12141a; background: var(--hot); }
+#loadout button.lo-opt.on i { color: rgba(18, 20, 26, 0.6); }
+
+/* The chart and the copy, side by side. Held at a fixed height: the
+   blurbs are different lengths, and a panel that changes height as you
+   arrow across it drags the whole centred column up and down. */
+#loadout .lo-detail {
+  display: flex;
+  /* Wraps rather than squeezing: the chart's bar column is the flexible
+     one, so in a narrow panel a row that stays side by side hands the
+     bars a couple of pixels and the chart silently becomes a list of
+     numbers. Stacked, both halves keep their width. */
+  flex-wrap: wrap;
+  gap: 22px;
+  padding: 16px 20px;
+  min-height: 168px;
+}
+#loadout .lo-stats {
+  flex: 1 1 210px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+}
+#loadout .lo-stat {
+  display: grid;
+  grid-template-columns: 72px 1fr 52px;
+  align-items: center;
+  gap: 10px;
+}
+#loadout .lo-stat-name {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+}
+/* Each bar is that weapon's figure against the best any weapon has, so
+   the chart re-scales itself if a third one is ever added. */
+#loadout .lo-bar {
+  display: block;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.09);
+}
+#loadout .lo-bar u {
+  display: block;
+  height: 100%;
+  background: var(--hot);
+  transition: width 0.16s ease-out;
+}
+#loadout .lo-stat-val {
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: #cfd6e2;
+}
+#loadout .lo-blurbs {
+  flex: 1 1 240px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+}
+#loadout .lo-blurb {
+  font-size: 11px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.55);
+}
+#loadout .lo-blurb.dim {
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.38);
+}
+/* Sized like `.lo-body`, because it is the same column: centred on its
+   own contents it started and stopped nowhere near the panel it sits
+   under. The Done button then goes to the column's right edge, where the
+   eye is already looking for the way out. */
+#loadout .lo-foot {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  max-width: 620px;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+}
+#loadout kbd {
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 3px 7px;
+  margin-right: 4px;
+  color: #cfd6e2;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+/* Pad glyphs are tinted, the same tell the controls table uses, so the
+   two keys on the Done button read as alternatives rather than a chord. */
+#loadout kbd.pad {
+  color: var(--hot);
+  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
+}
+#loadout button.lo-back {
+  margin-left: auto;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  color: var(--hot);
+  background: rgba(255, 230, 128, 0.1);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+}
+#loadout button.lo-back:hover { background: rgba(255, 230, 128, 0.22); }
+/* `#loadout` is the one overlay deliberately left out of `--ov-scale`
+   (its stage is a hole the 3D turntable is placed through, so a transform
+   would move the hole and leave the weapon behind it) — which means it is
+   also the one that has to fit a landscape phone on its own. The prose is
+   what goes: the names, the figures and the weapon itself are the screen,
+   and the copy is the part you can read on a desk instead. */
+@media (max-height: 560px) {
+  #loadout .lo-panel { gap: 10px; }
+  #loadout .lo-body { gap: 8px; }
+  #loadout .lo-detail { min-height: 0; padding: 12px 16px; }
+  #loadout .lo-blurbs { display: none; }
+  #loadout button.lo-opt { min-height: 44px; }
+  #loadout .lo-slot { padding: 5px 12px; }
+}

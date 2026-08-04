@@ -284,7 +284,8 @@ const PROP_BODIES: Record<ScatterSpec["prop"], PropBody> = {
 };
 
 /**
- * Builds Hollowmere from `hollowmere/layout.ts`.
+ * Builds a map from the `MapLayout` and `EnvironmentSpec` it is handed — the
+ * pair `world/maps.ts` keeps together. No map is named here.
  *
  * ## The visual / collider split
  *

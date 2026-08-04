@@ -36,6 +36,7 @@
  * CSS contract: `#hud` is `pointer-events: none`, so this overlay opts back in
  * — the same carve-out `#deploy` takes.
  */
+import "./loadout.css";
 import { CONFIG } from "../config";
 import { SIGHT_IDS, type SightId } from "../entities/sights";
 import { WEAPON_IDS, type WeaponId } from "../entities/weapons";
