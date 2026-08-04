@@ -102,6 +102,12 @@ export interface ViewModelParams {
   bobPhase: number;
   /** Vertical velocity (m/s), for the airborne give. */
   velY: number;
+  /**
+   * The camera's landing absorb, in metres and negative while the eye is
+   * sunk. Read, never integrated here: one spring per impact (see
+   * `CameraSystem.landDip`), the same rule the bob phase follows.
+   */
+  landDip: number;
 }
 
 const GLOVE = "#23262c";
@@ -188,6 +194,12 @@ export class ViewModel {
   private swayY = 0;
   private swayYaw = 0;
   private swayPitch = 0;
+  /**
+   * Smoothed airborne give (metres). The lag is the point: the body's vertical
+   * speed steps at both ends of a jump, and the weapon is the one thing on
+   * screen that must not step with it.
+   */
+  private airGive = 0;
 
   /** Scratch — the pose is rebuilt every frame and must not allocate. */
   private readonly pos = new Vector3();
@@ -505,7 +517,24 @@ export class ViewModel {
     }
 
     // --- airborne give: the weapon lags the body through a jump ---
-    this.off.y -= clamp(p.velY * v.airDrop, -v.airDropMax, v.airDropMax);
+    // Sprung, not read straight off velY. Vertical speed is a STEP function at
+    // both ends of a jump — 0 to jumpVelocity at the push, impact speed to 0
+    // on the frame the feet land — so a give taken directly from it snaps the
+    // full `airDropMax` back to neutral in one frame, which is exactly the
+    // pop the landing absorb below exists to replace.
+    const give = -clamp(p.velY * v.airDrop, -v.airDropMax, v.airDropMax);
+    this.airGive += (give - this.airGive) * Math.min(1, dt * v.airDropSmooth);
+    this.off.y += this.airGive;
+
+    // --- landing absorb: the hands take the impact after the eye does ---
+    // The camera owns the spring and this reads it, the same arrangement as
+    // the bob phase. The weapon is parented to the camera, so it already
+    // travels with the dip; what these two add is the part that SHOWS — a
+    // share of the sink again on top of it, and the muzzle dropping (rot.x
+    // positive is nose-down, the way the per-shot kick is nose-up) as the
+    // arms give and come back.
+    this.off.y += p.landDip * v.landFollow;
+    this.rot.x -= p.landDip * v.landPitch;
 
     // --- per-shot kick: back, up, and nose-high ---
     if (p.kick > 0.001) {

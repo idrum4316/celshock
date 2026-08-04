@@ -924,6 +924,45 @@ export const CONFIG = {
     bobCrouchMult: 0.45,
     /** How fast the bob amplitude follows the movement input (per second). */
     bobSmooth: 7,
+    /**
+     * The landing absorb: what the eye does when the feet arrive. A jump used
+     * to end with the camera simply stopping — zero vertical speed on the
+     * contact frame, nothing to show for the fall — which reads as a dropped
+     * frame rather than as an arrival. This is the knees, and it is meant to
+     * be felt: a hard landing is not supposed to be smooth, it is supposed to
+     * be brief and deliberate.
+     *
+     * A damped spring, given a downward VELOCITY at the impact and left to
+     * find its way back, so the motion has weight on the way in and a small
+     * rebound on the way out. At these numbers a plain jump (8.5 m/s down)
+     * sinks the eye 6 cm over 67 ms, comes back through neutral by ~1 cm and
+     * is settled inside half a second; the worst drop the map offers is 8.5 cm.
+     * Deep enough to punctuate the jump, short enough not to cost a fight.
+     */
+    land: {
+      /**
+       * Impact speeds (m/s) between which the absorb ramps from nothing to its
+       * full depth. `minSpeed` is under the sound's own threshold on purpose:
+       * a small hop bends the knees visibly before it makes any noise.
+       */
+      minSpeed: 2.5,
+      fullSpeed: 11,
+      /** Downward speed (m/s) handed to the eye by a full-speed landing. */
+      dipSpeed: 2.4,
+      /** Spring frequency (Hz) and damping ratio (<1 rebounds; 1 does not). */
+      frequency: 2.0,
+      damping: 0.5,
+      /** Nod and roll per metre of dip (rad/m): the chin and the weight. */
+      nod: 0.55,
+      roll: 0.35,
+      /**
+       * Multiplier on the nod and the roll while aimed — the dip is left at
+       * full, because bending your knees is not something a sight prevents.
+       * The rotations are what swing the picture off the (un-nodded) rounds,
+       * so they are the half worth suppressing when it matters.
+       */
+      adsMult: 0.35,
+    },
   },
 
   /**
@@ -1089,6 +1128,25 @@ export const CONFIG = {
      */
     airDrop: 0.006,
     airDropMax: 0.05,
+    /**
+     * How fast the give follows that fall speed (per second). It exists
+     * because the speed it follows does not ease: it jumps to the launch
+     * velocity on the push and to zero on the frame the feet touch. Take the
+     * give straight from it and the weapon snaps 5 cm back to neutral in one
+     * frame, which is the pop the landing absorb is there to replace. ~70 ms
+     * of lag — enough that the return is a motion, short enough that the
+     * weapon still reads as attached to the body.
+     */
+    airDropSmooth: 14,
+    /**
+     * The landing absorb's share of the camera's dip (see `camera.land`). The
+     * weapon already rides the camera down; this is how much further the arms
+     * let it go, and the nose-down pitch per metre of that dip. Both are the
+     * part you can actually see, because the rest of the sink moves the eye
+     * and the weapon together.
+     */
+    landFollow: 0.35,
+    landPitch: 0.5,
 
     /**
      * The loadout screen's turntable: the weapon held up to be LOOKED at

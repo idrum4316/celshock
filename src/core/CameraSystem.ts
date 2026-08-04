@@ -13,9 +13,12 @@
  * idiom — because burst climb must not vary with frame rate. Recoil only
  * partly springs back (CONFIG.recoil.recoverFraction); the rest is pushed into
  * the player's aim permanently — a deliberate product decision, not a bug.
- * The view punch (FOV spike / camera shove / jitter) and the head bob are pure
- * cosmetics: they are applied only to the rendered camera, never to
- * aimPitch/aimYaw, so bullets and bots never see them.
+ * The view punch (FOV spike / camera shove / jitter), the head bob and the
+ * landing absorb are pure cosmetics: they are applied only to the rendered
+ * camera, never to aimPitch/aimYaw, so bullets and bots never see them.
+ * The landing absorb is a damped spring this system owns and the viewmodel
+ * READS (`landDip`) — one integrator per impact, the same rule as the bob
+ * phase. It is also the only thing that writes the camera's roll.
  * Must run before mats.updateCamera()/lighting.update()/sfx.setListener()
  * in Game's frame order.
  */
@@ -82,6 +85,21 @@ export class CameraSystem {
    */
   private punchT = 0;
 
+  /**
+   * The landing absorb: how far the eye has sunk into a touchdown, in metres
+   * and never positive until the recovery overshoots. A damped spring rather
+   * than a decaying pulse, because knees are one — it is given a downward
+   * VELOCITY at the impact and finds its own way back, so the dip has weight
+   * on the way in and a small rebound on the way out instead of a sawtooth.
+   *
+   * Public because the weapon rides a share of it (`ViewModel`). One
+   * integrator, read by both — the same rule the bob phase follows, and for
+   * the same reason: two springs on one impact drift apart and the gun swims
+   * against the view.
+   */
+  landDip = 0;
+  private landVel = 0;
+
   /** Scratch for the rendered camera position — no per-frame allocation. */
   private readonly eye = new Vector3();
 
@@ -138,6 +156,25 @@ export class CameraSystem {
     this.bobPhase = 0;
     this.bobAmount = 0;
     this.bobTarget = 0;
+    this.landDip = 0;
+    this.landVel = 0;
+  }
+
+  /**
+   * Absorbs a landing; called by Player with the speed the feet arrived at.
+   * Scaled across the fall speeds that count as one at all, so stepping off a
+   * kerb bends nothing and a drop off the chapel terrace bends everything.
+   *
+   * The impact sets a downward velocity rather than a displacement — a leg
+   * that is already loaded does not reset when it takes a second hit — and the
+   * hardest of two impacts in the same breath wins rather than summing, so a
+   * bounce down a flight of steps cannot dig the eye through the floor.
+   */
+  land(speed: number): void {
+    const l = CONFIG.camera.land;
+    const t = Math.min(1, (speed - l.minSpeed) / (l.fullSpeed - l.minSpeed));
+    if (t <= 0) return;
+    this.landVel = Math.min(this.landVel, -l.dipSpeed * t);
   }
 
   /**
@@ -223,6 +260,26 @@ export class CameraSystem {
     // --- view punch decays (cosmetic — safe to use a plain time decay) ---
     this.punchT = Math.max(0, this.punchT - dt / CONFIG.recoil.punchTime);
 
+    // --- landing absorb settles (semi-implicit Euler on a damped spring) ---
+    // Velocity first, then position off the NEW velocity. The other way round
+    // is explicit Euler, which gains energy every step and rings instead of
+    // settling — on a spring the eye sits in, that is nausea. dt is
+    // clamped to 0.05 upstream, which keeps `omega * dt` well inside stability
+    // at these frequencies.
+    const l = CONFIG.camera.land;
+    if (this.landDip !== 0 || this.landVel !== 0) {
+      const w = Math.PI * 2 * l.frequency;
+      this.landVel +=
+        (-w * w * this.landDip - 2 * l.damping * w * this.landVel) * dt;
+      this.landDip += this.landVel * dt;
+      // Park it exactly, so the eye and the weapon both stop reading a
+      // micrometre of sag for the rest of the round.
+      if (Math.abs(this.landDip) < 1e-4 && Math.abs(this.landVel) < 1e-3) {
+        this.landDip = 0;
+        this.landVel = 0;
+      }
+    }
+
     // --- ADS blend (exponential ease toward target) ---
     const target = input.ads ? 1 : 0;
     this.adsBlend +=
@@ -249,17 +306,31 @@ export class CameraSystem {
         right.scale(Math.sin(this.bobPhase) * c.bobLateral * bobW),
       );
     }
+    // The eye sinks with the knees. Translation only — a metre of drop is a
+    // metre of parallax and nothing else, so the bullets are untouched.
+    this.eye.y += this.landDip;
     const r = CONFIG.recoil;
     const punch = this.punchT * this.punchT;
     if (punch > 0) {
       this.eye.subtractInPlace(dir.scale(r.camPush * punch));
     }
 
+    // The nod and the roll are what make the absorb read as a body arriving
+    // rather than as the floor moving: the chin drops toward the impact and
+    // the weight comes down on one side. Both are damped while aiming, the
+    // same bargain the bob makes — a braced shooter absorbs with the legs, and
+    // it is only the ROTATIONAL part that swings the picture off the rounds
+    // (which fly along the un-nodded `forward`, like every other cosmetic
+    // here). The dip itself is left alone; knees bend whether or not you are
+    // looking through a sight.
+    const swing = this.landDip * (1 - (1 - l.adsMult) * t);
+    const nod = swing * l.nod;
+
     this.camera.position.copyFrom(this.eye);
-    if (punch > 0) {
-      const shPitch = (Math.random() * 2 - 1) * r.shakePitch * punch;
-      const shYaw = (Math.random() * 2 - 1) * r.shakeYaw * punch;
-      const sp = this.aimPitch + shPitch;
+    if (punch > 0 || nod !== 0) {
+      const shPitch = punch > 0 ? (Math.random() * 2 - 1) * r.shakePitch * punch : 0;
+      const shYaw = punch > 0 ? (Math.random() * 2 - 1) * r.shakeYaw * punch : 0;
+      const sp = this.aimPitch + shPitch + nod;
       const sy = this.aimYaw + shYaw;
       const cp = Math.cos(sp);
       this.camera.setTarget(
@@ -270,6 +341,10 @@ export class CameraSystem {
     } else {
       this.camera.setTarget(this.eye.add(dir));
     }
+    // Roll goes on AFTER the target: `setTarget` writes yaw and pitch out of
+    // the direction and never touches z, so this is the one axis the camera
+    // keeps of its own. It is also the only place anything writes it.
+    this.camera.rotation.z = swing * l.roll;
     this.camera.fov =
       c.fovHip + (this.sight.fovAds - c.fovHip) * t + r.fovPunch * punch;
   }

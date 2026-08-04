@@ -422,6 +422,25 @@ load-bearing.
   (`jumped` / `footstep` / `landed`) rather than playing anything: `Sfx` is
   Game's, and the same split is why bots emit `onStep` and let
   `Sfx.botStep` decide, from the listener position, whether it is audible.
+- **A landing is an arrival, and it is spent in two places.** The ground
+  probe's `stepHeight` tolerance is what keeps the feet glued walking down a
+  kerb, and it is **grounded-only**: extended to a body in the air — which is
+  what testing `velY <= 0` did — a jump lands a full 0.6 m early and is
+  teleported the rest of the way in one frame. Measured, that was a **0.656 m
+  single-frame drop against a physical maximum of 0.14 m**, over a third of the
+  jump's own height, and it read exactly like a dropped frame. Airborne, the
+  landing is where the feet meet the floor and the snap resolves one frame of
+  overlap. What replaces it is `CameraSystem.land()`: a damped spring given a
+  downward *velocity* scaled by impact speed, so the eye sinks ~6 cm over 67 ms
+  on a plain jump, rebounds ~1 cm and is settled inside half a second. The
+  camera owns that spring and the viewmodel READS `landDip` — one integrator,
+  the same rule as the bob phase. The nod and the roll are damped by
+  `land.adsMult` while the dip is not: the eye dropping is parallax and moves
+  nothing, while the rotations swing the picture off rounds that still fly
+  along the un-nodded `forward`. **The viewmodel's airborne give is sprung for
+  the same reason the landing is**: `velY` is a step function at both ends of a
+  jump, so a give read straight off it snapped `airDropMax` back to neutral on
+  the contact frame.
 
 The bob and the view punch move the **rendered camera only** — `aimPitch`/
 `aimYaw` never see them, so bullets don't bob. `Player.setBodyHidden` now hides

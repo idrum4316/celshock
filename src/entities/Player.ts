@@ -472,16 +472,34 @@ export class Player implements Combatant {
     this.root.position.y += this.velY * dt;
 
     // Hollowmere has terraces, embankments, ramps and a hayloft, so the floor
-    // is wherever the probe finds it rather than a fixed plane. Rising ground
-    // is snapped up to (a step, not a wall) only while falling or grounded, so
-    // a jump still arcs over a low wall instead of sticking to it.
+    // is wherever the probe finds it rather than a fixed plane. Ground rising
+    // under the feet is always snapped up to (a step, not a wall).
+    //
+    // The tolerance BELOW the feet is grounded-only, and that is load-bearing.
+    // It exists so walking off a kerb or down a slope keeps the feet on the
+    // floor instead of starting a fall every stride. Extend it to a body in
+    // the air — which is what testing `velY <= 0` did — and a jump lands a
+    // full `stepHeight` early, teleporting the last 0.6 m in a single frame:
+    // over a third of a jump's own height gone between two frames, with no
+    // impact where the eye can see one. That is what read as a dropped frame.
+    // Airborne, the landing is where the feet actually meet the floor, and the
+    // only thing the snap resolves is one frame's worth of overlap.
     const floorY = this.probeGround();
     const foot = this.root.position.y - this.groundY;
-    if (foot <= floorY + (this.velY <= 0 ? p.stepHeight : 0)) {
+    const stick = this.grounded ? p.stepHeight : 0;
+    if (foot <= floorY + stick) {
       // Report the arrival before the snap eats the speed it arrived at. Only
       // a fall counts: walking on level ground touches down every frame at
       // roughly one frame of gravity, which is well under `landMinSpeed`.
-      if (!this.grounded) ev.landed = Math.max(0, -this.velY);
+      if (!this.grounded) {
+        ev.landed = Math.max(0, -this.velY);
+        // The eye absorbs it. Pushed straight at the camera rather than routed
+        // through `PlayerEvents` for the same reason the bob drive is: the
+        // camera owns the spring, this owns the movement that excites it, and
+        // Game's copy would arrive a frame late. The sound still goes out as
+        // an event, because audio is Game's.
+        cam.land(ev.landed);
+      }
       this.root.position.y = floorY + this.groundY;
       this.velY = 0;
       this.grounded = true;
@@ -598,6 +616,7 @@ export class Player implements Combatant {
       pitchRate: this.pitchRate,
       bobPhase: cam.bobPhase,
       velY: this.velY,
+      landDip: cam.landDip,
     });
   }
 
