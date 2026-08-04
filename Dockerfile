@@ -29,6 +29,9 @@ RUN npm ci
 COPY tsconfig.json vite.config.ts index.html main.ts ./
 COPY src ./src
 COPY textures ./textures
+# public/ is copied to dist/ verbatim: the web app manifest and the install
+# icons, which must keep the exact URLs the manifest and index.html name.
+COPY public ./public
 
 # `npm run build` is `tsc --noEmit && vite build` — the typecheck is the only
 # automated gate this repo has, so a type error fails the image build too.

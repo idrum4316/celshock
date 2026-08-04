@@ -2,8 +2,28 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- `viewport-fit=cover` paints under a notch (the HUD keeps clear of it
+         with the safe-area insets below); `user-scalable=no` is what stops a
+         two-finger look from pinch-zooming the page instead. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
     <title>HOLLOWMERE — Cel-Shaded Conquest</title>
+
+    <!-- Installable app. The manifest asks for fullscreen landscape; the two
+         apple-* tags are iOS's own equivalents, which it reads instead of the
+         manifest. `black-translucent` is the one that lets the scene run to
+         the top of the screen rather than under a white bar. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#05070b" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Hollowmere" />
+    <link rel="icon" href="/icons/icon-192.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <style>
       /* =====================================================================
          HOLLOWMERE HUD
@@ -25,7 +45,22 @@
          ===================================================================== */
 
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+        /* Phone browser chrome: `dvh` is the viewport as it stands with the
+           URL bar showing, so the canvas is never sized to a screen that is
+           partly covered. `overscroll-behavior` kills pull-to-refresh, which
+           on a first-person shooter is a swipe up to look up. */
+        overscroll-behavior: none;
+        touch-action: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      @supports (height: 100dvh) {
+        html, body { height: 100dvh; }
+      }
       body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 
       #game-canvas {
@@ -42,6 +77,13 @@
         pointer-events: none;
         color: #fff;
         user-select: none;
+        /* The gauges are positioned against #hud's PADDING box, so one rule
+           here keeps every one of them out from under a notch or a home
+           indicator. Resolves to 0 everywhere that has neither, so the desktop
+           layout is untouched. The canvas is deliberately not inset: the scene
+           should run to the glass. */
+        padding: env(safe-area-inset-top) env(safe-area-inset-right)
+          env(safe-area-inset-bottom) env(safe-area-inset-left);
         /* A condensed grotesque is what separates a military HUD from a web
            page, and every one of these ships with some desktop OS — the game
            carries no font files, the same rule as its meshes and its audio.
@@ -946,6 +988,32 @@
         color: rgba(255, 255, 255, 0.65);
       }
       #lock-hint b { color: var(--hot); }
+
+      /* --- short viewports (a phone held sideways) ---
+         The menu and the deploy map stack a title, a picker, a table and a
+         prompt, they are sized in px for a 720p window, and NOTHING in this
+         HUD scrolls — so on a 350px-tall landscape phone the stack simply
+         runs off both ends. The fix is to draw the whole screen at the size
+         it was authored for and scale it down: the box is grown by 1/s so
+         that scaling it by s about the top-left lands exactly on the
+         viewport again, which keeps the backdrop full-bleed. At the default
+         s = 1 both the size and the transform are identities, so a desktop
+         layout is untouched pixel for pixel.
+
+         `#loadout` is deliberately NOT in this list. Its stage is a hole in
+         the scrim that the 3D turntable is placed through, back-projected
+         from the SAME viewport fractions the CSS uses (see
+         CONFIG.viewmodel.inspect) — a transform would move the hole and
+         leave the weapon behind it. */
+      #hud { --ov-scale: 1; }
+      @media (max-height: 620px) { #hud { --ov-scale: 0.75; } }
+      @media (max-height: 430px) { #hud { --ov-scale: 0.45; } }
+      #overlay, #deploy {
+        width: calc(100% / var(--ov-scale));
+        height: calc(100% / var(--ov-scale));
+        transform: scale(var(--ov-scale));
+        transform-origin: top left;
+      }
 
       /* --- overlays (menu / round over / pause) --- */
       #overlay {

@@ -19,9 +19,35 @@ Other scripts:
 ```bash
 npm run build    # typecheck + production build to dist/
 npm run preview  # serve the production build
+npm run icons    # regenerate the install icons under public/icons (committed)
 ```
 
 Requires Node 18+ and a WebGL2-capable browser (Chrome/Edge/Firefox/Safari).
+
+## Installing it
+
+The build is an installable app (a PWA): a web app manifest, generated icons,
+and a service worker that caches the whole bundle, so once it has loaded a
+round it launches offline.
+
+- **Android / Chrome / Edge** — open the site, then _Install app_ from the
+  browser menu (or the prompt in the address bar). It launches fullscreen and
+  landscape, without browser chrome.
+- **iOS / Safari** — open the site, _Share_ → _Add to Home Screen_. iOS gives
+  it a standalone window rather than true fullscreen; that is as far as Safari
+  goes.
+- **Desktop Chrome/Edge** — the same _Install_ works, and gives it its own
+  window.
+
+Left in a browser tab on a phone, the first tap takes the screen and locks it
+to landscape instead, so the URL bar is out of the way either way.
+
+This needs the site served over **HTTPS** (or `localhost`) — a service worker
+will not register otherwise, and without one there is no install prompt.
+
+**A phone still needs a controller.** The game reads keyboard, mouse and
+gamepad; there are no on-screen touch controls, so a phone plays it with a
+Bluetooth pad paired to it and not with thumbs on the glass.
 
 ## Controls
 
@@ -106,6 +132,9 @@ has a contract header at the top.
 - Bots use cover incidentally (the flow field routes them past buildings) rather
   than deliberately picking firing positions.
 - One map. The system supports more, but only Hollowmere is authored.
+- **No touch controls.** The game installs and runs on a phone, but every input
+  is keyboard, mouse or gamepad — a touch is only good for the menus' "tap to
+  continue", so playing on a phone means pairing a controller.
 
 ## Next steps for expansion
 

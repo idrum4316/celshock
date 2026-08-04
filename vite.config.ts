@@ -9,8 +9,9 @@
  *
  * The plugin is `apply: "serve"`, so it does not exist in a production build.
  */
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 
 /**
@@ -94,6 +95,80 @@ function layoutWriter(): Plugin {
   };
 }
 
+/**
+ * Emits `dist/sw.js` from the template at `src/pwa/sw.js`, with `__PRECACHE__`
+ * replaced by a manifest of everything the build produced.
+ *
+ * It runs in `writeBundle` and walks `dist/` on disk rather than reading the
+ * Rollup bundle, for two reasons: `index.html` and the copied `public/` files
+ * are not both reliably in the bundle object at any one hook, and what the
+ * worker must precache is exactly "the files that were deployed".
+ *
+ * The version is a hash of every file's NAME AND CONTENTS. Hashing the names
+ * alone looks sufficient — Vite content-hashes the asset filenames — but
+ * `index.html` is the one unhashed file, and this project keeps the whole HUD
+ * stylesheet inside it. A change there would otherwise leave the worker's
+ * bytes identical, and a byte-identical worker is one the browser never
+ * updates: the old HUD would be served from cache forever.
+ */
+function serviceWorker(): Plugin {
+  const walk = (dir: string, root: string) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) return walk(abs, root);
+      return [relative(root, abs).split("\\").join("/")];
+    });
+
+  return {
+    name: "hollowmere-service-worker",
+    apply: "build",
+
+    writeBundle(options) {
+      const outDir = options.dir ?? resolve(process.cwd(), "dist");
+      // Source maps are a debugging aid nobody loads offline, and the worker
+      // itself is not something the worker caches.
+      const files = walk(outDir, outDir)
+        .filter((f) => f !== "sw.js" && !f.endsWith(".map"))
+        .sort();
+
+      const hash = createHash("sha256");
+      for (const file of files) {
+        hash.update(file);
+        hash.update(readFileSync(join(outDir, file)));
+      }
+
+      const manifest = {
+        version: hash.digest("hex").slice(0, 12),
+        // "/" is the URL a launch actually asks for; index.html is the same
+        // bytes under the name the deploy wrote. The worker's navigation
+        // handler looks up "/", so it has to be a precached key in its own
+        // right rather than a redirect the cache knows nothing about.
+        urls: ["/", ...files.map((f) => `/${f}`)],
+      };
+
+      const template = readFileSync(
+        resolve(process.cwd(), "src/pwa/sw.js"),
+        "utf8",
+      );
+      // The whole declaration is the anchor, not the placeholder alone: the
+      // file's header comment names the placeholder too, and a plain string
+      // replace substitutes the manifest into the prose instead of the code.
+      const decl = /^const PRECACHE = __PRECACHE__;$/m;
+      if (!decl.test(template)) {
+        throw new Error("src/pwa/sw.js is missing its PRECACHE declaration");
+      }
+      writeFileSync(
+        join(outDir, "sw.js"),
+        template.replace(
+          decl,
+          `const PRECACHE = ${JSON.stringify(manifest, null, 2)};`,
+        ),
+        "utf8",
+      );
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [layoutWriter()],
+  plugins: [layoutWriter(), serviceWorker()],
 });

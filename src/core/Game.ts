@@ -61,6 +61,7 @@ import { DeployScreen } from "../ui/DeployScreen";
 import { HUD, type CaptureStatus } from "../ui/HUD";
 import { kitLabel, LoadoutScreen } from "../ui/LoadoutScreen";
 import { Minimap } from "../ui/Minimap";
+import { enterFullscreenOnTouch } from "../pwa/register";
 import { CameraSystem } from "./CameraSystem";
 import { InputManager } from "./InputManager";
 import { Sfx } from "./Sfx";
@@ -398,6 +399,11 @@ export class Game {
       if (!this.input.pointerLocked && this.state === "playing") {
         this.requestLock();
       }
+      // The touch-device equivalent of the pointer lock: on a phone opened in
+      // a browser tab there is no lock to take, and the URL bar is what is
+      // eating the top of the screen. No-ops on the desktop and in an
+      // installed app, which comes up fullscreen from the manifest.
+      enterFullscreenOnTouch();
     });
 
     // Losing the pointer lock is the pause trigger, and it has to be, because
@@ -416,6 +422,14 @@ export class Game {
     });
     window.addEventListener("keydown", () => this.sfx.unlock(), { once: true });
     window.addEventListener("resize", () => this.engine.resize());
+    // A phone turned on its side reports the rotation before it has finished
+    // laying the page out, so the resize that rides along with it can carry
+    // the old dimensions — leaving the canvas stretched across a viewport it
+    // no longer matches. The second, late resize is the one that lands.
+    window.addEventListener("orientationchange", () => {
+      this.engine.resize();
+      window.setTimeout(() => this.engine.resize(), 300);
+    });
 
     // The map editor is a development tool: the whole of src/editor is behind
     // a dynamic import so none of it reaches a production bundle.

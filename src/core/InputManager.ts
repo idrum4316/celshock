@@ -116,6 +116,20 @@ export class InputManager {
    */
   private pointerMask = 0;
   private mouseMask = 0;
+  /**
+   * A touch tap, latched until the next `update()` reads it.
+   *
+   * A touch may not touch the masks above — those are held state, and a tap
+   * has no hold — but the menus' confirm IS "a button went down anywhere", and
+   * on a phone the only pointer there is is a finger. Without this the title
+   * screen of an installed app cannot be got past at all: the deploy map takes
+   * a tap (it listens for its own `pointerdown`) but nothing before it does.
+   *
+   * It feeds `confirmPressed` and deliberately NOT `menuConfirmPressed`, which
+   * is exactly the split the mouse already has — a tap on the empty half of a
+   * pause screen is not a menu choice.
+   */
+  private touchTapped = false;
   private accumX = 0;
   private accumY = 0;
   private prevJump = false;
@@ -157,7 +171,10 @@ export class InputManager {
     const readPointer = (e: PointerEvent) => {
       if (isMouse(e)) this.pointerMask = e.buttons;
     };
-    document.addEventListener("pointerdown", readPointer);
+    document.addEventListener("pointerdown", (e) => {
+      readPointer(e);
+      if (e.pointerType === "touch") this.touchTapped = true;
+    });
     document.addEventListener("pointerup", readPointer);
     document.addEventListener("pointercancel", (e) => {
       if (isMouse(e)) this.pointerMask = 0;
@@ -276,10 +293,16 @@ export class InputManager {
     this.reloadPressed = reloadNow && !this.prevReload;
     this.prevReload = reloadNow;
 
+    // The tap is a one-frame pulse rather than held state, so it is consumed
+    // here: read once, cleared once, and the edge below does the rest.
+    const tapped = this.touchTapped;
+    this.touchTapped = false;
+
     const confirmNow =
       this.keys.has("Enter") ||
       this.keys.has("NumpadEnter") ||
       (buttons & 1) !== 0 ||
+      tapped ||
       padJump ||
       padStart;
     this.confirmPressed = confirmNow && !this.prevConfirm;
