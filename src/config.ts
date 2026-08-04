@@ -1005,23 +1005,24 @@ export const CONFIG = {
        * Fraction of the frame's rotation to smear across — how long the
        * shutter is open. 1 covers the whole frame (a 360-degree shutter,
        * more than a real camera); film convention is nearer 0.5. This sits
-       * just above that: clearly there on a whip pan, not mush on a look
-       * around, and a target stays trackable while you turn onto it. 0
-       * disables the pass, at which point the shader is a straight copy.
+       * well under that on purpose: the blur should register as weight
+       * behind a whip pan and stay unnoticed on an ordinary look around,
+       * which is most of what a round is. 0 disables the pass, at which
+       * point the shader is a straight copy.
        *
        * Measured: smear length is exactly linear in speed x strength, so
        * halving this is identical to halving the pan rate.
        */
-      strength: 0.55,
+      strength: 0.3,
       /** Taps along the smear, the sharp one included. Must be at least 2. */
       samples: 10,
       /**
        * Longest smear, as a fraction of the frame. This is a safety cap, not
        * a look: one dropped frame arrives as a single huge rotation, and
        * headless captures run slow enough to smear the screen flat without
-       * it. At the strength above it only starts biting past roughly 300
-       * deg/s, so ordinary play never reaches it and a hitch saturates
-       * instead of exploding.
+       * it. It bites at a pan rate inversely proportional to `strength` —
+       * roughly 550 deg/s at the value above — so ordinary play never
+       * reaches it and a hitch saturates instead of exploding.
        */
       maxShift: 0.04,
       /** Rotation in one frame (radians) below which the pass is skipped. */
@@ -1031,10 +1032,13 @@ export const CONFIG = {
        * The viewmodel is fixed in screen space and must not smear with the
        * world behind it, and there is no depth in this pass to tell them
        * apart — so the centre of the frame, where the weapon sits and where
-       * the eye is tracking, keeps its edges.
+       * the eye is tracking, keeps its edges. Widening the sharp core is the
+       * second subtlety lever after `strength`, and the better-behaved one:
+       * it takes the blur off exactly the pixels the player is reading and
+       * leaves it where peripheral motion belongs.
        */
-      maskInner: 0.2,
-      maskOuter: 0.7,
+      maskInner: 0.35,
+      maskOuter: 0.85,
     },
     /**
      * Hard-edged directional shadows from the key light (the moon), plus a
