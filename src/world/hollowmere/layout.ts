@@ -351,8 +351,8 @@ const placements: Placement[] = [
   // The deck stands 0.73 m over the mud — too tall to step onto, so the door
   // gets a ramp or the whole flag is unreachable.
   { kind: "ramp", x: 40, z: -71, y: -0.346, rotY: Math.PI, params: { length: 5, width: 4, height: 0.73 } },
-  { kind: "jetty", x: 24.5, z: -83.5, y: 0.642, rotY: Math.PI / 2, params: { length: 20 } },
-  { kind: "jetty", x: 21.5, z: -95, y: 0.68, params: { length: 20 } },
+  { kind: "jetty", x: 24.5, z: -83.5, y: 0.142, rotY: Math.PI / 2, params: { length: 20 } },
+  { kind: "jetty", x: 21.5, z: -95, y: 0.18, params: { length: 20 } },
   // Shore fence, split at the ramp — an unbroken fence here blocked the only
   // door the ramp serves.
   { kind: "fence", x: 31, z: -70, params: { length: 10 } },
