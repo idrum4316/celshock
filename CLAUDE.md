@@ -218,7 +218,9 @@ src/
   ui/
     HUD.ts                  # DOM overlay: tickets, flags, capture-zone panel,
                             # killfeed, scoreboard, world-anchored damage arcs
-    DeployScreen.ts         # Clickable top-down deploy map + the kit button
+    DeployScreen.ts         # Top-down deploy map — click a marker or step the
+                            #   selection with the arrows/d-pad — + the deploy
+                            #   and kit buttons
     LoadoutScreen.ts        # The kit screen: weapon slot, optic slot, the
                             #   stat chart derived from CONFIG.weapons, and the
                             #   turntable stage — a hole in its own scrim, with
@@ -277,10 +279,12 @@ other focus loss. A player who never took the lock (a pad player) has none to
 lose, hence the transition test rather than a bare "not locked". `Escape` and
 gamepad Start are the second trigger, through `input.pausePressed`. Start also
 raises `confirmPressed` (it is the menus' deploy button), so the paused branch
-handles pause first and breaks. The list is confirmed with
-`menuConfirmPressed` — Enter and pad A but *not* the mouse — because a click on
-the empty half of a pause screen is not a menu choice, unlike the deploy map
-where the click is the action.
+handles pause first and breaks. Gamepad **B** resumes as well
+(`menuBackPressed`), the same back it is on the kit screen. The list is
+confirmed with `menuConfirmPressed` — Enter and pad A but *not* the mouse —
+because a click on the empty half of a pause screen is not a menu choice. The
+deploy screen follows the same rule for the same reason and one more: see
+"Getting into a round".
 
 `#hud.paused` is deliberately **not** `.overlaid`: the menu and the round-over
 card hide the gauges because what is under them is last round's, while under a
@@ -288,8 +292,8 @@ pause the tickets, flags and vitals are current and frozen with the scene. What
 it does hide is what would be lying — the crosshair, the hitmarker, the damage
 arcs and the "click to capture the mouse" hint. It is also the one overlay that
 takes pointer events across its whole area, because the deploy screen
-underneath takes them too and a click through the backdrop would deploy the
-player. Re-taking the lock on resume tolerates a rejection: Chrome refuses one
+underneath takes them too and a click through the backdrop would land on its
+map or its Deploy button. Re-taking the lock on resume tolerates a rejection: Chrome refuses one
 for about a second after Escape released it, which is exactly the sequence a
 pause ends with, and the next click gets it.
 
@@ -534,16 +538,55 @@ Two details there are not decoration:
   it. Accuracy is the aimed spread *inverted* — a bar that grew with the number
   would rank the SMG as the accurate one.
 - **The buttons that OPEN the screen fire on `pointerdown`, not on click.** The
-  menu's confirm and the deploy screen's are "a mouse button went down
-  anywhere", read from the button mask on the next tick, which happens before a
-  `click` (which lands on mouse *up*) ever fires. Changing the state on the down
-  edge is what stops the click that asked for the loadout from also deploying
-  the player out from under it. Buttons *inside* the screen can use `click`
-  safely, because by then the button is already back up.
+  menu's confirm is "a mouse button went down anywhere", read from the button
+  mask on the next tick, which happens before a `click` (which lands on mouse
+  *up*) ever fires. Changing the state on the down edge is what stops the click
+  that asked for the loadout from also deploying the player out from under it.
+  Buttons *inside* the screen can use `click` safely, because by then the button
+  is already back up.
 
 On the keyboard and the d-pad the screen splits the axes: up/down chooses which
 slot is being edited, left/right steps through it. The menu behind it keeps
-left/right for difficulty.
+left/right for difficulty. Enter, pad **A**, pad **B** and `L`/pad X all close
+it — every pick is already applied, so there is nothing for a confirm and a
+cancel to disagree about, and B is what a pad player reaches for.
+
+### Getting into a round
+
+Three screens stand between the title and the world, and each is driven by a
+pointer *and* by a pad, with no path that needs the other.
+
+**The menu and the round-over card carry a `Deploy` button** (`HUD.bindStart`
+→ `Game.onStart`). It is redundant with the confirm — a click anywhere on
+either screen already starts the round — and that is why it has to exist: an
+instruction in prose is not a target, and "click, press Enter, or press Start"
+made a pad player work out which of the three was theirs. The glyph line on the
+button says all of it at once.
+
+**That button is why the deploy screen's confirm is `menuConfirmPressed`.** It
+changes the state on the down edge, which puts the `deploy` branch in front of
+the very click that asked for it — and the first deploy of a round has
+`respawnT` at 0, so a confirm that counted the mouse fired immediately and
+dropped the player into the world at whichever spawn the list started on,
+skipping the screen entirely. Enter and pad A only; the map takes its own
+clicks and the two buttons take their own.
+
+**The spawn is steppable** (`DeployScreen.moveSelection`, wired to the menu
+arrows in `Game`'s `deploy` branch). Before it there was no way to change
+position without a mouse, so a pad's confirm deployed at whatever the list
+happened to start on. Both axes step the same list: the spawns are points
+scattered over a map rather than a row or a column, so no direction *means*
+anything, and a d-pad direction that does nothing reads as a screen ignoring
+the pad. The selection is stepped *before* `update()` redraws, so the marker
+and the status line — which names the selection, because a highlight 300 px
+away is not a label — move on the frame the key was pressed.
+
+**`#deploy-go` is the pointer's way off that screen**, since the confirm no
+longer takes a click. Pointerdown, like the map's markers and for the same
+reason: the same event goes on to take the pointer lock, which it can only do
+once `spawnPlayer` has moved the state to `playing`. It greys itself
+(`.waiting`) while `confirm()` is still a no-op — a control that answers
+nothing is worse than one visibly not yet yours.
 
 **The right half of the screen is a turntable carrying the real viewmodel** —
 the weapon that will be in the player's hands, with the optic actually

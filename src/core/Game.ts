@@ -444,6 +444,13 @@ export class Game {
 
     this.hud.onDifficulty = (tier) => this.setDifficulty(tier);
     this.hud.onOpenLoadout = () => this.openLoadout();
+    // The menu's and the round-over card's Deploy button. Guarded on the state
+    // rather than trusted, because the overlay's markup outlives neither: the
+    // handler is bound to a button that `hideOverlay` throws away, and a click
+    // landing between that and the next repaint must not start a second round.
+    this.hud.onStart = () => {
+      if (this.state === "menu" || this.state === "roundover") this.startRound();
+    };
     this.deployScreen.onOpenLoadout = () => this.openLoadout();
     this.loadoutScreen.onWeapon = (id) => this.setWeapon(id);
     this.loadoutScreen.onSight = (id) => this.setSight(id);
@@ -700,19 +707,40 @@ export class Game {
           break;
         }
         this.respawnT -= dt;
+        // Stepped before the redraw, so the marker and the status line move on
+        // the frame the key was pressed. Both axes step the same list — the
+        // spawns are a handful of points scattered over a map rather than a
+        // row or a column, so there is no axis that "means" anything, and a
+        // d-pad direction that does nothing reads as a screen that ignores the
+        // pad.
+        if (this.input.menuRightPressed || this.input.menuDownPressed) {
+          this.deployScreen.moveSelection(1);
+        }
+        if (this.input.menuLeftPressed || this.input.menuUpPressed) {
+          this.deployScreen.moveSelection(-1);
+        }
         this.deployScreen.update(this.respawnT);
-        // Enter / gamepad A deploys at the current selection; clicking the map
-        // picks a different one.
-        if (this.input.confirmPressed) this.deployScreen.confirm();
+        // Enter / gamepad A deploys at the current selection; the map takes its
+        // own clicks and the kit button takes its own, so the MOUSE IS LEFT OUT
+        // (`menuConfirmPressed`) — the same rule the pause and kit screens
+        // follow, and here it is load-bearing rather than tidy. The menu's
+        // Deploy button changes the state on the down edge, which puts this
+        // case in front of the very click that asked for it; a confirm that
+        // counted the mouse would deploy the player through the screen they
+        // just opened, at whichever spawn the list happened to start on.
+        if (this.input.menuConfirmPressed) this.deployScreen.confirm();
         break;
       case "loadout":
         // Two axes, two slots: up/down chooses which half of the kit is being
-        // edited, left/right steps through it. Confirm and pause both close —
-        // there is nothing to confirm here, every pick has already been
-        // applied to the weapon behind the screen. The mouse is left out of
-        // the confirm (`menuConfirmPressed`) because a click on the empty half
-        // of the screen is not a choice, the same rule the pause menu follows.
+        // edited, left/right steps through it. Back, confirm and pause all
+        // close — there is nothing to confirm here, every pick has already been
+        // applied to the weapon behind the screen, so B and A do the same
+        // thing and B is the one a pad player will reach for. The mouse is left
+        // out of the confirm (`menuConfirmPressed`) because a click on the
+        // empty half of the screen is not a choice, the same rule the pause
+        // menu follows.
         if (
+          this.input.menuBackPressed ||
           this.input.pausePressed ||
           this.input.menuConfirmPressed ||
           this.input.loadoutPressed
@@ -737,7 +765,10 @@ export class Game {
         // Pause is checked first and breaks: Start raises `pausePressed` and
         // `confirmPressed` on the same frame, and resuming must not also fire
         // whichever item the selection happens to be on.
-        if (this.input.pausePressed) {
+        // B backs out of a pause the same way it backs out of the kit screen:
+        // the lid comes off and the state under it comes back, which is what
+        // "Resume" does anyway.
+        if (this.input.pausePressed || this.input.menuBackPressed) {
           this.resume();
           break;
         }

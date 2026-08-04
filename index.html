@@ -480,6 +480,76 @@
         background: rgba(255, 230, 128, 0.1);
         animation: pulse 1.4s ease-in-out infinite;
       }
+      /* The map takes a click, and before this row nothing said the arrows and
+         the d-pad move the selection too — which on a pad left the confirm
+         deploying at whichever spawn the list started on. */
+      #deploy-nav {
+        display: flex;
+        gap: 22px;
+        font-size: 10px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.35);
+      }
+      #deploy-nav kbd {
+        font: inherit;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        padding: 3px 7px;
+        margin-right: 4px;
+        color: #cfd6e2;
+        background: rgba(255, 255, 255, 0.07);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+        clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+      }
+      #deploy-nav kbd.pad {
+        color: var(--hot);
+        box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
+      }
+      /* Side by side rather than stacked: this column has the map, a status
+         line, a hint row and two buttons to fit inside a 720p window, and the
+         two buttons are the only pair that reads as a row. */
+      #deploy-actions { display: flex; align-items: stretch; gap: 12px; }
+      #deploy-go {
+        font: inherit;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        padding: 8px 34px;
+        color: #12141a;
+        background: var(--hot);
+        border: 0;
+        cursor: pointer;
+        clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+        transition: background 0.12s;
+      }
+      #deploy-go b {
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.24em;
+        text-indent: 0.24em;
+        text-transform: uppercase;
+      }
+      #deploy-go i {
+        font-style: normal;
+        font-size: 9px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: rgba(18, 20, 26, 0.6);
+      }
+      #deploy-go:hover { background: #fff3c4; }
+      /* Still there, still readable, visibly not yet yours — the reinforcement
+         countdown is on the status line right above it. */
+      #deploy-go.waiting {
+        color: rgba(255, 255, 255, 0.42);
+        background: rgba(255, 255, 255, 0.06);
+        cursor: default;
+      }
+      #deploy-go.waiting i { color: rgba(255, 255, 255, 0.25); }
+      #deploy-go.waiting:hover { background: rgba(255, 255, 255, 0.06); }
 
       /* --- conquest: the reinforcement gauge ---
          Two counts with a gauge each, draining away from the centre. The bar
@@ -1112,6 +1182,47 @@
         background: var(--hot);
       }
 
+      /* --- the deploy button, on the menu and on the round-over card ---
+         The one control on either screen that is the action rather than a
+         setting, so it is the only one painted in the hot colour filled in
+         rather than outlined. Same pointer-events carve-out as the difficulty
+         row: the overlay around it stays inert. The glyph line names all three
+         inputs, which is what it replaced — a line of prose telling a pad
+         player to click. */
+      #overlay button.ov-start {
+        font: inherit;
+        pointer-events: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        padding: 13px 52px;
+        color: #12141a;
+        background: var(--hot);
+        border: 0;
+        cursor: pointer;
+        clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+        transition: background 0.12s, transform 0.12s;
+      }
+      #overlay button.ov-start b {
+        font-size: 17px;
+        font-weight: 800;
+        letter-spacing: 0.26em;
+        text-indent: 0.26em;
+        text-transform: uppercase;
+      }
+      #overlay button.ov-start i {
+        font-style: normal;
+        font-size: 10px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: rgba(18, 20, 26, 0.62);
+      }
+      #overlay button.ov-start:hover {
+        background: #fff3c4;
+        transform: translateY(-1px);
+      }
+
       /* --- the loadout button, on the menu and on the deploy screen ---
          Both open the same screen, so both read the same: a label, the kit
          currently in the player's hands, and the key that gets there. The
@@ -1500,6 +1611,12 @@
         background: rgba(255, 255, 255, 0.07);
         box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
         clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+      }
+      /* Pad glyphs are tinted, the same tell the controls table uses, so the
+         two keys on the Done button read as alternatives rather than a chord. */
+      #loadout kbd.pad {
+        color: var(--hot);
+        box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
       }
       #loadout button.lo-back {
         font: inherit;

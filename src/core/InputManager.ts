@@ -72,6 +72,16 @@ export class InputManager {
   menuUpPressed = false;
   menuDownPressed = false;
   /**
+   * Edge-triggered "back out of this screen" (Backspace / gamepad B).
+   *
+   * Menus only, which is what makes B available at all: on the pad B is
+   * crouch, and nothing in gameplay reads this flag. Escape is deliberately
+   * NOT here — it is the pause key, and the screens that take a back also take
+   * a pause, so folding the two together would leave no way to tell which the
+   * player asked for.
+   */
+  menuBackPressed = false;
+  /**
    * Edge-triggered pause/resume (Escape / gamepad Start).
    *
    * Escape is deliberately NOT in `BOUND_CODES`: its browser default is to
@@ -140,6 +150,7 @@ export class InputManager {
   private prevMenuRight = false;
   private prevMenuUp = false;
   private prevMenuDown = false;
+  private prevMenuBack = false;
   private prevPause = false;
   private prevLoadout = false;
   private prevPadSprint = false;
@@ -333,6 +344,14 @@ export class InputManager {
     this.prevMenuUp = upNow;
     this.prevMenuDown = downNow;
 
+    // Back. `padCrouch` is B, and reading it here rather than a fourth face
+    // button is the whole point: B is the back button everywhere else on a
+    // console, and the states that read this one are states where nobody is
+    // crouching.
+    const backNow = this.keys.has("Backspace") || padCrouch;
+    this.menuBackPressed = backNow && !this.prevMenuBack;
+    this.prevMenuBack = backNow;
+
     const pauseNow = this.keys.has("Escape") || padStart;
     this.pausePressed = pauseNow && !this.prevPause;
     this.prevPause = pauseNow;
@@ -428,6 +447,7 @@ const BOUND_CODES = new Set([
   "KeyL",
   "Space",
   "Tab",
+  "Backspace",
   "Enter",
   "NumpadEnter",
   "ArrowLeft",

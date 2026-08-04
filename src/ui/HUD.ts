@@ -699,13 +699,13 @@ export class HUD {
         <button class="kit-open"><b>${kit}</b><i>Change kit</i></button>
         <span class="hint">L / Y</span>
       </div>
+      <button class="ov-start"><b>Deploy</b><i>Enter &middot; A &middot; Start</i></button>
       <div class="ov-controls frame">
         <div class="ov-controls-head">
           <span>Controls</span><span>Keyboard &amp; mouse</span><span>Gamepad</span>
         </div>
         ${controls}
       </div>
-      <p class="prompt">Click, press Enter, or press Start to deploy</p>
     `;
     this.overlay
       .querySelectorAll<HTMLElement>("button.tier")
@@ -720,6 +720,26 @@ export class HUD {
     // player out from under the screen they just asked for.
     const kitBtn = this.overlay.querySelector<HTMLElement>("button.kit-open");
     if (kitBtn) kitBtn.onpointerdown = () => this.onOpenLoadout();
+    this.bindStart();
+  }
+
+  /**
+   * The one button that starts the round, shared by the menu and the round-over
+   * card. It is redundant with the confirm on the mouse — a click anywhere on
+   * either screen already deploys — and that is precisely why it needs to
+   * exist: an instruction in prose is not a target, and a pad player reading
+   * "click, press Enter, or press Start" has to work out which of those they
+   * own. A button with the glyphs on it says both at once.
+   *
+   * POINTERDOWN, for the reason the kit button documents: the overlay's own
+   * confirm is a mouse-down read on the next tick, before any `click` fires.
+   * Here the two agree on what should happen, so the button is only claiming
+   * the action it was already going to get — but on the down edge, so the
+   * ordering is the same as the kit button's and cannot drift.
+   */
+  private bindStart(): void {
+    const btn = this.overlay.querySelector<HTMLElement>("button.ov-start");
+    if (btn) btn.onpointerdown = () => this.onStart();
   }
 
   /** Wired by Game: the player picked a difficulty tier from the menu. */
@@ -727,6 +747,9 @@ export class HUD {
 
   /** Wired by Game: the player asked for the loadout screen. */
   onOpenLoadout: () => void = () => {};
+
+  /** Wired by Game: the player asked to start a round. */
+  onStart: () => void = () => {};
 
   showRoundOver(
     winnerName: string,
@@ -745,8 +768,9 @@ export class HUD {
         <span class="lbl">REINFORCEMENTS REMAINING</span>
         <span class="vals"><b>${tickets0}</b><i>/</i><b>${tickets1}</b></span>
       </div>
-      <p class="prompt">Click, press Enter, or press Start for another round</p>
+      <button class="ov-start"><b>Another round</b><i>Enter &middot; A &middot; Start</i></button>
     `;
+    this.bindStart();
   }
 
   /**
@@ -792,7 +816,7 @@ export class HUD {
         </div>`,
         ).join("")}
       </div>
-      <p class="prompt">Esc or Start to resume</p>
+      <p class="prompt">Esc &middot; Start &middot; B to resume</p>
     `;
     this.pauseButtons = [];
     this.overlay

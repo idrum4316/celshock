@@ -1,7 +1,8 @@
 /**
  * DeployScreen.ts — Top-down deploy map: renders spawn options from the
- * GameMap's collider geometry, hit-tests clicks, fires onDeploy (wired in
- * Game) when a selection is confirmed.
+ * GameMap's collider geometry, hit-tests clicks, steps the selection for the
+ * keyboard/pad (moveSelection), fires onDeploy (wired in Game) when a
+ * selection is confirmed.
  * Invariants: CSS contract — #hud is pointer-events:none and this overlay
  * opts back in; don't break that or gameplay clicks die. Re-checks map/
  * conquest readiness every update; the 3D scene renders live behind it.
@@ -33,6 +34,8 @@ export class DeployScreen {
   private statusEl: HTMLElement;
   /** The kit button's caption; rewritten when the fit changes. */
   private kitEl: HTMLElement;
+  /** The confirm button; greyed until the reinforcement wait is over. */
+  private goBtn!: HTMLElement;
 
   /** Wired by Game. */
   onDeploy: (spawn: SpawnPointDef) => void = () => {};
@@ -61,7 +64,14 @@ export class DeployScreen {
         <canvas id="deploy-map" width="620" height="620"></canvas>
       </div>
       <div id="deploy-status"></div>
-      <button id="deploy-kit"><span class="lbl">Loadout</span><b></b><i>L / Y</i></button>
+      <div id="deploy-nav">
+        <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd class="pad">D-pad</kbd> choose position</span>
+        <span>Click a marker on the map</span>
+      </div>
+      <div id="deploy-actions">
+        <button id="deploy-go"><b>Deploy</b><i>Enter &middot; A</i></button>
+        <button id="deploy-kit"><span class="lbl">Loadout</span><b></b><i>L / Y</i></button>
+      </div>
     `;
     document.getElementById("hud")!.appendChild(this.root);
     this.canvas = this.root.querySelector("#deploy-map")!;
@@ -74,6 +84,15 @@ export class DeployScreen {
     // so the state has to change on the down edge or the click that opened the
     // loadout also drops the player into the map behind it.
     kitBtn.onpointerdown = () => this.onOpenLoadout();
+
+    // The deploy confirm is Enter / pad A and deliberately not the mouse, so
+    // without this there is no pointer route off this screen except hitting one
+    // of the markers — which on a phone, where the marker is 11 px on a map
+    // scaled to the viewport, is not a target. Pointerdown for the reason the
+    // markers use it: the same event goes on to take the pointer lock, and it
+    // can only do that once `spawnPlayer` has put the state into `playing`.
+    this.goBtn = this.root.querySelector<HTMLElement>("#deploy-go")!;
+    this.goBtn.onpointerdown = () => this.confirm();
 
     this.canvas.addEventListener("pointerdown", (e) => this.click(e));
   }
@@ -112,11 +131,36 @@ export class DeployScreen {
     this.ready = remaining <= 0;
 
     const name = this.spawnLabel(this.options[this.selected]);
+    // The name is the selection read back. It is on this line rather than only
+    // on the map because a marker highlighted 300 px away is not a label, and
+    // stepping through spawns with a d-pad is exactly the case where nothing
+    // else tells you what you just moved onto.
     this.statusEl.textContent = this.ready
-      ? `CLICK A POSITION TO DEPLOY  —  ${name}`
+      ? `READY TO DEPLOY  —  ${name}`
       : `REINFORCEMENTS IN ${Math.ceil(remaining)}  —  ${name}`;
     this.statusEl.classList.toggle("ready", this.ready);
+    // `confirm()` is a no-op until the wait is over, so the button must not
+    // look live before then — a control that answers nothing is worse than one
+    // that is visibly not yet yours.
+    this.goBtn.classList.toggle("waiting", !this.ready);
     this.draw();
+  }
+
+  /**
+   * Steps the highlighted spawn, wrapping at both ends — the keyboard's arrows
+   * and the pad's d-pad. The mouse picks a marker directly; without this there
+   * was no way to change position at all without one, which made the pad's
+   * confirm a deploy at whatever the list happened to start on.
+   *
+   * It only moves the index. `update()` runs every frame in this state and
+   * redraws from it, so there is nothing to repaint here — and it is called
+   * before that update, so the marker and the status line change on the same
+   * frame the key was pressed.
+   */
+  moveSelection(delta: number): void {
+    const n = this.options.length;
+    if (n === 0) return;
+    this.selected = (this.selected + delta + n) % n;
   }
 
   /** Deploys at the current selection. Used by the keyboard/gamepad confirm. */
