@@ -7,6 +7,12 @@
  * farther than the first solid hit does not count (a bot embedded in a prop is
  * unshootable — movement bugs become combat bugs). Tracers/sparks are
  * fixed-size pools: add new effects to a pool, NEVER allocate per shot.
+ * A tracer is a short streak flown from muzzle to impact over several frames,
+ * NOT a muzzle-to-impact beam — the hit is resolved instantly regardless, so
+ * the flight is presentation only and must never gate damage. The impact spark
+ * rides the streak and spawns on arrival: it is the one thing here that waits,
+ * because an impact seen before its round lands is what makes a slowed tracer
+ * read as fake.
  */
 import {
   Mesh,
@@ -37,13 +43,30 @@ export interface ShotResult {
 
 interface Tracer {
   mesh: Mesh;
-  life: number;
+  /** Muzzle, and the unit direction to the impact point. */
+  from: Vector3;
+  dir: Vector3;
+  /** Metres from muzzle to whatever the round stopped on. */
+  dist: number;
+  /** Metres the leading edge has flown. The tail trails it by `tracerLength`. */
+  head: number;
+  alive: boolean;
+  /** Where the round stopped — `from + dir * dist`, kept for the spark. */
+  impact: Vector3;
+  /**
+   * The impact spark this round owes, spawned when the streak's head arrives
+   * and nulled so it fires once. Null for a round that stopped on nothing.
+   */
+  sparkColor: string | null;
 }
 
 interface Spark {
   mesh: Mesh;
   t: number;
 }
+
+/** Reused by the tracer update so a live streak costs no allocation. */
+const SCRATCH = new Vector3();
 
 /**
  * Hitscan shooting and the transient effects it throws off. Tracers and
@@ -81,7 +104,16 @@ export class CombatSystem {
       mesh.rotationQuaternion = Quaternion.Identity();
       mesh.isVisible = false;
       mesh.isPickable = false;
-      this.tracers.push({ mesh, life: 0 });
+      this.tracers.push({
+        mesh,
+        from: Vector3.Zero(),
+        dir: Vector3.Forward(),
+        dist: 0,
+        head: 0,
+        alive: false,
+        impact: Vector3.Zero(),
+        sparkColor: null,
+      });
     }
     for (let i = 0; i < fx.sparkPoolSize; i++) {
       const mesh = MeshBuilder.CreateSphere(
@@ -147,24 +179,43 @@ export class CombatSystem {
 
     const hitPoint = origin.add(dir.scale(hitDist));
     let killed = false;
-    if (hitTarget) {
-      killed = hitTarget.takeDamage(damage, origin);
-      this.spawnSpark(hitPoint, "#ffe680");
-    } else if (hitWall) {
-      this.spawnSpark(hitPoint, "#c8c8c8");
-    }
+    if (hitTarget) killed = hitTarget.takeDamage(damage, origin);
 
-    this.spawnTracer(muzzle, hitPoint);
+    // The DAMAGE is instant — everyone is hitscan and nothing below may gate
+    // it. The spark is not: it is handed to the tracer and spawned when the
+    // streak's head arrives, so the impact is not seen before the round that
+    // caused it gets there. At `tracerSpeed` that is up to ~0.4 s at the range
+    // cap, which is exactly how long the tell was.
+    const spark = hitTarget ? "#ffe680" : hitWall ? "#c8c8c8" : null;
+    this.spawnTracer(muzzle, hitPoint, spark);
     return { target: hitTarget, killed, hitWall };
   }
 
   update(dt: number): void {
-    // Tracers: stretch briefly then vanish.
+    // Tracers: a fixed-length streak flying from the muzzle to the impact
+    // point. The head runs out to `dist` and stops there; the tail keeps going
+    // until it catches up, so the streak emerges from the barrel and is eaten
+    // by whatever the round hit rather than popping in and out whole.
+    const fx = CONFIG.effects;
     for (const tr of this.tracers) {
-      if (tr.life > 0) {
-        tr.life -= dt;
-        if (tr.life <= 0) tr.mesh.isVisible = false;
+      if (!tr.alive) continue;
+      tr.head += fx.tracerSpeed * dt;
+      if (tr.sparkColor !== null && tr.head >= tr.dist) {
+        this.spawnSpark(tr.impact, tr.sparkColor);
+        tr.sparkColor = null;
       }
+      const tail = tr.head - fx.tracerLength;
+      if (tail >= tr.dist) {
+        tr.alive = false;
+        tr.mesh.isVisible = false;
+        continue;
+      }
+      const back = Math.max(tail, 0);
+      const len = Math.max(Math.min(tr.head, tr.dist) - back, 0.01);
+      // Pooled effect: no per-frame allocation.
+      tr.dir.scaleToRef(back + len / 2, SCRATCH);
+      tr.mesh.position.copyFrom(tr.from).addInPlace(SCRATCH);
+      tr.mesh.scaling.set(1, len, 1);
     }
 
     // Sparks: quick scale-out pops.
@@ -183,7 +234,8 @@ export class CombatSystem {
   /** Clears transient effects between rounds. */
   clearTransient(): void {
     for (const tr of this.tracers) {
-      tr.life = 0;
+      tr.alive = false;
+      tr.sparkColor = null;
       tr.mesh.isVisible = false;
     }
     for (const s of this.sparks) {
@@ -192,20 +244,38 @@ export class CombatSystem {
     }
   }
 
-  private spawnTracer(from: Vector3, to: Vector3): void {
-    const tr =
-      this.tracers.find((t) => t.life <= 0) ?? this.tracers[0];
+  /**
+   * `sparkColor` is the impact this round owes on arrival, or null if it
+   * stopped on nothing. A stolen slot (exhausted pool) drops its pending spark
+   * with the streak it belonged to, which is right: an impact whose tracer was
+   * recycled would pop with nothing visibly arriving.
+   */
+  private spawnTracer(
+    from: Vector3,
+    to: Vector3,
+    sparkColor: string | null,
+  ): void {
+    const tr = this.tracers.find((t) => !t.alive) ?? this.tracers[0];
     const delta = to.subtract(from);
-    const len = Math.max(delta.length(), 0.01);
-    tr.mesh.position.copyFrom(from.add(delta.scale(0.5)));
-    tr.mesh.scaling.set(1, len, 1);
+    const dist = Math.max(delta.length(), 0.01);
+    delta.scaleInPlace(1 / dist);
+    tr.from.copyFrom(from);
+    tr.dir.copyFrom(delta);
+    tr.dist = dist;
+    tr.head = 0;
+    tr.alive = true;
+    tr.impact.copyFrom(to);
+    tr.sparkColor = sparkColor;
+    // The direction is fixed for the whole flight, so this is set once here and
+    // only `update` moves the streak along it.
     Quaternion.FromUnitVectorsToRef(
       Vector3.Up(),
-      delta.scale(1 / len),
+      delta,
       tr.mesh.rotationQuaternion!,
     );
+    tr.mesh.position.copyFrom(from);
+    tr.mesh.scaling.set(1, 0.01, 1);
     tr.mesh.isVisible = true;
-    tr.life = CONFIG.effects.tracerLife;
   }
 
   private spawnSpark(pos: Vector3, colorHex: string): void {

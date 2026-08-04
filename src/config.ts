@@ -975,12 +975,30 @@ export const CONFIG = {
   },
 
   effects: {
-    tracerLife: 0.07,
+    /**
+     * A tracer is a short streak that FLIES, not a beam drawn muzzle-to-impact.
+     * Everyone is hitscan, so the damage has already happened by the time the
+     * streak leaves the barrel — the flight is pure presentation, and these two
+     * numbers are what stop a shot reading as a laser.
+     *
+     * `tracerLength` is the streak itself (metres of lit round). Long enough to
+     * read as a direction at 60 m, short enough that it never joins the muzzle
+     * to the target. `tracerSpeed` is well under a real 900 m/s round: at true
+     * muzzle velocity a 120 m shot crosses in 0.13 s, which at 60 fps is eight
+     * frames of a streak nobody can follow, so it degenerates back into the
+     * beam it is meant to replace.
+     */
+    tracerLength: 6,
+    tracerSpeed: 320,
     /**
      * Sized for a 16-bot firefight: everyone is hitscan, so a tracer is drawn
-     * per shot from every combatant that fires.
+     * per shot from every combatant that fires — and now each one lives for its
+     * whole flight (up to `weapon.range / tracerSpeed`, ~0.4 s) rather than a
+     * fixed 0.07 s, so several times as many are in the air at once. An
+     * exhausted pool steals the oldest slot, which shows as a streak vanishing
+     * mid-flight.
      */
-    tracerPoolSize: 64,
+    tracerPoolSize: 96,
     sparkPoolSize: 48,
   },
 
