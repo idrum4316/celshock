@@ -17,11 +17,17 @@
  * aimed pose from `sightCenter`, so a sight that ends up somewhere else is
  * still perfectly aligned, just carried differently.
  *
+ * The other number everything is measured against is `eyeDistance` — how far
+ * back the eye is held, which is what turns a length here into the angle the
+ * shooter actually gets. It lives in `CONFIG.sights`, so an optic's size and
+ * its eye relief are two halves of one decision; see `eyeDistance` below.
+ *
  * Invariants: each optic is merged into its OWN meshes rather than into the
  * weapon's, which is what lets one be swapped for another without rebuilding
  * the gun under it. Emissive parts go through `build.lit`, never `collect`.
  */
 import { MeshBuilder, Mesh, Color3, StandardMaterial, TransformNode, Vector3 } from "@babylonjs/core";
+import { CONFIG } from "../config";
 import { SIGHT_IDS, type SightId } from "./sights";
 import { FACETS, METAL, POLYMER, type SightAssembly, type WeaponBuild } from "./weaponKit";
 
@@ -40,50 +46,107 @@ export interface OpticMount {
 }
 
 /**
- * Rises above the rail. The irons sit as low as the rear ring's outer radius
- * allows — putting the aperture on the rail is the whole appeal of irons —
- * and the two tube optics stand off far enough for their housings to clear it.
+ * How far the eye sits behind a sight's own centre, in WEAPON units — the one
+ * number every size here is measured against.
+ *
+ * An optic is only ever seen through, so what matters about it is angular: the
+ * bore's half-angle at the eye is `radius / eyeDistance`, and NOTHING else
+ * about the sight picture is a length. Halve an optic and halve the distance
+ * the eye is held at, and the picture through it is identical to the pixel
+ * while the thing bolted to the weapon is half the size. That is the whole
+ * reason these are as small as they are: the sights used to be sized against
+ * an eye held a rifle's length back, which made every one of them wider than
+ * the receiver it stood on.
+ *
+ * `CONFIG.sights[id].eyeRelief` is in the CAMERA's frame and the weapon is
+ * drawn at `viewmodel.scale`, so the conversion is that scale — see
+ * `ViewModel.applyFit`, which derives the aimed pose from the same two numbers
+ * in the other direction.
  */
-const IRON_RISE = 0.061;
-const WIN_RISE = 0.101;
-const SCOPE_RISE = 0.121;
+const eyeDistance = (id: SightId): number =>
+  CONFIG.sights[id].eyeRelief / CONFIG.viewmodel.scale;
+
+/**
+ * Rises above the rail. Each is the LOWEST its own optic can be carried, and
+ * for the two tube sights the floor is the same thing: the cone the eye sees
+ * through the sight spreads with distance, and where it spreads far enough it
+ * runs onto the weapon's own top deck — the rifle's rail runs out to 0.53 with
+ * a folded iron leaf standing on the end of it. A sight lower than this puts
+ * the gun in its own picture. The irons have no such floor, because what you
+ * see under the front post through a rear aperture IS the weapon.
+ *
+ * These are therefore not free to be "realistic", and they are what is left of
+ * the old bulk: the optics themselves came down by a third to a half, the
+ * mounts under them by rather less.
+ */
+const IRON_RISE = 0.036;
+const WIN_RISE = 0.078;
+const SCOPE_RISE = 0.1;
 
 /**
  * The holo's clear bore and wall. The shooter looks PAST the wall, so every
  * millimetre of it costs sight picture — keep it near the outline width and
  * let the bore carry the size. Outer radius is `(BORE + WALL * 2) / 2`, which
  * is what the turrets and the mount stand off from.
+ *
+ * The bore is `2 * eyeDistance("holo") * tan(half-angle)`, and the half-angle
+ * is what the window is FOR — about 3.3 deg, a window a fifth of the screen
+ * high, wide enough to find a target through and small enough that the housing
+ * is not the largest thing on the weapon.
  */
-const BORE = 0.1;
-const WALL = 0.009;
+const BORE = 0.072;
+const WALL = 0.007;
 
 /**
  * The two iron stations share a bore, which is what gives the picture its
  * depth: the rear ring is a third of the eye's distance to the front one, so
  * it reads as twice the size and the front hood floats inside it.
  */
-const IRON_BORE = 0.07;
+const IRON_BORE = 0.048;
 
 /**
  * The 3.5x scope. A telescope here is a real tube the eye looks down — there
  * is no lens and no post-process, so how much of the frame is clear glass is
- * decided by the OBJECTIVE rim's angular size, and the bore has to be wide
- * enough to be worth looking through.
+ * decided by the rim's angular size, and the bore has to be wide enough to be
+ * worth looking through: `SCOPE_CONE` is the tangent of the half-angle that
+ * buys, and at these numbers the picture is a circle about two thirds of the
+ * screen high.
+ *
+ * That single number is what sizes the body, because a straight tube is the
+ * WORST shape to spend it on: a cylinder wide enough not to clip the cone at
+ * the objective is far wider than the cone needs at the eyepiece, which is
+ * exactly the drainpipe this used to be. The tube is built as `SCOPE_SECTIONS`
+ * steps instead, each only as wide as the cone is at ITS far rim — so the body
+ * flares from eyepiece to objective the way a real scope's does, and the
+ * silhouette is a scope rather than a can.
  */
-const SCOPE_BORE = 0.15;
-const SCOPE_WALL = 0.008;
+const SCOPE_CONE = 0.099;
+const SCOPE_WALL = 0.007;
+const SCOPE_SECTIONS = 3;
 /**
  * Ocular and objective, relative to `mountZ`. The tube's height and length are
- * set by ONE constraint, and it is not appearance: a straight tube's view cone
- * spreads with distance, and where it spreads far enough it runs onto the
- * weapon's own barrel — a bright muzzle device sitting inside the bottom of
- * the sight picture. `SCOPE_RISE` is high enough, and the tube long enough, to
- * keep the cone's lower edge clear of the gas block, the folded front sight
- * and the flash hider all the way out. Lower the rings or shorten the body and
- * the weapon appears in its own scope.
+ * set by ONE constraint, and it is not appearance: the view cone runs onto the
+ * weapon's own rail and barrel where it spreads far enough, putting a lit
+ * muzzle device inside the bottom of the sight picture. `SCOPE_RISE` is high
+ * enough to keep the cone's lower edge clear of the rail, the gas block and
+ * the flash hider all the way out, and the scope's omission of the folded
+ * front iron is the same constraint again. Lower the rings and the weapon
+ * appears in its own scope.
+ *
+ * Length is the one dimension that is NOT free to shrink with the rest: the
+ * far rim's distance from the eye is what the bore is divided by, so a shorter
+ * tube is a wider one. This is as long as it can be without reaching past the
+ * charging handle.
  */
-const SCOPE_OCULAR_DZ = -0.15;
-const SCOPE_OBJECTIVE_DZ = 0.14;
+const SCOPE_OCULAR_DZ = -0.13;
+const SCOPE_OBJECTIVE_DZ = 0.12;
+
+/**
+ * The clear bore a scope section ending `dz` from the sight centre must carry,
+ * so that its far rim sits exactly on the view cone.
+ */
+const scopeBore = (dz: number): number =>
+  2 * SCOPE_CONE * (eyeDistance("scope") + dz - SCOPE_OCULAR_DZ);
 
 /**
  * Builds all three optics onto one weapon and returns them keyed by id, with
@@ -112,14 +175,14 @@ export function buildOptics(
    */
   const foldedIrons = (front: boolean): void => {
     const r = mount.railTop;
-    b.box("rsBase", METAL, 0.04, 0.02, 0.036, 0, r + 0.002, mount.ironRearZ + 0.045);
-    b.box("rsLeaf", METAL, 0.032, 0.012, 0.07, 0, r + 0.01, mount.ironRearZ);
+    b.box("rsBase", METAL, 0.034, 0.016, 0.032, 0, r + 0.002, mount.ironRearZ + 0.042);
+    b.box("rsLeaf", METAL, 0.028, 0.01, 0.062, 0, r + 0.008, mount.ironRearZ);
     // The front pair is the last thing the scope's view cone runs onto — see
     // SCOPE_OCULAR_DZ. A weapon wearing a scope this size is set up around it
     // rather than over a set of irons, so it simply does not carry them.
     if (!front) return;
-    b.box("fsBase", METAL, 0.038, 0.02, 0.03, 0, r + 0.002, mount.ironFrontZ - 0.048);
-    b.box("fsLeaf", METAL, 0.03, 0.009, 0.07, 0, r + 0.0085, mount.ironFrontZ);
+    b.box("fsBase", METAL, 0.032, 0.016, 0.028, 0, r + 0.002, mount.ironFrontZ - 0.044);
+    b.box("fsLeaf", METAL, 0.026, 0.008, 0.062, 0, r + 0.007, mount.ironFrontZ);
   };
 
   /**
@@ -137,20 +200,20 @@ export function buildOptics(
     const baseH = floor - mount.railTop;
     const baseY = (mount.railTop + floor) / 2;
     // Rear: a ring standing just clear of the rail on its own base.
-    b.box("ironRearBase", METAL, 0.032, baseH, 0.03, 0, baseY, mount.ironRearZ);
-    b.shell("ironRearRing", METAL, IRON_BORE, 0.006, 0.012, ironY, mount.ironRearZ, 10);
+    b.box("ironRearBase", METAL, 0.026, baseH, 0.026, 0, baseY, mount.ironRearZ);
+    b.shell("ironRearRing", METAL, IRON_BORE, 0.0055, 0.01, ironY, mount.ironRearZ, 10);
     // Front: the same ring as a hood, with the post rising from its floor to
     // the axis. The bead is the aim point — a tritium dot, and the only thing
     // on this sight that is visible against a dark treeline.
-    b.box("ironFrontBase", METAL, 0.034, baseH, 0.032, 0, baseY, mount.ironFrontZ);
-    b.shell("ironFrontHood", METAL, IRON_BORE, 0.005, 0.014, ironY, mount.ironFrontZ, 10);
+    b.box("ironFrontBase", METAL, 0.028, baseH, 0.028, 0, baseY, mount.ironFrontZ);
+    b.shell("ironFrontHood", METAL, IRON_BORE, 0.005, 0.012, ironY, mount.ironFrontZ, 10);
     const postH = IRON_BORE / 2;
-    b.box("ironPost", METAL, 0.006, postH, 0.008, 0, ironY - postH / 2, mount.ironFrontZ);
+    b.box("ironPost", METAL, 0.005, postH, 0.007, 0, ironY - postH / 2, mount.ironFrontZ);
     b.merge("iron", node);
     const bead = b.lit(
       MeshBuilder.CreateSphere(
         `${prefix}_ironBead`,
-        { diameter: 0.0065, segments: 6 },
+        { diameter: 0.005, segments: 6 },
         b.scene,
       ),
       node,
@@ -170,46 +233,65 @@ export function buildOptics(
    */
   const buildHolo = (node: TransformNode): Vector3 => {
     foldedIrons(true);
-    const footY = mount.railTop + 0.005;
-    b.box("opticMount", POLYMER, 0.062, 0.045, 0.13, 0, footY + 0.0165, winZ);
-    b.box("opticFoot", METAL, 0.07, 0.012, 0.134, 0, footY, winZ);
-    b.box("opticLever", METAL, 0.018, 0.03, 0.05, 0.038, footY + 0.011, winZ + 0.026);
-    b.pin("opticNut", METAL, 0.012, 0.076, 0, footY + 0.011, winZ - 0.042);
+    // Turrets and battery cap, standing off the housing's outer radius.
+    const rOut = BORE / 2 + WALL;
+    // Foot plate on the rail, and a saddle from it to the housing's underside.
+    // The saddle is whatever is LEFT between the two, not a size of its own:
+    // at this rise it is a low mount rather than the riser block the old
+    // shoulder-height housing needed, and hard-coding a height for it would
+    // put the tube back up in the air or bury it in the receiver.
+    const footY = mount.railTop + 0.004;
+    const saddleFrom = mount.railTop + 0.008;
+    const saddleTo = winY - rOut;
+    b.box("opticFoot", METAL, 0.056, 0.01, 0.104, 0, footY, winZ);
+    b.box(
+      "opticMount",
+      POLYMER,
+      0.048,
+      saddleTo - saddleFrom,
+      0.096,
+      0,
+      (saddleFrom + saddleTo) / 2,
+      winZ,
+    );
+    b.box("opticLever", METAL, 0.014, 0.022, 0.038, 0.031, footY + 0.006, winZ + 0.02);
+    b.pin("opticNut", METAL, 0.01, 0.062, 0, footY + 0.006, winZ - 0.032);
     // The housing: a shell of `FACETS` slabs about the sight axis, with a
     // heavier rim at each end. The bore is the sight picture — the rims are
     // sized OUTWARD from it so a wider rim never eats into what you can see.
-    b.shell("sightTube", POLYMER, BORE, WALL, 0.052, winY, winZ);
-    b.shell("sightRimF", POLYMER, BORE + 0.004, 0.013, 0.014, winY, winZ + 0.031);
-    b.shell("sightRimR", POLYMER, BORE + 0.004, 0.013, 0.014, winY, winZ - 0.031);
-    // Turrets and battery cap, standing off the housing's outer radius.
-    const rOut = BORE / 2 + WALL;
-    b.pin("elevTurret", METAL, 0.03, 0.018, 0, winY + rOut + 0.009, winZ, "y");
-    b.pin("elevCap", METAL, 0.022, 0.008, 0, winY + rOut + 0.022, winZ, "y");
-    b.pin("windTurret", METAL, 0.03, 0.018, rOut + 0.009, winY, winZ, "x");
-    b.pin("battery", METAL, 0.026, 0.016, -(rOut + 0.008), winY - 0.008, winZ, "x");
+    b.shell("sightTube", POLYMER, BORE, WALL, 0.042, winY, winZ);
+    b.shell("sightRimF", POLYMER, BORE + 0.003, 0.009, 0.011, winY, winZ + 0.024);
+    b.shell("sightRimR", POLYMER, BORE + 0.003, 0.009, 0.011, winY, winZ - 0.024);
+    b.pin("elevTurret", METAL, 0.022, 0.013, 0, winY + rOut + 0.006, winZ, "y");
+    b.pin("elevCap", METAL, 0.016, 0.006, 0, winY + rOut + 0.016, winZ, "y");
+    b.pin("windTurret", METAL, 0.022, 0.013, rOut + 0.006, winY, winZ, "x");
+    b.pin("battery", METAL, 0.019, 0.012, -(rOut + 0.006), winY - 0.006, winZ, "x");
     b.merge("holo", node);
 
     // Reticle: emissive ring + center dot.
+    // Scaled with the bore, so the ring subtends what it always did: a reticle
+    // is an angle, and one left at its old size in a smaller window would fill
+    // the picture it is supposed to sit in.
     const ring = b.lit(
       MeshBuilder.CreateTorus(
         `${prefix}_reticleRing`,
-        { diameter: 0.022, thickness: 0.0028, tessellation: 24 },
+        { diameter: 0.016, thickness: 0.002, tessellation: 24 },
         b.scene,
       ),
       node,
     );
     ring.rotation.x = Math.PI / 2; // face down the barrel axis
-    ring.position.set(0, winY, winZ - 0.004);
+    ring.position.set(0, winY, winZ - 0.003);
 
     const dot = b.lit(
       MeshBuilder.CreateSphere(
         `${prefix}_reticleDot`,
-        { diameter: 0.0045, segments: 6 },
+        { diameter: 0.0032, segments: 6 },
         b.scene,
       ),
       node,
     );
-    dot.position.set(0, winY, winZ - 0.004);
+    dot.position.set(0, winY, winZ - 0.003);
 
     // Faint holo glass filling the bore (own material — alpha must not leak
     // into the shared emissive cache). A disc, not a quad: the corners of a
@@ -226,7 +308,7 @@ export function buildOptics(
       b.scene,
     );
     glass.parent = node;
-    glass.position.set(0, winY, winZ + 0.012);
+    glass.position.set(0, winY, winZ + 0.009);
     glass.material = glassMat;
     // noGlow: the GlowLayer would turn the faint tint into a cyan haze that
     // obscures the sight picture.
@@ -250,73 +332,94 @@ export function buildOptics(
     foldedIrons(false);
     const ocularZ = winZ + SCOPE_OCULAR_DZ;
     const objectiveZ = winZ + SCOPE_OBJECTIVE_DZ;
-    const rOut = SCOPE_BORE / 2 + SCOPE_WALL;
-    const bodyLen = objectiveZ - ocularZ;
-    const midZ = (ocularZ + objectiveZ) / 2;
-    b.shell("scopeTube", POLYMER, SCOPE_BORE, SCOPE_WALL, bodyLen, scopeY, midZ);
-    // Eyepiece and objective bell, both sized outward from the bore so
-    // neither can narrow the sight picture.
-    b.shell("scopeOcular", POLYMER, SCOPE_BORE + 0.006, 0.014, 0.018, scopeY, ocularZ - 0.005);
-    b.shell("scopeDiopter", METAL, SCOPE_BORE + 0.004, 0.011, 0.012, scopeY, ocularZ + 0.03, 10);
-    b.shell("scopeBell", POLYMER, SCOPE_BORE + 0.012, 0.01, 0.03, scopeY, objectiveZ + 0.015);
-    // Two clamp rings, on bases tall enough to bridge the gap the objective
-    // needs (see SCOPE_RISE) — a big front lens is exactly why a scope stands
-    // off its rail as far as this one does.
-    // The base runs from a hair under the rail to the underside of its own
-    // clamp ring, so the two meet with no seam and no overlap however high
-    // this weapon carries its rail.
+    const seg = (SCOPE_OBJECTIVE_DZ - SCOPE_OCULAR_DZ) / SCOPE_SECTIONS;
+    // The body, as steps that each just clear the cone at their own far rim.
+    // A section is limited by that rim and by nothing else — its near end is
+    // always wider than the cone needs there — so the staircase circumscribes
+    // the cone and the sight picture is the last section's.
+    // A section's outer radius is its FAR rim's — which is the radius the
+    // whole section carries, so anything clamped to or standing on the tube at
+    // `dz` has to be sized against the section `dz` falls in, not against the
+    // cone where it happens to sit.
+    const outerAt = (dz: number): number => {
+      const i = Math.min(
+        SCOPE_SECTIONS,
+        Math.max(1, Math.ceil((dz - SCOPE_OCULAR_DZ) / seg)),
+      );
+      return scopeBore(SCOPE_OCULAR_DZ + i * seg) / 2 + SCOPE_WALL;
+    };
+    for (let i = 0; i < SCOPE_SECTIONS; i++) {
+      const far = SCOPE_OCULAR_DZ + seg * (i + 1);
+      b.shell(
+        "scopeTube",
+        POLYMER,
+        scopeBore(far),
+        SCOPE_WALL,
+        seg,
+        scopeY,
+        winZ + far - seg / 2,
+      );
+    }
+    const rOcular = outerAt(SCOPE_OCULAR_DZ);
+    const rObjective = outerAt(SCOPE_OBJECTIVE_DZ);
+    // Eyepiece and objective bell, both sized outward from their own section's
+    // bore so neither can narrow the sight picture.
+    b.shell("scopeOcular", POLYMER, rOcular * 2, 0.012, 0.016, scopeY, ocularZ - 0.004);
+    b.shell("scopeDiopter", METAL, rOcular * 2, 0.009, 0.01, scopeY, ocularZ + 0.026, 10);
+    b.shell("scopeBell", POLYMER, rObjective * 2, 0.009, 0.026, scopeY, objectiveZ + 0.012);
+    // Two clamp rings, each around the section it lands on, on bases tall
+    // enough to bridge the gap the cone needs (see SCOPE_RISE) — clearing the
+    // weapon's own rail is why a scope stands off as far as this one does.
+    // A base runs from a hair under the rail to the underside of its own clamp
+    // ring, so the two meet with no seam and no overlap however high this
+    // weapon carries its rail.
     const baseBottom = mount.railTop - 0.003;
-    const baseTop = scopeY - rOut - 0.008;
-    const ringBaseH = baseTop - baseBottom;
-    for (const dz of [-0.04, 0.12] as const) {
+    for (const dz of [-0.02, 0.085] as const) {
+      const rRing = outerAt(dz);
+      const baseTop = scopeY - rRing - 0.007;
       b.box(
         "scopeRingBase",
         METAL,
-        0.05,
-        ringBaseH,
-        0.028,
+        0.042,
+        baseTop - baseBottom,
+        0.024,
         0,
         (baseBottom + baseTop) / 2,
         winZ + dz,
       );
-      b.shell(
-        "scopeRing",
-        METAL,
-        SCOPE_BORE + SCOPE_WALL * 2,
-        0.008,
-        0.024,
-        scopeY,
-        winZ + dz,
-        10,
-      );
+      b.shell("scopeRing", METAL, rRing * 2, 0.007, 0.02, scopeY, winZ + dz, 10);
     }
-    const turretZ = winZ + 0.01;
-    b.pin("scopeElev", METAL, 0.034, 0.02, 0, scopeY + rOut + 0.01, turretZ, "y");
-    b.pin("scopeElevCap", METAL, 0.024, 0.008, 0, scopeY + rOut + 0.024, turretZ, "y");
-    b.pin("scopeWind", METAL, 0.034, 0.02, rOut + 0.01, scopeY, turretZ, "x");
-    b.pin("scopeParallax", METAL, 0.028, 0.016, -(rOut + 0.008), scopeY, turretZ, "x");
+    const turretZ = winZ + 0.005;
+    const rTurret = outerAt(0.005);
+    b.pin("scopeElev", METAL, 0.026, 0.015, 0, scopeY + rTurret + 0.007, turretZ, "y");
+    b.pin("scopeElevCap", METAL, 0.018, 0.006, 0, scopeY + rTurret + 0.018, turretZ, "y");
+    b.pin("scopeWind", METAL, 0.026, 0.015, rTurret + 0.007, scopeY, turretZ, "x");
+    b.pin("scopeParallax", METAL, 0.021, 0.012, -(rTurret + 0.006), scopeY, turretZ, "x");
     b.merge("scope", node);
 
     // Duplex reticle: four arms in from the tube wall, and a centre dot. Built
     // as one merged emissive mesh — five separate draws for a crosshair is
     // five too many on the one model that is always on screen.
-    const retZ = objectiveZ - 0.07;
-    const armIn = 0.016;
-    const armOut = SCOPE_BORE / 2 - 0.007;
+    // The arms run to just inside the CONE at the reticle's own depth, not to
+    // the tube wall beside it: the visible circle is the cone's, and a wall
+    // this far up the flare is well outside it.
+    const retZ = objectiveZ - 0.06;
+    const armIn = 0.011;
+    const armOut = SCOPE_CONE * (eyeDistance("scope") + retZ - ocularZ) - 0.004;
     const armLen = armOut - armIn;
     const armMid = (armIn + armOut) / 2;
     const bars: Mesh[] = [];
     for (const side of [-1, 1] as const) {
       const v = MeshBuilder.CreateBox(
         `${prefix}_scopeRetV`,
-        { width: 0.0022, height: armLen, depth: 0.0015 },
+        { width: 0.0017, height: armLen, depth: 0.0012 },
         b.scene,
       );
       v.position.set(0, scopeY + side * armMid, retZ);
       bars.push(v);
       const h = MeshBuilder.CreateBox(
         `${prefix}_scopeRetH`,
-        { width: armLen, height: 0.0022, depth: 0.0015 },
+        { width: armLen, height: 0.0017, depth: 0.0012 },
         b.scene,
       );
       h.position.set(side * armMid, scopeY, retZ);
@@ -324,7 +427,7 @@ export function buildOptics(
     }
     const centre = MeshBuilder.CreateSphere(
       `${prefix}_scopeRetDot`,
-      { diameter: 0.004, segments: 6 },
+      { diameter: 0.003, segments: 6 },
       b.scene,
     );
     centre.position.set(0, scopeY, retZ);

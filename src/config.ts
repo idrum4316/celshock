@@ -887,8 +887,19 @@ export const CONFIG = {
     iron: {
       name: "Iron",
       magnification: 1.35,
-      /** Distance from the eye to the sight's own eye reference, aimed (m). */
-      eyeRelief: 0.42,
+      /**
+       * Distance from the eye to the sight's own eye reference, aimed (m).
+       *
+       * This is half of a PAIR — `optics.ts` measures every dimension of the
+       * sight against it, so the two only mean anything together. What the
+       * eye sees through a sight is an angle: shorten this and shrink the
+       * optic by the same factor, and the sight picture is identical while
+       * the thing on the weapon is smaller. That is exactly what was done to
+       * all three, which had been sized for an eye held so far back that the
+       * optics came out wider than the receiver they stood on. Changing one
+       * of the two alone re-sizes the picture instead.
+       */
+      eyeRelief: 0.33,
       /** Multiplier on `camera.adsBlendSpeed` — how fast it comes up. */
       adsSpeedMult: 1.2,
     },
@@ -896,7 +907,7 @@ export const CONFIG = {
     holo: {
       name: "Holo",
       magnification: 1.6,
-      eyeRelief: 0.52,
+      eyeRelief: 0.38,
       adsSpeedMult: 1,
     },
     /**
@@ -910,12 +921,17 @@ export const CONFIG = {
       /**
        * Short, and that is what makes it a scope rather than a pipe. The eye
        * looks down a real hollow tube here, so how much of the frame is clear
-       * is set by the OBJECTIVE rim's angular size — pull the eye back and
-       * the far rim shrinks until the sight picture is a keyhole. Close in,
-       * the near rim passes off the top and bottom of the screen and what is
-       * left is a magnified circle in a dark surround.
+       * is set by the far rim's angular size — pull the eye back and the rim
+       * shrinks until the sight picture is a keyhole, or the tube has to grow
+       * to hold it, which is what made this one a drainpipe. Close in, the
+       * near rim passes off the top and bottom of the screen and what is left
+       * is a magnified circle in a dark surround.
+       *
+       * The floor under it is the camera's near plane (`CameraSystem` sets
+       * 0.05): this is scaled by `zoomComp` before it becomes a stand-off, so
+       * the eyepiece sits about 0.07 m out and any less would clip it open.
        */
-      eyeRelief: 0.28,
+      eyeRelief: 0.17,
       adsSpeedMult: 0.75,
     },
   },

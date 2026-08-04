@@ -448,12 +448,32 @@ Six things are load-bearing:
   exempt: the weapon turns about its own root, so the displacement a given
   angle produces already scales with the model.
 - **The scope is a real hollow tube, so its own weapon can get into the
-  picture.** A straight tube's view cone spreads with distance and runs onto the
-  barrel — a lit muzzle device sitting inside the sight picture. The tube's
-  height above the rail, its length and the scope's omission of the folded front
-  iron are all set by that one constraint, not by looks. How much of the frame
-  is clear is set by the *objective* rim's angular size, which is why a long eye
-  relief turns the sight picture into a keyhole.
+  picture.** A view cone spreads with distance and runs onto the barrel — a lit
+  muzzle device sitting inside the sight picture. The tube's height above the
+  rail, its length and the scope's omission of the folded front iron are all set
+  by that one constraint, not by looks. How much of the frame is clear is set by
+  the far rim's angular size, which is why a long eye relief turns the sight
+  picture into a keyhole.
+- **An optic's size and its eye relief are ONE number, and the pair is why the
+  sights are as small as they are.** Everything the eye gets from a sight is
+  angular — the bore's half-angle at the eye — so halving an optic *and* the
+  distance the eye is held at leaves the picture identical to the pixel while
+  the thing bolted to the weapon is half the size. `optics.ts` therefore
+  measures every dimension against `eyeDistance(id)`, which is
+  `CONFIG.sights[id].eyeRelief / viewmodel.scale`, and changing one of the two
+  alone re-sizes the picture instead of the sight. The optics were originally
+  sized for an eye held a rifle's length back, which is what made every one of
+  them wider than the receiver it stood on. Two floors bound how far this goes:
+  the camera's near plane (`minZ` 0.05, against a stand-off of `eyeRelief *
+  zoomComp` — the scope's 0.17 buys ~0.02 m of margin) and the view cone's
+  clearance over the weapon's own rail, which is what the rises are.
+- **A straight tube is the worst shape to spend the cone on.** A cylinder wide
+  enough not to clip the cone at the objective is far wider than the cone needs
+  at the eyepiece, which is how the scope became a drainpipe. It is built as
+  `SCOPE_SECTIONS` steps instead, each only as wide as the cone is at *its* far
+  rim, so the body flares from eyepiece to objective the way a real one does.
+  Anything clamped to or standing on the tube is sized by `outerAt`, which
+  reports the section's radius rather than the cone's where it happens to sit.
 
 **The optics are built against the weapon, not for it.** `optics.ts` takes an
 `OpticMount` — the height of that weapon's rail, where along it the sight sits,
