@@ -82,6 +82,11 @@ have already cost time:
   a real offset that decays over several seconds at headless frame rates, and
   reading through it looks exactly like a misaligned sight. Watch it fall (it
   tracks `player.view.swayX`) rather than trusting one sample.
+  **Alignment is not occlusion, and only the second question needs a picture**:
+  a sight can read a perfect zero on both cross axes and still be looking at
+  the weapon's own stock, which is exactly what the DMR's irons did.
+  `optics.ts`'s `ironSightFloor` is what keeps geometry out of the aperture; a
+  screenshot at `adsBlend === 1` is what confirms it.
 - The muzzle flash is unhittable at 2 fps (`gunfeel.flashTime` is 0.05 s of game
   time); force it with `player.flashRoot.setEnabled(true)` instead.
 - Getting into `playing` takes an indeterminate number of Enter presses: the menu
@@ -519,6 +524,20 @@ sits no further out than the rifle's despite a longer receiver. A marksman
 rifle wants the longest sight radius it can get; what it can actually have is
 whatever leaves the sight picture clear, and the extra radius therefore comes
 out of the rear station instead. `DmrModel.ts`'s `MOUNT` documents both.
+
+**The irons bound the weapon from the other end too, and that is what the
+stock's heights are.** An aperture's eye relief is over half a receiver's
+length, so the eye sits BEHIND the butt: everything on a stock stands between
+the eye and the rear sight, in the one part of the picture there is no looking
+around. `optics.ts` exports `ironSightFloor` — the underside of the cone from
+the eye to the rear ring's bore — and `DmrModel` derives its comb from it, with
+the butt and the spine hung off the comb in turn. A scope's cheek riser over
+that line does not clip the sight picture, it *is* the sight picture, which is
+what the DMR shipped with. A comb is adjustable precisely because irons and
+glass want the cheek at different heights; this is it at the bottom of its
+travel. Forward of the rear station the same cone runs onto the rail and the
+front sight's base, and that is correct — what you see under the post through
+an aperture is meant to be the weapon.
 
 The screen itself (`src/ui/LoadoutScreen.ts`) owns its own DOM under `#hud` and
 is a `loadout` game state — a lid over `menu` or `deploy` that remembers which

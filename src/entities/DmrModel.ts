@@ -10,7 +10,7 @@
  */
 import { Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../shaders/CelShader";
-import { buildOptics, type OpticMount } from "./optics";
+import { buildOptics, ironSightFloor, type OpticMount } from "./optics";
 import { BODY, METAL, POLYMER, RUBBER, WeaponBuild, type WeaponParts } from "./weaponKit";
 
 /**
@@ -39,6 +39,44 @@ const MOUNT: OpticMount = {
   ironRearZ: -0.22,
   ironFrontZ: 0.53,
 };
+
+/**
+ * The stock's heights, and only the first of them is a choice.
+ *
+ * The eye behind this weapon sits BEHIND its own butt — an aperture's eye
+ * relief is over half a receiver's length — so the comb, the butt plate and
+ * everything else back here stands between the eye and the rear sight, in the
+ * one part of the sight picture the shooter cannot look around. A comb over
+ * the line simply fills the aperture, and a marksman rifle wearing a scope's
+ * cheek riser does exactly that: this comb topped out ABOVE the sight axis
+ * rather than under it, and the irons showed a wall of polymer and nothing
+ * else.
+ *
+ * So the comb's top is not authored, it is `ironSightFloor` at the comb's own
+ * front edge — the lowest point of the aperture's cone where the comb is
+ * nearest to it — less a few millimetres of daylight. That is the honest
+ * reading of the part as well as the workable one: a comb is adjustable
+ * because irons and glass want the cheek at different heights, and this is it
+ * at the bottom of its travel, which is the setting the back-up irons are for.
+ * The posts, the gap under them and the locking knob all survive, so the
+ * silhouette cue survives with it.
+ *
+ * Everything else follows from that one number, in this order: the comb's
+ * underside sets where the stock's spine can run, and the butt is dropped to
+ * just under the comb, because a butt standing proud of the cheek piece is a
+ * stock nobody could get behind. Raise the rail or re-rise the irons and the
+ * whole assembly comes with them.
+ */
+const COMB_FRONT_Z = -0.345;
+const COMB_TOP = ironSightFloor(MOUNT, COMB_FRONT_Z) - 0.006;
+const COMB_PAD_H = 0.012;
+const COMB_H = 0.032;
+const COMB_BOTTOM = COMB_TOP - COMB_PAD_H - COMB_H;
+/** Top of the stock's spine: the comb's underside, less the gap it rides on. */
+const SPINE_TOP = COMB_BOTTOM - 0.02;
+/** Centre line of the butt assembly — plate, pad, grooves, toe and sling. */
+const BUTT_H = 0.2;
+const BUTT_Y = COMB_TOP - 0.014 - BUTT_H / 2;
 
 /**
  * Where each hand grips, in weapon-local units. The support hand sits further
@@ -211,28 +249,42 @@ export function buildDmr(
   // --- fixed stock: adjustable comb on posts, adjustable pad on rails ---
   // Fixed rather than folding, and that is the point of it: the two things a
   // marksman rifle adjusts are where the cheek sits and how far back the pad
-  // is, and both are visible from inside the weapon's own silhouette.
+  // is, and both are visible from inside the weapon's own silhouette. Every
+  // height here is derived — see COMB_TOP, which is the sight picture's floor
+  // rather than a number anybody liked the look of.
   b.box("stockBlock", BODY, 0.08, 0.105, 0.07, 0, 0.012, -0.31);
-  b.box("stockTop", POLYMER, 0.06, 0.05, 0.24, 0, 0.05, -0.42);
-  b.box("stockBottom", POLYMER, 0.058, 0.04, 0.22, 0, -0.06, -0.41);
-  for (const dz of [-0.36, -0.47] as const) {
-    b.pin("combPost", METAL, 0.012, 0.05, 0, 0.095, dz, "y");
+  b.box("stockTop", POLYMER, 0.06, 0.04, 0.24, 0, SPINE_TOP - 0.02, -0.42);
+  b.box("stockBottom", POLYMER, 0.058, 0.04, 0.22, 0, BUTT_Y - 0.065, -0.41);
+  // The posts stand in the daylight between the spine and the comb, which is
+  // the whole read: a cheek piece carried ON something, not moulded into the
+  // stock. Long enough at each end to be housed rather than balanced.
+  for (const dz of [-0.385, -0.49] as const) {
+    b.pin(
+      "combPost",
+      METAL,
+      0.012,
+      COMB_BOTTOM - SPINE_TOP + 0.028,
+      0,
+      (SPINE_TOP + COMB_BOTTOM) / 2,
+      dz,
+      "y",
+    );
   }
-  b.box("comb", POLYMER, 0.056, 0.032, 0.18, 0, 0.115, -0.415);
-  b.box("combPad", RUBBER, 0.058, 0.012, 0.18, 0, 0.137, -0.415);
-  b.box("combKnob", METAL, 0.014, 0.016, 0.016, 0.03, 0.1, -0.415);
+  b.box("comb", POLYMER, 0.056, COMB_H, 0.175, 0, COMB_TOP - COMB_PAD_H - COMB_H / 2, -0.4325);
+  b.box("combPad", RUBBER, 0.058, COMB_PAD_H, 0.175, 0, COMB_TOP - COMB_PAD_H / 2, -0.4325);
+  b.box("combKnob", METAL, 0.014, 0.016, 0.016, 0.03, COMB_BOTTOM + 0.014, -0.385);
   for (const side of [-1, 1] as const) {
-    b.tube("padRail", METAL, 0.014, 0.014, 0.1, side * 0.026, -0.02, -0.48);
+    b.tube("padRail", METAL, 0.014, 0.014, 0.1, side * 0.026, BUTT_Y - 0.025, -0.48);
   }
-  b.box("buttPlate", POLYMER, 0.072, 0.2, 0.04, 0, 0.005, -0.53);
-  b.box("buttPad", RUBBER, 0.074, 0.185, 0.022, 0, 0.005, -0.558);
+  b.box("buttPlate", POLYMER, 0.072, BUTT_H, 0.04, 0, BUTT_Y, -0.53);
+  b.box("buttPad", RUBBER, 0.074, 0.185, 0.022, 0, BUTT_Y, -0.558);
   for (let i = 0; i < 2; i++) {
-    b.box("padGroove", BODY, 0.076, 0.008, 0.02, 0, -0.045 - i * 0.03, -0.56);
+    b.box("padGroove", BODY, 0.076, 0.008, 0.02, 0, BUTT_Y - 0.05 - i * 0.03, -0.56);
   }
   // Toe hook under the butt — where the off hand goes on a supported shot, and
   // the last silhouette cue that this weapon expects to be shot from prone.
-  b.box("toeHook", METAL, 0.02, 0.052, 0.032, 0, -0.096, -0.5);
-  b.box("slingRear", METAL, 0.026, 0.03, 0.014, -0.042, -0.032, -0.45);
+  b.box("toeHook", METAL, 0.02, 0.052, 0.032, 0, BUTT_Y - 0.101, -0.5);
+  b.box("slingRear", METAL, 0.026, 0.03, 0.014, -0.042, BUTT_Y - 0.037, -0.45);
 
   // Merged before any optic is built, so a sight's parts can never end up
   // inside the weapon's colour groups.

@@ -149,6 +149,33 @@ const scopeBore = (dz: number): number =>
   2 * SCOPE_CONE * (eyeDistance("scope") + dz - SCOPE_OCULAR_DZ);
 
 /**
+ * The height a weapon's own geometry must stay UNDER at depth `z`, if it is not
+ * to eat into the iron sight picture.
+ *
+ * What the eye gets through an aperture is the cone from the eye to the rear
+ * ring's bore, and anything standing into that cone between the two takes a
+ * bite out of the picture — enough of it and the picture is gone. The eye sits
+ * `eyeDistance("iron")` behind the rear station (that is exactly what
+ * `ViewModel.applyFit` puts it at), so the cone's lower edge is the straight
+ * line from there to the bore's lower rim; this is that line at `z`.
+ *
+ * Exported because a stock is the one part of a weapon that lives BEHIND its
+ * own rear sight, which makes it the one part whose height is not free — see
+ * the comb in `DmrModel`, which is what this was written for. Forward of the
+ * rear station the same cone runs onto the rail and the front sight's own
+ * base, and that is not a fault: what you see under the post through an
+ * aperture is meant to be the weapon.
+ */
+export function ironSightFloor(mount: OpticMount, z: number): number {
+  const eyeBack = eyeDistance("iron");
+  return (
+    mount.railTop +
+    IRON_RISE -
+    (IRON_BORE / 2) * ((z - mount.ironRearZ + eyeBack) / eyeBack)
+  );
+}
+
+/**
  * Builds all three optics onto one weapon and returns them keyed by id, with
  * every mesh they added.
  *
