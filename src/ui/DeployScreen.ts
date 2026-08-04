@@ -63,14 +63,20 @@ export class DeployScreen {
         <div class="hull"></div>
         <canvas id="deploy-map" width="620" height="620"></canvas>
       </div>
+      <!-- Every input hint on this screen lives in one row, and the buttons
+           below carry only what they do. The kit button used to spell its own
+           key out, which cost the row more width than it had: the map is
+           height-led, so on a 768-tall laptop the two buttons and a long
+           weapon name did not fit across it. -->
+
       <div id="deploy-status"></div>
       <div id="deploy-nav">
         <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd class="pad">D-pad</kbd> choose position</span>
-        <span>Click a marker on the map</span>
+        <span><kbd>L</kbd><kbd class="pad">Y</kbd> loadout</span>
       </div>
       <div id="deploy-actions">
         <button id="deploy-go"><b>Deploy</b><i>Enter &middot; A</i></button>
-        <button id="deploy-kit"><span class="lbl">Loadout</span><b></b><i>L / Y</i></button>
+        <button id="deploy-kit"><span class="lbl">Loadout</span><b></b></button>
       </div>
     `;
     document.getElementById("hud")!.appendChild(this.root);

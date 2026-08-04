@@ -655,10 +655,18 @@ export class HUD {
    * the player's hands, which is the part of the old row that was worth
    * keeping on the menu.
    *
+   * The two rows are ONE grid, not two centred rows. They are the same shape —
+   * label, control, hint — and centring each independently put their labels,
+   * their controls and their hints at three different x each, which is most of
+   * what made this screen read as a pile rather than a panel. `.ov-settings`
+   * owns the columns and each row is `display: contents`, so the label column
+   * ends on one edge and both controls begin on the next.
+   *
    * `#overlay` is inside a `pointer-events: none` HUD and does not opt back in
-   * (only `#deploy` does), so the difficulty row and the kit button ask for
-   * pointer events on themselves alone — the rest of the overlay stays inert
-   * and a stray click can never be mistaken for a UI action.
+   * (only `#deploy` does), so the individual CONTROLS ask for pointer events —
+   * the tier buttons and the kit button, never the rows around them. The
+   * labels, the hints and the grid's own gaps stay inert, so a click that
+   * lands between two buttons is still the confirm that starts the round.
    */
   showMenu(
     difficulties: readonly string[],
@@ -689,15 +697,17 @@ export class HUD {
         <h1>HOLLOWMERE</h1>
         <p class="tagline">Conquest &mdash; take and hold five points against the Blight</p>
       </div>
-      <div class="difficulty">
-        <span class="label">Enemy skill</span>
-        <div class="tiers">${tiers}</div>
-        <span class="hint">&larr; &rarr; / D-pad</span>
-      </div>
-      <div class="kit">
-        <span class="label">Loadout</span>
-        <button class="kit-open"><b>${kit}</b><i>Change kit</i></button>
-        <span class="hint">L / Y</span>
+      <div class="ov-settings">
+        <div class="difficulty">
+          <span class="label">Enemy skill</span>
+          <div class="tiers">${tiers}</div>
+          <span class="hint">&larr; &rarr; / D-pad</span>
+        </div>
+        <div class="kit">
+          <span class="label">Loadout</span>
+          <button class="kit-open"><b>${kit}</b><i>Change kit</i></button>
+          <span class="hint">L / Y</span>
+        </div>
       </div>
       <button class="ov-start"><b>Deploy</b><i>Enter &middot; A &middot; Start</i></button>
       <div class="ov-controls frame">

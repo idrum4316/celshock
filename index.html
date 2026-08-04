@@ -414,7 +414,22 @@
            screen has no scroll to fall back on. */
         gap: 14px;
         pointer-events: auto;
+        /* The map's size, hoisted so its siblings can share it. Everything
+           below the map used to size itself to its own contents and centre on
+           that, so the status line, the hints and the buttons each floated at
+           their own width under a map none of them touched. One width, four
+           shared edges, and the column reads as a panel with a map in it.
+
+           Divided by `--ov-scale` because `vh` is the VIEWPORT's, while this
+           box is `100% / scale` across and then scaled back down — so on a
+           short viewport a raw `56vh` was scaled a second time and the map came
+           out at a quarter of the height it asked for. At scale 1, which is
+           every desktop, the divide is the identity. */
+        --map: calc(min(56vh, 60vw) / var(--ov-scale));
       }
+      #deploy-status,
+      #deploy-nav,
+      #deploy-actions { width: var(--map); }
       #deploy h2 {
         position: relative;
         font-size: 14px;
@@ -445,8 +460,8 @@
          all fixed-height, so the viewport's height is the only thing the map
          can give ground to. */
       #deploy-map {
-        width: min(56vh, 60vw);
-        height: min(56vh, 60vw);
+        width: var(--map);
+        height: var(--map);
         display: block;
         cursor: crosshair;
         image-rendering: auto;
@@ -485,7 +500,9 @@
          deploying at whichever spawn the list started on. */
       #deploy-nav {
         display: flex;
-        gap: 22px;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 4px 22px;
         font-size: 10px;
         letter-spacing: 0.2em;
         text-transform: uppercase;
@@ -509,8 +526,22 @@
       }
       /* Side by side rather than stacked: this column has the map, a status
          line, a hint row and two buttons to fit inside a 720p window, and the
-         two buttons are the only pair that reads as a row. */
-      #deploy-actions { display: flex; align-items: stretch; gap: 12px; }
+         two buttons are the only pair that reads as a row. They share the map's
+         width rather than measuring whatever the weapon happens to be called.
+
+         WRAPPING IS THE SAFETY, and it is needed: the map is height-led, so on
+         a 768-tall laptop it is 430 px wide and the longest kit
+         ("Marksman rifle · Scope") does not fit beside a Deploy button. Both
+         grow, so a row that breaks gives two full-width buttons stacked rather
+         than one button hanging over the edge of the map above it. */
+      #deploy-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: stretch;
+        gap: 12px;
+      }
+      #deploy-go,
+      #deploy-kit { flex: 1 1 auto; }
       #deploy-go {
         font: inherit;
         display: flex;
@@ -518,7 +549,9 @@
         align-items: center;
         justify-content: center;
         gap: 2px;
-        padding: 8px 34px;
+        /* Narrow enough that the kit button beside it still fits the map's
+           width without wrapping — the pair has 448 px to live in. */
+        padding: 8px 26px;
         color: #12141a;
         background: var(--hot);
         border: 0;
@@ -1108,9 +1141,22 @@
         /* The menu stacks title, difficulty, the kit button, controls and
            prompt. There is no scroll here either, so the gap is what keeps
            all five inside a 720p window. */
-        gap: 20px;
+        gap: 18px;
         text-align: center;
+        /* ONE content width, and everything below the title takes it.
+           Every block here used to size itself to its own contents and centre
+           on that, so five stacked blocks had five widths and no two shared an
+           edge — which is what read as clutter rather than as a screen. The
+           title is the deliberate exception: it is a symmetric block of text,
+           and a heading wider than the column it heads is a typographic
+           choice, not a misalignment. */
+        --col: min(600px, 92vw);
       }
+      #overlay .ov-settings,
+      #overlay button.ov-start,
+      #overlay .ov-controls,
+      #overlay .pause-actions,
+      #overlay .ov-result { width: var(--col); }
       #overlay .ov-title { display: flex; flex-direction: column; gap: 10px; }
       #overlay h1 {
         font-size: 76px;
@@ -1142,30 +1188,51 @@
         animation: pulse 1.4s ease-in-out infinite;
       }
 
-      /* The overlay itself stays pointer-events:none (inherited from #hud);
-         only this row opts back in, so a click anywhere else is still the
-         game's. */
-      #overlay .difficulty {
-        pointer-events: auto;
-        display: flex;
+      /* --- the settings block: two rows, one grid ---
+         Both rows are label / control / hint, so they share the grid's three
+         columns instead of each centring on its own contents. `display:
+         contents` is what lets the rows keep their own class (the tier and kit
+         rules below still scope to them) while their children sit in the
+         parent's tracks.
+
+         The control column is `1fr`, so the four tier buttons and the kit
+         button all span it — same left edge, same right edge, and the row of
+         tiers stops being a ragged strip in the middle of the screen.
+
+         The overlay stays pointer-events:none (inherited from #hud); only the
+         CONTROLS opt back in, never the rows, so the labels, the hints and the
+         grid's gaps stay inert and a click there is still the confirm. */
+      #overlay .ov-settings {
+        display: grid;
+        grid-template-columns: max-content 1fr max-content;
         align-items: center;
-        gap: 14px;
+        column-gap: 16px;
+        row-gap: 8px;
       }
+      #overlay .ov-settings > div { display: contents; }
+      #overlay .ov-settings .label { text-align: right; }
+      #overlay .ov-settings .hint { text-align: right; }
       #overlay .difficulty .tiers { display: flex; gap: 6px; }
-      #overlay .difficulty .label,
-      #overlay .difficulty .hint {
+      #overlay .ov-settings .label,
+      #overlay .ov-settings .hint {
         font-size: 10px;
         letter-spacing: 0.24em;
         text-transform: uppercase;
         color: rgba(255, 255, 255, 0.42);
       }
       #overlay .difficulty button.tier {
+        pointer-events: auto;
+        /* Equal shares of the control column, so four tiers measure the same
+           as the one kit button under them. The padding is what keeps four of
+           them inside `--col`: at 18px the row's min-content was 584 against a
+           560 column and the grid quietly overflowed at every viewport size. */
+        flex: 1 1 0;
         font: inherit;
         font-size: 12px;
         font-weight: 700;
         letter-spacing: 0.2em;
         text-transform: uppercase;
-        padding: 8px 18px;
+        padding: 8px 12px;
         color: #cdd6e6;
         background: rgba(255, 255, 255, 0.05);
         border: 0;
@@ -1227,22 +1294,9 @@
          Both open the same screen, so both read the same: a label, the kit
          currently in the player's hands, and the key that gets there. The
          menu's `#overlay` is pointer-events:none (inherited from #hud), so
-         the row claims them for itself — the same carve-out the difficulty
-         picker and the pause actions get. #deploy already opts in for its
+         the button claims them for itself — the same carve-out the tier
+         buttons and the pause actions get. #deploy already opts in for its
          whole area. */
-      #overlay .kit {
-        pointer-events: auto;
-        display: flex;
-        align-items: center;
-        gap: 14px;
-      }
-      #overlay .kit .label,
-      #overlay .kit .hint {
-        font-size: 10px;
-        letter-spacing: 0.24em;
-        text-transform: uppercase;
-        color: rgba(255, 255, 255, 0.42);
-      }
       #overlay button.kit-open,
       #deploy-kit {
         font: inherit;
@@ -1280,9 +1334,27 @@
         background: rgba(255, 230, 128, 0.18);
         color: var(--hot);
       }
-      /* On the deploy screen the label rides above the kit, because the row
-         there is a single button rather than a labelled control in a row. */
-      #deploy-kit { flex-direction: row; align-items: baseline; gap: 14px; }
+      /* Both are rows spread across the width they were given rather than
+         columns hugging their text: on the menu the kit button spans the
+         settings grid's control column (the same width as the four tier
+         buttons above it), and on the deploy screen it takes whatever the
+         Deploy button leaves of the map's width. Left to shrink-wrap, each was
+         a small box adrift in a large gap. `nowrap` because the widest kit
+         ("Marksman rifle · Scope") is within a few pixels of the space, and a
+         wrapped caption makes the button taller than the one beside it. */
+      #overlay button.kit-open,
+      #deploy-kit {
+        flex-direction: row;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 14px;
+      }
+      #overlay button.kit-open b,
+      #overlay button.kit-open i,
+      #deploy-kit b,
+      #deploy-kit i,
+      #deploy-kit .lbl { white-space: nowrap; }
+      #deploy-kit { padding: 8px 16px; }
       #deploy-kit .lbl {
         font-size: 10px;
         letter-spacing: 0.24em;
@@ -1488,8 +1560,18 @@
         display: flex;
         flex-direction: column;
         align-items: flex-start;
+        justify-content: center;
+        /* Tall enough for the one name that wraps to two lines ("Submachine
+           gun"), so the weapon row and the optic row are the same height
+           whatever is in them — otherwise the two rows of the same control
+           measure differently and the column looks accidental. */
+        min-height: 52px;
         gap: 2px;
         padding: 8px 14px;
+        /* A <button>'s UA default is centred, and `.lo-body`'s `text-align:
+           left` does not reach inside one. Only the names long enough to wrap
+           showed it, which read as two of the three buttons being centred. */
+        text-align: left;
         color: #cdd6e6;
         background: rgba(255, 255, 255, 0.05);
         border: 0;
@@ -1591,10 +1673,16 @@
         border-top: 1px solid rgba(255, 255, 255, 0.1);
         color: rgba(255, 255, 255, 0.38);
       }
+      /* Sized like `.lo-body`, because it is the same column: centred on its
+         own contents it started and stopped nowhere near the panel it sits
+         under. The Done button then goes to the column's right edge, where the
+         eye is already looking for the way out. */
       #loadout .lo-foot {
         display: flex;
         align-items: center;
         gap: 20px;
+        width: 100%;
+        max-width: 620px;
         font-size: 10px;
         letter-spacing: 0.2em;
         text-transform: uppercase;
@@ -1619,6 +1707,7 @@
         box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
       }
       #loadout button.lo-back {
+        margin-left: auto;
         font: inherit;
         font-size: 10px;
         letter-spacing: 0.2em;
@@ -1631,6 +1720,20 @@
         clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
       }
       #loadout button.lo-back:hover { background: rgba(255, 230, 128, 0.22); }
+      /* `#loadout` is the one overlay deliberately left out of `--ov-scale`
+         (its stage is a hole the 3D turntable is placed through, so a transform
+         would move the hole and leave the weapon behind it) — which means it is
+         also the one that has to fit a landscape phone on its own. The prose is
+         what goes: the names, the figures and the weapon itself are the screen,
+         and the copy is the part you can read on a desk instead. */
+      @media (max-height: 560px) {
+        #loadout .lo-panel { gap: 10px; }
+        #loadout .lo-body { gap: 8px; }
+        #loadout .lo-detail { min-height: 0; padding: 12px 16px; }
+        #loadout .lo-blurbs { display: none; }
+        #loadout button.lo-opt { min-height: 44px; }
+        #loadout .lo-slot { padding: 5px 12px; }
+      }
 
       /* The pause menu's action list. Same carve-out as the difficulty row —
          the buttons take pointer events, the overlay around them does not. */
@@ -1639,7 +1742,6 @@
         display: flex;
         flex-direction: column;
         gap: 6px;
-        min-width: 280px;
       }
       #overlay button.pact {
         font: inherit;
@@ -1672,7 +1774,10 @@
       #overlay .ov-controls {
         --cham: 16px;
         padding: 16px 26px 18px;
-        min-width: 470px;
+        /* Reference material, and the last thing on either screen — set back
+           from the block above it so the action reads as the end of the page
+           and this reads as a footnote under it. */
+        margin-top: 6px;
       }
       #overlay .ov-controls-head,
       #overlay .ctl {
@@ -1721,6 +1826,7 @@
         --cham: 14px;
         display: flex;
         align-items: center;
+        justify-content: space-between;
         gap: 20px;
         padding: 12px 26px;
       }
@@ -1773,6 +1879,13 @@
          underneath takes pointer events of its own, and a click through the
          empty half of a pause screen must not deploy the player. */
       #hud.paused #overlay { pointer-events: auto; }
+      /* A pause taken while waiting out a respawn lands on top of the deploy
+         screen, and that screen is a full column of its own headed chrome —
+         "SELECT DEPLOYMENT" landed across "PAUSED" and its Deploy button sat
+         under the resume prompt. Dimmed rather than hidden: the map behind a
+         pause is still context worth having, it just is not the thing being
+         read. The overlay above it already swallows the clicks. */
+      #hud.paused #deploy { opacity: 0.18; }
       #hud.paused #crosshair,
       #hud.paused #hitmarker,
       #hud.paused #damage-dirs,

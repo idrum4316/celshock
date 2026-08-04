@@ -556,6 +556,36 @@ cancel to disagree about, and B is what a pad player reaches for.
 Three screens stand between the title and the world, and each is driven by a
 pointer *and* by a pad, with no path that needs the other.
 
+**Each screen has ONE content width and everything hangs off it.** Every block
+used to size itself to its own contents and centre on that, so five stacked
+blocks had five widths and no two shared an edge — which is what reads as
+clutter rather than as a screen. `#overlay` declares `--col` (the settings
+grid, the Deploy button, the controls table, the pause list and the result bar
+all take it) and `#deploy` declares `--map` (the status line, the hint row and
+the button row all take it, so they meet the map's own edges). The two big
+titles are the deliberate exception: a symmetric block of text wider than the
+column it heads is a typographic choice, not a misalignment.
+
+Three things there are worth keeping:
+
+- **The menu's two settings rows are one grid, not two rows.** Both are
+  label / control / hint; centred independently they put their labels, their
+  controls and their hints at three different x each. `.ov-settings` owns the
+  three columns and each row is `display: contents`. The control column is
+  `1fr`, so the four difficulty tiers and the kit button below them span the
+  same width — which is what sets the tiers' padding, since at 18px their
+  min-content overflowed `--col` at every viewport size.
+- **Only the controls opt into pointer events, never the rows.** `#hud` is
+  `pointer-events: none` and the menu's confirm is a mouse-down anywhere, so a
+  row that claimed events would turn its labels, its hints and the grid's own
+  gaps into dead zones where a click does nothing instead of starting the round.
+- **`#deploy-actions` wraps.** The map is height-led, so on a 768-tall laptop
+  it is 430 px across and the longest kit ("Marksman rifle · Scope") does not
+  fit beside a Deploy button. Both buttons grow, so a row that breaks gives two
+  full-width buttons stacked rather than one hanging over the map's edge. That
+  width is also why every input hint on the screen lives in the one hint row
+  and the buttons carry only what they do.
+
 **The menu and the round-over card carry a `Deploy` button** (`HUD.bindStart`
 → `Game.onStart`). It is redundant with the confirm — a click anywhere on
 either screen already starts the round — and that is why it has to exist: an
@@ -1497,7 +1527,14 @@ Three details about the phone itself, each of which was a visible bug first:
   authored for 720p. **`#loadout` is deliberately excluded**: its stage is a
   hole the 3D turntable is placed through, back-projected from the same
   viewport fractions the CSS uses, so a transform would move the hole and leave
-  the weapon behind it.
+  the weapon behind it — which is also why it is the one screen that carries a
+  short-viewport media query of its own, dropping the weapon prose so the
+  chart and the names still fit a landscape phone.
+- **Inside a scaled box, `vh` and `vw` are still the VIEWPORT's**, so a length
+  written in them is scaled a second time on the way out. `#deploy`'s map is
+  `calc(min(56vh, 60vw) / var(--ov-scale))` for exactly that reason: at s =
+  0.45 the raw form rendered the map at a quarter of the height it asked for,
+  and the divide is the identity on every desktop.
 
 There are **no touch controls** — every input is keyboard, mouse or gamepad, so
 a phone plays this with a pad paired to it. Menus and the deploy map take a
