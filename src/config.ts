@@ -640,16 +640,20 @@ export const CONFIG = {
    * is derived from this table, so adding a weapon here and a model builder
    * beside `RifleModel` is the whole job.
    *
-   * Both fire the same hitscan round through the same `CombatSystem.fire`,
-   * and both take any of the three optics below — an optic is bolted to a
-   * rail and both weapons have one. What separates them is the trade this
+   * They all fire the same hitscan round through the same `CombatSystem.fire`,
+   * and each takes any of the three optics below — an optic is bolted to a
+   * rail and every weapon here has one. What separates them is the trade this
    * table spells out: the rifle hits hard enough to kill in four and holds a
    * line across the valley, the SMG empties a bigger magazine half again as
-   * fast and cannot be trusted past the far side of a street.
+   * fast and cannot be trusted past the far side of a street, and the DMR
+   * kills in two and gives you one trigger pull at a time to do it with.
    *
-   * The time to kill is deliberately close (rifle 4 rounds at 8/s = 0.375 s,
-   * SMG 6 at 13/s = 0.385 s). What you are choosing is not damage per second,
-   * it is how much of the screen a burst covers.
+   * The time to kill is deliberately close for the two automatics (rifle 4
+   * rounds at 8/s = 0.375 s, SMG 6 at 13/s = 0.385 s). What you are choosing
+   * between them is not damage per second, it is how much of the screen a
+   * burst covers. The DMR is the one that steps outside that: 2 rounds at 3/s
+   * is 0.333 s, faster than either, and it pays for it with the error budget
+   * — a missed rifle round costs 0.125 s and a missed DMR round costs 0.333.
    *
    * `recoilMult` and `bloomMult` SCALE `CONFIG.recoil` rather than restating
    * it: the shape of recoil — how much springs back, how fast, where it is
@@ -664,8 +668,13 @@ export const CONFIG = {
       short: "Rifle",
       /** 30 per hit against 100 HP = 4 shots to kill. */
       damage: 30,
-      /** Rounds per second (full auto). */
+      /** Rounds per second. */
       fireRate: 8,
+      /**
+       * Whether the trigger has to be released between rounds. Held fire is
+       * the default; see `Player.tryShot`, which owns the latch.
+       */
+      semiAuto: false,
       magSize: 24,
       reloadTime: 1.4,
       /** Bullet spread half-angle (radians). */
@@ -707,6 +716,7 @@ export const CONFIG = {
       /** 18 against 100 HP = 6 shots to kill. */
       damage: 18,
       fireRate: 13,
+      semiAuto: false,
       magSize: 34,
       reloadTime: 1.15,
       spreadHip: 0.07,
@@ -718,6 +728,62 @@ export const CONFIG = {
       adsSpeedMult: 1.3,
       hipZ: -0.07,
       sfxPitch: 1.35,
+    },
+    /**
+     * The DMR: a semi-automatic marksman rifle. One round per trigger pull,
+     * and the round is worth pulling for — 50 against 100 HP is two hits,
+     * whatever the range and wherever they land.
+     *
+     * `semiAuto` is the whole design and not a detail on top of it. The other
+     * two are held down and steered; this one is a sequence of decisions, and
+     * every number here is chosen against that. The rate is a CEILING rather
+     * than a cadence — nothing fires it faster than the trigger finger — so
+     * `bloomMult` can be high without punishing the aimed shot it is meant to
+     * reward: at any deliberate pace the bloom has bled off before the next
+     * round leaves, and only trying to run it as an automatic finds the
+     * ceiling. The recoil multiplier is the real cost of the two-shot kill.
+     * At 2.2 a shot kicks 3.3 deg and only 70% of that springs back
+     * (`recoverFraction`); a third of a second later ~1.2 deg of it is still
+     * there, so a follow-up taken at the weapon's full rate goes high unless
+     * it is pulled down by hand. Waiting is what makes the second shot land,
+     * which is the same trade as the magazine: twelve rounds is six kills,
+     * the rifle's, with none of the rifle's forgiveness.
+     *
+     * Hip spread is the worst on offer, deliberately: a long weapon on a sling
+     * is not a close-quarters answer, and the way to say so is to make firing
+     * it unaimed useless rather than merely worse.
+     */
+    dmr: {
+      name: "Marksman Rifle",
+      short: "DMR",
+      /** 50 against 100 HP = 2 shots to kill, at any range it reaches. */
+      damage: 50,
+      /** A ceiling on the trigger finger, not a cadence — see `semiAuto`. */
+      fireRate: 3,
+      /** One round per pull. `Player.tryShot` holds the latch. */
+      semiAuto: true,
+      magSize: 12,
+      reloadTime: 1.9,
+      spreadHip: 0.09,
+      /** 0.14 deg aimed: the tightest group in the kit, by a factor of two. */
+      spreadAds: 0.0025,
+      /**
+       * Past the fog wall (78 m) there is nothing to shoot at that you can
+       * see, so this mostly buys the open lanes down the valley and the line
+       * on the stat chart. It is still the honest number for the round: the
+       * other two stop short of what their optics can pick out, and this one
+       * does not.
+       */
+      range: 180,
+      recoilMult: 2.2,
+      bloomMult: 1.5,
+      adsSpeedMult: 0.7,
+      /** Longer than the rifle, so it sits further out or the muzzle fills the
+       *  frame — the SMG's offset, in the other direction. */
+      hipZ: 0.06,
+      /** A heavier charge in a longer barrel: lower, and (see `Sfx.shoot`,
+       *  where level tracks 1/pitch) louder, because it fires far less often. */
+      sfxPitch: 0.82,
     },
   },
 

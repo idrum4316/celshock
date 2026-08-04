@@ -36,14 +36,17 @@ export const DEFAULT_WEAPON: WeaponId = "rifle";
  * Every field is a plain `number` on purpose. `CONFIG` is `as const`, so the
  * table's own fields are literal types and a `let` holding one cannot be
  * reassigned; resolving through here is what lets the rest of the game treat
- * a weapon's stats as numbers that happen to differ between two weapons.
+ * a weapon's stats as numbers that happen to differ from one to the next.
  */
 export interface WeaponSetup {
   id: WeaponId;
   name: string;
   short: string;
   damage: number;
+  /** Rounds per second — a ceiling on the trigger when `semiAuto`. */
   fireRate: number;
+  /** One round per trigger pull. `Player.tryShot` is where that is enforced. */
+  semiAuto: boolean;
   magSize: number;
   reloadTime: number;
   spreadHip: number;
@@ -75,6 +78,7 @@ export function weaponSetup(id: WeaponId): WeaponSetup {
     short: w.short,
     damage: w.damage,
     fireRate: w.fireRate,
+    semiAuto: w.semiAuto,
     magSize: w.magSize,
     reloadTime: w.reloadTime,
     spreadHip: w.spreadHip,

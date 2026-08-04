@@ -173,6 +173,13 @@ export class Player implements Combatant {
   private regenLockT = 0;
   private reloadT = 0;
   private fireCooldown = 0;
+  /**
+   * Whether the trigger has been down since before the last thing it asked
+   * for. A semi-automatic weapon needs a release between rounds, and this is
+   * the only state that remembers one — `InputManager.fire` is held state and
+   * has no idea what it was last used for.
+   */
+  private triggerHeld = false;
   private velY = 0;
   /** Extra spread accumulated by sustained fire; bleeds off when not firing. */
   private spreadBloom = 0;
@@ -597,8 +604,25 @@ export class Player implements Combatant {
   /**
    * Consumes one shot if the weapon can fire right now.
    * Auto-reloads when the magazine empties.
+   *
+   * Takes the trigger rather than being called behind it, because a
+   * semi-automatic weapon has to see the trigger come UP: the release is what
+   * arms the next round, and a caller that only speaks when the trigger is
+   * down can never report one. Every path through here therefore ends with
+   * the latch matching the trigger.
+   *
+   * The latch is set before the guards below, not after a successful shot, so
+   * holding the trigger through a reload or a sprint does not fire the instant
+   * either ends — which is exactly what a trigger that was never released
+   * should do.
    */
-  tryShot(): boolean {
+  tryShot(trigger: boolean): boolean {
+    if (!trigger) {
+      this.triggerHeld = false;
+      return false;
+    }
+    if (this.weapon.semiAuto && this.triggerHeld) return false;
+    this.triggerHeld = true;
     if (
       !this.alive ||
       this.reloading ||

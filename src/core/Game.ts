@@ -1123,8 +1123,11 @@ export class Game {
     // Mouse fire requires pointer lock so UI clicks never discharge the gun.
     // The deploy map's click is the exception that gate cannot see — it is the
     // click that TAKES the lock — and `spawnPlayer` calls `consumeFire()` for it.
+    // The trigger goes IN rather than gating the call: a semi-automatic weapon
+    // has to be told when it comes up, and only Player knows whether the one
+    // being carried cares.
     const canFire = this.input.pointerLocked || this.input.gamepadConnected;
-    if (this.input.fire && canFire && this.player.tryShot()) {
+    if (this.player.tryShot(this.input.fire && canFire)) {
       const blend = this.cameraSys.adsBlend;
       const spread = this.player.spread(blend);
       // Tracers, the flash light and the noise all start at the viewmodel's

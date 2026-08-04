@@ -18,7 +18,7 @@
  *   scaling take the same factor, so no ray direction moves and the sight
  *   stays exactly on the axis. Scaling one without the other is what would
  *   break it.
- * - Both weapons are built once and all but the carried one is disabled, the
+ * - Every weapon is built once and all but the carried one is disabled, the
  *   same trick the optics use: a loadout change is a handful of boolean
  *   writes and a re-derivation, never a rebuild. That is also why the muzzle
  *   and the ejection port are nodes owned HERE rather than the model's — they
@@ -51,6 +51,7 @@ import {
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
+import { buildDmr } from "./DmrModel";
 import { buildRifle } from "./RifleModel";
 import { buildSmg } from "./SmgModel";
 import { DEFAULT_SIGHT, sightSetup, type SightId, type SightSetup } from "./sights";
@@ -79,6 +80,7 @@ export const VIEWMODEL_GROUP = 1;
 const WEAPON_BUILDERS: Record<WeaponId, WeaponBuilder> = {
   rifle: buildRifle,
   smg: buildSmg,
+  dmr: buildDmr,
 };
 
 /** What the weapon needs to know about the player, per frame. */
@@ -225,9 +227,9 @@ export class ViewModel {
     this.weapon.parent = camera;
     this.weapon.scaling.setAll(v.scale);
 
-    // Both weapons are built up front. The cost is one extra set of merged
-    // colour groups sitting disabled — against a rebuild in the middle of a
-    // deploy screen, which would drop Player's muzzle flash on the floor and
+    // Every weapon is built up front. The cost is a set of merged colour
+    // groups per weapon sitting disabled — against a rebuild in the middle of
+    // a deploy screen, which would drop Player's muzzle flash on the floor and
     // stall the frame it happened on.
     for (const id of WEAPON_IDS) {
       const root = new TransformNode(`viewmodel_${id}`, scene);

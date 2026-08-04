@@ -53,6 +53,7 @@ const WEAPON_BLURBS: Record<WeaponId, string> = {
   rifle:
     "A full-power battle rifle. Four rounds kill at any distance you can see a target at, and it holds its group across the valley — but the magazine is short and every round has to be worth its recoil.",
   smg: "Pistol-calibre, and it empties a long magazine in under three seconds. Quickest to the shoulder, cheapest to miss with, and past the width of a street it will not group whatever optic is on top of it.",
+  dmr: "Semi-automatic: one round per trigger pull, and two rounds anywhere on a man will do it. The tightest group and the longest reach in the kit, paid for with a kick that has to be ridden back down before the second shot means anything.",
 };
 
 /**
@@ -92,6 +93,11 @@ function least(pick: (w: (typeof CONFIG.weapons)[WeaponId]) => number): number {
  * The chart for one weapon. Accuracy is the AIMED spread inverted — a bar
  * that grows with the number would rank the SMG as the accurate one — and is
  * shown in degrees, which is the only unit that means anything at a glance.
+ *
+ * Rate is left as a bare figure even though it means something different on a
+ * semi-automatic (a ceiling on the trigger finger, not a cadence): the value
+ * column is 52px and "3/s semi" does not fit in it. The fire mode is on the
+ * weapon's own button instead, next to the number it qualifies.
  */
 function weaponStats(id: WeaponId): StatRow[] {
   const w = CONFIG.weapons[id];
@@ -291,7 +297,7 @@ export class LoadoutScreen {
       const w = CONFIG.weapons[id];
       return `
         <button class="lo-opt${id === this.weapon ? " on" : ""}" data-weapon="${id}">
-          <b>${w.name}</b><i>${w.damage} dmg · ${w.fireRate}/s</i>
+          <b>${w.name}</b><i>${w.damage} dmg · ${w.fireRate}/s ${w.semiAuto ? "semi" : "auto"}</i>
         </button>`;
     }).join("");
     const sights = SIGHT_IDS.map(

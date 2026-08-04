@@ -73,8 +73,8 @@ have already cost time:
   after anything that touches the viewmodel or the camera — for **every** optic,
   since each carries its own eye reference: take
   `scene.getTransformNodeByName("view_<weapon>_<sight>_sightCenter")
-  .getAbsolutePosition()` (`weapon` is `rifle`/`smg`, `sight` is
-  `iron`/`holo`/`scope` — all six combinations, since a weapon change moves the
+  .getAbsolutePosition()` (`weapon` is `rifle`/`smg`/`dmr`, `sight` is
+  `iron`/`holo`/`scope` — all nine combinations, since a weapon change moves the
   optic too), subtract `camera.position`, and project onto
   `cameraSys.forward` / `flatRight`. At `adsBlend === 1` the two cross-axis
   components must be **0**, and the along-axis one is that sight's `eyeRelief`
@@ -132,7 +132,9 @@ src/
                             #   per-colour merge) + the WeaponParts contract
     RifleModel.ts           # Low-poly SCAR-pattern battle rifle
     SmgModel.ts             # Low-poly compact SMG — same contract, so the
-                            #   viewmodel carries either
+                            #   viewmodel carries any of them
+    DmrModel.ts             # Low-poly semi-auto marksman rifle — heavy barrel,
+                            #   folded bipod, adjustable comb
     optics.ts               # The three optic assemblies, built onto whichever
                             #   weapon's OpticMount asked for them
     weapons.ts              # WeaponId + the resolved WeaponSetup the player
@@ -382,14 +384,14 @@ The bob and the view punch move the **rendered camera only** — `aimPitch`/
 the viewmodel, which matters in the editor: it flies the same camera the weapon
 is parented to, so a visible rifle would ride along in front of it.
 
-### The loadout: two weapons, three optics
+### The loadout: three weapons, three optics
 
 Two tables, two slots, and neither knows about the other. `CONFIG.weapons`
 declares what can be carried and `CONFIG.sights` what can be bolted to it;
 `entities/weapons.ts` and `entities/sights.ts` derive `WeaponId`/`SightId`
-**from those tables**, so each is declared in exactly one place. Both weapons
-take all three optics, which is not a shortcut — an optic is a thing on a rail,
-and both weapons have one.
+**from those tables**, so each is declared in exactly one place. Every weapon
+takes all three optics, which is not a shortcut — an optic is a thing on a rail,
+and every weapon here has one.
 
 **A weapon owns the round; an optic owns the picture.** Damage, rate, magazine,
 spread, range and the recoil multipliers are the weapon's and reach nothing but
@@ -414,12 +416,31 @@ the game. `bloomMult` multiplies the *ceiling* as well as the per-shot term —
 a weapon that blooms faster has to be allowed to bloom further, or the extra
 rounds per second cost it nothing after the second shot.
 
-The two are balanced on time to kill, not on damage per second: 4 rifle rounds
-at 8/s is 0.375 s, 6 SMG rounds at 13/s is 0.385 s. What the choice actually
-buys is how much of the screen a burst covers, and how far away it still means
-anything.
+The two automatics are balanced on time to kill, not on damage per second: 4
+rifle rounds at 8/s is 0.375 s, 6 SMG rounds at 13/s is 0.385 s. What the
+choice between them actually buys is how much of the screen a burst covers, and
+how far away it still means anything.
 
-Six things are load-bearing:
+**The DMR is the one weapon that steps outside that**, and `semiAuto` is why it
+can. Two rounds at 3/s is 0.333 s — the best ideal time to kill in the kit —
+but the rate is a *ceiling on the trigger finger* rather than a cadence, and
+the error budget is what pays for it: a missed rifle round costs 0.125 s and a
+missed DMR round costs 0.333. Its `recoilMult` of 2.2 is the second half of
+that bill. Only 70% of a kick springs back (`recoil.recoverFraction`), so a
+third of a second after a shot roughly 1.2 deg of it is still on the aim, and a
+follow-up taken at the weapon's full rate goes high unless it is pulled down by
+hand. That also makes `bloomMult` cheap to set high: at any deliberate pace the
+bloom has bled off before the next round leaves, so only trying to run the
+weapon as an automatic ever finds the ceiling.
+
+The latch itself lives in **`Player.tryShot`, which takes the trigger rather
+than being called behind it**. A semi-automatic has to see the trigger come
+*up* — the release is what arms the next round — and a caller that only speaks
+while the trigger is down can never report one. The latch is set *before* the
+alive/reloading/sprinting guards, so a trigger held through a reload does not
+fire the instant the reload ends.
+
+Eight things are load-bearing:
 
 - **Every weapon and every optic is built once, and all but one of each is
   `setEnabled(false)`.** A loadout change is a handful of boolean writes and a
@@ -433,7 +454,7 @@ Six things are load-bearing:
 - **Each weapon carries its own arms.** Where a hand grips is the model's
   business (`WeaponParts.grip`/`support`), and the forearm's geometry is baked
   along the hand-to-elbow line, so an arm cannot simply be translated onto a
-  shorter gun. Two pairs of merged meshes, one enabled.
+  shorter gun. One pair of merged meshes per weapon, one pair enabled.
 - **Zoom compensation is a uniform scale about the camera's origin.** Past
   `viewmodel.adsMagReference` the weapon is scaled down *and* drawn
   proportionally closer — `adsPos` and `weapon.scaling` take the same factor —
@@ -478,10 +499,22 @@ Six things are load-bearing:
 **The optics are built against the weapon, not for it.** `optics.ts` takes an
 `OpticMount` — the height of that weapon's rail, where along it the sight sits,
 and its two back-up iron stations — and measures everything from those four
-numbers. So the SMG's lower receiver carries the same three sights with nothing
-re-tuned, and the derived `adsPos` puts each one on the axis wherever it lands.
-Adding a weapon is a config entry, a model builder returning `WeaponParts`, and
-an `OpticMount`; adding an optic is a config entry and a builder in `optics.ts`.
+numbers. So the SMG's lower receiver and the DMR's deeper one carry the same
+three sights with nothing re-tuned, and the derived `adsPos` puts each one on
+the axis wherever it lands. Adding a weapon is a config entry, a model builder
+returning `WeaponParts`, and an `OpticMount`; adding an optic is a config entry
+and a builder in `optics.ts`.
+
+**The mount is not free, though, and the DMR is where that shows.** Two of the
+four numbers are bounded by the optics rather than by the receiver: the view
+cone spreads with distance from the eye, so past a certain z it is looking at
+the weapon's own rail. The scope's cone reaches the rail's ribs at about
+z = 0.59 and the holo's reaches the FOLDED front iron leaf at about z = 0.53,
+which is why the DMR's rail stops where it does and why its front iron station
+sits no further out than the rifle's despite a longer receiver. A marksman
+rifle wants the longest sight radius it can get; what it can actually have is
+whatever leaves the sight picture clear, and the extra radius therefore comes
+out of the rear station instead. `DmrModel.ts`'s `MOUNT` documents both.
 
 The screen itself (`src/ui/LoadoutScreen.ts`) owns its own DOM under `#hud` and
 is a `loadout` game state — a lid over `menu` or `deploy` that remembers which
@@ -1478,8 +1511,8 @@ node's transform is applied twice.
   version was rejected.
 - **Everyone** is hitscan — player and bots share `CombatSystem.fire()`, which
   takes the shooter's target list so friendly fire is excluded by construction
-  rather than by a team check inside, and the shooter's own `range` (two player
-  weapons carry different distances, and it bounds the wall pick and the
+  rather than by a team check inside, and the shooter's own `range` (the player's
+  weapons carry three different distances, and it bounds the wall pick and the
   near-miss sweep as well as the damage). There is no projectile pool to thrash in a
   16-bot firefight. Tracers and sparks are pooled; add effects to a pool rather
   than allocating per shot.
