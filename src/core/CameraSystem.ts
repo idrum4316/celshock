@@ -108,6 +108,16 @@ export class CameraSystem {
     this.camera.minZ = 0.05;
     this.camera.fov = CONFIG.camera.fovHip;
     this.camera.inputs.clear(); // fully driven by this system
+    // The roll (`rotation.z`, written by the landing absorb) reaches the view
+    // matrix only through the camera's UP VECTOR, and Babylon otherwise keeps
+    // that vector as state refreshed on the frames `rotation.z` *changes*.
+    // Since the refresh bakes the yaw and pitch of that frame in with the
+    // roll, the frame a landing settles on leaves a stale up vector standing
+    // for the rest of the round: the tilt is zero where it was settled and
+    // grows with every degree you turn away from it. This derives the up
+    // vector from `rotation` every frame instead, which is what the flag is
+    // for. Never remove it while anything writes roll.
+    this.camera.updateUpVectorFromRotation = true;
     scene.activeCamera = this.camera;
   }
 

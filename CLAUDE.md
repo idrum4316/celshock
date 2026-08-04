@@ -437,7 +437,15 @@ load-bearing.
   the same rule as the bob phase. The nod and the roll are damped by
   `land.adsMult` while the dip is not: the eye dropping is parallax and moves
   nothing, while the rotations swing the picture off rounds that still fly
-  along the un-nodded `forward`. **The viewmodel's airborne give is sprung for
+  along the un-nodded `forward`. **The roll needs
+  `camera.updateUpVectorFromRotation`**: `rotation.z` reaches the view matrix
+  only through the camera's up vector, and Babylon otherwise treats that vector
+  as state it refreshes on the frames the roll *changes* — baking in the yaw
+  and pitch of that frame along with it. So the frame a landing settled on left
+  a stale up vector standing for the rest of the round: no tilt where you
+  landed, and a growing one as you turned away from it, which read as the camera
+  being stuck tilted after a jump. The flag derives it from `rotation` every
+  frame instead. **The viewmodel's airborne give is sprung for
   the same reason the landing is**: `velY` is a step function at both ends of a
   jump, so a give read straight off it snapped `airDropMax` back to neutral on
   the contact frame.
