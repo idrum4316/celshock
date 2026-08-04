@@ -124,6 +124,13 @@ export class Player implements Combatant {
   private view: ViewModel;
   /** Whether the viewmodel is hidden (menu, deploy screen, editor). */
   private bodyHidden = true;
+  /**
+   * Whether the weapon is on the loadout screen's turntable. Its own flag
+   * rather than a case of `bodyHidden`: every state the kit screen covers has
+   * the gun put away, and showing it there must not mean the player is
+   * holding it.
+   */
+  private inspecting = false;
 
   // Smoothed inputs for the viewmodel pose.
   private moveBlend = 0;
@@ -762,13 +769,44 @@ export class Player implements Combatant {
    */
   setBodyHidden(hidden: boolean): void {
     this.bodyHidden = hidden;
+    // Putting the gun away and taking it out both end an inspection, which is
+    // what stops a turntable pose surviving into a round — and it is why the
+    // three places that hide the kit screen from underneath (the menu, the
+    // editor, a round starting) owe nothing beyond the call they already make.
+    if (this.inspecting) this.inspectWeapon(false);
+    else this.applyVisibility();
+  }
+
+  /**
+   * Hands the weapon to the loadout screen's turntable, or takes it back.
+   * Pure pass-through apart from the visibility: the pose is the viewmodel's,
+   * and nothing about the weapon's state — magazine, reload, spread — changes
+   * because it is being looked at.
+   */
+  inspectWeapon(on: boolean): void {
+    this.inspecting = on;
+    if (on) this.view.beginInspect();
+    else this.view.endInspect();
     this.applyVisibility();
   }
 
+  /**
+   * Turns the inspected weapon and re-poses it — one call per frame from the
+   * loadout state, which is the only place that has a camera standing still
+   * long enough for a turntable to mean anything.
+   */
+  updateInspect(dYaw: number, dPitch: number, fovY: number, aspect: number): void {
+    if (!this.inspecting) return;
+    this.view.spinInspect(dYaw, dPitch);
+    this.view.updateInspect({ fovY, aspect });
+  }
+
   private applyVisibility(): void {
-    this.view.setVisible(!this.bodyHidden);
+    this.view.setVisible(!this.bodyHidden || this.inspecting);
     // Live brass goes with it; the flash handles itself per shot via
     // flashRoot.setEnabled, and never fires while the weapon is hidden anyway.
+    // Brass is deliberately NOT part of an inspection: it is thrown into the
+    // world, and the world is not what the kit screen is showing.
     for (const c of this.casings) {
       c.mesh.isVisible = c.t > 0 && !this.bodyHidden;
     }

@@ -85,9 +85,20 @@ have already cost time:
   time); force it with `player.flashRoot.setEnabled(true)` instead.
 - Getting into `playing` takes an indeterminate number of Enter presses: the menu
   gates its confirm on `overlayT > 0.5` and headless frames are ~0.5 s apart, so
-  press until `state === "playing"` rather than pressing twice. A long wait after
-  that gets the player killed, which drops the state back to `deploy` and freezes
-  the pose — override `player.takeDamage` if you need to stand still.
+  press until `state === "playing"` rather than pressing twice. A LONG PRESS is
+  what registers — `keyboard.press()` can put the down and the up inside one
+  ~0.5 s frame gap, so the key set is empty on every `input.update()` and nothing
+  happens however many times you send it. A long wait after getting in gets the
+  player killed, which drops the state back to `deploy` and freezes the pose —
+  override `player.takeDamage` if you need to stand still.
+- The kit screen's turntable needs no clicking to reach: `g.openLoadout()` from
+  the debug handle does it (from `menu` or `deploy` — assigning `g.state =
+  "deploy"` first is the way in from a live round). The pose is readable rather
+  than only visible — `player.view.inspectYaw`/`inspectPitch` for the angles, and
+  `view.weapon.rotationQuaternion` must be **null** again after the screen
+  closes or the carried pose will never come back. Re-run the sight-alignment
+  check above after a session on it: a quaternion or a scale left behind by the
+  turntable would show up there and nowhere else.
 
 To inspect a model in isolation, drop a throwaway `modelviewer.html` + `.ts` at
 the repo root (Vite serves it as a second page) with an `ArcRotateCamera` driven
@@ -110,7 +121,8 @@ src/
     Player.ts               # Movement, sprint, jump, weapon state, viewmodel
     ViewModel.ts            # The first-person weapon: the carried gun + gloved
                             #   arms on the camera, hip/ADS/sprint/reload,
-                            #   sway, bob. Builds every weapon, enables one.
+                            #   sway, bob, plus the kit screen's turntable.
+                            #   Builds every weapon, enables one.
     weaponKit.ts            # The build accumulator every weapon model is
                             #   written in (colours, box/tube/pin/shell, the
                             #   per-colour merge) + the WeaponParts contract
@@ -201,8 +213,10 @@ src/
     HUD.ts                  # DOM overlay: tickets, flags, capture-zone panel,
                             # killfeed, scoreboard, world-anchored damage arcs
     DeployScreen.ts         # Clickable top-down deploy map + the kit button
-    LoadoutScreen.ts        # The kit screen: weapon slot, optic slot, and the
-                            #   stat chart derived from CONFIG.weapons
+    LoadoutScreen.ts        # The kit screen: weapon slot, optic slot, the
+                            #   stat chart derived from CONFIG.weapons, and the
+                            #   turntable stage — a hole in its own scrim, with
+                            #   the live viewmodel posed on it
     Minimap.ts              # Corner minimap: flags, friendlies, firing enemies
   shaders/
     CelShader.ts            # Custom cel ShaderMaterial + outline helper
@@ -467,6 +481,58 @@ Two details there are not decoration:
 On the keyboard and the d-pad the screen splits the axes: up/down chooses which
 slot is being edited, left/right steps through it. The menu behind it keeps
 left/right for difficulty.
+
+**The right half of the screen is a turntable carrying the real viewmodel** —
+the weapon that will be in the player's hands, with the optic actually
+fitted, turned by dragging it or by the pad's right stick. It is not a
+second model, not a render target and not a second camera: `ViewModel` simply
+has a pose that is not the carried one (`beginInspect` / `spinInspect` /
+`updateInspect` / `endInspect`), and the weapon is already parented to the
+camera and drawn in `VIEWMODEL_GROUP` over everything else. Five things there
+are load-bearing:
+
+- **The stage is a hole in the screen's scrim.** Everything the kit screen
+  draws is DOM, and DOM is above the canvas, so a backdrop over the stage would
+  dim the weapon along with the world behind it. `#loadout`'s scrim therefore
+  stops at the panel column and the stage gets a vignette instead — and `show()`
+  marks `#hud` so the CSS can hide the menu, the deploy map and every gauge
+  while the kit is up. Either screen left standing paints straight over the
+  weapon.
+- **The stage's geometry is shared with `CONFIG.viewmodel.inspect`.** The pose
+  is placed by back-projecting a SCREEN anchor, and the anchor works out to
+  exactly the CSS `--panel` fraction (the stage's centre is `(1+p)/2` across,
+  which in NDC is `p`). Both are fractions of the viewport, so a resize moves
+  them together; the distance additionally gives way on a viewport narrower
+  than `aspectReference`, because apparent size follows the vertical FOV while
+  the room to fit in is a share of the width.
+- **The turntable rotation is a quaternion, and it is the only thing allowed to
+  write one.** The carried pose is Euler, composed in the weapon's own frame, so
+  at a side-on yaw the pitch a drag asks for arrives as a roll. `endInspect`
+  dropping the quaternion is what lets the Euler pose come back at all — while
+  one is set Babylon ignores `rotation` entirely.
+- **It rotates about a derived pivot, not about the node's origin,** which on a
+  rifle is the receiver: a turntable about that would swing the weapon around
+  the screen. `applyFit` measures the pivot from the weapon's own muzzle
+  landmark, so the SMG spins about the middle of the SMG.
+- **The hands let go.** A forearm cut off at the elbow reads fine on a carried
+  weapon and reads as a severed arm on a bench, so `ViewModel` hides the arm
+  meshes for the duration — one place writes mesh visibility, or "show the
+  weapon" and "let go of it" fight over them.
+
+`Game.updateKitStage` drives it, and it exists because `loadout` is the one lid
+state that shows live 3D: it owes by hand the per-frame pushes only
+`updateGameplay` makes. The camera position is the load-bearing one — the cel
+shader fogs against `camPos`, which outside a round is whatever the last
+gameplay frame left there and `Vector3.Zero()` before the first, so a kit opened
+straight off the main menu would fog the weapon out to a grey silhouette. It
+also puts up the two bench lamps (`CONFIG.lighting.kitLamps`), which go through
+`LightingSystem` like every other light because a carried light always wins a
+slot. They are far brighter than the shoulder lamp on purpose: the weapon's
+albedo is a night game's albedo, and on the one screen whose whole job is to
+show you the weapon, moonlight alone is a black silhouette. `stowKit` is the
+single teardown — screen, pose and lamps — and all four exits go through it,
+because a carried light nobody removes survives `lighting.clear()` and follows
+the player into the round.
 
 ### The scene has (almost) no Babylon lights
 

@@ -1007,6 +1007,66 @@ export const CONFIG = {
      */
     airDrop: 0.006,
     airDropMax: 0.05,
+
+    /**
+     * The loadout screen's turntable: the weapon held up to be LOOKED at
+     * rather than carried, parked at a fixed place on the screen and turned by
+     * the player. Framing numbers, in the same spirit as `scale` and `hipPos`
+     * above — how much of the frame the weapon eats and where it sits, not
+     * anything the rounds can tell apart.
+     */
+    inspect: {
+      /**
+       * Metres from the lens at the hip-fire FOV. Nearer than the hip pose, so
+       * the weapon fills its half of the screen; ViewModel scales this by the
+       * live FOV so the stage frames identically whatever the camera was left
+       * zoomed to (dying mid-ADS is enough to leave it narrow — nothing
+       * re-writes `camera.fov` until the next round starts).
+       */
+      dist: 1.25,
+      /**
+       * The aspect ratio `dist` frames the weapon for. Narrower than this and
+       * the weapon is pushed proportionally further back: its size follows the
+       * vertical FOV, but the room it has to fit in is the stage's share of the
+       * width, so a nearly square window would otherwise lay a rifle across
+       * the panel column. Wider is free — the stage only gets roomier.
+       */
+      aspectReference: 1.7,
+      /**
+       * Where on the SCREEN the weapon is centred, in NDC (-1..1, +x right,
+       * +y up). This is the loadout screen's stage: its panel column takes the
+       * left 46% of the viewport (`--panel` in #loadout's CSS) and the stage
+       * the rest, so the stage's centre sits `(1 + 0.46) / 2` across — which in
+       * NDC is 0.46 again. Both sides are FRACTIONS of the viewport, which is
+       * what keeps the DOM and the weapon together at any window size.
+       */
+      anchorX: 0.46,
+      anchorY: 0.06,
+      /**
+       * The turntable spins about a point this far along the weapon's own
+       * muzzle offset, so a shorter weapon centres itself instead of swinging
+       * around a stock that is no longer there. Measured from the models'
+       * spans — the rifle runs -0.52..0.75 and the SMG -0.32..0.50, whose
+       * midpoints are 0.15 and 0.18 of their own muzzle landmark.
+       */
+      pivotFrac: 0.17,
+      /**
+       * Opening angles. A yaw just past a quarter turn brings the ejection-port
+       * side toward the viewer with the muzzle across to the right, leaning a
+       * few degrees TOWARD it — the other way round reads as foreshortened,
+       * because the near end is then the stock and the whole weapon tapers off
+       * to a muzzle in the distance. The slight negative pitch tips the top
+       * plate into view, so the optic reads as fitted rather than as a lump on
+       * the receiver.
+       */
+      baseYaw: 1.78,
+      basePitch: -0.12,
+      /** Radians per pixel of drag, and per second at full stick deflection. */
+      dragRate: 0.009,
+      stickRate: 2.6,
+      /** Pitch is clamped short of straight up/down; yaw wraps freely. */
+      pitchMax: 1.15,
+    },
   },
 
   /**
@@ -1379,6 +1439,31 @@ export const CONFIG = {
     lampRange: 18,
     lampIntensity: 1.6,
     lampHeight: 1.45,
+    /**
+     * The kit screen's bench lamps — carried lights that exist only while a
+     * weapon is on the loadout turntable, placed relative to the CAMERA
+     * (`ahead`/`side`/`up`, metres) rather than anywhere in the world.
+     *
+     * They are here because the alternative is whatever the moon and the last
+     * frame's fixtures happen to be doing to a gun held at hip height in a
+     * dark village — and on the one screen whose entire job is to show you the
+     * weapon, that is a black silhouette. The weapon's albedo is a night
+     * game's albedo, so this is deliberately far brighter than the shoulder
+     * lamp: `col = albedo * light` in the cel shader, and a #2a-ish receiver
+     * needs light well past 1 before it reads as metal rather than as a hole.
+     *
+     * Two of them — a warm key above the weapon and a dimmer cool fill from
+     * beyond it and below — because a single light flattens the model into one
+     * tone, and the hard bands the shader quantises the light into need
+     * something to vary across before they read as shape.
+     *
+     * The short range is load-bearing: the stage is a hole in the kit screen's
+     * scrim, so anything these reach is visible behind the weapon.
+     */
+    kitLamps: [
+      { ahead: 1, side: 0, up: 0.62, color: "#ffe8c6", range: 3, intensity: 5.2 },
+      { ahead: 1.6, side: 0.75, up: -0.25, color: "#a6bfe0", range: 3, intensity: 2.2 },
+    ],
   },
 
   /**

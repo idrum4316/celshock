@@ -1,10 +1,25 @@
 /**
- * LoadoutScreen.ts — The kit screen: pick a weapon, fit an optic, read what
- * the trade costs.
- * Owns: its own DOM under `#hud`, the two-slot selection model, and the stat
- * table it derives from `CONFIG.weapons`. It reports choices and redraws
- * nothing on its own — `Game` applies a pick and calls `setFit` back, so the
- * highlighted button can never get ahead of the weapon in the player's hands.
+ * LoadoutScreen.ts — The kit screen: pick a weapon, fit an optic, turn the
+ * thing over in your hands, and read what the trade costs.
+ * Owns: its own DOM under `#hud`, the two-slot selection model, the stat
+ * table it derives from `CONFIG.weapons`, and the pointer drags over its
+ * stage. It reports choices and redraws nothing on its own — `Game` applies a
+ * pick and calls `setFit` back, so the highlighted button can never get ahead
+ * of the weapon in the player's hands.
+ *
+ * The weapon on the right is not a picture: it is the real viewmodel, the one
+ * that will be in the player's hands, posed on a turntable by `ViewModel` and
+ * drawn by the live scene behind this overlay. Two consequences run through
+ * the file:
+ * - **The stage is a hole in the scrim, not a panel.** The weapon is on the
+ *   canvas and every part of this screen is above it, so the stage half carries
+ *   no background of its own — only a vignette to frame it. Which is also why
+ *   `show()` marks `#hud` and the CSS hides the menu and the deploy map while
+ *   the kit is up: they are DOM too, and either would paint over the weapon.
+ * - **The stage's geometry is shared with `CONFIG.viewmodel.inspect`.** The
+ *   panel column's width is what puts the stage's centre 0.46 of the way
+ *   across the viewport, which is the anchor the weapon is placed at. Both
+ *   sides are fractions of the viewport, so a resize moves them together.
  *
  * A screen rather than a row, because there are two slots now and the row it
  * replaces was a strip of buttons wedged under a menu that already had a
@@ -115,6 +130,15 @@ export function kitLabel(weapon: WeaponId, sight: SightId): string {
 export class LoadoutScreen {
   private root: HTMLElement;
   private body: HTMLElement;
+  /** The caption under the weapon on the stage. */
+  private stageCap: HTMLElement;
+  /**
+   * Drag accumulated since `Game` last read it. Pixels, not radians — how far
+   * a pixel turns the weapon is the viewmodel's business, and this screen has
+   * no opinion about it.
+   */
+  private dragX = 0;
+  private dragY = 0;
   private weapon: WeaponId = WEAPON_IDS[0];
   private sight: SightId = SIGHT_IDS[0];
   /** Which row the d-pad is on. Left/right steps inside it; up/down swaps it. */
@@ -130,16 +154,25 @@ export class LoadoutScreen {
     this.root.id = "loadout";
     this.root.className = "hidden";
     this.root.innerHTML = `
-      <h2>LOADOUT</h2>
-      <div class="lo-body"></div>
-      <p class="lo-foot">
-        <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> choose</span>
-        <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> slot</span>
-        <button class="lo-back"><kbd>Enter</kbd> Done</button>
-      </p>
+      <div class="lo-scrim"></div>
+      <div class="lo-panel">
+        <h2>LOADOUT</h2>
+        <div class="lo-body"></div>
+        <p class="lo-foot">
+          <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> choose</span>
+          <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> slot</span>
+          <button class="lo-back"><kbd>Enter</kbd> Done</button>
+        </p>
+      </div>
+      <div class="lo-stage">
+        <span class="lo-stage-cap"></span>
+        <span class="lo-stage-hint">Drag &middot; right stick to turn</span>
+      </div>
     `;
     document.getElementById("hud")!.appendChild(this.root);
     this.body = this.root.querySelector(".lo-body")!;
+    this.stageCap = this.root.querySelector(".lo-stage-cap")!;
+    this.bindStage(this.root.querySelector<HTMLElement>(".lo-stage")!);
     // A pick is applied the moment it is made, so this closes and nothing
     // else. `click` is safe here where the buttons that OPEN this screen need
     // pointerdown: the state under it takes its confirm from a mouse-down,
@@ -147,6 +180,49 @@ export class LoadoutScreen {
     this.root.querySelector<HTMLElement>("button.lo-back")!.onclick = () =>
       this.onClose();
     this.draw();
+  }
+
+  /**
+   * Turns the weapon under a mouse drag.
+   *
+   * `setPointerCapture` is what makes a drag that leaves the stage — over the
+   * panel, off the window — keep turning the weapon instead of stopping dead
+   * at the edge, which is the whole difference between a handle and a hotspot.
+   * Deltas are taken from `clientX/Y` rather than `movementX/Y`: the pointer is
+   * not locked here, and the movement fields are the ones this game reads only
+   * when it is.
+   */
+  private bindStage(stage: HTMLElement): void {
+    let last: { x: number; y: number } | null = null;
+    stage.addEventListener("pointerdown", (e) => {
+      last = { x: e.clientX, y: e.clientY };
+      stage.setPointerCapture(e.pointerId);
+      stage.classList.add("turning");
+    });
+    stage.addEventListener("pointermove", (e) => {
+      if (!last) return;
+      this.dragX += e.clientX - last.x;
+      this.dragY += e.clientY - last.y;
+      last = { x: e.clientX, y: e.clientY };
+    });
+    const end = () => {
+      last = null;
+      stage.classList.remove("turning");
+    };
+    stage.addEventListener("pointerup", end);
+    stage.addEventListener("pointercancel", end);
+  }
+
+  /**
+   * The drag since the last call, in pixels, and zeroed by reading it — the
+   * same consume-on-read shape `InputManager` gives mouse look, so a frame
+   * that never ran cannot turn the weapon twice.
+   */
+  consumeDrag(): { x: number; y: number } {
+    const drag = { x: this.dragX, y: this.dragY };
+    this.dragX = 0;
+    this.dragY = 0;
+    return drag;
   }
 
   /** Shows the kit that is actually fitted. Called by Game, never by a click. */
@@ -163,11 +239,20 @@ export class LoadoutScreen {
     // three deploys ago is a screen you have to look at before you can use it.
     this.slot = "weapon";
     this.root.classList.remove("hidden");
+    // The screens this one covers are DOM, and the weapon it shows is not:
+    // either of them left up would paint over the stage. The CSS carries the
+    // rule; this is the flag it reads.
+    document.getElementById("hud")!.classList.add("kitting");
     this.draw();
   }
 
   hide(): void {
     this.root.classList.add("hidden");
+    document.getElementById("hud")!.classList.remove("kitting");
+    // A drag interrupted by the screen closing must not turn the weapon on the
+    // next open.
+    this.dragX = 0;
+    this.dragY = 0;
   }
 
   get visible(): boolean {
@@ -225,6 +310,10 @@ export class LoadoutScreen {
         </div>`,
       )
       .join("");
+
+    // The stage's own caption: what is actually on the turntable, named where
+    // the eye already is rather than only over on the buttons.
+    this.stageCap.textContent = kitLabel(this.weapon, this.sight);
 
     this.body.innerHTML = `
       <div class="lo-slots">

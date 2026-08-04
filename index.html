@@ -1119,25 +1119,131 @@
 
          Above #overlay's z-index, because the menu is one of the things it
          covers. It is deliberately absent from the pause menu: a round you
-         are standing in is not somewhere you get to change what you carry. */
+         are standing in is not somewhere you get to change what you carry.
+
+         TWO COLUMNS, and the right one is a hole. The weapon on the stage is
+         the live viewmodel drawn by the scene on the canvas UNDER this whole
+         overlay, so the stage half carries no background of its own — the
+         scrim stops before it and only a vignette frames it.
+
+         `--panel` is therefore load-bearing outside this file: the stage takes
+         the rest of the width, so its centre sits `(1 + panel) / 2` across,
+         which in NDC (2x - 1) is exactly `panel` — 0.46, the anchor
+         `CONFIG.viewmodel.inspect` places the weapon at. Both are fractions of
+         the viewport, so a resize moves them together; change one without the
+         other and the weapon drifts off its own stage. */
       #loadout {
         position: absolute;
         inset: 0;
         z-index: 11;
+        --panel: 46%;
+        display: flex;
+        align-items: stretch;
+        pointer-events: auto;
+      }
+      /* The scrim is a child rather than #loadout's own background because it
+         has to stop: opaque under the panel, gone before the stage. A backdrop
+         over the stage would dim the weapon along with the world behind it —
+         everything here is above the canvas.
+
+         It ends on a rule rather than fading out over the stage. A soft ramp
+         across a live scene is a soft ramp against whatever brightness happens
+         to be behind it, which reads as a smear the width of a hand; a hard
+         edge with a lit line on it reads as the side of a panel. */
+      #loadout .lo-scrim {
+        position: absolute;
+        inset: 0;
         background:
-          radial-gradient(ellipse at center, rgba(6, 8, 14, 0.93), rgba(2, 3, 6, 0.985)),
+          linear-gradient(
+            to right,
+            rgba(2, 3, 6, 0.985) 0%,
+            rgba(4, 6, 13, 0.97) 70%,
+            rgba(4, 6, 13, 0.94) 100%
+          ),
           repeating-linear-gradient(
             to bottom,
             rgba(255, 255, 255, 0.025) 0 1px,
             transparent 1px 3px
           );
+        right: calc(100% - var(--panel));
+        border-right: 1px solid rgba(255, 255, 255, 0.09);
+      }
+      #loadout .lo-panel {
+        position: relative;
+        flex: 0 0 var(--panel);
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
         gap: 18px;
-        pointer-events: auto;
+        padding: 0 26px;
       }
+      /* The stage: a frame around a hole, and the drag handle for the weapon in
+         it. The vignette darkens the world at the edges without touching the
+         middle, where the weapon is — a flat wash over it would dim the
+         weapon just as much as the village behind. */
+      #loadout .lo-stage {
+        position: relative;
+        flex: 1 1 auto;
+        cursor: grab;
+        background: radial-gradient(
+          ellipse 44% 48% at 50% 44%,
+          rgba(3, 4, 10, 0.5) 42%,
+          rgba(3, 4, 10, 0.93) 100%
+        );
+      }
+      #loadout .lo-stage.turning { cursor: grabbing; }
+      /* Corner ticks, so the hole reads as a bay the weapon is standing in
+         rather than as a gap where the panel failed to load. */
+      #loadout .lo-stage::before,
+      #loadout .lo-stage::after {
+        content: "";
+        position: absolute;
+        width: 26px;
+        height: 26px;
+        border: 1px solid rgba(255, 230, 128, 0.3);
+      }
+      #loadout .lo-stage::before {
+        top: 15%;
+        left: 8%;
+        border-right: 0;
+        border-bottom: 0;
+      }
+      #loadout .lo-stage::after {
+        bottom: 15%;
+        right: 8%;
+        border-left: 0;
+        border-top: 0;
+      }
+      #loadout .lo-stage-cap,
+      #loadout .lo-stage-hint {
+        position: absolute;
+        left: 0;
+        right: 0;
+        text-align: center;
+        text-transform: uppercase;
+      }
+      #loadout .lo-stage-cap {
+        bottom: 21%;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.26em;
+        color: var(--hot);
+      }
+      #loadout .lo-stage-hint {
+        bottom: 17%;
+        font-size: 9px;
+        letter-spacing: 0.2em;
+        color: rgba(255, 255, 255, 0.34);
+      }
+      /* While the kit is up, everything else under #hud goes dark — the menu,
+         the deploy map, the gauges, the crosshair, all of it. The weapon on the
+         stage is NOT DOM: it is drawn by the scene on the canvas below every
+         one of these, so anything left standing paints over it. The menu's own
+         backdrop is nearly opaque, which is why its ghost through the scrim was
+         never doing any work anyway; the crosshair sitting in the middle of a
+         kit screen was doing worse than nothing. */
+      #hud.kitting > *:not(#loadout) { visibility: hidden; }
       /* Same rules-either-side heading as the deploy screen's. */
       #loadout h2 {
         position: relative;
@@ -1161,11 +1267,14 @@
         left: 100%;
         background: linear-gradient(to left, transparent, rgba(255, 230, 128, 0.55));
       }
+      /* Sized to the panel column it now sits in rather than to the viewport:
+         the stage owns the other half of the screen. */
       #loadout .lo-body {
         display: flex;
         flex-direction: column;
         gap: 12px;
-        width: min(780px, 88vw);
+        width: 100%;
+        max-width: 620px;
         text-align: left;
       }
       #loadout .lo-slots { display: flex; flex-direction: column; gap: 6px; }
@@ -1238,12 +1347,17 @@
          arrow across it drags the whole centred column up and down. */
       #loadout .lo-detail {
         display: flex;
+        /* Wraps rather than squeezing: the chart's bar column is the flexible
+           one, so in a narrow panel a row that stays side by side hands the
+           bars a couple of pixels and the chart silently becomes a list of
+           numbers. Stacked, both halves keep their width. */
+        flex-wrap: wrap;
         gap: 22px;
         padding: 16px 20px;
         min-height: 168px;
       }
       #loadout .lo-stats {
-        flex: 0 0 44%;
+        flex: 1 1 210px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -1282,7 +1396,7 @@
         color: #cfd6e2;
       }
       #loadout .lo-blurbs {
-        flex: 1 1 auto;
+        flex: 1 1 240px;
         display: flex;
         flex-direction: column;
         justify-content: center;

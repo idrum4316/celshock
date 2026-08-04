@@ -92,6 +92,13 @@ type GameState =
 /** Grass bends around combatants; in the editor there are none. */
 const EMPTY_PUSHERS: readonly Combatant[] = [];
 
+/**
+ * The carried-light id for one of the kit screen's bench lamps. A function so
+ * that putting them up and taking them down cannot disagree about the name —
+ * a carried light nobody removes never gives its shader slot back.
+ */
+const kitLampId = (n: number) => `kit-lamp-${n}`;
+
 /** Where the chosen enemy-skill tier is remembered between sessions. */
 const DIFFICULTY_KEY = "hollowmere.difficulty";
 /** …and the loadout. Same store, same tolerance for it not working. */
@@ -239,6 +246,8 @@ export class Game {
   private readonly combatants: Combatant[] = [];
   /** Scratch for the shadow focus point — no per-frame allocation. */
   private readonly shadowFocus = new Vector3();
+  /** …and for the kit screen's bench lamp, placed relative to the camera. */
+  private readonly kitLampPos = new Vector3();
   /** Counts down while the player is waiting to redeploy. */
   private respawnT = 0;
   /** Round scoreboard: kills and losses per team, plus the player's own line. */
@@ -496,16 +505,91 @@ export class Game {
     this.state = "loadout";
     this.loadoutScreen.setFit(this.weapon, this.sight);
     this.loadoutScreen.show();
+    // The weapon comes out to be looked at. It is the real viewmodel on the
+    // real camera — the kit screen shows what will be in the player's hands,
+    // not a picture of it — which is why the screen's stage half is a hole in
+    // its own scrim rather than a panel.
+    this.player.inspectWeapon(true);
+  }
+
+  /**
+   * Puts the kit screen away — the screen, the weapon on its stage, and the
+   * lamp lighting it — without saying where the game goes next.
+   *
+   * Every exit owes all three, and there are four of them: the Done button,
+   * the main menu, F2 into the editor and a round starting. The lamp is the
+   * one that bites if it is missed. A carried light never loses its shader
+   * slot and survives `lighting.clear()` between rounds, so one left behind
+   * follows the player into the fight as a lantern nobody is holding.
+   */
+  private stowKit(): void {
+    this.loadoutScreen.hide();
+    this.player.inspectWeapon(false);
+    CONFIG.lighting.kitLamps.forEach((_, n) =>
+      this.lighting.removeCarried(kitLampId(n)),
+    );
   }
 
   private closeLoadout(): void {
     if (this.state !== "loadout") return;
-    this.loadoutScreen.hide();
+    this.stowKit();
     this.state = this.loadoutFrom;
     // The menu paints the kit into its own markup and was covered while it
     // changed, so it is redrawn on the way out. The deploy screen's caption is
     // a text node `applyLoadout` already patched.
     if (this.state === "menu") this.showMenu();
+  }
+
+  /**
+   * Turns the weapon on the kit screen's stage, and keeps it lit while it is
+   * there.
+   *
+   * The kit screen is the one overlay showing live 3D, so it owes by hand the
+   * two per-frame pushes only `updateGameplay` normally makes. The camera
+   * position is the load-bearing one: the cel shader fogs against `camPos`,
+   * which outside a round is whatever the last gameplay frame left there —
+   * `Vector3.Zero()` before the first one. A kit opened straight off the main
+   * menu would put the weapon a whole map's width from where the shader thinks
+   * the eye is, and fog it out to a flat grey silhouette. The other is the drag
+   * itself, which is read consume-on-read from the screen and mixed with the
+   * pad's right stick, so both devices turn the same turntable.
+   *
+   * The bench lamps are the third thing, and they go through `LightingSystem`
+   * like every other light rather than being uploaded from here: carried
+   * lights always win a slot, so one frame of `lighting.update` is all it
+   * takes to put them on the weapon. `stowKit` takes them away again.
+   */
+  private updateKitStage(dt: number): void {
+    const i = CONFIG.viewmodel.inspect;
+    const drag = this.loadoutScreen.consumeDrag();
+    const camera = this.cameraSys.camera;
+    // Both axes are negated: a drag takes hold of the near face of the weapon,
+    // so pulling right has to turn the far side left.
+    this.player.updateInspect(
+      -(drag.x * i.dragRate + this.input.stickLookX * i.stickRate * dt),
+      -(drag.y * i.dragRate + this.input.stickLookY * i.stickRate * dt),
+      camera.fov,
+      this.engine.getAspectRatio(camera),
+    );
+    this.mats.updateCamera(camera.position);
+    const eye = camera.position;
+    const forward = this.cameraSys.forward;
+    const right = this.cameraSys.flatRight;
+    CONFIG.lighting.kitLamps.forEach((lamp, n) => {
+      this.kitLampPos.set(
+        eye.x + forward.x * lamp.ahead + right.x * lamp.side,
+        eye.y + forward.y * lamp.ahead + right.y * lamp.side + lamp.up,
+        eye.z + forward.z * lamp.ahead + right.z * lamp.side,
+      );
+      this.lighting.setCarried(
+        kitLampId(n),
+        this.kitLampPos,
+        lamp.color,
+        lamp.range,
+        lamp.intensity,
+      );
+    });
+    this.lighting.update(dt, camera.position, this.mats);
   }
 
   /**
@@ -626,6 +710,7 @@ export class Game {
         if (this.input.menuDownPressed) this.loadoutScreen.moveSlot(1);
         if (this.input.menuLeftPressed) this.loadoutScreen.cycle(-1);
         if (this.input.menuRightPressed) this.loadoutScreen.cycle(1);
+        this.updateKitStage(dt);
         break;
       case "playing":
         if (this.input.pausePressed) {
@@ -754,7 +839,7 @@ export class Game {
     this.state = "menu";
     this.clearPause();
     this.deployScreen.hide();
-    this.loadoutScreen.hide();
+    this.stowKit();
     this.minimap.setVisible(false);
     this.player.setBodyHidden(true);
     this.hud.setScoreboard(false);
@@ -814,7 +899,7 @@ export class Game {
     this.deployScreen.hide();
     // F2 is reachable from the loadout screen too, and it would sit over the
     // editor's own panel.
-    this.loadoutScreen.hide();
+    this.stowKit();
     this.minimap.setVisible(false);
     this.player.setBodyHidden(true);
     if (document.pointerLockElement) document.exitPointerLock();
@@ -898,7 +983,7 @@ export class Game {
   private startRound(): void {
     this.hud.hideOverlay();
     // Reachable from the menu, so the kit screen may still be up over it.
-    this.loadoutScreen.hide();
+    this.stowKit();
     // Reachable straight from the pause menu ("Restart round"), and harmless
     // from anywhere else.
     this.clearPause();

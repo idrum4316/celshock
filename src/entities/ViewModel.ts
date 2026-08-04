@@ -32,12 +32,19 @@
  * - Arms are built at the origin and merged per colour before being parented,
  *   the same rule as BuildingKit and the weapon models: MergeMeshes bakes
  *   world matrices, so the merge is only correct at identity.
+ * - The loadout screen's turntable (`beginInspect`/`updateInspect`) is the one
+ *   pose that is not the carried one, and it is the only thing here that may
+ *   write `rotationQuaternion`. While one is set Babylon ignores `rotation`
+ *   entirely, so `endInspect` clearing it is what lets the carried pose come
+ *   back at all.
  */
 import {
   Color3,
+  Matrix,
   Mesh,
   MeshBuilder,
   type Node,
+  Quaternion,
   Scene,
   TransformNode,
   Vector3,
@@ -105,6 +112,19 @@ const smoothstep01 = (x: number) => x * x * (3 - 2 * x);
 const ramp = (a: number, b: number, x: number) =>
   smoothstep01(clamp((x - a) / (b - a), 0, 1));
 
+/**
+ * What the turntable needs from the camera it is parented to. The weapon is
+ * placed by SCREEN position, so it has to know how the camera projects: the
+ * anchor is back-projected through these, which is also what makes the pose
+ * survive a resize or a camera left zoomed by the last round.
+ */
+export interface InspectParams {
+  /** Vertical field of view (radians) — Babylon's default fixed axis. */
+  fovY: number;
+  /** Render width / height. */
+  aspect: number;
+}
+
 /** One built weapon and the arms holding it — enabled only while carried. */
 interface WeaponRig {
   /** Parent of everything in this rig; the switch a loadout change throws. */
@@ -117,6 +137,16 @@ interface WeaponRig {
 export class ViewModel {
   /** Every visible part, for the one visibility switch Player owns. */
   readonly meshes: Mesh[] = [];
+  /**
+   * The gloved arms, of every weapon — the subset that lets go while the
+   * weapon is on the turntable. A forearm cut off at the elbow is a fact of
+   * first person that reads fine when the weapon is being carried and reads as
+   * a severed arm when it is being turned over on a bench.
+   */
+  private readonly arms: Mesh[] = [];
+  /** Whether the on-screen weapon is visible at all (Player's switch). */
+  private shown = false;
+  private inspecting = false;
   /**
    * The carried weapon's barrel tip and ejection port, as nodes that outlive a
    * loadout change. Player hangs the muzzle flash off the first and throws its
@@ -138,6 +168,17 @@ export class ViewModel {
   /** The authored hip pose, plus the carried weapon's own length offset. */
   private readonly hipPos: Vector3;
   private readonly hipRot: Vector3;
+
+  /**
+   * The carried weapon's turntable pivot, in the weapon's own frame: a point
+   * along its axis derived from its own muzzle landmark (see
+   * `inspect.pivotFrac`), so the SMG spins about the middle of the SMG.
+   * Written by `applyFit` with everything else the fit decides.
+   */
+  private readonly pivot = new Vector3();
+  /** Turntable angles, in radians. Only the inspect path reads them. */
+  private inspectYaw = 0;
+  private inspectPitch = 0;
 
   // Sway state: a spring behind the look rates, so the weapon settles after
   // the camera has stopped instead of snapping back with it.
@@ -163,6 +204,17 @@ export class ViewModel {
    * scales with the model, and the angle at the eye comes out unchanged.
    */
   private readonly off = new Vector3();
+  /** Scratch for the turntable's rotation — built per frame, never allocated. */
+  private readonly spinYaw = Matrix.Identity();
+  private readonly spinPitch = Matrix.Identity();
+  private readonly spin = Matrix.Identity();
+  /**
+   * The quaternion the node itself holds while inspecting. Handed over once by
+   * `beginInspect` and mutated in place after that — Babylon compares the
+   * object against its own cache, so an in-place write is seen, exactly as it
+   * is for `position`.
+   */
+  private readonly spinQ = new Quaternion();
 
   constructor(scene: Scene, mats: CelMaterialFactory, camera: Node) {
     const v = CONFIG.viewmodel;
@@ -184,11 +236,12 @@ export class ViewModel {
       parts.root.parent = root;
       const supportArm = new TransformNode(`viewmodel_${id}_supportArm`, scene);
       supportArm.parent = root;
-      this.meshes.push(...parts.meshes);
-      this.meshes.push(...buildArm(scene, mats, `${id}_trigger`, parts.grip, root));
-      this.meshes.push(
+      const arms = [
+        ...buildArm(scene, mats, `${id}_trigger`, parts.grip, root),
         ...buildArm(scene, mats, `${id}_support`, parts.support, supportArm),
-      );
+      ];
+      this.meshes.push(...parts.meshes, ...arms);
+      this.arms.push(...arms);
       this.rigs[id] = { root, parts, supportArm };
     }
 
@@ -266,6 +319,11 @@ export class ViewModel {
     // A shorter weapon sits closer, or it reads as being held at arm's length.
     this.hipPos.set(v.hipPos.x, v.hipPos.y, v.hipPos.z + this.weaponFit.hipZ);
 
+    // Where the turntable spins: along this weapon's own axis, so a swap on
+    // the kit screen re-centres the model instead of hanging the SMG off the
+    // point the rifle's receiver used to sit at.
+    this.pivot.set(0, 0, parts.muzzle.z * v.inspect.pivotFrac);
+
     const s = v.scale * this.sight.zoomComp;
     const centre = parts.sights[this.sight.id].sightCenter.position;
     this.adsPos.set(
@@ -281,7 +339,19 @@ export class ViewModel {
   }
 
   setVisible(visible: boolean): void {
-    for (const m of this.meshes) m.isVisible = visible;
+    this.shown = visible;
+    this.applyMeshVisibility();
+  }
+
+  /**
+   * The one place a mesh's visibility is written. Two flags decide it — shown
+   * at all, and whether the hands are on the weapon — and routing both through
+   * here is what stops the kit screen's "show the weapon" and its "let go of
+   * it" from fighting over the arms depending on which ran last.
+   */
+  private applyMeshVisibility(): void {
+    for (const m of this.meshes) m.isVisible = this.shown;
+    if (this.inspecting) for (const m of this.arms) m.isVisible = false;
   }
 
   /** Drops every transient offset — called when a round starts. */
@@ -291,6 +361,101 @@ export class ViewModel {
     this.swayYaw = 0;
     this.swayPitch = 0;
     for (const id of WEAPON_IDS) this.rigs[id].supportArm.position.setAll(0);
+  }
+
+  /**
+   * Takes the weapon off the shoulder and puts it on the loadout screen's
+   * turntable, opened at the authored angles rather than wherever it was left
+   * three deploys ago — the same rule the kit screen's own cursor follows.
+   *
+   * The pose switches to a quaternion here, and that is not a detail: the
+   * carried pose is Euler and Babylon composes it in the WEAPON's frame, so at
+   * a side-on yaw the pitch a drag asks for arrives as a roll. A quaternion
+   * built yaw-then-pitch keeps the pitch about the camera's own horizontal
+   * axis at every yaw, which is what makes a drag feel like a hand on the
+   * weapon. `endInspect` puts the Euler pose back.
+   */
+  beginInspect(): void {
+    const i = CONFIG.viewmodel.inspect;
+    this.inspectYaw = i.baseYaw;
+    this.inspectPitch = i.basePitch;
+    this.weapon.rotationQuaternion = this.spinQ;
+    this.inspecting = true;
+    this.applyMeshVisibility();
+  }
+
+  /** Hands the weapon back to the carried pose, hands and all. */
+  endInspect(): void {
+    // Euler `rotation` is dead while this is set, so dropping it is what lets
+    // the hip pose return at all.
+    this.weapon.rotationQuaternion = null;
+    this.weapon.scaling.setAll(CONFIG.viewmodel.scale);
+    this.inspecting = false;
+    this.applyMeshVisibility();
+  }
+
+  /**
+   * Turns the weapon on the turntable — radians, from a drag or a stick. Yaw
+   * wraps; pitch stops short of straight up and down, where a spinning
+   * turntable stops reading as one.
+   */
+  spinInspect(dYaw: number, dPitch: number): void {
+    const i = CONFIG.viewmodel.inspect;
+    this.inspectYaw = (this.inspectYaw + dYaw) % (Math.PI * 2);
+    this.inspectPitch = clamp(this.inspectPitch + dPitch, -i.pitchMax, i.pitchMax);
+  }
+
+  /**
+   * Poses the weapon on the turntable. Not a step of `update` — nothing that
+   * moves the carried weapon applies to one being looked at, so sway, bob, the
+   * kick and the whole hip/ADS blend are simply absent.
+   *
+   * Two things are derived rather than authored, and both are what make the
+   * stage hold still:
+   * - The position is the stage's screen anchor BACK-PROJECTED to the inspect
+   *   distance, so the weapon sits where the DOM says the stage is at any
+   *   window size, and the distance is scaled by the live FOV against the
+   *   hip-fire one so a camera left zoomed by the last round frames it the
+   *   same. (Babylon holds the vertical FOV, hence the aspect on x alone.)
+   * - The pivot correction. The node rotates about its own origin, which on a
+   *   rifle is the receiver and nowhere near the middle of the model, so a
+   *   turntable about it would swing the weapon around the screen. Placing the
+   *   ROTATED pivot on the anchor instead keeps the weapon's own centre
+   *   nailed to the stage while it turns.
+   */
+  updateInspect(p: InspectParams): void {
+    const v = CONFIG.viewmodel;
+    const i = v.inspect;
+
+    // Yaw first, then pitch about the camera's horizontal axis: Babylon's
+    // matrix product applies the left operand first (the same order
+    // scale-rotate-translate is composed in).
+    Matrix.RotationYToRef(this.inspectYaw, this.spinYaw);
+    Matrix.RotationXToRef(this.inspectPitch, this.spinPitch);
+    this.spinYaw.multiplyToRef(this.spinPitch, this.spin);
+    Quaternion.FromRotationMatrixToRef(this.spin, this.spinQ);
+
+    // The distance also gives way to a viewport narrower than the one the
+    // framing was authored for: apparent size follows the VERTICAL fov, while
+    // the room the weapon has to fit in is the stage's share of the WIDTH, so
+    // on a nearly square window a rifle framed for 16:9 lies across the panel.
+    const fit = Math.max(1, i.aspectReference / p.aspect);
+    // Written as "hold the visible half-height at the weapon" rather than as a
+    // distance, because that IS the framing: how much of the world fits beside
+    // the weapon is what decides how big it looks, and holding it fixed is what
+    // makes the stage identical through any FOV the last round left behind.
+    const halfH = i.dist * fit * Math.tan(CONFIG.camera.fovHip / 2);
+    const dist = halfH / Math.tan(p.fovY / 2);
+    this.pos.copyFrom(this.pivot).scaleInPlace(v.scale);
+    Vector3.TransformCoordinatesToRef(this.pos, this.spin, this.pos);
+    this.pos.set(
+      i.anchorX * halfH * p.aspect - this.pos.x,
+      i.anchorY * halfH - this.pos.y,
+      dist - this.pos.z,
+    );
+
+    this.weapon.position.copyFrom(this.pos);
+    this.weapon.scaling.setAll(v.scale);
   }
 
   update(dt: number, p: ViewModelParams): void {
