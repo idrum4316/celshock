@@ -585,9 +585,9 @@ export const CONFIG = {
     height: 1.8,
     radius: 0.45,
     /**
-     * Crouch. Held, never toggled, and it costs speed for a lower profile and
-     * a steadier gun. Two numbers do the real work and they must move
-     * together:
+     * Crouch — held on Ctrl, latched by `C` or the pad's B (see
+     * `InputManager.crouch`). It costs speed for a lower profile and a
+     * steadier gun. Two numbers do the real work and they must move together:
      *
      * `crouchEyeHeight` is where the camera goes, where `Player.eyePos`
      * reports, and therefore what bots test line of sight against and aim at —

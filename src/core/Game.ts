@@ -785,6 +785,11 @@ export class Game {
         // the lid comes off and the state under it comes back, which is what
         // "Resume" does anyway.
         if (this.input.pausePressed || this.input.menuBackPressed) {
+          // B is also the pad's crouch toggle, so the press that lifted the lid
+          // has already flipped the latch. Only a B resume owes the correction
+          // — clearing it on every resume would stand up a player who paused
+          // deliberately crouched behind cover.
+          if (this.input.menuBackPressed) this.input.clearCrouchToggle();
           this.resume();
           break;
         }
@@ -1126,6 +1131,12 @@ export class Game {
     // up the DOM — so the fire gate below would be satisfied by the very click
     // that spawned the player. Hold the trigger until it is released.
     this.input.consumeFire();
+    // Both stances latch, and a fresh body neither crouches nor runs. The
+    // crouch one also catches the pad's B doing double duty: backing out of
+    // the kit screen on the way to deploying flips the latch, and nothing else
+    // would clear it.
+    this.input.clearCrouchToggle();
+    this.input.clearSprintToggle();
     this.state = "playing";
   }
 

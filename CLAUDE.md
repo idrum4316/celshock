@@ -360,7 +360,7 @@ defines and the same point bots test line of sight against, so what a bot can
 see of you is what you can see of it.
 
 **Crouch is that one point moving, and it only works because it is one point.**
-Holding crouch eases `eyePos` down to `CONFIG.player.crouchEyeHeight`, which
+Asking for crouch eases `eyePos` down to `CONFIG.player.crouchEyeHeight`, which
 lowers the camera, breaks a bot's line of sight and moves its aim point all at
 once — so ducking behind a waist-high wall genuinely breaks contact rather than
 looking like it does. The catch is that `Player.center` must come down the same
@@ -374,7 +374,36 @@ eye it is when standing — the same visible-but-unhittable trap `CoverMap`'s
 *not* resized: `moveWithCollisions` is horizontal-only and the ground probe
 places the feet, so a shorter body would buy nothing and would owe a stand-up
 clearance test. Sprint outranks crouch and is resolved first, so the two can
-never argue over the blend. Bots have no equivalent — their rig has no knees
+never argue over the blend.
+
+**It is asked for two ways, and the split is per input rather than per player.**
+Ctrl is a hold — the crouch taken for one corner, where letting go is how you
+stand up — while `C` and the pad's **B** flip a latch, for the crouch held
+through a firefight; on a pad that is the only workable shape, since B held
+rules out the rest of the face buttons. Both toggles share ONE latch in
+`InputManager`, so either can answer the other, and the hold simply ORs on top
+of it. The cost is that B is also the menus' back button: a press that lifts
+the pause lid or closes the kit screen flips the latch behind it, so
+`Game` calls `input.clearCrouchToggle()` wherever a B press hands control back
+to gameplay (a B resume) and on `spawnPlayer` (a fresh body neither crouches
+nor runs).
+
+**A latch is spent by whatever overrides it, never suspended under it**, and
+that rule is what keeps two toggles from stacking up a stance the player has
+stopped asking for. Starting to run spends a latched crouch (so a sprint does
+not drop you back into a crouch you asked for before it) and ending a run
+spends the sprint latch (so a pad player who stops for a corner walks out of
+it rather than sprinting the moment they touch the stick). Pressing either
+latch clears the other outright, since the two stances are exclusive and the
+one asked for second wins. `Player.update` is where the two edges live,
+because `input.sprint`/`input.crouch` are only the *ask* — the stick, the
+optic and the reload are what decide whether a sprint is happening — and it
+calls back into `InputManager.clearCrouchToggle`/`clearSprintToggle` on the
+transitions. **Held keys are exempt**: Shift and Ctrl are a live ask rather
+than a latch, so a Ctrl held through a sprint still crouches you when the
+sprint ends, and nothing here can clear a key that is still down.
+
+Bots have no equivalent — their rig has no knees
 (see `CoverMap`), and this is player-only. There is no occlusion pick and no pull-in
 any more: the old shoulder camera had to ray-test its way out of walls, and a
 camera inside the head has nothing to be occluded by. There is also **no player

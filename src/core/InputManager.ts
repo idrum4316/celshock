@@ -41,12 +41,30 @@ export class InputManager {
   /**
    * Keyboard: held Shift. Gamepad: L3 toggles — holding a stick click for a
    * 240 m crossing is miserable, so the pad latches instead.
+   *
+   * This is the ASK, not the sprint: whether one is happening also depends on
+   * the stick, the optic and the reload, and `Player` is what resolves that.
+   * It is also what spends the latch when the sprint ends
+   * (`clearSprintToggle`), so a stop is a stop rather than a pause in a
+   * standing intention to run.
    */
   sprint = false;
   /**
-   * Held: crouch. Deliberately held rather than latched, unlike sprint — a
-   * crouch is taken for a corner or a burst, not for a 240 m crossing, and a
-   * toggle you forget you are in silently halves your speed.
+   * Crouch, from a hold OR a latch, because the two inputs want different
+   * things. Ctrl is held: a crouch taken for a corner or a single burst, where
+   * letting go is how you stand up and there is nothing to forget you are in.
+   * `C` and the pad's B toggle, for the crouch you hold through a whole
+   * firefight — and on the pad that is the only workable shape, since B is
+   * also jump's neighbour and holding it rules out the rest of the face
+   * buttons.
+   *
+   * The two toggles share ONE latch (`crouchLatched`), so whichever of them
+   * put you down can be answered by either one, and Ctrl simply ORs on top —
+   * a hold cannot clear a latch, and releasing it drops you back to whatever
+   * the latch says.
+   *
+   * The latch is EXCLUSIVE with the sprint latch and is spent by a sprint
+   * rather than suspended under one: see `clearCrouchToggle`.
    */
   crouch = false;
   /** Held: show the scoreboard. */
@@ -154,8 +172,14 @@ export class InputManager {
   private prevPause = false;
   private prevLoadout = false;
   private prevPadSprint = false;
+  private prevCrouchToggle = false;
   /** Latched L3 sprint state — toggled on each L3 press, cleared on blur. */
   private padSprintOn = false;
+  /**
+   * Latched crouch — flipped by `C` or by the pad's B, cleared on blur and by
+   * `clearCrouchToggle()`. One latch for both, see `crouch`.
+   */
+  private crouchLatched = false;
   /** Set by `consumeFire()`; cleared the frame the trigger reads released. */
   private fireBlocked = false;
 
@@ -170,6 +194,7 @@ export class InputManager {
       this.pointerMask = 0;
       this.mouseMask = 0;
       this.padSprintOn = false;
+      this.crouchLatched = false;
     });
 
     // Button state is read from `buttons` bitmasks (not individual
@@ -281,17 +306,35 @@ export class InputManager {
     this.fire = fireNow && !this.fireBlocked;
 
     // L3 toggles sprint rather than holding it — a stick click is fatiguing
-    // to hold, and sprint here is traversal, not a burst.
-    if (padSprint && !this.prevPadSprint) this.padSprintOn = !this.padSprintOn;
+    // to hold, and sprint here is traversal, not a burst. Taking one latch
+    // spends the other: the two stances are exclusive, so the one asked for
+    // second wins outright rather than queueing behind the first.
+    if (padSprint && !this.prevPadSprint) {
+      this.padSprintOn = !this.padSprintOn;
+      if (this.padSprintOn) this.crouchLatched = false;
+    }
     this.prevPadSprint = padSprint;
 
     this.sprint =
       this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.padSprintOn;
+
+    // Crouch: `C` and pad B flip the shared latch on their rising edge, Ctrl
+    // is held on top of whatever the latch says. Both toggles are OR'd into
+    // one edge, so pressing them on the same frame is one flip rather than
+    // two that cancel.
+    const crouchToggleNow = this.keys.has("KeyC") || padCrouch;
+    if (crouchToggleNow && !this.prevCrouchToggle) {
+      this.crouchLatched = !this.crouchLatched;
+      // The other half of the exclusivity above: asking to get down ends a
+      // latched sprint, so the crouch takes effect on the frame it was asked
+      // for instead of waiting for the run to finish.
+      if (this.crouchLatched) this.padSprintOn = false;
+    }
+    this.prevCrouchToggle = crouchToggleNow;
     this.crouch =
-      this.keys.has("KeyC") ||
+      this.crouchLatched ||
       this.keys.has("ControlLeft") ||
-      this.keys.has("ControlRight") ||
-      padCrouch;
+      this.keys.has("ControlRight");
     this.altHeld = this.keys.has("AltLeft") || this.keys.has("AltRight");
     // Back / View button (6 on the standard mapping is LT, 8 is Back).
     this.scoreboard = this.keys.has("Tab") || (pad ? buttonHeld(pad, 8, trig) : false);
@@ -385,6 +428,36 @@ export class InputManager {
    */
   consumeFire(): void {
     this.fireBlocked = true;
+  }
+
+  /**
+   * Drops the latched crouch, so the player stands up. Held keys are
+   * untouched — a Ctrl still down is still a crouch on the next frame.
+   *
+   * Two callers, for two different reasons. `Player` spends the latch when a
+   * sprint actually starts (see `LATCH IS SPENT` there). And `Game` calls it
+   * wherever a B press hands control back to gameplay, plus on spawn: B is
+   * both the pad's crouch toggle and its "back", so the press that backs out
+   * of a screen flips the latch behind it, and a player who lifted the pause
+   * lid would arrive in the world crouched with no idea why. The keyboard has
+   * no such collision (`C` is gameplay-only), but the latch is shared, so one
+   * call settles both.
+   */
+  clearCrouchToggle(): void {
+    this.crouchLatched = false;
+  }
+
+  /**
+   * Drops the latched (L3) sprint. Shift is untouched, for the same reason
+   * Ctrl is above: a held key is a live ask, not a latch.
+   *
+   * `Player` calls this the frame a sprint actually ends, whatever ended it —
+   * the stick coming back to centre, an optic coming up, a reload. A latch
+   * that outlived its own state would make the next step out of cover a
+   * sprint, which is the opposite of what the player asked for by stopping.
+   */
+  clearSprintToggle(): void {
+    this.padSprintOn = false;
   }
 
   /**

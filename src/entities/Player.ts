@@ -161,7 +161,7 @@ export class Player implements Combatant {
   reloading = false;
   /** True while the sprint key is held and the player is actually running. */
   sprinting = false;
-  /** True while the crouch key is held and the player is not sprinting. */
+  /** True while crouch is asked for (held or latched) and not sprinting. */
   crouching = false;
   /**
    * Eased 0..1 stance blend. Drives the eye height, the hit sphere's centre,
@@ -434,13 +434,30 @@ export class Player implements Combatant {
     // `tryShot`) — otherwise it is strictly better than walking.
     //
     // Sprint outranks crouch, and is resolved first so the two can't argue:
-    // asking to run stands the player up, and letting go of the sprint key
-    // drops straight back down while the crouch key is still held. Crouch is
-    // deliberately NOT gated on `grounded` — jumping out of it would pop the
-    // camera half a metre at the worst possible moment, and the collider
-    // capsule never changes size, so there is nothing underfoot to reconcile.
+    // asking to run stands the player up. Crouch is deliberately NOT gated on
+    // `grounded` — jumping out of it would pop the camera half a metre at the
+    // worst possible moment, and the collider capsule never changes size, so
+    // there is nothing underfoot to reconcile.
+    //
+    // **A LATCH IS SPENT BY WHAT OVERRIDES IT, NEVER SUSPENDED BY IT**, and
+    // this is where that is enforced, because this is the only place that
+    // knows whether a sprint is actually happening: `input.sprint` is the ask,
+    // and the stick, the optic and the reload are what decide. So the two
+    // edges below are the state changing, not a button.
+    //
+    // Starting to run spends a latched crouch, or the run would drop the
+    // player back into a crouch they asked for before it. Ending a run spends
+    // the sprint latch, or a pad player who stops for a corner starts running
+    // again the moment they touch the stick — the L3 press is a sprint, not a
+    // standing intention to sprint whenever moving. Both are one-way: neither
+    // clears an input that is *held*, so Shift and Ctrl still mean what they
+    // say for as long as they are down, and a held Ctrl still comes back after
+    // a sprint because the player never stopped asking for it.
+    const wasSprinting = this.sprinting;
     this.sprinting =
       input.sprint && input.moveY > 0.1 && cam.adsBlend < 0.4 && !this.reloading;
+    if (this.sprinting && !wasSprinting) input.clearCrouchToggle();
+    if (wasSprinting && !this.sprinting) input.clearSprintToggle();
     this.crouching = input.crouch && !this.sprinting;
     this.crouchBlend +=
       ((this.crouching ? 1 : 0) - this.crouchBlend) *

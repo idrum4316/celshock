@@ -34,7 +34,11 @@ const CONTROLS: readonly [string, string, string][] = [
   ["Jump", "A", "Space"],
   ["Reload", "X", "R"],
   ["Sprint", "L3", "Shift"],
-  ["Crouch", "B", "Ctrl"],
+  // Two keys because they behave differently — Ctrl is held, C latches, and
+  // on the pad B latches too. The table's grammar is one chip per key and it
+  // has nowhere to say which is which; the pair reads as "either", which is
+  // true, and one press of each tells the rest.
+  ["Crouch", "B", "Ctrl C"],
   ["Pause", "Start", "Esc"],
 ];
 
