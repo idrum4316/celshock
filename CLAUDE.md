@@ -116,7 +116,11 @@ have already cost time:
   mode keeps accumulating emissions while stopped, so under it the same pair
   refills the sky a second later. Do not change that option. Note the field
   takes `maxLifeTime` to reach its steady state, so let `getActiveCount()`
-  settle before capturing anything that includes it.
+  settle before capturing anything that includes it. Read `system` through the
+  handle each time rather than holding it: the buffer is sized to the applied
+  `ParticleSpec`, so a *different* spec replaces the whole system (an unchanged
+  one never does, which is what keeps an editor rebuild from blinking the sky
+  out).
 - The muzzle flash is unhittable at 2 fps (`gunfeel.flashTime` is 0.05 s of game
   time); force it with `player.flashRoot.setEnabled(true)` instead.
 - Getting into `playing` takes an indeterminate number of Enter presses: the menu

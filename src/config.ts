@@ -1803,29 +1803,26 @@ export const CONFIG = {
      */
     cobbleBumpScale: 0.1,
     /**
-     * Slots in the drifting mote field's GPU pool (`systems/Atmosphere.ts`) —
-     * a ceiling and NOTHING else. What the ash looks like (colour, size,
-     * drift, how much of it there is) is the map's, because a valley of
-     * falling ash and a room full of rising embers disagree about every one
-     * of those; that lives on `ParticleSpec` in `world/environment.ts`.
+     * The most slots the drifting mote field (`systems/Atmosphere.ts`) may
+     * allocate — a **VRAM ceiling and NOTHING else**, never a target. What the
+     * ash looks like (colour, size, drift, how much of it there is) is the
+     * map's, because a valley of falling ash and a room full of rising embers
+     * disagree about every one of those; that lives on `ParticleSpec` in
+     * `world/environment.ts`.
      *
-     * The field is simulated by transform feedback, so this is a buffer size
-     * rather than a frame cost — but it is a FIXED one: both ping-pong buffers
-     * are allocated at this capacity on the first `apply()` whatever the map
-     * then asks for, at a 21-float stride, so 32,000 is 5.4 MB of VRAM
-     * standing whether the field is dense or empty.
+     * `Atmosphere` sizes the buffer to whichever spec is applied — `count / 3
+     * * 14`, the slots a life can still be running in — and rebuilds the
+     * system when a map asks for a different number, so this is spent only by
+     * a map that would exceed it. Hollowmere asks for 4,000, so 18,667 slots
+     * at a 21-float stride across two ping-pong buffers: 3.1 MB, against the
+     * 5.4 MB a fixed 32,000-slot pool would stand at whatever the map wanted.
+     * It bounds a `ParticleSpec.count` of about 6,800.
      *
-     * `Atmosphere` runs the system in emit-rate-controlled mode, where the
-     * live slot count settles at `emitRate * maxLifeTime` = `count / 3 * 14`,
-     * so this bounds a `ParticleSpec.count` of about 6,800. Hollowmere asks
-     * for 4,000.
-     *
-     * **Overflowing it does not read as thinner air.** Babylon clamps the slot
-     * count and leaves the emit rate alone, so the circular buffer comes round
-     * in less than a mote's maximum life and the longest-lived motes are
-     * re-emitted while still visible — they pop out instead of fading, which
-     * points at nothing. `Atmosphere.warnIfPoolClamped` says so in dev builds;
-     * see ISSUES.md.
+     * **Hitting it costs density, not correctness.** `Atmosphere` shortens
+     * mote lives to match the buffer it was allowed, which keeps the circular
+     * recycle from cutting motes off mid-fade; the field ends up thinner and
+     * shorter-drifting, and `warnIfCeilingClamped` says so with numbers in dev
+     * builds. Raise this only for a map that genuinely wants denser air.
      *
      * The headroom is deliberately modest, because **count is the weaker of
      * the two levers on how dense the air looks and the only one that costs
@@ -1835,7 +1832,7 @@ export const CONFIG = {
      * frame time doubles. What makes the field read is `ParticleSpec.size`.
      * Anyone reaching for this number should raise that one instead.
      */
-    particlePoolSize: 32000,
+    particlePoolCeiling: 32000,
   },
 
   /**

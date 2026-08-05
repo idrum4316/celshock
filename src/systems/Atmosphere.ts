@@ -3,6 +3,13 @@
  * reconfigured per environment via apply(ParticleSpec). Texture is generated
  * at runtime. apply(undefined) stops the emitter.
  *
+ * **The buffer is sized to the field, not the field clamped to the buffer.**
+ * A GPU particle system's capacity is fixed at construction, so `fit()`
+ * rebuilds the system whenever the spec asks for a different number of slots.
+ * That is what keeps the recycling invariant below exact — the alternative,
+ * running every map against one standing pool, is what made an overflowing
+ * map pop its motes out instead of fading them.
+ *
  * The simulation is transform feedback (`GPUParticleSystem`), which is what
  * makes a field of tens of thousands cost what a thousand cost on the CPU.
  * There is no CPU fallback and there is deliberately no capability check:
@@ -24,9 +31,14 @@ import { CONFIG } from "../config";
 import type { ParticleSpec } from "../world/environment";
 
 /**
- * How long a mote lives. Named because the pool is sized against the upper
+ * How long a mote lives. Named because the buffer is sized against the upper
  * bound: in emit-rate-controlled mode the system settles at
  * `emitRate * maxLifeTime` live slots.
+ *
+ * The two are also a SHAPE rather than two independent numbers. When the VRAM
+ * ceiling bounds the buffer, `apply` shortens both by the same factor so the
+ * spread of lives — and so how ragged the field's fading looks — survives; it
+ * is `MIN_LIFE / MAX_LIFE` that is preserved, never `MIN_LIFE` itself.
  */
 const MIN_LIFE = 6;
 const MAX_LIFE = 14;
@@ -42,6 +54,11 @@ const MAX_LIFE = 14;
  */
 export class Atmosphere {
   private system: GPUParticleSystem | null = null;
+  /**
+   * The standing system's capacity. Zero until the first spec arrives, which
+   * is also what makes "no system yet" and "wrong size" one branch in `fit`.
+   */
+  private capacity = 0;
   private texture: DynamicTexture;
 
   constructor(private scene: Scene) {
@@ -65,7 +82,7 @@ export class Atmosphere {
   }
 
   /**
-   * Builds the emitter on first use.
+   * Builds the emitter at a given buffer size.
    *
    * `emitRateControl` is not a detail. In that mode the system holds
    * `emitRate * maxLifeTime` live slots and recycles them in a circular
@@ -78,10 +95,10 @@ export class Atmosphere {
    * keep working: with emit-rate control the field goes empty and stays
    * empty, exactly as it did on the CPU path.
    */
-  private build(): GPUParticleSystem {
+  private build(capacity: number): GPUParticleSystem {
     const ps = new GPUParticleSystem(
       "motes",
-      { capacity: CONFIG.graphics.particlePoolSize, emitRateControl: true },
+      { capacity, emitRateControl: true },
       this.scene,
     );
     ps.particleTexture = this.texture;
@@ -90,26 +107,54 @@ export class Atmosphere {
   }
 
   /**
-   * Rebuilds the mote field for a room; `undefined` disables it.
+   * Returns a system whose buffer is exactly the size this field needs,
+   * rebuilding the standing one if it is the wrong size.
    *
-   * **The live slot count only ever grows.** Babylon adds slots as the field
-   * ramps up and drops them only on `reset()`, so a sparser spec applied
-   * after a denser one — a second map, or `undefined` — emits at the new rate
-   * but goes on stepping the old buffer. It costs vertex work and shows
-   * nothing: a slot with no live particle is culled to a degenerate position.
-   * Resetting here instead would be worse, because it empties the sky and
-   * refills it over `MAX_LIFE` seconds on every editor rebuild, which is what
-   * `installMap` does on each keystroke. If a second map ever makes that cost
-   * real, reset on a *decrease* only.
+   * Capacity is fixed at construction, so a rebuild is the only way to have
+   * one that matches — and it is affordable because it is **stable under an
+   * unchanged spec by construction, not by care**: a map's `ParticleSpec` is a
+   * module constant, so `wanted` comes out the same integer on every
+   * `installMap`, which the editor runs on each keystroke. Only a genuine
+   * change of map or of the ceiling reaches the rebuild, where the world is
+   * being rebuilt around it anyway and a field that refills over `MAX_LIFE`
+   * seconds costs nothing anybody is looking at. (`applySky`'s identity check
+   * rests on the same property of a map's environment.)
+   *
+   * Shrinking is the half that is easy to miss. Babylon only ever GROWS
+   * `_currentActiveCount` and drops it on `reset()`, so without a rebuild a
+   * sparser second map would emit at its own low rate while going on stepping
+   * and drawing the dense map's slots for the rest of the session.
+   */
+  private fit(emitRate: number): GPUParticleSystem {
+    const wanted = Math.min(
+      Math.ceil(emitRate * MAX_LIFE),
+      CONFIG.graphics.particlePoolCeiling,
+    );
+    if (this.system && this.capacity === wanted) return this.system;
+    // `false`, or the default takes the mote texture with the buffers — it is
+    // this class's, generated once and shared by every system it builds.
+    this.system?.dispose(false);
+    this.capacity = wanted;
+    this.system = this.build(wanted);
+    return this.system;
+  }
+
+  /**
+   * Rebuilds the mote field for a room; `undefined` (or a count of zero)
+   * disables it.
    */
   apply(spec: ParticleSpec | undefined, width: number, depth: number): void {
-    if (!spec) {
+    if (!spec || spec.count <= 0) {
       this.system?.stop();
       return;
     }
 
-    this.system ??= this.build();
-    const ps = this.system;
+    // `count` is a density dial rather than a headcount. A mote lives ~10 s on
+    // average, so a third of it per second holds about 3.3x it in the air at
+    // once; what the buffer is sized against is the other product,
+    // `emitRate * MAX_LIFE`, which is every slot a life can still be running in.
+    const emitRate = spec.count / 3;
+    const ps = this.fit(emitRate);
 
     const hx = width / 2 - 1;
     const hz = depth / 2 - 1;
@@ -123,12 +168,18 @@ export class Atmosphere {
 
     ps.minSize = spec.size * 0.6;
     ps.maxSize = spec.size * 1.8;
-    ps.minLifeTime = MIN_LIFE;
-    ps.maxLifeTime = MAX_LIFE;
-    // `count` is motes in the air, not a raw cap: a mote lives ~10 s on
-    // average, so a third of it per second is what holds that many aloft.
-    ps.emitRate = spec.count / 3;
-    warnIfPoolClamped(ps.emitRate);
+    ps.emitRate = emitRate;
+    // **The wrap invariant.** Emit-rate control advances a circular write
+    // pointer at `emitRate` over `capacity` slots, so it comes round every
+    // `capacity / emitRate` seconds and a mote living longer than that is
+    // re-emitted while still visible — popping out mid-fade. `fit` normally
+    // makes that period exactly `MAX_LIFE`; when the VRAM ceiling bounded the
+    // buffer instead, the lives come down to meet the buffer. Either way the
+    // longest life a mote can draw and the wrap period are the same number.
+    const maxLife = Math.min(MAX_LIFE, this.capacity / emitRate);
+    ps.minLifeTime = MIN_LIFE * (maxLife / MAX_LIFE);
+    ps.maxLifeTime = maxLife;
+    warnIfCeilingClamped(emitRate, maxLife);
     // Embers add into the dark; ash and dust just occlude. The constants are
     // BaseParticleSystem's, so they are read off the GPU class rather than
     // off `ParticleSystem` — naming the CPU class for two integers is what
@@ -150,40 +201,40 @@ export class Atmosphere {
   }
 
   dispose(): void {
-    this.system?.dispose();
+    this.system?.dispose(false);
     this.system = null;
+    this.capacity = 0;
     this.texture.dispose();
   }
 }
 
 /**
- * A map asking for more motes than the pool holds is clamped, and the clamp is
- * silent in a way that does not look like a clamp.
+ * A map asking for more slots than the VRAM ceiling allows still gets a field
+ * that fades correctly — `apply` shortens the lives to keep the wrap invariant
+ * — but it is not the field that was asked for, and nothing on screen says so.
+ * Shorter lives mean a shorter drift and fewer motes aloft, which reads as
+ * thinner air with no cause attached to it.
  *
- * Babylon bounds the live SLOT count to the pool and leaves the emit rate
- * alone. Emit-rate control sizes the buffer at `emitRate * MAX_LIFE` precisely
- * so the circular write pointer takes a full `MAX_LIFE` to come round — which
- * is what guarantees no live mote is ever recycled out from under itself.
- * Clamp the slots without clamping the rate and that wrap period falls below
- * `MAX_LIFE`, so the longest-lived motes are re-emitted while still visible.
- * The symptom is motes POPPING OUT rather than a thinner field, and nothing
- * about it points at the pool.
- *
- * Clamping `emitRate` to match would preserve the wrap and is the worse fix:
- * it keeps the field looking correct while quietly overriding the density the
- * map asked for. Say so instead, and let whoever wrote the number decide.
+ * This is the one place the trade is announced. It is a dev-only warning
+ * rather than a silent clamp because the density is the map author's decision:
+ * the numbers below are what they actually got and both ways back to what they
+ * asked for.
  */
-function warnIfPoolClamped(emitRate: number): void {
+function warnIfCeilingClamped(emitRate: number, maxLife: number): void {
   if (!import.meta.env.DEV) return;
-  const pool = CONFIG.graphics.particlePoolSize;
+  if (maxLife >= MAX_LIFE) return;
+  const ceiling = CONFIG.graphics.particlePoolCeiling;
   const wanted = Math.ceil(emitRate * MAX_LIFE);
-  if (wanted <= pool) return;
+  const minLife = MIN_LIFE * (maxLife / MAX_LIFE);
+  const aloft = Math.round((emitRate * (minLife + maxLife)) / 2);
   console.warn(
-    `Atmosphere: the mote field wants ${wanted} slots and the pool holds ` +
-      `${pool}. Motes will be recycled after ${(pool / emitRate).toFixed(1)} s ` +
-      `against a ${MAX_LIFE} s maximum life, so the longest-lived ones will ` +
-      `pop out instead of fading. Lower the map's ParticleSpec.count (below ` +
-      `${Math.floor((pool / MAX_LIFE) * 3)}) or raise ` +
-      `CONFIG.graphics.particlePoolSize.`,
+    `Atmosphere: the mote field wants ${wanted} slots and the ceiling allows ` +
+      `${ceiling}. Mote lives are shortened from ${MIN_LIFE}-${MAX_LIFE} s to ` +
+      `${minLife.toFixed(1)}-${maxLife.toFixed(1)} s to keep them fading ` +
+      `rather than popping, so the field holds about ${aloft} motes instead ` +
+      `of ${Math.round((emitRate * (MIN_LIFE + MAX_LIFE)) / 2)}. Lower the ` +
+      `map's ParticleSpec.count (below ` +
+      `${Math.floor((ceiling / MAX_LIFE) * 3)}) or raise ` +
+      `CONFIG.graphics.particlePoolCeiling.`,
   );
 }
