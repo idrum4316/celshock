@@ -56,8 +56,30 @@ export const HollowmereEnvironment: EnvironmentSpec = {
   particles: {
     color: "#8a9aa6",
     emissive: false,
-    count: 140,
-    size: 0.06,
+    /**
+     * Motes aloft, and how big one is. The pair is the ash, and **`size` is
+     * the lever, not `count`** — which is the opposite of what the CPU-era
+     * numbers (140 at 0.06) suggest.
+     *
+     * `count` was 140 while the field ran on the CPU, where the pool capped
+     * at 1,200 and Hollowmere held ~650 motes across a 240 m valley: one per
+     * 950 cubic metres. Transform feedback lifted that ceiling, and raising
+     * the number turned out to buy almost nothing on its own. Measured over
+     * the whole range from 140 to 16,000 — 654 live slots to 74,667 — the
+     * picture barely changes, because the emit box is the entire map and a
+     * 0.06 m mote is one to three pixels at street distance arriving at alpha
+     * 0.5 and fading to nothing. It sits under the grain pass at any density.
+     *
+     * `size` moves it immediately: at 0.12 the flecks read against a dark
+     * wall and against the hillside, and by 0.25 they are soft blobs that
+     * read as snow rather than as ash. So the count is set where the field
+     * covers the ground without the cost — it is judged inside the fog wall
+     * and nowhere else, since past 78 m everything is `fogColor` and the far
+     * half of the valley's share is paid for and never seen — and the size
+     * is what was actually turned up.
+     */
+    count: 4000,
+    size: 0.12,
     riseSpeed: -0.25,
   },
   /**
