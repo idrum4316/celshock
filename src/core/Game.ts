@@ -1201,7 +1201,13 @@ export class Game {
     if (this.input.reloadPressed && this.player.startReload()) {
       this.sfx.reload(this.player.reloadTime);
     }
-    if (this.input.grenadePressed) this.throwGrenade();
+    // A throw is a gesture with a release inside it, so it is two checks a
+    // frame apart rather than one call: the button starts the arm, and the
+    // grenade leaves when the arm gets there. The release is tested here,
+    // straight after `player.update`, because that is the call that posed the
+    // hand it comes out of.
+    if (this.player.throwReleaseDue()) this.releaseGrenade();
+    if (this.input.grenadePressed) this.player.beginThrow();
 
     // --- shooting (hitscan from the camera through the crosshair) ---
     // Mouse fire requires pointer lock so UI clicks never discharge the gun.
@@ -1307,27 +1313,41 @@ export class Game {
   }
 
   /**
-   * The player's throw. Along the camera axis, from a point out in front of
-   * the eye rather than from the eye itself — a throw taken with a wall at your
-   * shoulder must not spawn the grenade inside the wall, where its first act
-   * would be to bounce back into your face.
+   * The player's throw, at the moment the hand reaches full extension. It
+   * leaves from the VIEWMODEL's throwing hand rather than from a point
+   * measured off the eye, which is the difference between a grenade that was
+   * thrown and one that was fired: the eye follows the same object out of the
+   * same hand it watched cock back, off the camera's axis and on the off-hand
+   * side, instead of finding it already in flight down the middle of the
+   * screen on the frame the button went down.
+   *
+   * `handAhead` survives as a FLOOR on that point for the reason it was there
+   * in the first place — a throw taken with a wall at your shoulder must not
+   * spawn the grenade inside the wall, where its first act would be to bounce
+   * back into your face. The extended hand clears it comfortably.
    *
    * The count is spent only once the pool has agreed to carry it: a grenade
    * debited for a throw that never happened is the most confusing thing this
-   * feature could hand a player, which is why `Player` splits the ask from the
-   * booking.
+   * feature could hand a player, which is why `Player` splits the release from
+   * the booking. A refusal here costs the arm's cooldown and nothing else.
    */
-  private throwGrenade(): void {
-    if (!this.player.canThrowGrenade()) return;
+  private releaseGrenade(): void {
     const g = CONFIG.grenade;
     const eye = this.cameraSys.camera.position;
     const forward = this.cameraSys.forward;
-    const right = this.cameraSys.flatRight;
-    this.grenadeHand.set(
-      eye.x + forward.x * g.handAhead + right.x * g.handSide,
-      eye.y + forward.y * g.handAhead + g.handUp,
-      eye.z + forward.z * g.handAhead + right.z * g.handSide,
-    );
+    this.grenadeHand.copyFrom(this.player.throwHandWorld());
+    const ahead =
+      (this.grenadeHand.x - eye.x) * forward.x +
+      (this.grenadeHand.y - eye.y) * forward.y +
+      (this.grenadeHand.z - eye.z) * forward.z;
+    if (ahead < g.handAhead) {
+      const d = g.handAhead - ahead;
+      this.grenadeHand.addInPlaceFromFloats(
+        forward.x * d,
+        forward.y * d,
+        forward.z * d,
+      );
+    }
     if (
       !this.grenades.throwAlong(
         this.grenadeHand,
@@ -1340,6 +1360,10 @@ export class Game {
     }
     this.player.spendGrenade();
     this.sfx.grenadeThrow();
+    // The body's own follow-through, through the spring the landing and the
+    // blast concussion already share — one integrator on the eye, never a
+    // shake of its own.
+    this.cameraSys.land(g.throwShake);
   }
 
   /**

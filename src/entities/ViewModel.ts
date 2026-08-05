@@ -2,7 +2,7 @@
  * ViewModel.ts — The first-person weapon: whichever gun is carried and the two
  * gloved arms holding it, parented to the camera, plus every offset that moves
  * them (hip/ADS pose, sprint carry, reload dip and mag swap, the off-hand
- * throw's give, sway, bob, kick).
+ * throw's arm and give, sway, bob, kick).
  * Owns: the on-screen weapon. Nothing else may reparent or pose it.
  *
  * Invariants:
@@ -24,8 +24,13 @@
  *   writes and a re-derivation, never a rebuild. That is also why the muzzle
  *   and the ejection port are nodes owned HERE rather than the model's — they
  *   have things hanging off them (Player's flash) that must survive a swap.
- * - Everything here is cosmetic. It reads the camera; it never writes it, and
- *   it never touches aim, spread or damage.
+ * - Everything here is cosmetic WITH ONE EXCEPTION, and it is a read rather
+ *   than a write: `throwHandWorld` is where the grenade leaves from, so the
+ *   throwing hand's pose is the one thing on this rig that something in the
+ *   world is placed by. A grenade that spawned anywhere else is a grenade the
+ *   hand did not throw, which is the whole reason the arm exists.
+ * - Everything else here is cosmetic. It reads the camera; it never writes it,
+ *   and it never touches aim, spread or damage.
  * - Meshes render in VIEWMODEL_GROUP with the depth buffer cleared first, so
  *   the weapon is never sliced open by the wall the player is standing
  *   against. Anything else attached to it (Player's muzzle flash) must join
@@ -95,11 +100,13 @@ export interface ViewModelParams {
   /** 0..1 through the reload, for the support hand's trip to the magwell. */
   reloadPhase: number;
   /**
-   * 1 the instant a grenade leaves the hand, falling to 0 over
-   * `viewmodel.throwTime`. The weapon gives way to the other arm and comes
-   * back; it is never put away, because a grenade is an off-hand action.
+   * Seconds since the throw was asked for, or negative when there is no throw
+   * in flight. Seconds rather than a blend because the gesture is a TIMELINE
+   * with a release in the middle of it (see `viewmodel.throw`) — the hand
+   * cocks, whips, lets go and comes back, and a single 1 -> 0 weight cannot
+   * say where in that the arm is. Player owns the clock; this only reads it.
    */
-  throwBlend: number;
+  throwTime: number;
   /** Per-shot punch, 1 at the shot and squared by the caller. */
   kick: number;
   /** Smoothed look rates (rad/s) — the weapon trails both. */
@@ -119,6 +126,41 @@ export interface ViewModelParams {
 
 const GLOVE = "#23262c";
 const SLEEVE = "#3d4335";
+
+/**
+ * The throwing arm's geometry, in the same model units the weapons' arms are
+ * built in (its node carries `scale`, exactly as the weapon does). The fist is
+ * at the node's origin so the whole gesture can be authored as where the HAND
+ * is, and the forearm runs back and outboard from it to an elbow that is
+ * rigid — the arm swings as one piece, the same simplification the support
+ * hand's trip to the magwell already makes.
+ *
+ * Its LENGTH is load-bearing rather than anatomical: the forearm stops at a
+ * flat cut where a shoulder there is no geometry for would be, so the cut has
+ * to stay off the screen at every pose in the gesture or the arm reads as a
+ * floating log. Long, aimed down and outboard, it runs off the bottom-left
+ * corner instead — see the note on the hand keys in `viewmodel.throw`.
+ */
+const THROW_ELBOW = new Vector3(-0.22, -0.55, -0.24);
+/**
+ * The frag in the fist, in those same model units — so 0.046 m once the node's
+ * scale is applied, against `grenade.radius`'s 0.11 in the world. Deliberately
+ * not the same number: the thrown body is sized to be NOTICED arriving across
+ * a street, and a ball that size held at the lens is a beachball in a glove.
+ * What has to match is the read — an olive sphere with a live pip on it.
+ */
+const THROW_BALL = 0.075;
+/**
+ * How far past the release the hand carries on, as a fraction of the whip it
+ * just travelled, and the share of the recovery it spends getting there. An
+ * arm that reversed on the release frame reads as the throw being cancelled
+ * rather than followed through.
+ */
+const THROW_FOLLOW = 0.18;
+const THROW_FOLLOW_FRAC = 0.28;
+
+/** A plain triple, which is how every pose in CONFIG is written. */
+type XYZ = { x: number; y: number; z: number };
 
 const clamp = (v: number, lo: number, hi: number) =>
   Math.min(hi, Math.max(lo, v));
@@ -174,6 +216,27 @@ export class ViewModel {
   /** Carries the whole pose; every rig hangs off it. */
   private readonly weapon: TransformNode;
   private readonly rigs = {} as Record<WeaponId, WeaponRig>;
+
+  /**
+   * The throwing arm, and the grenade in its fist. Parented to the CAMERA
+   * rather than to `weapon`: the weapon tips out of the way for the throw, and
+   * a hand that inherited that would be shoved around by the very pose it is
+   * the cause of. Disabled whenever no throw is in flight, which is nearly
+   * always — `setEnabled` rather than `isVisible`, so it composes with (and
+   * cannot be trampled by) `applyMeshVisibility`'s two flags.
+   */
+  private readonly throwHand: TransformNode;
+  /** Hidden the instant the real grenade leaves; back for the next wind-up. */
+  private readonly throwBall: TransformNode;
+  /**
+   * The gesture as four keys — rest, cock, release, follow-through — resolved
+   * once so the per-frame job is one lerp between two of them. The last is
+   * DERIVED from the other two rather than authored: a little further along
+   * the line the hand was already travelling when it let go, so an arm that
+   * stopped dead on the release frame instead carries on and slows, and it
+   * stays right whatever the three authored keys are moved to.
+   */
+  private readonly throwKeys: { pos: Vector3; rot: Vector3 }[] = [];
 
   /** Aimed position, derived from the fit (see the header). */
   private readonly adsPos = new Vector3();
@@ -266,6 +329,65 @@ export class ViewModel {
       this.rigs[id] = { root, parts, supportArm };
     }
 
+    // The throwing arm: ONE rig shared by every weapon, unlike the two arms
+    // above. Where a hand grips is the model's business and is why those are
+    // per-weapon; a fist closed around a grenade is not holding the gun at all
+    // and has nothing to fit.
+    this.throwHand = new TransformNode("viewmodel_throwHand", scene);
+    this.throwHand.parent = camera;
+    this.throwHand.scaling.setAll(v.scale);
+    this.throwHand.setEnabled(false);
+    const throwArm = buildArm(
+      scene,
+      mats,
+      "throwHand",
+      { hand: Vector3.Zero(), elbow: THROW_ELBOW },
+      this.throwHand,
+    );
+    const ball = MeshBuilder.CreateSphere(
+      "view_throwGrenade",
+      { diameter: THROW_BALL * 2, segments: 6 },
+      scene,
+    );
+    ball.parent = this.throwHand;
+    ball.position.set(0, 0.04, 0.06);
+    ball.material = mats.get("#3f4a33");
+    ball.isPickable = false;
+    const pip = MeshBuilder.CreateSphere(
+      "view_throwGrenadePip",
+      { diameter: THROW_BALL * 0.62, segments: 4 },
+      scene,
+    );
+    pip.parent = ball;
+    // Proud of the body's ink shell, the same rule the thrown grenade's pip and
+    // the player's visor slit both follow.
+    pip.position.y = THROW_BALL;
+    pip.material = mats.getEmissive("#ff5a4f");
+    pip.metadata = { noOutline: true };
+    pip.isPickable = false;
+    this.throwBall = ball;
+    this.meshes.push(...throwArm, ball, pip);
+    this.arms.push(...throwArm);
+
+    const th = v.throw;
+    const key = (pos: XYZ, rot: XYZ) => ({
+      pos: new Vector3(pos.x, pos.y, pos.z),
+      rot: new Vector3(rot.x, rot.y, rot.z),
+    });
+    this.throwKeys.push(
+      key(th.handRest, th.handRestRot),
+      key(th.handCock, th.handCockRot),
+      key(th.handRelease, th.handReleaseRot),
+      key(th.handRelease, th.handReleaseRot),
+    );
+    // The follow-through, extrapolated past the release along the whip.
+    for (const f of ["pos", "rot"] as const) {
+      this.throwKeys[3][f]
+        .subtractInPlace(this.throwKeys[1][f])
+        .scaleInPlace(THROW_FOLLOW)
+        .addInPlace(this.throwKeys[2][f]);
+    }
+
     this.muzzle = new TransformNode("viewmodel_muzzle", scene);
     this.muzzle.parent = this.weapon;
     this.ejectPort = new TransformNode("viewmodel_ejectPort", scene);
@@ -297,8 +419,13 @@ export class ViewModel {
   setWeapon(id: WeaponId): void {
     this.weaponFit = weaponSetup(id);
     // The rig being put down keeps whatever mid-reload offset its support arm
-    // had; zero it, or picking it up again starts with the hand at the magwell.
-    for (const wid of WEAPON_IDS) this.rigs[wid].supportArm.position.setAll(0);
+    // had — and, if the swap caught a throw in flight, an arm switched off
+    // for it. Both are per-rig state that a weapon this hand has never held
+    // must not inherit.
+    for (const wid of WEAPON_IDS) {
+      this.rigs[wid].supportArm.position.setAll(0);
+      this.rigs[wid].supportArm.setEnabled(true);
+    }
     this.applyFit();
   }
 
@@ -381,7 +508,11 @@ export class ViewModel {
     this.swayY = 0;
     this.swayYaw = 0;
     this.swayPitch = 0;
-    for (const id of WEAPON_IDS) this.rigs[id].supportArm.position.setAll(0);
+    for (const id of WEAPON_IDS) {
+      this.rigs[id].supportArm.position.setAll(0);
+      this.rigs[id].supportArm.setEnabled(true);
+    }
+    this.throwHand.setEnabled(false);
   }
 
   /**
@@ -402,6 +533,9 @@ export class ViewModel {
     this.inspectPitch = i.basePitch;
     this.weapon.rotationQuaternion = this.spinQ;
     this.inspecting = true;
+    // Nothing here runs `update`, so a throw caught by the kit screen would
+    // leave its arm frozen across the turntable for as long as the screen is up.
+    this.throwHand.setEnabled(false);
     this.applyMeshVisibility();
   }
 
@@ -499,14 +633,22 @@ export class ViewModel {
       addScaled(this.off, v.reloadPos, reloadW);
       addScaled(this.rot, v.reloadRot, reloadW);
     }
-    // The throw arcs in and back out rather than easing like the blends above:
-    // Player hands this over as a linear 1 -> 0 decay, and a linear return
-    // reads as the weapon being dragged back rather than let go of. `sin(pi*w)`
-    // is zero at both ends and peaks in the middle, which IS the gesture.
-    const throwW = Math.sin(Math.PI * clamp(p.throwBlend, 0, 1));
-    if (throwW > 0.001) {
-      addScaled(this.off, v.throwPos, throwW);
-      addScaled(this.rot, v.throwRot, throwW);
+    // The throw's give is NOT a symmetric arc like the blends above: it is the
+    // support hand being somewhere else, so it comes on as fast as the hand
+    // leaves the handguard, holds for as long as the hand is away, and eases
+    // back as the arm returns. A weapon that dipped and recovered on a bell
+    // curve is the shape of a recoil impulse, which is exactly what the old
+    // throw was mistaken for.
+    const th = v.throw;
+    const total = th.windup + th.recover;
+    const cockT = th.windup * th.cockFrac;
+    const throwing = p.throwTime >= 0 && p.throwTime <= total;
+    if (throwing) {
+      const w =
+        ramp(0, cockT, p.throwTime) *
+        (1 - ramp(th.windup + th.recover * 0.3, total, p.throwTime));
+      addScaled(this.off, th.weaponPos, w);
+      addScaled(this.rot, th.weaponRot, w);
     }
 
     // --- sway: the weapon trails the look, damped hard while braced ---
@@ -578,6 +720,83 @@ export class ViewModel {
       const o = v.magHandOffset;
       supportArm.position.set(o.x * magW, o.y * magW, o.z * magW);
     }
+    // ...and off the weapon entirely for a throw. The hand that throws IS the
+    // support hand, so leaving it welded to the handguard would put two left
+    // arms on screen at once — and hiding it is what motivates the give above:
+    // the weapon tips because only the firing hand is still on it.
+    supportArm.setEnabled(!throwing);
+
+    // --- the throwing arm: the gesture the grenade actually leaves from ---
+    this.throwHand.setEnabled(throwing);
+    if (throwing) this.poseThrowHand(p.throwTime, cockT, th.windup, total);
+  }
+
+  /**
+   * Places the throwing hand on the gesture's timeline. Four keys and one lerp
+   * between two of them; what carries the read is the EASING, which differs
+   * per segment because the phases of a throw are not the same motion:
+   * - the wind-up eases in and out — the arm cocking is deliberate;
+   * - the whip eases IN and is cut off at the release, so the hand is at its
+   *   fastest on the very frame the grenade leaves it, which is the frame the
+   *   eye is asked to believe the throw on;
+   * - the follow-through eases OUT, the arm running down against itself;
+   * - the return is a smoothstep, out of frame and forgotten.
+   */
+  private poseThrowHand(
+    t: number,
+    cockT: number,
+    windup: number,
+    total: number,
+  ): void {
+    const holdT = windup + (total - windup) * THROW_FOLLOW_FRAC;
+    let a = 0;
+    let b = 1;
+    let w: number;
+    if (t <= cockT) {
+      w = smoothstep01(t / cockT);
+    } else if (t <= windup) {
+      a = 1;
+      b = 2;
+      const x = (t - cockT) / (windup - cockT);
+      w = x * x;
+    } else if (t <= holdT) {
+      a = 2;
+      b = 3;
+      const x = (t - windup) / (holdT - windup);
+      w = 1 - (1 - x) * (1 - x);
+    } else {
+      a = 3;
+      b = 0;
+      w = smoothstep01((t - holdT) / (total - holdT));
+    }
+    Vector3.LerpToRef(
+      this.throwKeys[a].pos,
+      this.throwKeys[b].pos,
+      w,
+      this.throwHand.position,
+    );
+    Vector3.LerpToRef(
+      this.throwKeys[a].rot,
+      this.throwKeys[b].rot,
+      w,
+      this.throwHand.rotation,
+    );
+    // The frag is in the fist right up to the release and gone after it: the
+    // one in the air from that frame on is GrenadeSystem's, thrown from this
+    // hand's own position, and two of them on screen at once would give the
+    // whole thing away.
+    this.throwBall.setEnabled(t < windup);
+  }
+
+  /**
+   * Where the throwing hand is in the world — the release point Game hands to
+   * `GrenadeSystem`, so the grenade leaves the hand the player watched cock
+   * back instead of appearing on the camera axis like a muzzle. One frame
+   * stale in the camera's own motion, exactly as the muzzle and the ejection
+   * port are, because the camera has not been updated yet this frame.
+   */
+  throwHandWorld(): Vector3 {
+    return this.throwHand.getAbsolutePosition().clone();
   }
 
   /**

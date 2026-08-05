@@ -928,15 +928,22 @@ export const CONFIG = {
     throwSpeed: 24,
     throwLift: 0.28,
     /**
-     * Where it leaves the hand, relative to the eye and the way it is looking.
-     * Far enough forward that a throw taken with a wall at your shoulder does
-     * not spawn inside the wall, close enough that it still reads as thrown by
-     * the hands you are looking past.
+     * Where the player's throw starts is the VIEWMODEL's throwing hand, not a
+     * point measured off the eye: the grenade you watched the hand cock back
+     * is the one that flies, which is the whole difference between a throw and
+     * a muzzle. This is the one thing left of the old fixed offset — a FLOOR
+     * on how far ahead of the eye the release may be, so a throw taken with a
+     * wall at your shoulder cannot spawn the grenade inside the wall, where
+     * its first act would be to bounce back into your face. The hand is
+     * normally well past it (see `viewmodel.throw.handRelease`), so it only
+     * bites if that pose is ever pulled in.
      */
     handAhead: 0.5,
-    handSide: 0.2,
-    handUp: -0.1,
-    /** Seconds between the player's throws — the arm, not the fuse. */
+    /**
+     * Seconds between the player's throws — the arm, not the fuse. Long enough
+     * to cover the whole of `viewmodel.throw` (wind-up plus recovery), so the
+     * hand is out of frame before another throw can start it over.
+     */
     throwInterval: 0.7,
     gravity: 18,
     /** Collision radius (m); also the drawn size. */
@@ -977,6 +984,15 @@ export const CONFIG = {
      * Scaled by the same falloff the damage uses.
      */
     shakeSpeed: 13,
+    /**
+     * The throw's own follow-through on the eye, through the same spring and
+     * for the same reason there is only one of them: a whole body goes into
+     * an overhand throw, and a view that does not move at all while the arm
+     * does reads as the arm being a decal. Small — this is a nod, not a
+     * landing — and it fires on the release edge, so the eye dips as the
+     * grenade leaves rather than when the button went down.
+     */
+    throwShake: 4.5,
     /** Fireball: how far it expands, and how long the whole flash lasts. */
     blastVisualRadius: 4.2,
     blastVisualTime: 0.42,
@@ -1301,19 +1317,78 @@ export const CONFIG = {
     reloadRot: { x: 0.3, y: -0.2, z: 0.42 },
     /**
      * The throw. A grenade goes with the OFF hand, so the weapon is not put
-     * away for it — it drops out of the aim and rolls outboard while the other
-     * arm does the work, and comes back. That is the whole animation: there is
-     * no grenade in view and no arm swing, because both would need a rig the
-     * viewmodel does not have, and a weapon that visibly gives way is enough
-     * to say the hands are busy.
+     * away for it: the support hand leaves the handguard, the weapon tips out
+     * of the aim under the firing hand alone, and the other arm does the work
+     * in front of the camera.
      *
-     * `throwTime` is how long the pose takes to return, and it is deliberately
-     * shorter than `grenade.throwInterval` so the weapon is settled again
-     * before a second throw is allowed.
+     * The ARM is the animation, and it has to be. This was once a weapon dip
+     * on its own with nothing thrown in view, and the grenade appeared on the
+     * camera axis on the frame the button went down — which is exactly what a
+     * muzzle does, so the whole thing read as a second trigger rather than as
+     * a throw. What makes it a throw is a gesture with a release IN it: the
+     * hand comes up holding the grenade, cocks back, whips forward, and the
+     * grenade leaves it at full extension, from the hand's own position rather
+     * than from the eye.
+     *
+     * The timeline, all seconds from the button:
+     * - `[0, windup * cockFrac]` — the hand rises into frame and cocks back.
+     * - `[windup * cockFrac, windup]` — the whip forward. Short, so it snaps.
+     * - `windup` — RELEASE. The grenade leaves the hand and `GrenadeSystem`
+     *   has it from there; `Player.throwReleaseDue` is the one edge that says
+     *   so, and it is what the sound and the camera's follow-through key off.
+     * - `[windup, windup + recover]` — the hand drops back out of frame and
+     *   the weapon comes back up.
+     *
+     * `windup + recover` is deliberately shorter than `grenade.throwInterval`,
+     * so the arm is out of frame and the weapon settled before a second throw
+     * is allowed.
      */
-    throwPos: { x: 0.06, y: -0.12, z: -0.08 },
-    throwRot: { x: 0.26, y: 0.34, z: -0.3 },
-    throwTime: 0.45,
+    throw: {
+      windup: 0.24,
+      /** Share of the windup spent cocking; the rest is the whip. */
+      cockFrac: 0.6,
+      recover: 0.34,
+      /**
+       * The weapon's give, held from the cock through to the end of the
+       * recovery — it is the support hand being somewhere else, so it lasts
+       * exactly as long as the hand is away. Positive `rotY` is outboard (see
+       * `sprintRot`), which with the drop reads as the weapon tipping down and
+       * away under one hand.
+       */
+      weaponPos: { x: 0.02, y: -0.07, z: -0.06 },
+      weaponRot: { x: 0.2, y: 0.18, z: -0.24 },
+      /**
+       * The throwing hand's three keys, CAMERA-LOCAL and in metres (the arm
+       * node carries `scale`, so only its geometry is in model units). The
+       * off hand is the LEFT one — the rifle's support hand — so every x here
+       * is inboard of the weapon, which sits at `hipPos.x` on the right. That
+       * separation is half of why the grenade no longer reads as leaving the
+       * muzzle.
+       *
+       * `rest` is below the frame at both ends of the gesture. `cock` holds the
+       * whole fist and the frag in frame and near the lens, because the one
+       * thing the wind-up has to say is WHAT is about to be thrown — a hand
+       * cocked off the left edge is a throw the player never sees loaded.
+       * `release` is far out and low, so the whip reads as extension in DEPTH
+       * rather than as a slide across the screen.
+       *
+       * Both live poses are also bounded by something that is not composition:
+       * THE ELBOW MUST LEAVE THE FRAME. The forearm ends at a flat cut where
+       * the arm would carry on into a shoulder there is no geometry for, and a
+       * cut end standing in open screen reads as a floating log rather than as
+       * an arm — which is exactly what the first pass at this looked like. A
+       * hand placed high and central drags that cut into view however good the
+       * rest of the gesture is; low and outboard keeps it off the bottom-left
+       * corner, and `THROW_ELBOW`'s length is the other half of the same
+       * guarantee.
+       */
+      handRest: { x: -0.28, y: -0.36, z: 0.6 },
+      handRestRot: { x: 0.3, y: 0.3, z: 0 },
+      handCock: { x: -0.24, y: 0.04, z: 0.5 },
+      handCockRot: { x: -0.3, y: 0.25, z: -0.2 },
+      handRelease: { x: -0.18, y: -0.1, z: 0.86 },
+      handReleaseRot: { x: 0.35, y: -0.1, z: 0.1 },
+    },
     /** Where the support hand travels to for the magazine swap. */
     magHandOffset: { x: -0.02, y: -0.09, z: -0.34 },
     /** Support-hand window over the reload: leaves the guard, swaps, returns. */

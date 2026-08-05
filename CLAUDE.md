@@ -101,6 +101,14 @@ have already cost time:
   falloff being broken. And "0 damage" at a plausible range is usually the
   line-of-sight ray finding a wall, not a bug: sample the same distance in all
   four compass directions before believing it.
+- **The throw ANIMATION is a still-frame job, not a video one**, and 2 fps is
+  plenty for it: redefine the clock the whole gesture is posed from
+  (`Object.defineProperty(g.player, "throwT", { get: () => 0.145 })`, plus
+  `throwPending` to `false` so the frozen frame does not also throw a real
+  grenade) and screenshot each phase. Live-tune the hand's keys without a
+  reload by writing `g.player.view.throwKeys[i].pos/rot` — they are resolved
+  from `CONFIG` once at construction, so the poses are editable in place while
+  the timing and the give are not.
 - The muzzle flash is unhittable at 2 fps (`gunfeel.flashTime` is 0.05 s of game
   time); force it with `player.flashRoot.setEnabled(true)` instead.
 - Getting into `playing` takes an indeterminate number of Enter presses: the menu
@@ -748,6 +756,43 @@ about `src/systems/GrenadeSystem.ts` follows from that one fact.
   never arrived is the most confusing thing this could hand a player, which is
   why `Player` splits `canThrowGrenade` from `spendGrenade` and why `Bot`
   decrements after `ctx.throwGrenade` returns true.
+
+**The player's throw is a GESTURE with a release inside it, and that is what
+stops it reading as a second trigger.** It was once an event: the button spent
+a grenade, the body appeared on the camera axis on that same frame, and the
+weapon dipped and recovered on a bell curve. Every one of those three is what a
+muzzle does, and players read it as the rifle firing the grenade. What replaced
+it is a timeline (`CONFIG.viewmodel.throw`) owned as a clock by `Player`,
+counting up from the button rather than decaying from it:
+
+- The **off hand comes into frame holding the frag** — the throwing arm is
+  `ViewModel`'s, one rig shared by every weapon, parented to the camera rather
+  than to the weapon (which is tipping out of the way at the time) and disabled
+  whenever no throw is in flight. Seeing what is about to be thrown is the
+  whole job of the wind-up, so the cocked pose keeps the fist and the ball in
+  frame.
+- The **support hand goes with it.** It is the same hand, so leaving it on the
+  handguard puts two left arms on screen — and hiding it is what motivates the
+  weapon's give, which is now held for as long as the hand is away instead of
+  arcing back like an impulse.
+- **The grenade leaves the HAND**, at `throw.windup`, from
+  `ViewModel.throwHandWorld()`. `grenade.handAhead` survives only as a floor on
+  that point (a throw taken with a wall at your shoulder must not spawn inside
+  the wall); `handSide`/`handUp` are gone, because a point measured off the eye
+  is exactly the thing that read as a muzzle.
+- `Player.beginThrow` books the ARM (the cooldown) and `spendGrenade` still
+  books the grenade at the release, so a pool refusal costs a cooldown and
+  never a count. `throwReleaseDue` is the single consumed edge that says the
+  hand got there, and it is false if the player died mid-wind-up.
+- The eye's own follow-through goes through `CameraSystem.land`, the same
+  spring as a landing and a blast concussion. One integrator, three callers.
+
+Two things about the arm are learned rather than authored, and both are
+recorded where they are set: **the elbow must leave the frame at every pose**
+(the forearm ends at a flat cut, and a cut end standing in open screen is a
+floating log, not an arm), and **the hand cannot be posed at the distance a
+real one would be** — at 0.35 m the fist and the frag fill a quarter of the
+screen. Both are in `viewmodel.throw`'s note and on `THROW_ELBOW`.
 
 **The player throws where they are looking; a bot says where it wants the
 grenade to land.** Those are the two public entry points (`throwAlong` /

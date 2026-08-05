@@ -20,10 +20,14 @@
  * Footfalls are read off the CAMERA's bob phase, never a step timer of their
  * own — the sound has to land on the dip you can see — and leave here as
  * PlayerEvents rather than as a sound: this file owns no audio.
- * Grenades are a count and a cooldown here and nothing else — the thrown body
- * belongs to GrenadeSystem, which is Game's. That is why the throw is TWO
- * calls (`canThrowGrenade` then `spendGrenade`): the pool may refuse, and a
- * count spent on a grenade that never arrives is worse than one not thrown.
+ * Grenades are a count, a cooldown and a clock here and nothing else — the
+ * thrown body belongs to GrenadeSystem, which is Game's. The clock is what
+ * makes the throw a gesture rather than an event: `beginThrow` starts it,
+ * `throwReleaseDue` reports the frame the hand reaches full extension, and
+ * only then does Game ask the pool to carry a grenade and `spendGrenade` book
+ * it. The count is still debited last, for the reason it always was — the pool
+ * may refuse, and a count spent on a grenade that never arrives is worse than
+ * one not thrown.
  */
 import {
   Mesh,
@@ -192,8 +196,15 @@ export class Player implements Combatant {
   private velY = 0;
   /** Seconds until the arm is ready to throw another grenade. */
   private throwCooldown = 0;
-  /** Throw pose weight, 1 at the release and falling to 0 over `throwTime`. */
-  private throwT = 0;
+  /**
+   * Seconds since the throw was asked for, or -1 when the arm is idle. The
+   * clock the whole gesture runs on: the viewmodel poses the arm from it and
+   * `throwReleaseDue` reports the one frame it crosses `throw.windup`, which
+   * is when the grenade actually leaves.
+   */
+  private throwT = -1;
+  /** Whether this throw's grenade is still in the hand. */
+  private throwPending = false;
   /** Extra spread accumulated by sustained fire; bleeds off when not firing. */
   private spreadBloom = 0;
   /** Weapon punch, 1 at the shot and falling to 0 over `recoil.kickTime`. */
@@ -372,7 +383,8 @@ export class Player implements Combatant {
     this.ammo = this.magSize;
     this.grenades = CONFIG.grenade.carried;
     this.throwCooldown = 0;
-    this.throwT = 0;
+    this.throwT = -1;
+    this.throwPending = false;
     this.reloading = false;
     this.fireCooldown = 0;
     this.velY = 0;
@@ -558,7 +570,15 @@ export class Player implements Combatant {
     // --- weapon timers ---
     this.fireCooldown -= dt;
     this.throwCooldown -= dt;
-    this.throwT = Math.max(0, this.throwT - dt / CONFIG.viewmodel.throwTime);
+    // The throw clock counts UP, and it is parked rather than clamped: the
+    // gesture has a release in the middle of it, so "how long ago" is the only
+    // thing that says where in it the arm is. It is stopped once the arm is
+    // home so a long round cannot walk it off into imprecision.
+    if (this.throwT >= 0) {
+      const th = CONFIG.viewmodel.throw;
+      this.throwT += dt;
+      if (this.throwT > th.windup + th.recover) this.throwT = -1;
+    }
     this.spreadBloom = Math.max(
       0,
       this.spreadBloom - CONFIG.recoil.bloomRecovery * dt,
@@ -657,7 +677,7 @@ export class Player implements Combatant {
       sprintBlend: this.sprintBlend,
       reloadBlend: this.reloadBlend,
       reloadPhase: this.reloadProgress,
-      throwBlend: this.throwT,
+      throwTime: this.throwT,
       kick: this.weaponKickT * this.weaponKickT,
       turnRate: this.turnRate,
       pitchRate: this.pitchRate,
@@ -726,11 +746,6 @@ export class Player implements Combatant {
   /**
    * Whether a grenade could leave the hand right now.
    *
-   * Throwing is deliberately TWO calls — this and `spendGrenade` — because the
-   * grenade pool can refuse the throw, and a count decremented before the
-   * system that has to put the thing in the air has agreed to is a grenade the
-   * player paid for and never saw. Game asks, throws, and only then spends.
-   *
    * Sprinting is not a bar: a grenade is an off-hand action and running is
    * exactly when you want to get one over a wall. Reloading is not either, for
    * the same reason — the hand that works the magazine is not the hand that
@@ -740,11 +755,50 @@ export class Player implements Combatant {
     return this.alive && this.grenades > 0 && this.throwCooldown <= 0;
   }
 
-  /** Books the throw `canThrowGrenade` cleared and the pool accepted. */
+  /**
+   * Starts the gesture. The arm is booked here and the grenade is not: a throw
+   * takes `throw.windup` to reach the release, and what the pool can carry is
+   * a question about the moment the thing has to exist, not about the moment
+   * the button went down.
+   *
+   * The cooldown is spent up front all the same, or the button would restart
+   * the wind-up under itself every frame it was held.
+   */
+  beginThrow(): boolean {
+    if (!this.canThrowGrenade()) return false;
+    this.throwT = 0;
+    this.throwPending = true;
+    this.throwCooldown = CONFIG.grenade.throwInterval;
+    return true;
+  }
+
+  /**
+   * True on the single frame the hand reaches full extension — the release.
+   * Consumed by the asking, so the caller may throw exactly once per gesture,
+   * and false forever if the player died mid-wind-up (the arm is gone with the
+   * body, and a grenade must not appear where it was).
+   */
+  throwReleaseDue(): boolean {
+    if (!this.throwPending) return false;
+    if (this.throwT < CONFIG.viewmodel.throw.windup) return false;
+    this.throwPending = false;
+    return this.alive;
+  }
+
+  /**
+   * Books the grenade the pool has just agreed to carry. Deliberately separate
+   * from `throwReleaseDue`, and for the same reason it was always separate from
+   * `canThrowGrenade`: a count debited for a grenade that never made it into
+   * the air is the most confusing thing this feature could hand a player. A
+   * refused release costs the arm's cooldown and nothing else.
+   */
   spendGrenade(): void {
     this.grenades -= 1;
-    this.throwCooldown = CONFIG.grenade.throwInterval;
-    this.throwT = 1;
+  }
+
+  /** Where the throwing hand is, which is where the grenade leaves from. */
+  throwHandWorld(): Vector3 {
+    return this.view.throwHandWorld();
   }
 
   /**
