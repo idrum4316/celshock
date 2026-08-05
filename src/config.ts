@@ -1802,6 +1802,29 @@ export const CONFIG = {
      * stones; too high and the street reads as rubble.
      */
     cobbleBumpScale: 0.1,
+    /**
+     * Slots in the drifting mote field's GPU pool (`systems/Atmosphere.ts`) —
+     * a ceiling and NOTHING else. What the ash looks like (colour, size,
+     * drift, how much of it there is) is the map's, because a valley of
+     * falling ash and a room full of rising embers disagree about every one
+     * of those; that lives on `ParticleSpec` in `world/environment.ts`.
+     *
+     * The field is simulated by transform feedback, so this is a buffer size
+     * rather than a frame cost, and a map asking for more than it holds is
+     * clamped to it — thinner air, never a stutter. `Atmosphere` runs the
+     * system in emit-rate-controlled mode, where the live slot count settles
+     * at `emitRate * maxLifeTime` = `count / 3 * 14`, so this bounds a
+     * `ParticleSpec.count` of about 6,800. Hollowmere asks for 4,000.
+     *
+     * The headroom is deliberately modest, because **count is the weaker of
+     * the two levers on how dense the air looks and the only one that costs
+     * anything.** Measured on the shipped map: raising `count` from 4,000 to
+     * 16,000 — 18,667 slots to 74,667 — is not visible in a still at all,
+     * because each mote is one to three pixels at street distance, while
+     * frame time doubles. What makes the field read is `ParticleSpec.size`.
+     * Anyone reaching for this number should raise that one instead.
+     */
+    particlePoolSize: 32000,
   },
 
   /**

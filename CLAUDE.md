@@ -109,6 +109,14 @@ have already cost time:
   reload by writing `g.player.view.throwKeys[i].pos/rot` — they are resolved
   from `CONFIG` once at construction, so the poses are editable in place while
   the timing and the give are not.
+- **The ash field is frozen for a pixel diff with `stop()` + `reset()`**, on
+  `g.atmosphere.system` — it empties the field and, crucially, keeps it empty.
+  That still holds now the field runs on `GPUParticleSystem`, but only because
+  `Atmosphere` constructs it with `emitRateControl: true`: Babylon's legacy GPU
+  mode keeps accumulating emissions while stopped, so under it the same pair
+  refills the sky a second later. Do not change that option. Note the field
+  takes `maxLifeTime` to reach its steady state, so let `getActiveCount()`
+  settle before capturing anything that includes it.
 - The muzzle flash is unhittable at 2 fps (`gunfeel.flashTime` is 0.05 s of game
   time); force it with `player.flashRoot.setEnabled(true)` instead.
 - Getting into `playing` takes an indeterminate number of Enter presses: the menu
@@ -196,7 +204,9 @@ src/
     AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
     ShadowSystem.ts         # Moon shadow map (stepped shadows) + blob shadows
-    Atmosphere.ts           # Drifting ash particle field
+    Atmosphere.ts           # Drifting ash particle field, simulated on the
+                            #   GPU (transform feedback). No CPU fallback —
+                            #   WebGL2 is a hard requirement and guarantees it
     Sky.ts                  # Generated sky: dome (gradient/galactic band/stars/
                             #   moon halo), textured moon, fBm cloud decks
     WaterSystem.ts          # Water surfaces from map WaterRects
