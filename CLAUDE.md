@@ -1065,6 +1065,23 @@ Because it is ungated, a roof standing in the moon's shadow still catches it.
 It also has a cost that is easy to miss: it lifts *albedo*, so a bright
 material (the cobble street) gains far more from it than a dark one.
 
+**Two more terms are per-material opt-ins, and they are three cache variants
+rather than a matrix.** `getGlossy` adds the toon specular (`specColor` /
+`specShininess`) and `getTranslucent` adds the translucency band (`transColor`)
+— the key light coming *through* a thin surface rather than off it, for the
+stall awnings and the pine crowns. Both default to a **black colour**, which is
+what makes them cost nothing on the materials that skip them: every cel
+material carries both uniforms, and zero multiplies the term out. A material is
+matte, glossy *or* translucent — never two of those — because the cache is per
+colour and an axis that multiplies is an axis that costs. Adding a fourth
+variant means a spec type, an `apply*`, a `get*` under its own key, one entry
+in `UNIFORMS`, **and** teaching `outlineInkFor`'s regex the new
+`cel-<variant>-#rrggbb` name, or the ink falls back to the palette-neutral
+colour. The translucency term is directional both ways — it needs the eye
+looking into the key light *and* the facet turned away from it — so it can only
+be judged from under the thing, moonward, and shows nothing at all with the
+moon behind the camera.
+
 The one exception is `ShadowSystem`'s `DirectionalLight`, which no material
 reads — it exists only to define the shadow camera for its `ShadowGenerator`.
 The cel fragment shader samples that depth map as a hard two-level term gating

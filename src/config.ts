@@ -1797,6 +1797,32 @@ export const CONFIG = {
       cobble: { color: "#5f7ba6", intensity: 0.18, shininess: 8 },
     },
     /**
+     * Translucency: the key light coming THROUGH a thin surface rather than
+     * off it, banded and gated by the same stepped shadow as the diffuse.
+     * Same opt-in shape as `spec` above and the same restraint — the term
+     * only reads as transmission while almost nothing in the frame carries
+     * it, and only where a surface genuinely is thin enough to.
+     *
+     * It fires when the eye comes round to look INTO the moon through the
+     * surface, so these are judged from under an awning or beneath a tree
+     * with the moon beyond it, never from the lit side. The colour is what
+     * the light arrives as after passing through and is NOT multiplied by
+     * the surface's albedo, so both of these are far paler than the material
+     * they sit on.
+     */
+    translucency: {
+      /**
+       * Market-stall canvas: pale, slightly warmed by the cloth, and the
+       * brightest of the two because an awning is a single thin sheet.
+       */
+      awning: { color: "#c3cbd6", intensity: 0.5 },
+      /**
+       * Pine needles: cold green, and dimmer — a crown is many layers deep,
+       * so what comes through it is what got past all of them.
+       */
+      foliage: { color: "#61906f", intensity: 0.3 },
+    },
+    /**
      * Cobblestone bump: fake relief height (metres) of a sett dome at
      * height-map value 1.0. The light bands ripple across individual
      * stones; too high and the street reads as rubble.

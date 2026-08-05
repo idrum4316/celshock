@@ -56,6 +56,9 @@ import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
  * Opt-in per material (getGlossy / getGroundTextured's spec): a toon
  * specular — one two-band Blinn highlight from the key light, gated by the
  * same shadow. Everything not explicitly glossy stays matte.
+ * Opt-in the same way (getTranslucent): a translucency band — the key light
+ * coming THROUGH a thin surface rather than off it, for awnings and foliage.
+ * Everything not explicitly translucent stays opaque.
  *
  * Atmosphere is distance fog plus a separate height-based ground mist, so
  * arenas fade into darkness and the floor sits in a low-lying haze.
@@ -170,6 +173,11 @@ uniform vec3 shadowParams; // x = depth bias, y = darkness, z = normal offset
 // specColor is premultiplied by intensity — black (the default) is matte.
 uniform vec3 specColor;
 uniform float specShininess;
+
+// Translucency: the key light coming THROUGH a thin surface rather than off
+// it — a canvas awning or a pine crown with the moon behind it. Premultiplied
+// by intensity — black (the default) is opaque.
+uniform vec3 transColor;
 
 // Geometric (per-triangle) normal from the world position's screen-space
 // derivatives. The cross product's sign depends on triangle winding and
@@ -296,6 +304,21 @@ void main() {
   float spec = pow(max(dot(n, h), 0.0), specShininess);
   col += specColor * band(spec, 2.0) * shadow;
 
+  // Translucency: light that came through the surface instead of off it. Two
+  // terms multiply. dot(viewDir, lightDir) is how close the eye is to
+  // looking INTO the key light — viewDir runs surface-to-eye and lightDir is
+  // the direction the light travels, so the two align exactly when the source
+  // is on the far side of the surface from the viewer. dot(n, lightDir) is
+  // the diffuse term's mirror: the facet must be turned AWAY from the light,
+  // since nothing transmits through a face the light is already landing on.
+  // Banded like everything else, gated by the same shadow as the diffuse and
+  // the specular (light cannot come through a surface the moon doesn't
+  // reach), and added past the soft shoulder for the same reason the specular
+  // is — a lit awning is allowed to be the brightest thing in the frame.
+  // Opaque materials carry transColor 0 and this contributes nothing.
+  float through = max(dot(viewDir, lightDir), 0.0) * max(dot(n, lightDir), 0.0);
+  col += transColor * band(through, 2.0) * shadow;
+
   // --- atmosphere ---
   float dist = length(vPosW - camPos);
 
@@ -334,6 +357,24 @@ export interface SpecSpec {
 }
 
 /**
+ * Translucency settings for one thin material (see
+ * CONFIG.graphics.translucency). One colour and nothing else: the term's
+ * shape — how sharply it fires as the eye comes round into the key light —
+ * is the band count in the shader, which belongs to the look rather than to
+ * the material, the same way the diffuse's four bands do.
+ */
+export interface TranslucencySpec {
+  /**
+   * The colour the light arrives as after passing through — canvas warms it,
+   * needles green it. Scaled by intensity on upload; unlike the rim, it does
+   * NOT pick up the surface's own albedo, so a dark night-time canvas can
+   * still glow pale.
+   */
+  color: string;
+  intensity: number;
+}
+
+/**
  * Creates and caches one cel ShaderMaterial per color, and keeps the shared
  * environment uniforms (light, fog, mist, camera, dynamic lights) in sync on
  * all of them.
@@ -364,6 +405,7 @@ export class CelMaterialFactory {
     "shadowParams",
     "specColor",
     "specShininess",
+    "transColor",
   ];
   /** Every cel material samples the shadow map, whatever its albedo path. */
   private static readonly SAMPLERS = ["shadowMap"];
@@ -415,6 +457,7 @@ export class CelMaterialFactory {
       this.applyPointLights(mat);
       this.applyShadow(mat);
       this.applySpec(mat, null);
+      this.applyTranslucency(mat, null);
       this.cache.set(hex, mat);
     }
     return mat;
@@ -447,6 +490,47 @@ export class CelMaterialFactory {
       this.applyPointLights(mat);
       this.applyShadow(mat);
       this.applySpec(mat, spec);
+      this.applyTranslucency(mat, null);
+      this.cache.set(cacheKey, mat);
+    }
+    return mat;
+  }
+
+  /**
+   * The same flat cel colour as get(), but with the translucency band enabled
+   * — the key light coming through the surface rather than off it, for the
+   * thin things it should read through: canvas awnings, foliage, anything a
+   * silhouette is meant to glow at the edges of when the moon is behind it.
+   *
+   * Deliberately a third variant beside matte and glossy rather than a fourth
+   * combination with it: a surface thin enough to transmit is not one with a
+   * hard Blinn glint on it, and the cache is per colour, so an axis that
+   * multiplies is an axis that costs.
+   *
+   * Cached under its own key and named `cel-trans-#rrggbb` so
+   * outlineInkFor() still recovers the palette colour for the ink.
+   */
+  getTranslucent(hex: string, trans: TranslucencySpec): ShaderMaterial {
+    const cacheKey = `\0trans-${hex}`;
+    let mat = this.cache.get(cacheKey);
+    if (!mat) {
+      mat = new ShaderMaterial(
+        `cel-trans-${hex}`,
+        this.scene,
+        { vertex: "cel", fragment: "cel" },
+        {
+          attributes: ["position", "normal"],
+          uniforms: [...CelMaterialFactory.UNIFORMS],
+          samplers: [...CelMaterialFactory.SAMPLERS],
+        },
+      );
+      mat.setColor3("baseColor", Color3.FromHexString(hex));
+      mat.setVector3("camPos", Vector3.Zero());
+      this.applyEnvironment(mat);
+      this.applyPointLights(mat);
+      this.applyShadow(mat);
+      this.applySpec(mat, null);
+      this.applyTranslucency(mat, trans);
       this.cache.set(cacheKey, mat);
     }
     return mat;
@@ -480,6 +564,7 @@ export class CelMaterialFactory {
       this.applyPointLights(mat);
       this.applyShadow(mat);
       this.applySpec(mat, null);
+      this.applyTranslucency(mat, null);
       this.cache.set(CelMaterialFactory.SKINNED_KEY, mat);
     }
     return mat;
@@ -546,6 +631,7 @@ export class CelMaterialFactory {
       this.applyPointLights(mat);
       this.applyShadow(mat);
       this.applySpec(mat, spec ?? null);
+      this.applyTranslucency(mat, null);
       this.cache.set(cacheKey, mat);
     }
     return mat;
@@ -678,6 +764,23 @@ export class CelMaterialFactory {
     );
     mat.setFloat("specShininess", Math.max(1, spec.shininess));
   }
+
+  /**
+   * Translucency is per-material for the same reason specular is: null keeps
+   * a material opaque, and the zero colour is what the shader's term
+   * multiplies out to nothing against.
+   */
+  private applyTranslucency(
+    mat: ShaderMaterial,
+    trans: TranslucencySpec | null,
+  ): void {
+    mat.setColor3(
+      "transColor",
+      trans
+        ? Color3.FromHexString(trans.color).scale(trans.intensity)
+        : Color3.Black(),
+    );
+  }
 }
 
 /**
@@ -690,14 +793,14 @@ const outlineEntries: { mesh: Mesh; width: number }[] = [];
 /**
  * Ink for a mesh: a darkened take on its own cel colour, so outlines read as
  * coloured line work instead of a uniform black cut-out. The factory names
- * flat materials `cel-#rrggbb` (matte) or `cel-gloss-#rrggbb` (specular),
- * which is how the colour is recovered here; textured/skinned materials get
- * the palette-neutral fallback ink.
+ * flat materials `cel-#rrggbb` (matte), `cel-gloss-#rrggbb` (specular) or
+ * `cel-trans-#rrggbb` (translucent), which is how the colour is recovered
+ * here; textured/skinned materials get the palette-neutral fallback ink.
  */
 function outlineInkFor(mesh: Mesh): Color3 {
   const o = CONFIG.graphics.outlines;
   const name = mesh.material?.name ?? "";
-  const m = /^cel-(?:gloss-)?(#(?:[0-9a-fA-F]{6}))$/.exec(name);
+  const m = /^cel-(?:gloss-|trans-)?(#(?:[0-9a-fA-F]{6}))$/.exec(name);
   if (m) {
     return Color3.FromHexString(m[1]).scale(o.tintFactor);
   }

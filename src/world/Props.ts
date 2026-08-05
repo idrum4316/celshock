@@ -11,6 +11,7 @@
  * same layout builds the same world on every boot (see world/rng.ts).
  */
 import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
+import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 
 /**
@@ -132,8 +133,16 @@ export function buildPine(
     // Local to the trunk's centre, so the tiers ride its lean.
     tier.position.set((rng() - 0.5) * 0.12, y - 3.2, (rng() - 0.5) * 0.12);
     tier.rotation.y = rng() * Math.PI * 2;
-    // Moonlight only reaches the top of the crown.
-    tier.material = mats.get(i < 2 ? NEEDLE : NEEDLE_LIT);
+    // Moonlight only reaches the top of the crown — and passes THROUGH it,
+    // which is why the needles are translucent rather than merely a lighter
+    // green: a pine with the moon behind it should have a lit edge, and a
+    // stand of them between you and the moon should read as a screen you are
+    // seeing light past rather than as a row of black cones. The material is
+    // one per colour either way, so this costs no extra draw call.
+    tier.material = mats.getTranslucent(
+      i < 2 ? NEEDLE : NEEDLE_LIT,
+      CONFIG.graphics.translucency.foliage,
+    );
   });
   return trunk;
 }

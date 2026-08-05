@@ -25,7 +25,10 @@
 import { Mesh, MeshBuilder, Scene, VertexData } from "@babylonjs/core";
 import type { ShaderMaterial } from "@babylonjs/core";
 import { CONFIG } from "../../config";
-import type { CelMaterialFactory } from "../../shaders/CelShader";
+import type {
+  CelMaterialFactory,
+  TranslucencySpec,
+} from "../../shaders/CelShader";
 import type { LightSpec } from "../environment";
 import type { TerrainField } from "../TerrainField";
 import {
@@ -156,6 +159,36 @@ export class Build implements Structure {
     m.position.set(x, y, z);
     if (rot) m.rotation.set(rot.x ?? 0, rot.y ?? 0, rot.z ?? 0);
     m.material = this.mats.get(color);
+    this.meshes.push(m);
+    return m;
+  }
+
+  /**
+   * A box the key light comes THROUGH — canvas stretched over a frame. Same
+   * geometry as `box`; the difference is entirely the material, which carries
+   * the cel shader's translucency band, so the sheet glows where the moon is
+   * behind it. Visual only, and worth staying rare: the term reads as
+   * transmission precisely because almost nothing else in the village does it.
+   */
+  translucentBox(
+    w: number,
+    h: number,
+    d: number,
+    x: number,
+    y: number,
+    z: number,
+    color: string,
+    trans: TranslucencySpec,
+    rot?: { x?: number; y?: number; z?: number },
+  ): Mesh {
+    const m = MeshBuilder.CreateBox(
+      `${this.tag}-sheet${this.meshes.length}`,
+      { width: w, height: h, depth: d },
+      this.scene,
+    );
+    m.position.set(x, y, z);
+    if (rot) m.rotation.set(rot.x ?? 0, rot.y ?? 0, rot.z ?? 0);
+    m.material = this.mats.getTranslucent(color, trans);
     this.meshes.push(m);
     return m;
   }

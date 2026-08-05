@@ -10,6 +10,7 @@
  * behind, and stone wall, shed, silo and kiln break sightlines outright.
  */
 import { Scene } from "@babylonjs/core";
+import { CONFIG } from "../../config";
 import type { CelMaterialFactory } from "../../shaders/CelShader";
 import {
   Build,
@@ -27,6 +28,8 @@ import {
   TIMBER,
   SLATE,
 } from "./core";
+
+const TRANSLUCENCY = CONFIG.graphics.translucency;
 
 /** Grain silo: a tall corrugated cylinder. Pure cover, not enterable. */
 export function buildSilo(scene: Scene, mats: CelMaterialFactory): Structure {
@@ -65,7 +68,14 @@ export function buildStall(scene: Scene, mats: CelMaterialFactory): Structure {
       b.box(0.16, 2.6, 0.16, sx * 1.6, 1.3, sz * 0.7, TIMBER);
     }
   }
-  b.box(4, 0.14, 2.2, 0, 2.6, 0, THATCH, { x: 0.14 });
+  // The awning is canvas, and the only thing standing between a player in the
+  // Square and the moon: translucent, so from underneath it lights up rather
+  // than reading as a black lid. It is also the one surface here anyone
+  // routinely stands beneath, which is what makes the stall the right place
+  // for the term and a roof the wrong one.
+  b.translucentBox(4, 0.14, 2.2, 0, 2.6, 0, THATCH, TRANSLUCENCY.awning, {
+    x: 0.14,
+  });
   return b;
 }
 
