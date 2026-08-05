@@ -1663,6 +1663,15 @@ load-bearing:
   sized for a camera **1.55 m above the street**: at the 256 it was authored
   at, when the camera sat 3.3 m back, looking down at your own feet turned the
   setts into blobs.
+- **Two up-facing surfaces must never share a plane.** The merge is per colour,
+  so a floor slab and the plinth under it land in *different* meshes and their
+  draw order is arbitrary — a shared top face is a depth-test tie broken per
+  pixel, which strobes as the camera moves. It does not read as z-fighting
+  stipple either, because the two surfaces are different colours: the tavern's
+  taproom flickered between blue-grey stone and brown boards across all 130 m²
+  of it. Boards stand proud of their plinth (`buildTavern`, `buildTownhouse`).
+  Coplanar faces within **one** colour group are fine — they merge into a
+  single mesh, which is why the gable roofs meeting at a ridge are not a bug.
 
 ### The sky
 

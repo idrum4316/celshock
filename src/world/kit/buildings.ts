@@ -106,7 +106,8 @@ export function buildTownhouse(
 
   b.box(w + 0.5, 0.3, d + 0.5, 0, 0.15, 0, DARK_STONE); // plinth
   if (p.enterable) {
-    b.box(w, 0.2, d, 0, 0.2, 0, PLANK);
+    // Proud of the plinth, not flush with it — see buildTavern's floor.
+    b.box(w, 0.2, d, 0, 0.24, 0, PLANK);
     b.doorWall(w, g, t, 0, g / 2, -d / 2, PLASTER, 1.6, 2.3);
     b.wall(w, g, t, 0, g / 2, d / 2, PLASTER);
     b.wall(t, g, d, -w / 2, g / 2, 0, PLASTER);
@@ -168,8 +169,13 @@ export function buildTavern(scene: Scene, mats: CelMaterialFactory): Structure {
   const t = 0.4;
   const jut = 0.5;
 
+  // Boards stand PROUD of the plinth they are laid on. Flush tops (both at
+  // 0.3) put 130 m2 of taproom floor and stone footing on one plane, and the
+  // two are different colours so they merge into different meshes — the depth
+  // test is then a tie the draw order breaks arbitrarily, per pixel, and the
+  // floor flickers as you walk. The 0.04 is the board thickness showing.
   b.box(w + 0.6, 0.3, d + 0.6, 0, 0.15, 0, DARK_STONE);
-  b.box(w, 0.2, d, 0, 0.2, 0, PLANK);
+  b.box(w, 0.2, d, 0, 0.24, 0, PLANK);
   b.doorWall(w, g, t, 0, g / 2, -d / 2, PLASTER, 2.2, 2.6);
   b.doorWall(w, g, t, 0, g / 2, d / 2, PLASTER, 1.8, 2.3); // yard door
   b.wall(t, g, d, -w / 2, g / 2, 0, STONE);
