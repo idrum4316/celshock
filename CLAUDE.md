@@ -91,6 +91,16 @@ have already cost time:
   the weapon's own stock, which is exactly what the DMR's irons did.
   `optics.ts`'s `ironSightFloor` is what keeps geometry out of the aperture; a
   screenshot at `adsBlend === 1` is what confirms it.
+- **Grenades are testable without waiting for a round to develop**, and should
+  be: `g.grenades` (the debug handle's field) takes `throwAlong`/`throwAt`
+  directly and `g.grenades.update(1/60)` steps the flight, so a whole
+  detonation is a synchronous loop inside one `page.evaluate` rather than
+  something you wait 2 fps for. Two traps. A bot you moved by hand has to be
+  put back to `alive = true` between blasts — `takeDamage` kills it and
+  `hittablesAgainst` then quietly leaves it out, which reads exactly like the
+  falloff being broken. And "0 damage" at a plausible range is usually the
+  line-of-sight ray finding a wall, not a bug: sample the same distance in all
+  four compass directions before believing it.
 - The muzzle flash is unhittable at 2 fps (`gunfeel.flashTime` is 0.05 s of game
   time); force it with `player.flashRoot.setEnabled(true)` instead.
 - Getting into `playing` takes an indeterminate number of Enter presses: the menu
@@ -173,6 +183,8 @@ src/
     CaptureZoneSystem.ts    # The flags drawn in the world: boundary ring,
                             #   proximity-revealed skirt, beacon
     CombatSystem.ts         # Hitscan + pooled tracers and sparks
+    GrenadeSystem.ts        # The one thing that isn't hitscan: thrown
+                            #   grenades, their bounces, the fuse, the blast
     AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
     ShadowSystem.ts         # Moon shadow map (stepped shadows) + blob shadows
@@ -692,6 +704,98 @@ slot is being edited, left/right steps through it. The menu behind it keeps
 left/right for difficulty. Enter, pad **A**, pad **B** and `L`/pad X all close
 it — every pick is already applied, so there is nothing for a confirm and a
 cancel to disagree about, and B is what a pad player reaches for.
+
+### Grenades
+
+Everyone carries two and there is no resupply, so the pouch is refilled by
+death and by nothing else — `Player.fullReset` and `Bot.spawn`. That scarcity
+is the design: two a life makes each throw a decision rather than a second
+trigger, and it is why nothing here needed an ammo economy to be built first.
+
+**This is the only thing in the game that is not hitscan**, and everything
+about `src/systems/GrenadeSystem.ts` follows from that one fact.
+
+- **It collides with ONE ray per grenade per frame**, cast along the step and a
+  radius past it so a fast grenade cannot tunnel between two frames, filtered
+  on `metadata.solid === true` — the same collider proxies bullets stop on,
+  never the visuals. There are at most a handful in the air, which is the whole
+  reason that ray is affordable where a per-bullet one would not be. A reported
+  normal facing *away* from the grenade is flipped before the bounce: a
+  collider's back face is what a grenade thrown from inside a doorway finds,
+  and bouncing off one drives it straight through the wall it just hit.
+- **A slow grenade on a flat surface is parked outright** (`resting`). A body
+  that micro-bounces on a floor never settles, and one that never settles never
+  stops paying for its collision ray.
+- **`TerrainField` is a backstop under the colliders, not the floor test.** The
+  terrain blocks are `solid` and the ray normally finds them; the clamp is
+  there so a grenade that slipped past a seam ends up on the ground rather than
+  falling out of the world with a live fuse. It uses `heightAt`, so it can sit
+  a fraction under the *drawn* surface — which is fine for a backstop and would
+  not be for anything that has to line up (see `terrainSlab`).
+- **The blast resolves against the THROWER's target list**, fetched at
+  detonation rather than at the throw — a grenade is in the air for seconds and
+  the roster it goes off among is not the one it left the hand among. Friendly
+  fire is therefore excluded by construction, exactly as `CombatSystem.fire`
+  excludes it, and a grenade cannot hurt its own side including the thrower.
+  That is a game decision: the alternative is bots routinely killing their own
+  squad with a lobbed frag.
+- **Damage needs line of sight from the blast centre** — one ray per victim
+  already inside the radius, which is bounded by how few things are ever that
+  close. Measured on the shipped map: 130 at the epicentre, flat inside 2.6 m,
+  falling linearly to 0 at 8.5 m, and blocked outright through a wall.
+- **The pool REFUSES rather than stealing a live slot**, and both callers spend
+  their grenade only after it has accepted. A count debited for a throw that
+  never arrived is the most confusing thing this could hand a player, which is
+  why `Player` splits `canThrowGrenade` from `spendGrenade` and why `Bot`
+  decrements after `ctx.throwGrenade` returns true.
+
+**The player throws where they are looking; a bot says where it wants the
+grenade to land.** Those are the two public entry points (`throwAlong` /
+`throwAt`), and the ballistics live behind both. `throwAt` is the low arc of the
+standard solve and returns false when the throw cannot be made at
+`throwSpeed` — which is exactly what an AI needs to hear, since the alternative
+is a bot lobbing grenades that land at its own feet. Two consequences worth
+knowing:
+
+- **`throwSpeed` is bounded from below by the bots, not by the player.** A
+  projectile's flat range is `v^2 / g`, so 24 against a gravity of 18 reaches
+  32 m and `grenade.bot.maxRange` (30) has to fit inside that or every AI throw
+  is refused. Measured: 8/12/20/28 m all solve, 34 m refuses.
+- **A solved throw lands slightly long**, because the fuse outlives the flight
+  and the grenade rolls, and `friction` is tuned against that rather than
+  against the bounce. Measured on flat ground: 0.7–1.8 m past the aim point
+  across the whole 11–30 m band, well inside the bots' own scatter. At the 0.5
+  it started on, a bot's grenade skated 4–6 m past its target. In the village
+  the same throws land further out, and that is the walls and the banks doing
+  their job rather than solve error.
+
+**The range band IS the bots' self-preservation.** A bot has no idea how far its
+own blast reaches — there is no self-damage to teach it and no rig pose that
+could sell taking cover from its own frag — so it is simply never allowed to
+throw at anything nearer than `minRange`. Skill scales the *chance*, not the
+accuracy: an ace throwing wildly is indistinguishable from a rookie doing the
+same, while an ace throwing more often is a squad that starts using grenades
+once it has been held up, which is what the player actually reads.
+
+Three things elsewhere are part of this and easy to miss:
+
+- **The blast light is deliberately outside `spendMuzzleLightBudget`.**
+  Transients always win a shader slot and the budget exists because sixteen
+  bots firing is up to eighty flashes a second; there are seconds between
+  blasts, so one slot each is never what blacks the village out.
+- **The camera's concussion reuses `CameraSystem.land()`.** The eye taking a
+  pressure wave and the eye taking a landing are the same damped spring, and a
+  shake of its own would be a second integrator writing the same offset — the
+  trap the bob phase documents from the other side.
+- **A blast kills through `Game.registerBotKill`**, which is now the one place a
+  bot's death reaches the scoreboard, the ticket count and the killfeed from all
+  three things that can cause it. The hitmarker and the rumble deliberately stay
+  with the weapon, because those are about the shot that landed rather than the
+  body that fell.
+
+`installMap` clears the pool: a grenade whose fuse outlived the map it was
+thrown across would go off over terrain that no longer exists, and in the
+editor that means in the middle of a rebuild.
 
 ### The interface is four screens and the chrome
 
@@ -1896,13 +2000,15 @@ node's transform is applied twice.
   magazine held down genuinely walks off target and has to be pulled back by
   hand. This is an explicit product decision, not a bug — a fully-recovering
   version was rejected.
-- **Everyone** is hitscan — player and bots share `CombatSystem.fire()`, which
+- **Every ROUND is hitscan** — player and bots share `CombatSystem.fire()`, which
   takes the shooter's target list so friendly fire is excluded by construction
   rather than by a team check inside, and the shooter's own `range` (the player's
   weapons carry three different distances, and it bounds the wall pick and the
   near-miss sweep as well as the damage). There is no projectile pool to thrash in a
   16-bot firefight. Tracers and sparks are pooled; add effects to a pool rather
-  than allocating per shot.
+  than allocating per shot. The grenade is the one deliberate exception (see
+  "Grenades"), and it is affordable precisely because there are a handful in
+  the air rather than eighty a second.
 - TypeScript is strict with `noUnusedLocals`/`noUnusedParameters` — the
   typecheck will fail on dead variables.
 - `Bot` holds a small FSM and drives a joint rig built by `SoldierModel`

@@ -14,7 +14,9 @@
  * spends CONFIG.lighting.muzzleBudgetPerFrame on the nearest few (16 shader
  * light slots are absolute). Runs AFTER ConquestSystem.update each frame.
  * Cross-system effects go out via onBotKilled/onBotFired callbacks wired in
- * Game — never import other systems.
+ * Game — never import other systems. A bot's grenade leaves the same way
+ * (throwGrenadeFor): the ballistics and the pool are GrenadeSystem's, and this
+ * file only forwards the bot's ask and its answer.
  */
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -76,6 +78,15 @@ export class BattleSystem {
     () => [];
   /** Wired by Game: what is this bot standing on? */
   zoneFor: (bot: Bot) => BotZone = () => "none";
+  /**
+   * Wired by Game: lob a grenade from `from`, aimed to land at `at`. False when
+   * the throw cannot be made, and the bot then spends nothing.
+   *
+   * A callback for the same reason `spawnPointFor` is one — the grenades are
+   * another system's, and this one imports no systems.
+   */
+  throwGrenadeFor: (from: Vector3, at: Vector3, team: Team) => boolean = () =>
+    false;
 
   private nav: NavGrid | null = null;
   private cover: CoverMap | null = null;
@@ -150,6 +161,8 @@ export class BattleSystem {
         return this.cover.opennessAt(s);
       },
       separation: (bot, out) => this.separation(bot, out),
+      throwGrenade: (bot, at) =>
+        this.throwGrenadeFor(bot.eyePos, at, bot.team),
       clearObstacles: (x, y, z, out) =>
         this.obstacles
           ? this.obstacles.resolve(x, y, z, CONFIG.nav.bodyRadius, out)

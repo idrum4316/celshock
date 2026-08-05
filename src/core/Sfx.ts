@@ -261,6 +261,20 @@ export class Sfx {
     this.clack(3400, 0.8, t * 0.8);
   }
 
+  /**
+   * A grenade leaving the hand: the pin and lever going, then the cloth of the
+   * throw. Player-local — bots' throws are deliberately silent, because the
+   * one cue that matters for an incoming grenade is the blinking pip on the
+   * thing itself, and sixteen bots' worth of throw noise would bury it.
+   */
+  grenadeThrow(): void {
+    this.clack(3200, 0.55, 0);
+    this.burst({
+      dur: 0.13, vol: 0.1, type: "bandpass", freq: 800, freqEnd: 1900,
+      q: 0.9, delay: 0.06, send: 0.15,
+    });
+  }
+
   pickup(): void {
     this.tone(700, 0.08, "sine", 0.07, 1.6);
   }
@@ -368,6 +382,54 @@ export class Sfx {
     this.burst({
       dur: 0.1 + far * 0.14, vol: 0.62, type: "lowpass",
       freq: 1500 - 1150 * far, freqEnd: 190, delay, out: panner, send,
+    });
+  }
+
+  /**
+   * A grenade going off. Spatialised like bot fire, and built the same way —
+   * filtered slices of the shared noise buffer plus one pitched layer for the
+   * part that genuinely is a single frequency.
+   *
+   * The difference from a gunshot is entirely in the time scale, and that is
+   * what makes it read as an explosion rather than as a loud rifle: the crack
+   * is the same order (a few tens of milliseconds), but underneath it sits a
+   * half-second low roll and a full second of debris, and the reverb send is
+   * near unity because outdoors a blast is mostly the valley answering it.
+   *
+   * Exempt from `botShot`'s early distance rejection at `maxDistance`: a
+   * grenade at 90 m is still a thing you want to know happened, and there are
+   * seconds between them rather than eighty a second, so it can afford the
+   * voices.
+   */
+  explosion(at: Vector3): void {
+    const a = CONFIG.audio;
+    const dist = this.distanceToListener(at);
+    if (dist > a.maxDistance * 1.6) return;
+    const panner = this.panner(at);
+    if (!panner) return;
+    const far = Math.min(1, dist / a.maxDistance);
+    const delay = dist / a.speedOfSound;
+    const v = 0.92 + Math.random() * 0.16;
+    // The crack. Broadband, over in 40 ms, and the thing that says "sharp".
+    this.burst({
+      dur: 0.04, vol: 0.7 * v * (1 - far * 0.7), type: "highpass",
+      freq: (1800 - 1300 * far) * v, q: 0.5, delay, out: panner, send: 0.4,
+    });
+    // The body: a long lowpassed roll sweeping down as the pressure wave
+    // spreads. This is most of what a distant blast is.
+    this.burst({
+      dur: 0.5 + far * 0.35, vol: 1, type: "lowpass",
+      freq: 900 - 600 * far, freqEnd: 70, delay, out: panner, send: 1.4,
+    });
+    // The chest thump, a fifth of the rifle's pitch and five times its length.
+    this.tone(42 * v, 0.42, "sine", 0.5 * (1 - far * 0.5), 0.4, panner, {
+      delay, send: 0.8,
+    });
+    // Debris coming back down, well behind the blast — the tail that stops it
+    // sounding like a single event.
+    this.burst({
+      dur: 0.7, vol: 0.16 * (1 - far * 0.6), type: "bandpass", freq: 2200 * v,
+      freqEnd: 700, q: 0.7, delay: delay + 0.14, out: panner, send: 0.6,
     });
   }
 

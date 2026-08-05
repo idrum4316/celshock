@@ -22,6 +22,10 @@
  * cover.abandonTime is dropped (with a cooldown, or the search instantly
  * re-picks it) and the bot fights from where it stands. A bot moving to cover
  * still shoots; only the tucked-in half of the peek cycle holds fire.
+ * Grenades are two a life, considered on the ordinary think tick against a
+ * target the bot already has, and never thrown inside `grenade.bot.minRange` —
+ * that band IS the self-preservation, since there is no self-damage to teach
+ * one and no rig pose that could sell taking cover from your own frag.
  * New behavior = new FSM state, never new clips.
  */
 import { Scene, Vector3 } from "@babylonjs/core";
@@ -113,6 +117,16 @@ export interface BattleCtx {
   /** Push-apart from nearby friendlies, written into `out`. */
   separation(bot: Bot, out: Vector3): void;
   /**
+   * Lobs a grenade from this bot, aimed to LAND at `at`. False when the throw
+   * cannot be made — out of the arm's range, or the pool is empty — and a bot
+   * that gets one must not spend a grenade on it.
+   *
+   * The ballistics are deliberately not the bot's: a bot says where it wants
+   * the grenade and is told whether the arm can do it, exactly as it says where
+   * it wants to shoot and lets `fire` resolve the round.
+   */
+  throwGrenade(bot: Bot, at: Vector3): boolean;
+  /**
    * Pushes a body at `(x, y, z)` out of any collider it overlaps, writing the
    * result into `out`. Returns false, leaving `out` set to the input, when the
    * spot was already clear.
@@ -134,6 +148,7 @@ const _dir = new Vector3();
 const _sep = new Vector3();
 const _to = new Vector3();
 const _spot = new Vector3();
+const _nade = new Vector3();
 
 export class Bot implements Combatant {
   readonly team: Team;
@@ -233,6 +248,10 @@ export class Bot implements Combatant {
   private burstLeft = 0;
   private magLeft = 0;
   private reloadT = 0;
+  /** Grenades left this life — the same two-a-life pouch the player carries. */
+  private grenades = CONFIG.grenade.carried;
+  /** While positive, this bot will not throw another. */
+  private grenadeT = 0;
   /** Consecutive shots stopped by geometry with no target found. */
   private blockedStreak = 0;
   /** While positive, a recent hit is disrupting aim and speed. */
@@ -301,6 +320,8 @@ export class Bot implements Combatant {
     this.magLeft = CONFIG.bots.combat.magSize;
     this.reloadT = 0;
     this.fireCooldown = 0;
+    this.grenades = CONFIG.grenade.carried;
+    this.grenadeT = 0;
     this.stuckT = 0;
     this.detourT = 0;
     this.stuckStreak = 0;
@@ -392,6 +413,7 @@ export class Bot implements Combatant {
     this.flinchT = Math.max(0, this.flinchT - dt);
     this.coverCooldownT = Math.max(0, this.coverCooldownT - dt);
     this.squeezeT = Math.max(0, this.squeezeT - dt);
+    this.grenadeT = Math.max(0, this.grenadeT - dt);
     this.strafeT -= dt;
     if (this.strafeT <= 0) {
       this.strafeT = 0.8 + this.rand() * 1.6;
@@ -932,6 +954,7 @@ export class Bot implements Combatant {
       this.blockedStreak = 0;
     }
     if (this.target) m.sawEnemy(this.target.position);
+    this.considerGrenade(ctx);
 
     let want: BotState;
     if (this.target) {
@@ -1042,6 +1065,49 @@ export class Bot implements Combatant {
         this.peekT = this.profile.peekOutTime;
       }
     }
+  }
+
+  /**
+   * Whether to put a grenade on the enemy this bot is already fighting.
+   *
+   * Considered on the ordinary think tick rather than on a timer of its own:
+   * it is a decision about a target the bot has, and a bot with no target has
+   * nothing to throw at. That also means the chance below is per tick, so the
+   * think rate is part of the tuning — see `CONFIG.grenade.bot.chance`.
+   *
+   * **The range band IS the safety model.** A bot has no idea how far its own
+   * blast reaches — there is no self-damage to teach it and no sim to ask — so
+   * it is simply never allowed to throw at anything close enough to catch
+   * itself, and the arc solve refuses anything too far. Nothing else here
+   * protects the thrower, and nothing else has to: grenades cannot hurt their
+   * own side (see `CONFIG.grenade`).
+   *
+   * Skill scales the chance rather than the accuracy. An ace throwing wildly
+   * is indistinguishable from a rookie doing the same thing; an ace throwing
+   * MORE is a squad that starts using grenades once it has been held up, which
+   * is what the player actually reads.
+   */
+  private considerGrenade(ctx: BattleCtx): void {
+    const cfg = CONFIG.grenade.bot;
+    const t = this.target;
+    if (!t || this.grenades <= 0 || this.grenadeT > 0) return;
+    const dx = t.position.x - this.position.x;
+    const dz = t.position.z - this.position.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < cfg.minRange || dist > cfg.maxRange) return;
+    if (this.rand() > cfg.chance * (0.4 + this.skill)) return;
+    // Aimed at the ground the target is standing on, scattered — a grenade
+    // thrown exactly onto someone's feet every time is a mortar, not a soldier,
+    // and the falloff is where the play is anyway.
+    _nade.set(
+      t.position.x + (this.rand() * 2 - 1) * cfg.scatter,
+      t.position.y,
+      t.position.z + (this.rand() * 2 - 1) * cfg.scatter,
+    );
+    // The arm gets the last word: a solve it cannot make spends nothing.
+    if (!ctx.throwGrenade(this, _nade)) return;
+    this.grenades -= 1;
+    this.grenadeT = cfg.cooldown;
   }
 
   /**

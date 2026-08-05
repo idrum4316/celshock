@@ -875,6 +875,145 @@ export const CONFIG = {
     casingUp: 2.6,
   },
 
+  /**
+   * Fragmentation grenades. Everyone — the player and every bot — spawns with
+   * `carried` of them and there is no resupply: two a life is the whole
+   * economy, which is what makes each one a decision rather than a second
+   * trigger.
+   *
+   * This is the one weapon in the game that is NOT hitscan, and the numbers
+   * below are what pay for that. A thrown grenade is a body with a fuse: it
+   * flies, it bounces off the same collider proxies bullets stop on, and it
+   * goes off `fuse` seconds after it leaves the hand whatever it has hit on
+   * the way. Cooking is deliberately absent — the fuse starts on release —
+   * because a cook needs a hold-to-charge input on a button that is also the
+   * pad's only free bumper, and the arc is already the skill.
+   *
+   * The blast is `damage` inside `innerRadius`, falling linearly to nothing at
+   * `blastRadius`, and it needs line of sight: a wall between the two is a wall
+   * the fragments stop in, tested with the same `metadata.solid` ray everything
+   * else in this game uses. `damage` is deliberately over the 100 HP pool, so
+   * a grenade that lands ON someone kills, and one that lands near them
+   * softens them up — the falloff is where all the play is.
+   *
+   * Friendly fire is excluded the same way `CombatSystem.fire` excludes it: by
+   * the target list the thrower is handed, never by a team check at the point
+   * of damage. A grenade cannot hurt its own side, including the thrower. That
+   * is a game decision rather than a physical one, and the alternative — bots
+   * routinely killing their own squad with a lobbed frag — is not a fight
+   * anybody wants to be in.
+   */
+  grenade: {
+    /** Carried per life. There is no way to pick more up yet. */
+    carried: 2,
+    /** Seconds from leaving the hand to detonation. Not resettable, not cookable. */
+    fuse: 2.6,
+    /**
+     * Launch speed (m/s) and the upward tilt added to the aim direction
+     * (radians). The lift is what makes a throw at a flat horizon land out in
+     * front of you instead of at your own feet; aiming up adds to it as it
+     * should.
+     *
+     * The speed is bounded from below by the bots, not by the player: a
+     * projectile's flat range is `v^2 / g`, so 24 against a gravity of 18 can
+     * reach 32 m and `bot.maxRange` has to fit inside that or the ballistic
+     * solve refuses every throw the AI ever asks for. Measured on flat ground,
+     * a level throw from a standing eye first lands at 21 m and detonates at
+     * 23; aiming 11 degrees up reaches 30 and 26 degrees reaches 35, so where
+     * you are looking genuinely decides the throw.
+     *
+     * Against the exaggerated 18 m/s^2 gravity this is the same arc a 17.7 m/s
+     * throw would take under real gravity — a strong overhand, not a mortar.
+     */
+    throwSpeed: 24,
+    throwLift: 0.28,
+    /**
+     * Where it leaves the hand, relative to the eye and the way it is looking.
+     * Far enough forward that a throw taken with a wall at your shoulder does
+     * not spawn inside the wall, close enough that it still reads as thrown by
+     * the hands you are looking past.
+     */
+    handAhead: 0.5,
+    handSide: 0.2,
+    handUp: -0.1,
+    /** Seconds between the player's throws — the arm, not the fuse. */
+    throwInterval: 0.7,
+    gravity: 18,
+    /** Collision radius (m); also the drawn size. */
+    radius: 0.11,
+    /**
+     * Bounce: the fraction of the normal speed kept across an impact, and the
+     * fraction of the tangential speed friction leaves behind. A frag is a lump
+     * of steel and does not bounce like a ball — low restitution is what keeps
+     * a grenade thrown into a room in that room, which is the whole reason to
+     * throw one through a doorway.
+     *
+     * The FRICTION is the one that decides how the AI plays, and it is tuned
+     * against the roll rather than against the bounce: `throwAt` solves for the
+     * grenade to *arrive* at a point, and everything after that is overshoot.
+     * At 0.5 a bot's grenade skated 4-6 m past its target; at 0.3 it settles
+     * 0.7-1.8 m past across the whole 11-30 m band, which is well inside the
+     * scatter and reads as a throw rather than as a skim.
+     */
+    restitution: 0.25,
+    friction: 0.3,
+    /** Below this speed, resting on a floor, it stops rolling. */
+    restSpeed: 1.1,
+    /** Full damage inside this radius, falling linearly to nothing at the next. */
+    innerRadius: 2.6,
+    blastRadius: 8.5,
+    damage: 130,
+    /**
+     * Pool size. Seventeen combatants with two each is 34 in theory and never
+     * anything like it in practice — but an exhausted pool REFUSES the throw
+     * rather than stealing a live grenade's slot, so the count is never spent
+     * on something that does not arrive.
+     */
+    poolSize: 20,
+    /**
+     * The blast's kick on the camera, as a fall speed handed to
+     * `CameraSystem.land` — the eye taking a concussion is the same damped
+     * spring as the eye taking a landing, so there is one integrator for both.
+     * Scaled by the same falloff the damage uses.
+     */
+    shakeSpeed: 13,
+    /** Fireball: how far it expands, and how long the whole flash lasts. */
+    blastVisualRadius: 4.2,
+    blastVisualTime: 0.42,
+    /** Embers flung out of the blast: count, speed, lifetime, gravity. */
+    emberCount: 14,
+    emberSpeed: 13,
+    emberLife: 0.75,
+    emberGravity: 16,
+
+    /**
+     * When a bot throws one. Considered on its ordinary think tick rather than
+     * on a timer of its own — it is a decision about a target it already has,
+     * and a bot with no target has nothing to throw at.
+     *
+     * The range band is the whole safety model: a bot has no idea where its own
+     * blast reaches, so it is simply never allowed to throw at something close
+     * enough to catch itself. The far end is where the ballistic solve starts
+     * dropping grenades short of anything.
+     */
+    bot: {
+      minRange: 11,
+      maxRange: 30,
+      /**
+       * Chance per think tick, scaled by the bot's skill. At the 5 Hz think
+       * rate this is roughly one throw every few seconds of sustained contact
+       * for an ace and rather less for a rookie — the point is that a grenade
+       * arrives when you have been holding one position too long, not that it
+       * arrives on a schedule.
+       */
+      chance: 0.06,
+      /** Seconds before the same bot may throw again. */
+      cooldown: 8,
+      /** Aim scatter on the landing point (m). Bots are not mortars. */
+      scatter: 2.4,
+    },
+  },
+
   camera: {
     /** Mouse sensitivity (radians per pixel). */
     sensX: 0.0022,
@@ -1160,6 +1299,21 @@ export const CONFIG = {
     /** Reload: tipped down and rolled toward the magwell. */
     reloadPos: { x: 0.02, y: -0.1, z: -0.05 },
     reloadRot: { x: 0.3, y: -0.2, z: 0.42 },
+    /**
+     * The throw. A grenade goes with the OFF hand, so the weapon is not put
+     * away for it — it drops out of the aim and rolls outboard while the other
+     * arm does the work, and comes back. That is the whole animation: there is
+     * no grenade in view and no arm swing, because both would need a rig the
+     * viewmodel does not have, and a weapon that visibly gives way is enough
+     * to say the hands are busy.
+     *
+     * `throwTime` is how long the pose takes to return, and it is deliberately
+     * shorter than `grenade.throwInterval` so the weapon is settled again
+     * before a second throw is allowed.
+     */
+    throwPos: { x: 0.06, y: -0.12, z: -0.08 },
+    throwRot: { x: 0.26, y: 0.34, z: -0.3 },
+    throwTime: 0.45,
     /** Where the support hand travels to for the magazine swap. */
     magHandOffset: { x: -0.02, y: -0.09, z: -0.34 },
     /** Support-hand window over the reload: leaves the guard, swaps, returns. */
@@ -1633,6 +1787,18 @@ export const CONFIG = {
      */
     muzzleBudgetPerFrame: 4,
     muzzleMaxDistance: 30,
+    /**
+     * A grenade going off. Unbudgeted, unlike the muzzle flashes above, and it
+     * can be: there is one blast every few seconds at the very most, against
+     * up to eighty muzzle flashes a second, so a transient slot for each one is
+     * never the thing that blacks the village out. It is far brighter and far
+     * longer than a muzzle flash for the obvious reason — for a third of a
+     * second it is the only light in the valley that matters.
+     */
+    explosionColor: "#ffb45a",
+    explosionRange: 28,
+    explosionIntensity: 7,
+    explosionLife: 0.34,
     /**
      * Shoulder lamp the player carries. Without it these arenas are too dark
      * to fight in between fixtures — and it gives the character a light of

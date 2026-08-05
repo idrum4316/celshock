@@ -33,6 +33,7 @@ const CONTROLS: readonly [string, string, string][] = [
   ["Fire", "RT", "LMB"],
   ["Jump", "A", "Space"],
   ["Reload", "X", "R"],
+  ["Grenade", "RB", "G"],
   ["Sprint", "L3", "Shift"],
   // Two keys because they behave differently — Ctrl is held, C latches, and
   // on the pad B latches too. The table's grammar is one chip per key and it

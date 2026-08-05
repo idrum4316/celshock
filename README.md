@@ -61,6 +61,7 @@ Bluetooth pad paired to it and not with thumbs on the glass.
 | Shoot      | RT / R2             | Left-click       |
 | Jump       | A / ✕               | Space            |
 | Reload     | X / ▢               | R                |
+| Grenade    | RB / R1             | G                |
 | Scoreboard | Back / Share        | Tab              |
 | Loadout    | Y / △ (menus)       | L (menus)        |
 | Confirm    | A or Start          | Enter / Click    |
@@ -95,6 +96,11 @@ is untouched, so mixed setups never penalize keyboard/mouse aim.
 - Each team starts with **400 reinforcements**. Every death costs one, and
   whichever side holds **fewer flags bleeds** tickets steadily on top. Winning
   fights while ignoring objectives still loses the round.
+- Everyone — you and every bot — spawns with **two frag grenades** and no way
+  to get more. They arc, bounce off walls and roll, go off on a fuse rather
+  than on impact, and are lethal at the centre and survivable at the edge.
+  Fragments do not go through walls, so a corner is real cover. The blinking
+  red pip on one that has landed near you is the only warning you get.
 - Death opens the **deploy screen**: a top-down map of the village where you
   pick a spawn from the flags you hold, or fall back to your home gatehouse.
   Health regenerates a few seconds after you stop taking fire.

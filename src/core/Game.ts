@@ -8,7 +8,10 @@
  * mats.updateCamera() -> carried lights -> lighting.update() -> sfx.setListener().
  * ConquestSystem.update runs before BattleSystem.update (bots see this frame's
  * flag ownership). Muzzle-flash light budget is spent here
- * (spendMuzzleLightBudget) — new per-bot transient lights need the same treatment.
+ * (spendMuzzleLightBudget) — new per-bot transient lights need the same
+ * treatment; a grenade's blast light is deliberately outside it (seconds
+ * apart, not eighty a second). A bot goes down through registerBotKill
+ * whichever of the three things killed it — rifle, player rifle, grenade.
  * The map is a `MapDef` held in one field (`mapDef`) and built in one method
  * (`installMap`), which both a round start and an editor rebuild go through —
  * no map's layout or environment may be named anywhere else in here.
@@ -51,6 +54,7 @@ import { CaptureZoneSystem } from "../systems/CaptureZoneSystem";
 import { CombatSystem } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
 import { GrassSystem } from "../systems/GrassSystem";
+import { GrenadeSystem } from "../systems/GrenadeSystem";
 import { LightingSystem } from "../systems/LightingSystem";
 import { ShadowSystem } from "../systems/ShadowSystem";
 import { Sky } from "../systems/Sky";
@@ -193,6 +197,8 @@ export class Game {
   private sfx: Sfx;
   private mapBuilder: MapBuilder;
   private combat: CombatSystem;
+  /** Thrown grenades — the one thing on the map that is not hitscan. */
+  private grenades: GrenadeSystem;
   private aimAssist: AimAssistSystem;
   private battle: BattleSystem;
   private conquest: ConquestSystem;
@@ -262,6 +268,8 @@ export class Game {
   private readonly shadowFocus = new Vector3();
   /** …and for the kit screen's bench lamp, placed relative to the camera. */
   private readonly kitLampPos = new Vector3();
+  /** …and for where a thrown grenade leaves the player's hand. */
+  private readonly grenadeHand = new Vector3();
   /** Counts down while the player is waiting to redeploy. */
   private respawnT = 0;
   /** Round scoreboard: kills and losses per team, plus the player's own line. */
@@ -326,6 +334,7 @@ export class Game {
     this.grass = new GrassSystem(this.scene, glow);
     this.mapBuilder = new MapBuilder(this.scene, this.mats, this.lighting);
     this.combat = new CombatSystem(this.scene, this.mats);
+    this.grenades = new GrenadeSystem(this.scene, this.mats);
     this.aimAssist = new AimAssistSystem(this.scene);
     this.battle = new BattleSystem(this.scene, this.mats, this.combat);
     this.conquest = new ConquestSystem();
@@ -347,17 +356,24 @@ export class Game {
     this.player.onDamaged = (amount, died, from) =>
       this.onPlayerDamaged(amount, died, from);
     this.battle.setPlayer(this.player);
-    this.battle.onBotKilled = (bot, killer) => {
-      this.sfx.enemyDie();
-      this.conquest.registerDeath(bot.team);
-      this.kills[killer] += 1;
-      this.losses[bot.team] += 1;
-      this.hud.addKill(
-        CONFIG.teams[killer].name,
-        CONFIG.teams[bot.team].name,
-        false,
-      );
+    this.battle.onBotKilled = (bot, killer) => this.registerBotKill(bot, killer, false);
+    // Grenades resolve their blast against the thrower's own target list, the
+    // same way a bullet does — so friendly fire is excluded by construction
+    // here too, and this system never learns what a team is.
+    this.grenades.hittablesFor = (team) => this.battle.hittablesAgainst(team);
+    this.grenades.onExploded = (at) => this.onExplosion(at);
+    this.grenades.onBlastHit = (victim, thrower, byPlayer, killed) => {
+      // The player's own death is already handled, all the way down to the
+      // deploy screen, by `onPlayerDamaged` — `takeDamage` routed it there
+      // before this callback ran. Only bots are this handler's business.
+      if (!(victim instanceof Bot)) return;
+      if (byPlayer) this.hud.flashHitmarker(killed);
+      if (killed) this.registerBotKill(victim, thrower, byPlayer);
     };
+    // A bot asking for a grenade on a position. The arm has the last word — a
+    // solve it cannot make returns false and the bot spends nothing.
+    this.battle.throwGrenadeFor = (from, at, team) =>
+      this.grenades.throwAt(from, at, team, false);
     // Bots fire constantly and all over the map, so their shots are
     // spatialised and voice-capped rather than played flat like the player's.
     this.battle.onBotFired = (bot, at) => {
@@ -1026,6 +1042,10 @@ export class Game {
     const { layout, environment } = this.mapDef;
     this.map?.dispose();
     this.combat.clearTransient();
+    // A grenade whose fuse outlived the map it was thrown across would go off
+    // over terrain that no longer exists — and, in the editor, in the middle
+    // of a rebuild.
+    this.grenades.reset();
     // The flag markers are geometry hung off the old map's terrain. The editor
     // draws proxies of its own and would double every ring; a round rebuilds
     // them below. Either way they cannot survive the map they were placed on.
@@ -1041,6 +1061,9 @@ export class Game {
     this.water.build(map.water, environment, map.terrain);
     this.grass.build(map.grass, environment, map.colliderBoxes, map.terrain);
     this.player.setTerrain(map.terrain);
+    // The floor a grenade comes to rest on, as a backstop under the collider
+    // proxies — the same terrain the player's ground probe falls back to.
+    this.grenades.setTerrain(map.terrain);
     return map;
   }
 
@@ -1178,6 +1201,7 @@ export class Game {
     if (this.input.reloadPressed && this.player.startReload()) {
       this.sfx.reload(this.player.reloadTime);
     }
+    if (this.input.grenadePressed) this.throwGrenade();
 
     // --- shooting (hitscan from the camera through the crosshair) ---
     // Mouse fire requires pointer lock so UI clicks never discharge the gun.
@@ -1246,12 +1270,7 @@ export class Game {
           killed ? haptic.killMs : haptic.hitMs,
         );
         if (killed && shot.target instanceof Bot) {
-          this.sfx.enemyDie();
-          this.conquest.registerDeath(shot.target.team);
-          this.kills[this.player.team] += 1;
-          this.losses[shot.target.team] += 1;
-          this.playerKills += 1;
-          this.hud.addKill("YOU", CONFIG.teams[shot.target.team].name, true);
+          this.registerBotKill(shot.target, this.player.team, true);
         }
       }
       if (this.player.reloading) this.sfx.reload(this.player.reloadTime);
@@ -1271,6 +1290,9 @@ export class Game {
     this.battle.update(dt, this.cameraSys.camera.position);
     this.spendMuzzleLightBudget();
     this.combat.update(dt);
+    // After the bots, so a grenade thrown on this frame's think tick flies on
+    // this frame rather than sitting in the thrower's hand until the next one.
+    this.grenades.update(dt);
 
     this.updateCameraAndLighting(dt);
     // Reads the camera (it fades the markers into the fog wall) but never
@@ -1282,6 +1304,42 @@ export class Game {
       this.cameraSys.camera.position,
     );
     this.updateHud(dt);
+  }
+
+  /**
+   * The player's throw. Along the camera axis, from a point out in front of
+   * the eye rather than from the eye itself — a throw taken with a wall at your
+   * shoulder must not spawn the grenade inside the wall, where its first act
+   * would be to bounce back into your face.
+   *
+   * The count is spent only once the pool has agreed to carry it: a grenade
+   * debited for a throw that never happened is the most confusing thing this
+   * feature could hand a player, which is why `Player` splits the ask from the
+   * booking.
+   */
+  private throwGrenade(): void {
+    if (!this.player.canThrowGrenade()) return;
+    const g = CONFIG.grenade;
+    const eye = this.cameraSys.camera.position;
+    const forward = this.cameraSys.forward;
+    const right = this.cameraSys.flatRight;
+    this.grenadeHand.set(
+      eye.x + forward.x * g.handAhead + right.x * g.handSide,
+      eye.y + forward.y * g.handAhead + g.handUp,
+      eye.z + forward.z * g.handAhead + right.z * g.handSide,
+    );
+    if (
+      !this.grenades.throwAlong(
+        this.grenadeHand,
+        forward,
+        this.player.team,
+        true,
+      )
+    ) {
+      return;
+    }
+    this.player.spendGrenade();
+    this.sfx.grenadeThrow();
   }
 
   /**
@@ -1379,6 +1437,7 @@ export class Game {
   private updateHud(dt: number): void {
     this.hud.setHealth(this.player.health, this.player.maxHealth);
     this.hud.setAmmo(this.player.ammo, this.player.magSize, this.player.reloading);
+    this.hud.setGrenades(this.player.grenades, CONFIG.grenade.carried);
     // The crosshair ring IS the live spread: radians at the aim plane,
     // projected through the current FOV into screen pixels.
     const spreadPx =
@@ -1532,6 +1591,70 @@ export class Game {
       );
       this.enterDeploy(CONFIG.conquest.respawnDelay);
     }
+  }
+
+  /**
+   * A bot went down: the sound, the ticket, the scoreboard and the killfeed.
+   *
+   * One method rather than three copies because there are now three ways to
+   * kill one — a bot's rifle, the player's rifle, and either side's grenade —
+   * and they disagree about nothing except whose name goes on the line.
+   * `byPlayer` is what separates the player's own kill from their team's, and
+   * it is the only thing the three callers pass differently.
+   *
+   * Deliberately NOT the hitmarker or the rumble: those are about the shot
+   * that landed rather than the body that fell, and they belong with whichever
+   * weapon put it there.
+   */
+  private registerBotKill(bot: Bot, killer: Team, byPlayer: boolean): void {
+    this.sfx.enemyDie();
+    this.conquest.registerDeath(bot.team);
+    this.kills[killer] += 1;
+    this.losses[bot.team] += 1;
+    if (byPlayer) this.playerKills += 1;
+    this.hud.addKill(
+      byPlayer ? "YOU" : CONFIG.teams[killer].name,
+      CONFIG.teams[bot.team].name,
+      byPlayer,
+    );
+  }
+
+  /**
+   * A grenade went off. The light, the noise and the concussion — none of
+   * which the grenade system may reach on its own, which is why they arrive
+   * here as one event with a position on it.
+   *
+   * The light is deliberately outside `spendMuzzleLightBudget`. Transients
+   * always win a shader slot, and the budget exists because sixteen bots firing
+   * is up to eighty flashes a second; there are seconds between blasts, so one
+   * slot each is never what blacks the village out.
+   *
+   * The camera's concussion reuses `land()` rather than growing a shake of its
+   * own: the eye taking a pressure wave and the eye taking a landing are the
+   * same damped spring, and the alternative is a second integrator writing the
+   * same offset — the trap the bob phase documents from the other side. It
+   * falls off over twice the blast radius, so a grenade you survived at the
+   * edge still registers as one.
+   */
+  private onExplosion(at: Vector3): void {
+    const lc = CONFIG.lighting;
+    this.lighting.pulse(
+      at,
+      lc.explosionColor,
+      lc.explosionRange,
+      lc.explosionIntensity,
+      lc.explosionLife,
+    );
+    this.sfx.explosion(at);
+    if (this.state !== "playing") return;
+    const g = CONFIG.grenade;
+    const reach = g.blastRadius * 2;
+    const d = Vector3.Distance(at, this.cameraSys.camera.position);
+    if (d >= reach) return;
+    this.cameraSys.land(g.shakeSpeed * (1 - d / reach));
+    this.cameraSys.addPunch();
+    const haptic = CONFIG.rumble;
+    this.input.rumble(haptic.hurtStrong, haptic.hurtWeak, haptic.hurtMs);
   }
 
   /**

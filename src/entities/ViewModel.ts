@@ -1,7 +1,8 @@
 /**
  * ViewModel.ts — The first-person weapon: whichever gun is carried and the two
  * gloved arms holding it, parented to the camera, plus every offset that moves
- * them (hip/ADS pose, sprint carry, reload dip and mag swap, sway, bob, kick).
+ * them (hip/ADS pose, sprint carry, reload dip and mag swap, the off-hand
+ * throw's give, sway, bob, kick).
  * Owns: the on-screen weapon. Nothing else may reparent or pose it.
  *
  * Invariants:
@@ -93,6 +94,12 @@ export interface ViewModelParams {
   reloadBlend: number;
   /** 0..1 through the reload, for the support hand's trip to the magwell. */
   reloadPhase: number;
+  /**
+   * 1 the instant a grenade leaves the hand, falling to 0 over
+   * `viewmodel.throwTime`. The weapon gives way to the other arm and comes
+   * back; it is never put away, because a grenade is an off-hand action.
+   */
+  throwBlend: number;
   /** Per-shot punch, 1 at the shot and squared by the caller. */
   kick: number;
   /** Smoothed look rates (rad/s) — the weapon trails both. */
@@ -491,6 +498,15 @@ export class ViewModel {
     if (reloadW > 0.001) {
       addScaled(this.off, v.reloadPos, reloadW);
       addScaled(this.rot, v.reloadRot, reloadW);
+    }
+    // The throw arcs in and back out rather than easing like the blends above:
+    // Player hands this over as a linear 1 -> 0 decay, and a linear return
+    // reads as the weapon being dragged back rather than let go of. `sin(pi*w)`
+    // is zero at both ends and peaks in the middle, which IS the gesture.
+    const throwW = Math.sin(Math.PI * clamp(p.throwBlend, 0, 1));
+    if (throwW > 0.001) {
+      addScaled(this.off, v.throwPos, throwW);
+      addScaled(this.rot, v.throwRot, throwW);
     }
 
     // --- sway: the weapon trails the look, damped hard while braced ---

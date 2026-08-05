@@ -39,6 +39,16 @@ export class InputManager {
   jumpPressed = false;
   reloadPressed = false;
   /**
+   * Edge-triggered "throw a grenade" (G / gamepad RB).
+   *
+   * Edge rather than held, unlike the trigger: there is no automatic fire for
+   * grenades and you carry two, so a held button that emptied the pouch in two
+   * frames would be a bug rather than a feature. RB is the pad's home for it
+   * because it is the one shoulder button nothing else claims — LT aims, RT
+   * fires, LB is still free and RB is where every shooter puts this.
+   */
+  grenadePressed = false;
+  /**
    * Keyboard: held Shift. Gamepad: L3 toggles — holding a stick click for a
    * 240 m crossing is miserable, so the pad latches instead.
    *
@@ -162,6 +172,7 @@ export class InputManager {
   private accumY = 0;
   private prevJump = false;
   private prevReload = false;
+  private prevGrenade = false;
   private prevConfirm = false;
   private prevMenuConfirm = false;
   private prevMenuLeft = false;
@@ -272,10 +283,11 @@ export class InputManager {
     this.stickLookX = pad ? applyDeadzone(pad.axes[2] ?? 0, dz) : 0;
     this.stickLookY = pad ? applyDeadzone(pad.axes[3] ?? 0, dz) : 0;
 
-    // Actions (LT=6 ADS, RT=7 shoot, A=0 jump, B=1 crouch, X=2 reload,
-    // L3=10, Start=9)
+    // Actions (LT=6 ADS, RT=7 shoot, RB=5 grenade, A=0 jump, B=1 crouch,
+    // X=2 reload, L3=10, Start=9)
     const padAds = pad ? buttonHeld(pad, 6, trig) : false;
     const padFire = pad ? buttonHeld(pad, 7, trig) : false;
+    const padGrenade = pad ? buttonHeld(pad, 5, trig) : false;
     const padJump = pad ? buttonHeld(pad, 0, trig) : false;
     const padCrouch = pad ? buttonHeld(pad, 1, trig) : false;
     const padReload = pad ? buttonHeld(pad, 2, trig) : false;
@@ -290,6 +302,7 @@ export class InputManager {
         this.stickLookY !== 0 ||
         padAds ||
         padFire ||
+        padGrenade ||
         padJump ||
         padCrouch ||
         padReload ||
@@ -346,6 +359,10 @@ export class InputManager {
     const reloadNow = this.keys.has("KeyR") || padReload;
     this.reloadPressed = reloadNow && !this.prevReload;
     this.prevReload = reloadNow;
+
+    const grenadeNow = this.keys.has("KeyG") || padGrenade;
+    this.grenadePressed = grenadeNow && !this.prevGrenade;
+    this.prevGrenade = grenadeNow;
 
     // The tap is a one-frame pulse rather than held state, so it is consumed
     // here: read once, cleared once, and the edge below does the rest.
@@ -517,6 +534,7 @@ const BOUND_CODES = new Set([
   "KeyD",
   "KeyR",
   "KeyC",
+  "KeyG",
   "KeyL",
   "Space",
   "Tab",

@@ -20,6 +20,10 @@
  * Footfalls are read off the CAMERA's bob phase, never a step timer of their
  * own — the sound has to land on the dip you can see — and leave here as
  * PlayerEvents rather than as a sound: this file owns no audio.
+ * Grenades are a count and a cooldown here and nothing else — the thrown body
+ * belongs to GrenadeSystem, which is Game's. That is why the throw is TWO
+ * calls (`canThrowGrenade` then `spendGrenade`): the pool may refuse, and a
+ * count spent on a grenade that never arrives is worse than one not thrown.
  */
 import {
   Mesh,
@@ -150,6 +154,11 @@ export class Player implements Combatant {
   health: number = CONFIG.player.maxHealth;
   alive = true;
   grounded = true;
+  /**
+   * Grenades left this life. Refilled by `fullReset` and by nothing else —
+   * there is no resupply, so two a life is the whole economy.
+   */
+  grenades: number = CONFIG.grenade.carried;
 
   /**
    * The carried weapon, resolved once per loadout change. Everything about
@@ -181,6 +190,10 @@ export class Player implements Combatant {
    */
   private triggerHeld = false;
   private velY = 0;
+  /** Seconds until the arm is ready to throw another grenade. */
+  private throwCooldown = 0;
+  /** Throw pose weight, 1 at the release and falling to 0 over `throwTime`. */
+  private throwT = 0;
   /** Extra spread accumulated by sustained fire; bleeds off when not firing. */
   private spreadBloom = 0;
   /** Weapon punch, 1 at the shot and falling to 0 over `recoil.kickTime`. */
@@ -357,6 +370,9 @@ export class Player implements Combatant {
     this.health = this.maxHealth;
     this.alive = true;
     this.ammo = this.magSize;
+    this.grenades = CONFIG.grenade.carried;
+    this.throwCooldown = 0;
+    this.throwT = 0;
     this.reloading = false;
     this.fireCooldown = 0;
     this.velY = 0;
@@ -541,6 +557,8 @@ export class Player implements Combatant {
 
     // --- weapon timers ---
     this.fireCooldown -= dt;
+    this.throwCooldown -= dt;
+    this.throwT = Math.max(0, this.throwT - dt / CONFIG.viewmodel.throwTime);
     this.spreadBloom = Math.max(
       0,
       this.spreadBloom - CONFIG.recoil.bloomRecovery * dt,
@@ -639,6 +657,7 @@ export class Player implements Combatant {
       sprintBlend: this.sprintBlend,
       reloadBlend: this.reloadBlend,
       reloadPhase: this.reloadProgress,
+      throwBlend: this.throwT,
       kick: this.weaponKickT * this.weaponKickT,
       turnRate: this.turnRate,
       pitchRate: this.pitchRate,
@@ -702,6 +721,30 @@ export class Player implements Combatant {
     this.ejectCasing();
     if (this.ammo === 0) this.startReload();
     return true;
+  }
+
+  /**
+   * Whether a grenade could leave the hand right now.
+   *
+   * Throwing is deliberately TWO calls — this and `spendGrenade` — because the
+   * grenade pool can refuse the throw, and a count decremented before the
+   * system that has to put the thing in the air has agreed to is a grenade the
+   * player paid for and never saw. Game asks, throws, and only then spends.
+   *
+   * Sprinting is not a bar: a grenade is an off-hand action and running is
+   * exactly when you want to get one over a wall. Reloading is not either, for
+   * the same reason — the hand that works the magazine is not the hand that
+   * throws.
+   */
+  canThrowGrenade(): boolean {
+    return this.alive && this.grenades > 0 && this.throwCooldown <= 0;
+  }
+
+  /** Books the throw `canThrowGrenade` cleared and the pool accepted. */
+  spendGrenade(): void {
+    this.grenades -= 1;
+    this.throwCooldown = CONFIG.grenade.throwInterval;
+    this.throwT = 1;
   }
 
   /**

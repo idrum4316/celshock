@@ -1,7 +1,7 @@
 /**
- * HUD.ts — The gameplay chrome, and only that: vitals/ammo, reinforcement
- * gauge, flag strip, capture-zone panel, crosshair, hitmarker, damage vignette,
- * directional damage arcs, toasts, killfeed, scoreboard.
+ * HUD.ts — The gameplay chrome, and only that: vitals/ammo/grenades,
+ * reinforcement gauge, flag strip, capture-zone panel, crosshair, hitmarker,
+ * damage vignette, directional damage arcs, toasts, killfeed, scoreboard.
  * Invariants: Game pushes state every frame (setHealth/setAmmo/setFlags/
  * setCapture/setViewYaw/...) — setting HUD state from anywhere else is
  * overwritten next tick. Pure DOM manipulation; reads ControlPoint data, never
@@ -129,6 +129,10 @@ export class HUD {
   private ammoMag: HTMLElement;
   private ammoCap: HTMLElement;
   private magStrip: HTMLElement;
+  private nadePips: HTMLElement;
+  /** One pip per grenade carried; rebuilt only when the pouch size changes. */
+  private nadeMarks: HTMLElement[] = [];
+  private nadeBuilt = -1;
   private hudRight: HTMLElement;
   private weaponLabel: HTMLElement;
   /** One tick per round in the magazine; rebuilt only when the size changes. */
@@ -207,6 +211,10 @@ export class HUD {
           <div class="hp-num"><span id="health-text">100</span><em>HP</em></div>
         </div>
         <div id="hud-right">
+          <div class="cap-row nades">
+            <span class="cap">FRAG</span>
+            <span id="nade-pips"></span>
+          </div>
           <div class="ammo">
             <span id="ammo-mag">0</span><span id="ammo-cap"></span>
           </div>
@@ -224,6 +232,7 @@ export class HUD {
     this.ammoMag = document.getElementById("ammo-mag")!;
     this.ammoCap = document.getElementById("ammo-cap")!;
     this.magStrip = document.getElementById("mag-strip")!;
+    this.nadePips = document.getElementById("nade-pips")!;
     this.hudRight = document.getElementById("hud-right")!;
     this.weaponLabel = document.getElementById("weapon-label")!;
     this.flagStrip = document.getElementById("flag-strip")!;
@@ -393,6 +402,33 @@ export class HUD {
     this.ammoCap.textContent = `/ ${magSize}`;
     this.ammoMag.classList.toggle("low", !reloading && ammo <= magSize * 0.25);
     this.hudRight.classList.toggle("reloading", reloading);
+  }
+
+  /**
+   * The grenade pouch: one pip per grenade carried, spent ones hollowed out
+   * rather than removed. A count you can read at a glance matters more here
+   * than for ammunition — you carry two for a whole life and there is no
+   * resupply, so "how many left" is a decision rather than a status.
+   *
+   * Built against `carried` rather than the live count for the same reason the
+   * magazine strip is built against `magSize`: the row must not change width
+   * as it empties.
+   */
+  setGrenades(count: number, carried: number): void {
+    if (this.nadeBuilt !== carried) {
+      this.nadePips.innerHTML = "";
+      this.nadeMarks = [];
+      for (let i = 0; i < carried; i++) {
+        const pip = document.createElement("i");
+        this.nadePips.appendChild(pip);
+        this.nadeMarks.push(pip);
+      }
+      this.nadeBuilt = carried;
+    }
+    for (let i = 0; i < this.nadeMarks.length; i++) {
+      this.nadeMarks[i].classList.toggle("spent", i >= count);
+    }
+    this.hudRight.classList.toggle("no-nades", count <= 0);
   }
 
   /**
