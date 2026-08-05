@@ -1810,11 +1810,22 @@ export const CONFIG = {
      * of those; that lives on `ParticleSpec` in `world/environment.ts`.
      *
      * The field is simulated by transform feedback, so this is a buffer size
-     * rather than a frame cost, and a map asking for more than it holds is
-     * clamped to it — thinner air, never a stutter. `Atmosphere` runs the
-     * system in emit-rate-controlled mode, where the live slot count settles
-     * at `emitRate * maxLifeTime` = `count / 3 * 14`, so this bounds a
-     * `ParticleSpec.count` of about 6,800. Hollowmere asks for 4,000.
+     * rather than a frame cost — but it is a FIXED one: both ping-pong buffers
+     * are allocated at this capacity on the first `apply()` whatever the map
+     * then asks for, at a 21-float stride, so 32,000 is 5.4 MB of VRAM
+     * standing whether the field is dense or empty.
+     *
+     * `Atmosphere` runs the system in emit-rate-controlled mode, where the
+     * live slot count settles at `emitRate * maxLifeTime` = `count / 3 * 14`,
+     * so this bounds a `ParticleSpec.count` of about 6,800. Hollowmere asks
+     * for 4,000.
+     *
+     * **Overflowing it does not read as thinner air.** Babylon clamps the slot
+     * count and leaves the emit rate alone, so the circular buffer comes round
+     * in less than a mote's maximum life and the longest-lived motes are
+     * re-emitted while still visible — they pop out instead of fading, which
+     * points at nothing. `Atmosphere.warnIfPoolClamped` says so in dev builds;
+     * see ISSUES.md.
      *
      * The headroom is deliberately modest, because **count is the weaker of
      * the two levers on how dense the air looks and the only one that costs

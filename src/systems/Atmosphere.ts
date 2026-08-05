@@ -128,6 +128,7 @@ export class Atmosphere {
     // `count` is motes in the air, not a raw cap: a mote lives ~10 s on
     // average, so a third of it per second is what holds that many aloft.
     ps.emitRate = spec.count / 3;
+    warnIfPoolClamped(ps.emitRate);
     // Embers add into the dark; ash and dust just occlude. The constants are
     // BaseParticleSystem's, so they are read off the GPU class rather than
     // off `ParticleSystem` — naming the CPU class for two integers is what
@@ -153,4 +154,36 @@ export class Atmosphere {
     this.system = null;
     this.texture.dispose();
   }
+}
+
+/**
+ * A map asking for more motes than the pool holds is clamped, and the clamp is
+ * silent in a way that does not look like a clamp.
+ *
+ * Babylon bounds the live SLOT count to the pool and leaves the emit rate
+ * alone. Emit-rate control sizes the buffer at `emitRate * MAX_LIFE` precisely
+ * so the circular write pointer takes a full `MAX_LIFE` to come round — which
+ * is what guarantees no live mote is ever recycled out from under itself.
+ * Clamp the slots without clamping the rate and that wrap period falls below
+ * `MAX_LIFE`, so the longest-lived motes are re-emitted while still visible.
+ * The symptom is motes POPPING OUT rather than a thinner field, and nothing
+ * about it points at the pool.
+ *
+ * Clamping `emitRate` to match would preserve the wrap and is the worse fix:
+ * it keeps the field looking correct while quietly overriding the density the
+ * map asked for. Say so instead, and let whoever wrote the number decide.
+ */
+function warnIfPoolClamped(emitRate: number): void {
+  if (!import.meta.env.DEV) return;
+  const pool = CONFIG.graphics.particlePoolSize;
+  const wanted = Math.ceil(emitRate * MAX_LIFE);
+  if (wanted <= pool) return;
+  console.warn(
+    `Atmosphere: the mote field wants ${wanted} slots and the pool holds ` +
+      `${pool}. Motes will be recycled after ${(pool / emitRate).toFixed(1)} s ` +
+      `against a ${MAX_LIFE} s maximum life, so the longest-lived ones will ` +
+      `pop out instead of fading. Lower the map's ParticleSpec.count (below ` +
+      `${Math.floor((pool / MAX_LIFE) * 3)}) or raise ` +
+      `CONFIG.graphics.particlePoolSize.`,
+  );
 }
