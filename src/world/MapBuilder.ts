@@ -30,7 +30,13 @@ import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
 import type { LightingSystem } from "../systems/LightingSystem";
 import { BUILDERS, type BoxSpec, type Structure } from "./BuildingKit";
 import type { EnvironmentSpec } from "./environment";
-import { isScatterRect, type MapLayout, type ScatterSpec } from "./layout";
+import {
+  isScatterRect,
+  type MapLayout,
+  type RidgeSpec,
+  type ScatterSpec,
+} from "./layout";
+import { ridgeSegments } from "./Ridge";
 import { TerrainField, terrainPatches } from "./TerrainField";
 import { NavGrid } from "./NavGrid";
 import { CoverMap } from "./CoverMap";
@@ -343,7 +349,7 @@ export class MapBuilder {
     this.item = null;
 
     const terrain = new TerrainField(layout.terrain);
-    this.buildValley(size, env, terrain, visuals, colliders);
+    this.buildValley(size, env, terrain, visuals, colliders, layout.ridge);
 
     // --- authored structures ---
     // Roads are merged into one draw call per material so overlapping junctions
@@ -475,13 +481,14 @@ export class MapBuilder {
     };
   }
 
-  /** The valley floor plus the ridge that bounds play. */
+  /** The valley floor plus the rim that bounds play. */
   private buildValley(
     size: number,
     env: EnvironmentSpec,
     terrain: TerrainField,
     visuals: Mesh[],
     colliders: Mesh[],
+    ridge: RidgeSpec | undefined,
   ): void {
     const floorMat = this.mats.get(env.floorColor);
     for (const patch of terrainPatches(terrain, size, BLOCK_SIZE)) {
@@ -508,7 +515,14 @@ export class MapBuilder {
       colliders.push(col);
     }
 
-    // The ridge is tall enough that it never reads as a skybox edge through fog.
+    // The boundary itself: four boxes, and they are the ONLY thing stopping
+    // anything leaving the map. Five other systems — NavGrid (rasterize,
+    // severLinks, clearBlocked), ObstacleField, CoverMap, Minimap and
+    // DeployScreen — identify the boundary by `w > 200 || d > 200` and skip it,
+    // so these must stay longer than 200 m and must stay the only boundary
+    // colliders. They are invisible: what you see is the rim built below, whose
+    // basal band is flush with the inner face at exactly ±half so sparks land
+    // on the rock rather than in front of it.
     const h = 20;
     const t = 2;
     const half = size / 2;
@@ -519,18 +533,26 @@ export class MapBuilder {
       ["w", t, size + t * 2, -half - t / 2, 0],
     ];
     for (const [name, w, d, x, z] of sides) {
-      const wall = MeshBuilder.CreateBox(
-        `ridge-${name}`,
-        { width: w, height: h, depth: d },
-        this.scene,
-      );
-      wall.position.set(x, h / 2, z);
-      wall.material = this.mats.get(env.wallColor);
-      addOutline(wall, 0.06);
-      visuals.push(wall);
       colliders.push(
         this.collider(`ridge-${name}-col`, { w, h, d, x, y: h / 2, z }),
       );
+    }
+
+    // The rim, as landform. Built outward from the boundary only, so it costs
+    // no playable area — see Ridge.ts, which owns the shape and its invariants.
+    for (const seg of ridgeSegments(ridge, size, terrain)) {
+      const mesh = new Mesh(`ridge-${seg.key}`, this.scene);
+      seg.data.applyToMesh(mesh);
+      mesh.material = this.mats.get(
+        seg.tone === "scree" ? env.ridgeScreeColor : env.ridgeColor,
+      );
+      // A 20-45 m crest throws 26-58 m of shadow at the moon's 38 deg, and the
+      // shadow window is a fixed 110 m square that follows the player — so a
+      // casting rim would end its shadow in a hard line that slides across open
+      // ground as you walk. It is a receiver only.
+      mesh.metadata = { noShadowCaster: true };
+      addOutline(mesh, 0.05);
+      visuals.push(mesh);
     }
   }
 

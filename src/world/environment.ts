@@ -99,8 +99,21 @@ export interface GrassEnvSpec {
  */
 export interface EnvironmentSpec {
   floorColor: string;
-  wallColor: string;
-  wallTrimColor: string;
+  /**
+   * The valley rim's rock. Read only by the ridge — nothing in the village is
+   * coloured from here; a building's palette is its builder's. Past the fog
+   * wall the crest is pure `fogColor` anyway, so this is what the rim reads as
+   * from close up: at the two home spawns, which stand 15-24 m off it.
+   */
+  ridgeColor: string;
+  /**
+   * The rim's foot — the basal band and the first metres of the face. Its job
+   * is to melt the boundary into `floorColor` so the rim does not cut a hard
+   * line across the valley, so it wants to be near it and slightly warmer, NOT
+   * a bright trim: the sky term lifts albedo, so a light tone here comes back
+   * chalky on the up-facing ledges.
+   */
+  ridgeScreeColor: string;
   accentColor: string;
   skyColor: string;
   fogColor: string;

@@ -133,6 +133,57 @@ export interface Heightfield {
   heights: number[];
 }
 
+/**
+ * A gap in the rim where something leaves the valley — a road, a track, a dry
+ * watercourse. Positioned by the world point it should sit above; `Ridge` finds
+ * the nearest station on the boundary ring, so `(x, z)` only has to be near the
+ * edge, not exactly on it.
+ */
+export interface RidgePass {
+  x: number;
+  z: number;
+  /** How wide the saddle is, in metres of boundary. */
+  width: number;
+  /**
+   * How far the crest drops through it, 0..1 of the local height. The result is
+   * re-clamped against the rim's minimum slope, so a pass is always a saddle
+   * and can never open a hole in the sky — see Ridge.ts.
+   */
+  depth?: number;
+}
+
+/**
+ * The valley rim: the landform that closes the map off. SHAPE only — the rim's
+ * colours are the environment's (`ridgeColor`/`ridgeScreeColor`), the same
+ * split as the floor's `terrain` here against `floorColor` there. That is not
+ * tidiness: `applyEnvironment` writes uniforms and nothing else, which is what
+ * lets the editor's work light swap an EnvironmentSpec per keypress with no
+ * rebuild. A shape living there would silently stop working.
+ *
+ * Every field is optional so a second map still costs one layout file plus an
+ * EnvironmentSpec: omit it entirely and the rim builds with its defaults.
+ */
+export interface RidgeSpec {
+  /**
+   * Crest height as a tangent from the map centre — an ANGLE, not a height, so
+   * the corners (further from the centre) rise higher than the sides on their
+   * own, the way a valley actually looks. Ridge.ts clamps it from below against
+   * what the sky needs; see its header.
+   */
+  slope?: number;
+  /** How much `slope` wanders along the rim. */
+  slopeVariance?: number;
+  /** How far the landform reaches outward from the boundary, in metres. */
+  reach?: number;
+  passes?: RidgePass[];
+  /**
+   * The rim's own seed. Deliberately separate from `seed` below: one stream
+   * serves the whole map build in authored order, so drawing from it here would
+   * reroll every scatter region on the map.
+   */
+  seed?: number;
+}
+
 export interface MapLayout {
   placements: Placement[];
   scatter: ScatterSpec[];
@@ -142,6 +193,8 @@ export interface MapLayout {
   grass?: GrassRect[];
   /** The floor's shape. Absent means a level valley floor. */
   terrain?: Heightfield;
+  /** The rim's shape. Absent means the default escarpment. */
+  ridge?: RidgeSpec;
   /**
    * Seed for scatter placement. Fixed per map so the dressing — and therefore
    * the colliders blocking scatter emits, and therefore the nav graph — is

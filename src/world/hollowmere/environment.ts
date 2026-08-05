@@ -17,8 +17,8 @@ import type { EnvironmentSpec } from "../environment";
  */
 export const HollowmereEnvironment: EnvironmentSpec = {
   floorColor: "#3a3a33",
-  wallColor: "#2c2f2e",
-  wallTrimColor: "#555c54",
+  ridgeColor: "#2c2f2e",
+  ridgeScreeColor: "#33352e",
   accentColor: "#7fe0a0",
   skyColor: "#080d16",
   /**

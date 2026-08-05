@@ -206,6 +206,9 @@ src/
                             # it: heightfield -> heightAt() + the per-block
                             # VertexData MapBuilder hangs ground meshes on,
                             # plus terrainSlab() which bends a road onto it
+    Ridge.ts                # The valley rim: the landform that closes the map
+                            #   off. Shape only — VertexData out, no collider,
+                            #   nothing inside ±size/2. See "The valley rim"
     rng.ts                  # mulberry32 — the seeded PRNG world-building uses
     MapBuilder.ts           # Builds the map; merges visuals, emits colliders
     BuildingKit.ts          # Facade: shared types + BUILDERS registry
@@ -1014,6 +1017,61 @@ deliberately bypassed and `NavGrid` reads the field directly. The block split is
 not just for culling — `CameraSystem` picks every frame and `CombatSystem` every
 shot, and one map-wide floor mesh would defeat bounding-box rejection.
 
+### The valley rim
+
+The map's boundary is **four collider boxes and a landform, and they are two
+separate things** — the clearest case of the visual/collider split in the tree.
+`MapBuilder.buildValley` still emits the four boxes (20 m tall, 244 m long,
+inner faces at exactly ±120) and they are the only thing that stops anything
+leaving; `src/world/Ridge.ts` draws an escarpment over them and stops nothing.
+That split is why **seven** sites — `NavGrid` (rasterize, severLinks,
+clearBlocked), `ObstacleField`, `CoverMap`, `Minimap`, `DeployScreen` — can go
+on identifying the boundary with `box.w > 200 || box.d > 200` and know nothing
+about the rim. Keep the boxes over 200 m and keep the rim collider-free, or
+that heuristic is the first casualty. The minimap and the deploy map will still
+draw a clean square while the world shows a lumpy one; they are schematics, and
+that is correct.
+
+Five things about the landform are load-bearing:
+
+- **It is built OUTWARD from ±120 and never inward**, into space no player can
+  occupy, so it costs zero playable area. `assertOutsidePlay` throws in dev.
+- **Its basal band is vertical and flush with the collider plane.** This is the
+  one part of the profile that is not free to be pretty: colliders have to line
+  up with the surfaces they stand in for, and a face that battered outward from
+  the floor would put visible rock most of a metre in front of the box at chest
+  height, so rounds would spark on air. `PLINTH_FLOOR` (1.8 m) clears the
+  standing eye, the hit sphere's top and `CoverMap`'s hard-cover height; the
+  noise and the passes ride above it, never through it. Measured flush to
+  0.000 m at 1.05/1.55/1.7 m on all four rims.
+- **The crest is an ANGLE from the map centre, never a height.** `Sky.ts` culls
+  stars below dome row 0.46 (7.2° elevation) and cloud below 0.47, and paints
+  the dome flat `fogColor` beneath the horizon — so a crest under that exposes
+  a band of sky with nothing painted in it. A tangent clamped at `MIN_SLOPE`
+  makes that true by construction rather than by careful authoring, and it buys
+  the corners bigger massifs than the sides for free. The old box gave 9.46°;
+  the rim measures 8.19° at its lowest, which is the two passes deliberately
+  dipping, against the 7.2° floor.
+- **A pass is a saddle, not a cutting.** `MIN_SLOPE` is set just above the sky's
+  floor rather than at the rim's own height precisely so a pass has somewhere to
+  drop to — at 0.17 the clamp swallowed the cut entirely and the cols were
+  invisible. Only the crest falls; the face is left alone, because pulling it in
+  and raising the basal band turns a way out of the valley into a quarry.
+- **Its own RNG stream.** `buildValley` runs *before* the scatter loop, so a
+  single draw from `MapBuilder`'s shared stream would reroll every scatter
+  region on the map — a visible change to the level with nothing in the diff to
+  point at it. Verify a rim change by fingerprinting `colliderBoxes`.
+
+Shape lives on `MapLayout.ridge` (a `RidgeSpec`, all fields optional) and the
+palette on `EnvironmentSpec` (`ridgeColor`/`ridgeScreeColor`, which replaced the
+dead `wallColor`/`wallTrimColor`). That split is not tidiness: `applyEnvironment`
+writes uniforms and nothing else, which is what lets the editor's work light
+swap a spec per keypress with no rebuild, so a *shape* living there would
+silently stop working. The rim is also a **receiver only** (`noShadowCaster`) —
+a 20–45 m crest throws 26–58 m of shadow at the moon's 38°, and the shadow
+window is a fixed 110 m square that follows the player, so a casting rim would
+end its shadow in a hard line that slides across open ground as you walk.
+
 **Scatter placement is seeded** (`layout.seed`, via `src/world/rng.ts`). This is
 not cosmetic: blocking scatter emits colliders, colliders feed `NavGrid` and
 `ObstacleField`, so an unseeded scatter means the navigation graph differs
@@ -1611,7 +1669,18 @@ load-bearing:
 Everything overhead is painted at runtime by `src/systems/Sky.ts` from the map's
 `SkySpec`: an equirectangular dome texture (gradient, galactic band, stars, the
 moon's scattering halo), a textured moon disc that feeds the GlowLayer, and two
-drifting cloud decks. Four things there are load-bearing:
+drifting cloud decks.
+
+**The dome is painted assuming something occludes the bottom of it**, and that
+something is the valley rim — so the two are a contract, not neighbours. Stars
+and the galactic band are culled below canvas row 0.46 (`if (y > h * 0.46)
+continue`, written twice), `cloudBandBottom` stops cloud at 0.47, and the
+gradient runs to flat `fogColor` from row 0.58 down. In elevation that is
+**7.2° for stars and 5.4° for cloud**, below which there is nothing painted at
+all. `Ridge.ts`'s `MIN_SLOPE` is the other half of the contract and is set
+against those numbers; lowering the rim without moving these cutoffs uncovers a
+band of empty dome, and past the 78 m fog wall it does not matter because both
+are `fogColor` anyway. Four more things are load-bearing:
 
 - **Sky textures are uploaded with `update(false)`.** `DynamicTexture.update()`
   flips Y by default, which maps canvas row 0 to `v = 1` — the *nadir* on

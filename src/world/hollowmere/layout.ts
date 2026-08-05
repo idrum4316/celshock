@@ -556,6 +556,24 @@ export const HollowmereLayout: MapLayout = {
   water,
   grass,
   terrain: HollowmereHeights,
+  /**
+   * The valley rim. Only the two cols are authored — everything else about the
+   * escarpment falls out of Ridge.ts's defaults.
+   *
+   * Each col sits over the road that leaves the valley through a gatehouse, so
+   * the two home spawns look out through a saddle in the crag rather than at a
+   * blank rock face. Both roads run along Z, so the Warden's gap is in the
+   * north rim and the Blight's is in the SOUTH rim — not the east, though its
+   * gatehouse stands only 15 m off it.
+   */
+  ridge: {
+    passes: [
+      // Above the Warden road, which runs north to z ≈ 116.5.
+      { x: -100, z: 120, width: 26 },
+      // The Blight's track south. Narrower: the corner massif is close.
+      { x: 105, z: -120, width: 18 },
+    ],
+  },
   // Fixed so the dressing — and the colliders blocking scatter emits, and so
   // the nav graph — is identical on every boot. Changing it rerolls the whole
   // scatter field, which is a visible change to the level: re-walk the flags.

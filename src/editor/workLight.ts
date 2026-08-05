@@ -11,10 +11,11 @@
  * with `applyEnvironment`, which only writes shader uniforms and the clear
  * colour — idempotent and cheap enough to toggle per keypress with no rebuild.
  *
- * Two fields are deliberately NOT touched: `floorColor` and `wallColor` are
- * baked into the ground and ridge materials by MapBuilder.buildValley, so
- * changing them would need a full map rebuild to take effect. Everything the
- * work light does is uniform-only.
+ * Three fields are deliberately NOT touched: `floorColor`, `ridgeColor` and
+ * `ridgeScreeColor` are baked into the ground and rim materials by
+ * MapBuilder.buildValley, so changing them would need a full map rebuild to
+ * take effect. Everything the work light does is uniform-only. This is also
+ * why the rim's SHAPE lives on MapLayout rather than here — see RidgeSpec.
  */
 import type { EnvironmentSpec } from "../world/environment";
 
