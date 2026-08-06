@@ -101,6 +101,20 @@ have already cost time:
   falloff being broken. And "0 damage" at a plausible range is usually the
   line-of-sight ray finding a wall, not a bug: sample the same distance in all
   four compass directions before believing it.
+- **The blast DUST is not steppable that way, and needs the particle clock
+  pinned instead.** `g.grenades.update()` only ages the pool's bookkeeping —
+  the puffs are simulated on the GPU, so they advance on RENDERED frames, by
+  `updateSpeed * scene.getAnimationRatio()` each. Headless that ratio is the
+  real frame delta (~30 at 2 fps, and unlike `dt` it is not clamped to 0.05),
+  so a 2.4 s cloud is three frames and lands nowhere near the age you wanted.
+  Override `scene.getAnimationRatio` with a value you control — 0 freezes the
+  dust outright, and setting it to `seconds * 60` for exactly one rendered
+  frame (count them on `scene.onAfterRenderObservable`) steps the cloud to a
+  known age and holds it there for a screenshot. Two more things worth
+  knowing: `dust.burst()` takes a real `Vector3` and nothing else, because
+  `copyFrom` reads `_x`/`_y`/`_z` and a plain `{x,y,z}` silently gives a cloud
+  at NaN; and `getActiveCount()` is the ring size rather than a count of live
+  puffs, so it reads 34 for a cloud that faded out a minute ago.
 - **The throw ANIMATION is a still-frame job, not a video one**, and 2 fps is
   plenty for it: redefine the clock the whole gesture is posed from
   (`Object.defineProperty(g.player, "throwT", { get: () => 0.145 })`, plus
@@ -204,7 +218,8 @@ src/
                             #   proximity-revealed skirt, beacon
     CombatSystem.ts         # Hitscan + pooled tracers and sparks
     GrenadeSystem.ts        # The one thing that isn't hitscan: thrown
-                            #   grenades, their bounces, the fuse, the blast
+                            #   grenades, their bounces, the fuse, the blast,
+                            #   + BlastDust, the cloud it lifts off the ground
     AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
     ShadowSystem.ts         # Moon shadow map (stepped shadows) + blob shadows
@@ -770,6 +785,50 @@ about `src/systems/GrenadeSystem.ts` follows from that one fact.
   never arrived is the most confusing thing this could hand a player, which is
   why `Player` splits `canThrowGrenade` from `spendGrenade` and why `Bot`
   decrements after `ctx.throwGrenade` returns true.
+
+**The blast is a fireball, embers and DUST, and the dust is the half that
+outlives it.** The fireball is 0.42 s and the embers read as debris thrown out;
+`BlastDust` (in `GrenadeSystem.ts`) is what the blast lifts off the ground — a
+few dozen soft quads expanding, slowing and fading over `dust.life`, not
+emissive, `BLENDMODE_STANDARD`, tinted from the map's own `mistColor` toward its
+key light. It is a GPU burst rather than a pooled mesh, and that is affordable
+for the same reason the blast light is exempt from `spendMuzzleLightBudget`:
+there are seconds between detonations. **This is the one place a GPU particle
+system is allowed to be spawned per event** — the rule against it (muzzle smoke,
+brass) is about per-shot effects at eighty shots a second. Six things there are
+load-bearing, and four of them are Babylon's rather than the game's:
+
+- **It is a POOL of GPU systems, one per concurrent cloud, and it cannot be
+  one system holding all of them.** In emit-rate-controlled mode a
+  `GPUParticleSystem` re-emits into a ring of `max(emitRate * maxLifeTime, this
+  frame's emission)` slots from a circular write pointer. `emitRate` is zero
+  here — that is what makes it a burst rather than a field — so the ring is
+  exactly one `manualEmitCount`, and a second blast inside the first cloud's
+  life would write over the first cloud's slots and pop a standing cloud off
+  the screen. `Atmosphere` documents the other side of the same invariant.
+- **A stopped system refuses manual emissions too**, so `stop()` is not a way
+  to hold a burst system idle: the update shader gates its emit branch on
+  `stopFactor != 0`. Each system is started once and left started; with
+  `emitRate` at zero an idle one emits nothing and costs nothing.
+- **`updateSpeed` is `1/60`, which is what makes the numbers mean what they
+  say.** The GPU clock advances by `updateSpeed * scene.getAnimationRatio()`
+  per frame and that ratio is `dt * 60`, so at `1/60` a lifetime is seconds and
+  an emit power is metres per second. (`Atmosphere`'s 0.012 is deliberately not
+  that.)
+- **The fade cannot be curved.** `addColorGradient` on a GPU system in Babylon
+  9.19.1 throws on the next render and takes the whole scene's rendering down
+  with it — a black frame, not a fallback to the ungraded colours. Size and
+  velocity gradients on the same system are fine. So alpha runs linearly from
+  `color1`/`color2` to `colorDead`, and `dust.opacity` is set for how the cloud
+  reads at half life rather than at birth.
+- **The cloud is lifted off the detonation** (`dust.lift`). A puff is a
+  billboard metres across, so one centred where the grenade actually went off
+  has its lower half under the cobbles and the whole thing reads as a smear
+  painted on the street. Only the cloud moves — the damage, the light and the
+  embers still resolve at the blast.
+- **Its colour is the map's, and reaches it through `installMap`**
+  (`grenades.setEnvironment`) — the same place `grenades.reset()` clears the
+  standing clouds, and for the same reason it clears the grenades.
 
 **The player's throw is a GESTURE with a release inside it, and that is what
 stops it reading as a second trigger.** It was once an event: the button spent

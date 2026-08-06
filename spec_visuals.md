@@ -1,7 +1,7 @@
 # spec_visuals.md — visual work worth doing after the Babylon 9 upgrade
 
 Written against `8f8a80b` (Babylon 9.19.1). This is a **live proposal** that is
-part record now: **§1 and §4 are built**; §2 and §3 are not.
+part record now: **§1, §2 and §4 are built**; §3 is not.
 `specs/game_design.md` is the historical document and is not a contract; this
 one is meant to be one until it is either built or deliberately dropped.
 
@@ -198,9 +198,9 @@ feedback cost what they never would on a GPU. The numbers above are sound as
 absolutes. There is no CPU-path baseline to compare against any more either,
 since that path is deleted — the honest baseline is `8f8a80b`.
 
-## 2. Blast dust in `GrenadeSystem.spawnBlast`
+## 2. Blast dust in `GrenadeSystem.spawnBlast` — BUILT
 
-**Second, and small.**
+**Second, and small.** It was neither.
 
 `spawnBlast` already throws 14 pooled ember meshes on an even yaw spread
 (`CONFIG.grenade.emberCount/emberSpeed/emberLife`). The gap is not embers — it
@@ -231,6 +231,66 @@ handful of grenades in the air. A one-shot GPU burst per blast is nothing.
 flight, so a whole detonation is a synchronous loop inside one `page.evaluate` —
 the dust can be screenshotted at a fixed number of steps past the blast without
 waiting for a round to develop.
+
+### As built
+
+`BlastDust`, in `GrenadeSystem.ts` because it is the blast's own visuals and
+that is where the rest of them live. `spawnBlast` calls `burst(at)` beside the
+fireball and the embers, `installMap` hands it the environment and clears it
+with the grenade pool, and `CONFIG.grenade.dust` holds everything but the
+colour. The four rules the proposal set are all kept: the embers stayed, it
+emits on the detonation rather than per victim, `installMap` clears it, and it
+is `BLENDMODE_STANDARD` tinted from `mistColor`.
+
+**"A one-shot GPU burst per blast" turned out to be four systems, not one, and
+that is Babylon's ring buffer rather than a preference.** In
+emit-rate-controlled mode — which §1 pinned down as the mode this tree uses —
+a system re-emits into a ring of `max(emitRate * maxLifeTime, this frame's
+emission)` slots from a circular write pointer. A burst sets `emitRate` to
+zero, so that ring is exactly one `manualEmitCount`: a second blast inside the
+first cloud's life writes over the first cloud's slots and pops a standing
+cloud off the screen mid-fade. One system per concurrent cloud is what keeps
+two blasts apart, which is the same reason there are six fireball meshes and
+not one. Measured: two blasts 0.5 s apart, `getActiveCount()` reading 34 on two
+separate systems, and both clouds standing side by side in the frame at
+different ages.
+
+**Three more of Babylon's edges are recorded in the class, because each of them
+cost a run to find:**
+
+- **A stopped system refuses manual emissions as well as rate ones** — the
+  update shader gates its emit branch on `stopFactor != 0` — so `stop()` is not
+  how you hold a burst system idle. Started once, `emitRate` zero, forever.
+- **`addColorGradient` on a GPU system takes the whole scene's rendering down.**
+  In 9.19.1 it throws on the next render (`Cannot read properties of null
+  (reading 'program')`) and the frame goes black — not a fallback to the
+  ungraded colours, and not recoverable. It was wanted for the fade curve
+  (hold, then go, so the cloud survives the fireball); the fade is linear
+  instead and `opacity` is set for how the cloud reads at half life. Size and
+  velocity gradients on the same system are fine, and both are used.
+- **`updateSpeed` is `1/60` here rather than §1's 0.012**, which is what makes
+  `life` seconds and `speed` metres per second: the GPU clock advances by
+  `updateSpeed * scene.getAnimationRatio()` and that ratio is `dt * 60`.
+
+**The verification above is right about the flight and wrong about the dust,
+and `CLAUDE.md` now carries the correction.** `g.grenades.update()` steps the
+grenade; the puffs are on the GPU and advance on RENDERED frames, at the real
+frame delta — which headless is ~30x a 60 Hz frame and, unlike `dt`, is not
+clamped. A 2.4 s cloud is three frames that way. What works is overriding
+`scene.getAnimationRatio`: zero freezes the dust, and `seconds * 60` for
+exactly one counted frame steps it to a known age and holds it for a
+screenshot.
+
+**Two things about the look were learned in the picture and not before it.**
+The first pass put the puffs where the grenade actually detonated, and a
+billboard metres across centred a radius above the floor has its lower half
+under the cobbles — it read as a smear painted on the street rather than as
+something standing in it, so the cloud is now lifted (`dust.lift`) while the
+damage, the light and the embers stay at the blast. And the first `life` of
+1.7 s with a linear fade was half gone by the time the 0.42 s fireball was out,
+which is precisely backwards for the one effect whose job is to outlive the
+light: at 2.4 s the cloud is still clearly hanging at 1.0 s and a residue at
+1.8 s.
 
 ---
 
@@ -394,10 +454,12 @@ pitch 0.67.
 
 1. ~~§1 `Atmosphere` on GPU particles~~ — built; see "As built" above.
 2. ~~§4 the translucency band~~ — built; see "As built" above.
-3. §2 blast dust — small, and easier once §1 has settled the GPU-particle
-   conventions.
+3. ~~§2 blast dust~~ — built; see "As built" above. "Easier once §1 has settled
+   the GPU-particle conventions" held for the mode and the freeze and nothing
+   else: a field and a burst want opposite things from the same ring buffer.
 4. §3 bog mist — only if §1 makes it obviously cheap, and drop it if it fights
-   the shader's mist term.
+   the shader's mist term. Note it is a FIELD, so it is §1's shape rather than
+   §2's: one system, an emit rate, and none of the burst machinery above.
 
 **Do not put GPU particles on muzzle smoke or brass.** Those are per-shot, at up
 to eighty shots a second across sixteen bots. The rule there is pooled effects

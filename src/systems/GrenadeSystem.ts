@@ -1,9 +1,9 @@
 /**
  * GrenadeSystem.ts — Thrown grenades: the flight, the bounces, the fuse and the
- * blast, plus the fireball and embers it throws off.
- * Owns: the grenade pool, the blast pool and the ember pool. All three are
- * FIXED SIZE and allocated once — this is the same rule CombatSystem's tracers
- * follow, and for the same reason: a firefight must not allocate.
+ * blast, plus the fireball, embers and dust it throws off.
+ * Owns: the grenade pool, the blast pool, the ember pool and `BlastDust`. All
+ * four are FIXED SIZE and allocated once — this is the same rule CombatSystem's
+ * tracers follow, and for the same reason: a firefight must not allocate.
  *
  * This is the one thing in the game that is not hitscan, and everything here is
  * shaped by that:
@@ -22,10 +22,21 @@
  * `onExploded` for the light, the sound and the camera, `onBlastHit` for the
  * scoreboard. This system imports no other system.
  */
-import { Mesh, MeshBuilder, Ray, Scene, Vector3 } from "@babylonjs/core";
+import {
+  Color3,
+  Color4,
+  DynamicTexture,
+  GPUParticleSystem,
+  Mesh,
+  MeshBuilder,
+  Ray,
+  Scene,
+  Vector3,
+} from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { Team } from "../entities/Combatant";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
+import type { EnvironmentSpec } from "../world/environment";
 import { TerrainField } from "../world/TerrainField";
 import type { Hittable } from "./CombatSystem";
 
@@ -68,6 +79,8 @@ export class GrenadeSystem {
   private grenades: Grenade[] = [];
   private blasts: Blast[] = [];
   private embers: Ember[] = [];
+  /** The dust half of a blast — see `BlastDust`. */
+  private dust: BlastDust;
   /** Reused by the flight and the line-of-sight tests alike. */
   private readonly ray = new Ray(new Vector3(), new Vector3(0, -1, 0), 1);
   /** The map's floor, as a backstop under the collider proxies. */
@@ -105,6 +118,7 @@ export class GrenadeSystem {
     mats: CelMaterialFactory,
   ) {
     const g = CONFIG.grenade;
+    this.dust = new BlastDust(scene);
     const body = mats.get("#3f4a33");
     const pipMat = mats.getEmissive("#ff5a4f");
     const fireMat = mats.getEmissive("#ffb45a");
@@ -183,6 +197,15 @@ export class GrenadeSystem {
   /** Points the flight's floor backstop at the current map. */
   setTerrain(terrain: TerrainField): void {
     this.terrain = terrain;
+  }
+
+  /**
+   * The only thing in here a map's look reaches: what colour the blast dust
+   * is. Called from `installMap` with the environment the map was built
+   * against.
+   */
+  setEnvironment(env: EnvironmentSpec): void {
+    this.dust.setEnvironment(env);
   }
 
   /**
@@ -424,6 +447,10 @@ export class GrenadeSystem {
     blast.mesh.isVisible = true;
     blast.t = g.blastVisualTime;
 
+    // The dust goes up with the flash and outlives it by a second — the
+    // fireball is the event and the cloud is what the event left behind.
+    this.dust.burst(at);
+
     // Embers, thrown out of the blast on an even-ish spread rather than a
     // random one — a handful of random directions clumps, and a clump reads as
     // one lump of debris instead of as a burst.
@@ -447,6 +474,7 @@ export class GrenadeSystem {
 
   private updateEffects(dt: number): void {
     const g = CONFIG.grenade;
+    this.dust.update(dt);
     for (const b of this.blasts) {
       if (b.t <= 0) continue;
       b.t -= dt;
@@ -475,9 +503,10 @@ export class GrenadeSystem {
   }
 
   /**
-   * Drops everything in flight. Called wherever the map under it is thrown
-   * away — a grenade whose fuse survives a round change would go off in the
-   * next one, over terrain that no longer exists.
+   * Drops everything in flight, and every cloud standing over it. Called
+   * wherever the map under it is thrown away — a grenade whose fuse survives a
+   * round change would go off in the next one, over terrain that no longer
+   * exists, and a cloud left up would hang in the middle of an editor rebuild.
    */
   reset(): void {
     for (const n of this.grenades) {
@@ -494,5 +523,232 @@ export class GrenadeSystem {
       e.t = 0;
       e.mesh.isVisible = false;
     }
+    this.dust.reset();
   }
+}
+
+/** One blast's dust: the GPU system holding it, and when it goes quiet. */
+interface DustCloud {
+  system: GPUParticleSystem;
+  /** Seconds until the last puff has faded; <= 0 while the slot is free. */
+  t: number;
+}
+
+/**
+ * The low cloud a blast lifts off the ground: `CONFIG.grenade.dust.puffs` soft
+ * quads thrown out of a flat disc at the detonation, expanding, slowing and
+ * fading over `life`. Not emissive and not the flame — `BLENDMODE_STANDARD`,
+ * tinted from the map's own mist toward its key light, so it occludes what is
+ * behind it rather than adding to it.
+ *
+ * Owned by `GrenadeSystem` and constructed by it. It is in this file rather
+ * than in one of its own because it is the blast's own visuals, which is where
+ * the rest of them already live; nothing in `Game` wires it, and it is not a
+ * system in that sense.
+ *
+ * **It is a pool of GPU systems, not one system holding every cloud, and that
+ * is Babylon's constraint rather than a preference.** In emit-rate-controlled
+ * mode a `GPUParticleSystem` re-emits into a ring of
+ * `max(emitRate * maxLifeTime, this frame's emission)` slots from a circular
+ * write pointer. `emitRate` is zero here — that is what makes this a burst
+ * rather than a field — so the ring is exactly one `manualEmitCount`, and a
+ * second blast inside the first cloud's life would write over the first
+ * cloud's slots and pop it off the screen mid-fade. One ring per cloud is what
+ * keeps two blasts apart, for the same reason there are six fireball meshes
+ * and not one. (`Atmosphere` documents the other side of the same invariant:
+ * there the ring is sized so the pointer comes round exactly as the oldest
+ * mote dies.)
+ *
+ * Two more things about that mode are load-bearing:
+ *
+ * - **A stopped system refuses manual emissions too.** The update shader gates
+ *   its emit branch on `stopFactor != 0`, so `stop()` is not a way to hold a
+ *   burst system idle between blasts. Every system here is started once at
+ *   construction and left started; with `emitRate` at zero an idle one emits
+ *   nothing, and `_render` returns before doing any work while its ring is
+ *   still empty.
+ * - **`updateSpeed` is `1/60` so the numbers mean what they say.** The GPU
+ *   clock advances by `updateSpeed * scene.getAnimationRatio()` per frame, and
+ *   that ratio is `dt * 60`, so at `1/60` a lifetime is seconds and an emit
+ *   power is metres per second — the units the rest of `CONFIG.grenade` is
+ *   written in. (`Atmosphere`'s 0.012 is deliberately not that: its mote lives
+ *   are in its own clock.)
+ */
+class BlastDust {
+  private clouds: DustCloud[] = [];
+  private texture: DynamicTexture;
+
+  constructor(scene: Scene) {
+    const d = CONFIG.grenade.dust;
+    this.texture = buildPuffTexture(scene);
+
+    for (let i = 0; i < d.clouds; i++) {
+      const system = new GPUParticleSystem(
+        `blastDust${i}`,
+        {
+          capacity: d.puffs,
+          emitRateControl: true,
+          // The default is the engine's max texture size, which is 16k random
+          // vec4s generated with `Math.random()` per system at construction —
+          // ~131,000 calls and half a megabyte of VRAM each, to seed a few
+          // dozen puffs, and paid once per cloud in the pool. This is variety
+          // enough that no two puffs in a cloud share a seed.
+          randomTextureSize: 4096,
+        },
+        scene,
+      );
+      system.particleTexture = this.texture;
+      system.emitter = new Vector3();
+      system.blendMode = GPUParticleSystem.BLENDMODE_STANDARD;
+      system.updateSpeed = 1 / 60;
+      // Zero, and it must stay zero: a rate is what would turn this from a
+      // burst into a fountain standing wherever the last grenade went off.
+      system.emitRate = 0;
+      system.minLifeTime = d.life * 0.7;
+      system.maxLifeTime = d.life;
+      // Born radially out of a flat disc, so the cloud spreads along the
+      // ground. The randomizer is what stops it reading as a ring.
+      system.createCylinderEmitter(d.radius, d.height, 1, 0.55);
+      system.minEmitPower = d.speed * 0.45;
+      system.maxEmitPower = d.speed;
+      system.gravity = new Vector3(0, d.rise, 0);
+      // Thrown out hard, then stopping in the air. Read against the particle's
+      // own age, so it is per puff rather than per system.
+      system.addVelocityGradient(0, 1);
+      system.addVelocityGradient(0.25, 0.4);
+      system.addVelocityGradient(1, d.settle);
+      // A puff grows as it goes: this is what separates dust from debris. The
+      // pair at each stop is a per-particle range, so the cloud is not three
+      // dozen quads breathing in step.
+      system.addSizeGradient(0, d.sizeStart, d.sizeStart * (1 + d.sizeSpread));
+      system.addSizeGradient(1, d.sizeEnd, d.sizeEnd * (1 + d.sizeSpread));
+      // A billboard that never turns is a decal; these are one texture seen
+      // three dozen times in one place.
+      system.minInitialRotation = 0;
+      system.maxInitialRotation = Math.PI * 2;
+      system.minAngularSpeed = -0.5;
+      system.maxAngularSpeed = 0.5;
+      system.start();
+      this.clouds.push({ system, t: 0 });
+    }
+  }
+
+  /**
+   * Dust is the ground it came off and the air it hangs in, so its colour is
+   * the map's rather than this system's: `mistColor` lifted toward the key
+   * light by `dust.lit`. Called from `installMap` with the environment the map
+   * was built against — a cloud is only ever seen against that map's night.
+   */
+  setEnvironment(env: EnvironmentSpec): void {
+    const d = CONFIG.grenade.dust;
+    const tint = Color3.Lerp(
+      Color3.FromHexString(env.mistColor),
+      Color3.FromHexString(env.lighting.color),
+      d.lit,
+    );
+    for (const cloud of this.clouds) {
+      cloud.system.color1 = new Color4(tint.r, tint.g, tint.b, d.opacity);
+      // The other end of one puff's colour, darker and thinner: a cloud of a
+      // single tone is a shape, and the shaded half is what gives it a body.
+      // Each puff picks its own place between the two from its seed.
+      cloud.system.color2 = new Color4(
+        tint.r * 0.5,
+        tint.g * 0.5,
+        tint.b * 0.58,
+        d.opacity * 0.72,
+      );
+      // Alpha runs LINEARLY from `color1`/`color2` to this over the puff's
+      // life, and that is the whole fade — there is no curve on it.
+      //
+      // A colour gradient is what would buy one (hold, then go), and it is not
+      // usable: `addColorGradient` on a GPU system in Babylon 9.19.1 throws on
+      // the next render and takes the entire scene's rendering down with it,
+      // black frame and all, rather than failing to the ungraded colours.
+      // Size and velocity gradients on the same system are fine. So the fade
+      // is bought with the numbers instead: `opacity` is set for how the cloud
+      // reads at half life rather than at birth, and `life` for where linear
+      // decay puts the tail.
+      cloud.system.colorDead = new Color4(tint.r, tint.g, tint.b, 0);
+    }
+  }
+
+  /**
+   * One cloud at a detonation.
+   *
+   * An exhausted pool takes the OLDEST cloud rather than refusing, which is
+   * the opposite of the grenade pool's rule and for the opposite reason:
+   * nothing is spent on a cloud, so a blast with no dust is a worse lie than a
+   * second-old cloud cut short. `manualEmitCount` is consumed by the next
+   * render, so the puffs appear on the same frame as the fireball.
+   */
+  burst(at: Vector3): void {
+    const d = CONFIG.grenade.dust;
+    let slot = this.clouds[0];
+    for (const cloud of this.clouds) {
+      if (cloud.t <= 0) {
+        slot = cloud;
+        break;
+      }
+      if (cloud.t < slot.t) slot = cloud;
+    }
+    // Lifted off the detonation — see `dust.lift`. The blast itself is
+    // resolved at `at` and only the cloud stands above it.
+    (slot.system.emitter as Vector3).copyFrom(at).y += d.lift;
+    slot.system.manualEmitCount = d.puffs;
+    slot.t = d.life;
+  }
+
+  /** Ages the clouds. Only bookkeeping — the puffs are simulated on the GPU. */
+  update(dt: number): void {
+    for (const cloud of this.clouds) {
+      if (cloud.t > 0) cloud.t -= dt;
+    }
+  }
+
+  /**
+   * Drops every cloud, the same way the grenade pool is dropped and for the
+   * same reason: a cloud standing over terrain that no longer exists is what
+   * an editor rebuild would otherwise leave hanging in the air. `reset()`
+   * releases the GPU buffers, which the next burst re-creates.
+   */
+  reset(): void {
+    for (const cloud of this.clouds) {
+      cloud.system.reset();
+      cloud.t = 0;
+    }
+  }
+}
+
+/**
+ * The puff: a soft blob with a lumpy edge, generated so the game still ships
+ * no image files. Three overlapping gradients at FIXED offsets rather than
+ * random ones — one texture is shared by every puff in every cloud, so the
+ * variety has to come from rotation and size, and a texture that differed
+ * between page loads would only make a screenshot diff lie.
+ */
+function buildPuffTexture(scene: Scene): DynamicTexture {
+  const size = 128;
+  const texture = new DynamicTexture(
+    "blastDust",
+    { width: size, height: size },
+    scene,
+    false,
+  );
+  const ctx = texture.getContext();
+  const lobes: [number, number, number][] = [
+    [64, 64, 46],
+    [46, 52, 30],
+    [82, 74, 26],
+  ];
+  for (const [x, y, r] of lobes) {
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, r);
+    gradient.addColorStop(0, "rgba(255,255,255,0.95)");
+    gradient.addColorStop(0.5, "rgba(255,255,255,0.45)");
+    gradient.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+  }
+  texture.update();
+  texture.hasAlpha = true;
+  return texture;
 }

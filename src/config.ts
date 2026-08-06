@@ -1003,6 +1003,94 @@ export const CONFIG = {
     emberGravity: 16,
 
     /**
+     * The dust the blast throws up: a low cloud that expands out of the crater
+     * and hangs on well after the light has gone. The embers read as debris
+     * and are what a blast throws OUT; this is what it lifts off the ground,
+     * and it is the half that makes a grenade in a cobbled square leave
+     * something behind it.
+     *
+     * It is a GPU burst rather than a pooled mesh, which is affordable for
+     * exactly the reason the blast light is exempt from the muzzle-light
+     * budget: there are seconds between detonations. A per-shot effect could
+     * not be built this way (see the note on muzzle smoke in
+     * `spec_visuals.md`).
+     *
+     * Colour is NOT here. Dust is the ground and the air it hangs in, so it is
+     * tinted from the map's own `mistColor` and key light — see
+     * `GrenadeSystem.setEnvironment`.
+     */
+    dust: {
+      /**
+       * Concurrent clouds, and puffs in one. `clouds` is a count of GPU
+       * systems rather than of slots in a pool, and it cannot be folded into
+       * one system holding `clouds * puffs` — see `BlastDust`.
+       */
+      clouds: 4,
+      puffs: 34,
+      /**
+       * Seconds from the blast to the last puff fading out. Long, and that is
+       * the point of the whole effect: the fireball is 0.42 s, so anything
+       * under about two seconds here is over while the light is still in the
+       * frame and the blast leaves nothing behind it.
+       */
+      life: 2.4,
+      /**
+       * The disc the puffs are born in: about the fireball's own first radius,
+       * and flat, so the cloud starts as something lying on the ground rather
+       * than as a ball in the air.
+       */
+      radius: 1.1,
+      height: 0.6,
+      /**
+       * How far above the detonation that disc sits. A puff is a BILLBOARD
+       * metres across, so one centred where the grenade actually went off —
+       * which is a radius above the floor — has its whole lower half under the
+       * cobbles, and the cloud reads as a flat smear painted on the street
+       * rather than as something standing in it. This lifts the disc to about
+       * knee height, which is what a quad this size needs to clear the ground
+       * it is rising off. It is not the blast's own height: the damage, the
+       * light and the embers all still resolve where the grenade was.
+       */
+      lift: 0.75,
+      /**
+       * How fast a puff leaves the centre (m/s), and the fraction of that it
+       * still has at the end of its life. Dust is thrown out hard and then
+       * stops in the air — a cloud that expands at a constant rate reads as a
+       * shockwave, and one that never slows walks off the map.
+       */
+      speed: 2.6,
+      settle: 0.06,
+      /**
+       * Upward acceleration (m/s^2). Small: this is a cloud lifting as it
+       * spreads, not a mushroom.
+       */
+      rise: 0.8,
+      /** Puff diameter (m) at birth and at the end, and the spread over both. */
+      sizeStart: 1.4,
+      sizeEnd: 2.9,
+      sizeSpread: 0.45,
+      /**
+       * Alpha of one puff at birth, falling linearly to nothing at the end of
+       * its life. Dust occludes rather than glows (`BLENDMODE_STANDARD`), so
+       * this is how much of the world behind it a single quad takes away, and
+       * three dozen of them overlap.
+       *
+       * It is set for how the cloud reads at HALF life rather than at birth:
+       * the fade is linear and cannot be curved (see `BlastDust`), so a
+       * number chosen to look right on the first frame leaves nothing by the
+       * time the fireball is out — which is the half this exists for.
+       */
+      opacity: 0.7,
+      /**
+       * How far the tint is lifted from the map's mist toward its key light.
+       * At 0 the cloud is the colour of the air it hangs in, which on a night
+       * map is very nearly black; at 1 it is the moon. Dust is lit by the
+       * moon and made of the ground, so it sits between them.
+       */
+      lit: 0.5,
+    },
+
+    /**
      * When a bot throws one. Considered on its ordinary think tick rather than
      * on a timer of its own — it is a decision about a target it already has,
      * and a bot with no target has nothing to throw at.

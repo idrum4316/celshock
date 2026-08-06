@@ -1062,8 +1062,10 @@ export class Game {
     this.grass.build(map.grass, environment, map.colliderBoxes, map.terrain);
     this.player.setTerrain(map.terrain);
     // The floor a grenade comes to rest on, as a backstop under the collider
-    // proxies — the same terrain the player's ground probe falls back to.
+    // proxies — the same terrain the player's ground probe falls back to, and
+    // the map's own mist and moon, which are what colour the blast dust.
     this.grenades.setTerrain(map.terrain);
+    this.grenades.setEnvironment(environment);
     return map;
   }
 
