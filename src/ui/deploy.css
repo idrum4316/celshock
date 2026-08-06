@@ -77,7 +77,19 @@
   width: var(--map);
   height: var(--map);
   display: block;
-  cursor: crosshair;
+  /* The UA's own `crosshair` is thin dark lines with a hairline light edge,
+     which is a shape drawn for a light page: over this map's near-black paper
+     it disappears entirely, and the pointer is the only thing on the screen
+     the player is moving. So it is drawn here instead — the interface's accent
+     over a heavy dark casing, which reads over both the paper and the mid-grey
+     of a building footprint. The hotspot is the centre (13 13), and it must
+     stay there: the map hit-tests markers at the pointer's own coordinates.
+     `crosshair` is kept as the fallback for anything that refuses an SVG
+     cursor. `%23` is a literal `#` — unencoded it ends the data URI. */
+  cursor:
+    url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26"><g fill="none" stroke="%23000" stroke-opacity=".8" stroke-width="4.5" stroke-linecap="round"><path d="M13 2.5v6.5M13 17v6.5M2.5 13h6.5M17 13h6.5"/></g><g fill="none" stroke="%23ffe680" stroke-width="1.8" stroke-linecap="round"><path d="M13 2.5v6.5M13 17v6.5M2.5 13h6.5M17 13h6.5"/></g><circle cx="13" cy="13" r="1.6" fill="%23ffe680" stroke="%23000" stroke-opacity=".8" stroke-width="1"/></svg>')
+      13 13,
+    crosshair;
   image-rendering: auto;
   clip-path: polygon(
     22px 0, 100% 0, 100% calc(100% - 22px),

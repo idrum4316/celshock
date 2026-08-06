@@ -260,36 +260,137 @@ export class DeployScreen {
       c.fillText(p.def.id, x, y);
     }
 
-    // Deployment markers.
+    // Deployment markers. The selection is drawn LAST and on its own, so it is
+    // never partly under a neighbour — two spawns behind the same flag land
+    // within a marker's width of each other at this scale, and a selection you
+    // have to look for is the one thing this screen cannot afford.
+    //
+    // The hit radius is the same for every marker whatever it is drawn at:
+    // shrinking the unselected ones is a legibility decision, and it must not
+    // quietly shrink their click targets with it.
+    this.hotspots.length = 0;
+    const ink = lighten(mine, 0.4);
     for (let i = 0; i < this.options.length; i++) {
       const s = this.options[i];
       const x = toX(s.pos.x);
       const y = toY(s.pos.z);
-      const r = 11;
-      this.hotspots.push({ x, y, r: r + 5, index: i });
-
-      c.beginPath();
-      c.arc(x, y, r, 0, Math.PI * 2);
-      c.fillStyle = i === this.selected ? mine : "rgba(0,0,0,0.65)";
-      c.fill();
-      c.strokeStyle = mine;
-      c.lineWidth = i === this.selected ? 3 : 2;
-      c.stroke();
-
-      // A downward chevron, so a spawn never reads as a flag.
-      c.beginPath();
-      c.moveTo(x - 4, y - 3);
-      c.lineTo(x + 4, y - 3);
-      c.lineTo(x, y + 4);
-      c.closePath();
-      c.fillStyle = i === this.selected ? "#0b0e12" : mine;
-      c.fill();
+      this.hotspots.push({ x, y, r: 16, index: i });
+      if (i !== this.selected) this.drawMarker(x, y, ink);
     }
+    const sel = this.hotspots[this.selected];
+    if (sel) this.drawSelected(sel.x, sel.y);
+  }
+
+  /**
+   * An unselected spawn: a dark disc so it reads against a building footprint,
+   * a ring, and a downward chevron so a spawn never reads as a flag.
+   *
+   * The ring is the team's colour lightened rather than the colour itself. Both
+   * teams' colours are chosen for a night scene and one of them (the Blight's
+   * plum) is within a few points of this map's own background — at 2 px it
+   * simply is not there.
+   */
+  private drawMarker(x: number, y: number, ink: string): void {
+    const c = this.ctx;
+    c.beginPath();
+    c.arc(x, y, 9, 0, Math.PI * 2);
+    c.fillStyle = "rgba(6,8,12,0.8)";
+    c.fill();
+    c.strokeStyle = ink;
+    c.lineWidth = 2;
+    c.stroke();
+    this.chevron(x, y, ink);
+  }
+
+  /**
+   * The selection, in the screen's own accent rather than in the team's: what
+   * it has to be distinct from is the other markers, which are all in the
+   * team's colour — so a difference in fill and line width is the one
+   * distinction it cannot use, and that is what it was. It now reads as
+   * selected four ways over — brighter hue, larger, four ticks aimed at it,
+   * and a halo that breathes — because a d-pad step has to be visible from
+   * wherever on the map the eye happens to be.
+   *
+   * The pulse is drawn from the wall clock rather than from an accumulated dt:
+   * this screen's only job is to be looked at, so a phase that survives across
+   * respawns costs nothing and there is no dt in reach here anyway.
+   */
+  private drawSelected(x: number, y: number): void {
+    const c = this.ctx;
+    const beat = 0.5 + 0.5 * Math.sin((performance.now() / 1000) * 3.4);
+
+    c.save();
+    // A dark backing disc first: the halo is translucent, and over the mid-grey
+    // of a building footprint it would otherwise wash out to nothing.
+    c.beginPath();
+    c.arc(x, y, 17, 0, Math.PI * 2);
+    c.fillStyle = "rgba(6,8,12,0.72)";
+    c.fill();
+
+    c.beginPath();
+    c.arc(x, y, 15 + beat * 3, 0, Math.PI * 2);
+    c.strokeStyle = `rgba(255,230,128,${0.5 - beat * 0.28})`;
+    c.lineWidth = 2;
+    c.stroke();
+
+    // Four ticks pointing in at the marker — the part that still reads when the
+    // map is scaled down to a landscape phone and the disc is a few pixels.
+    c.strokeStyle = "rgba(255,230,128,0.85)";
+    c.lineWidth = 2;
+    c.lineCap = "round";
+    for (let k = 0; k < 4; k++) {
+      const a = (k * Math.PI) / 2 + Math.PI / 4;
+      const dx = Math.cos(a);
+      const dy = Math.sin(a);
+      c.beginPath();
+      c.moveTo(x + dx * 16, y + dy * 16);
+      c.lineTo(x + dx * 23, y + dy * 23);
+      c.stroke();
+    }
+
+    c.shadowColor = "rgba(255,230,128,0.9)";
+    c.shadowBlur = 12;
+    c.beginPath();
+    c.arc(x, y, 12, 0, Math.PI * 2);
+    c.fillStyle = HOT;
+    c.fill();
+    c.strokeStyle = "#fff6d2";
+    c.lineWidth = 2.5;
+    c.stroke();
+    c.restore();
+
+    this.chevron(x, y, "#0b0e12", 1.35);
+  }
+
+  private chevron(x: number, y: number, fill: string, scale = 1): void {
+    const c = this.ctx;
+    c.beginPath();
+    c.moveTo(x - 4 * scale, y - 3 * scale);
+    c.lineTo(x + 4 * scale, y - 3 * scale);
+    c.lineTo(x, y + 4.5 * scale);
+    c.closePath();
+    c.fillStyle = fill;
+    c.fill();
   }
 }
+
+/** The interface's accent (`--hot` in base.css), which the canvas cannot read. */
+const HOT = "#ffe680";
 
 /** Hex colour with an alpha channel, for the zone fills. */
 function hexA(hex: string, alpha: number): string {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+/**
+ * A team colour mixed toward white, for the marks small enough that the colour
+ * itself does not carry. The palette is authored for a night scene lit by one
+ * moon; against this map's near-black paper the darker of the two teams is
+ * barely a colour at all, and a 2 px ring drawn in it is invisible.
+ */
+function lighten(hex: string, amount: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const mix = (ch: number) => Math.round(ch + (255 - ch) * amount);
+  return `rgb(${mix((n >> 16) & 255)}, ${mix((n >> 8) & 255)}, ${mix(n & 255)})`;
 }
