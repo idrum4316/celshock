@@ -1378,16 +1378,22 @@ export class Game {
    * Nothing after this method may move the camera.
    */
   private updateCameraAndLighting(dt: number): void {
-    // Aim assist reads last frame's camera pose and this frame's enemy list
-    // (consumed synchronously — the battle scratch array is safe to pass),
-    // and is inert unless the player is looking with a gamepad stick.
+    // Aim assist reads last frame's aim and this frame's enemy list (consumed
+    // synchronously — the battle scratch array is safe to pass), and is inert
+    // unless the player is looking with a gamepad stick. It takes the EYE
+    // rather than the rendered camera on purpose: its tracking term
+    // differences the target's direction frame to frame, and the camera's bob
+    // would land in that difference as a shake. It also takes the camera's
+    // current full-stick turn rate, which is what bounds the assist below the
+    // player's own look speed at every optic.
     const assist = this.aimAssist.update(
       dt,
       this.input,
-      this.cameraSys.camera.position,
+      this.player.eyePos,
       this.cameraSys.forward,
       this.cameraSys.aimYaw,
       this.cameraSys.aimPitch,
+      this.cameraSys.stickYawRate,
       this.battle.hittablesAgainst(this.player.team),
     );
     // First person: the camera goes to the eye the bots shoot at, so what a

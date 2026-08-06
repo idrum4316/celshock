@@ -220,7 +220,11 @@ src/
     GrenadeSystem.ts        # The one thing that isn't hitscan: thrown
                             #   grenades, their bounces, the fuse, the blast,
                             #   + BlastDust, the cloud it lifts off the ground
-    AimAssistSystem.ts      # Gamepad-only aim assist (slowdown + rotation)
+    AimAssistSystem.ts      # Gamepad-only aim assist: an outer bubble that
+                            #   slows the stick, an inner one that rotates —
+                            #   mostly adhesion (matching the target's angular
+                            #   velocity), a little magnetism. Bounded by the
+                            #   player's own turn rate; inert without input
     LightingSystem.ts       # Dynamic point lights: fixtures, flashes, lamps
     ShadowSystem.ts         # Moon shadow map (stepped shadows) + blob shadows
     Atmosphere.ts           # Drifting ash particle field, simulated on the

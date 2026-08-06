@@ -177,6 +177,20 @@ export class CameraSystem {
     );
   }
 
+  /**
+   * The yaw rate a full stick deflection currently produces (rad/s), with the
+   * fitted optic's ADS multiplier already in it. `AimAssistSystem` bounds its
+   * own rotation as a fraction of this, which is what makes "a committed
+   * stick always out-turns the assist" true through a 3.5x scope as well as
+   * down the irons — the assist tuned as an absolute rate was 3.4x the
+   * player's own scoped turn rate. Reads the same `adsBlend > 0.5` step
+   * `update` applies the multiplier on, so the two cannot disagree.
+   */
+  get stickYawRate(): number {
+    const aiming = this.adsBlend > 0.5;
+    return CONFIG.camera.stickSensX * (aiming ? this.sight.stickMult : 1);
+  }
+
   /** Yaw-only forward, for movement on the ground plane. Deliberately the
    * un-recoiled yaw: strafing must not swim while the gun is kicking. */
   get flatForward(): Vector3 {

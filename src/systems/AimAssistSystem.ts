@@ -1,10 +1,14 @@
 /**
- * AimAssistSystem.ts — Gamepad-only aim assist: stick slowdown over targets
- * plus a gentle rotational pull toward them.
+ * AimAssistSystem.ts — Gamepad-only aim assist: an outer bubble that slows the
+ * stick over a target and an inner one that rotates the camera, the rotation
+ * being mostly ADHESION (matching the target's angular velocity) rather than
+ * magnetism (pulling toward its centre).
  * Invariants: NEVER affects mouse/keyboard — it disengages the moment the
- * mouse moves and leaves mouse sensitivity untouched. The pull must always be
- * defeatable by a committed stick push. LOS ray filters metadata.solid ===
- * true (walls block assist). Called by Game before CameraSystem.update.
+ * mouse moves and leaves mouse sensitivity untouched. Its rotation is capped
+ * at a fraction of the player's OWN full-stick turn rate, is gated on the
+ * player actually driving, and is cancelled by opposing stick deflection — so
+ * a committed push always wins. LOS ray filters metadata.solid === true (walls
+ * block assist). Called by Game before CameraSystem.update.
  */
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -29,17 +33,42 @@ export interface AssistFrame {
 }
 
 /**
- * Gamepad aim assist: a slowdown bubble around enemies plus a gentle
- * rotational pull toward the acquired target. The pull is defeatable by
- * design — pushing the look stick against it cancels it in proportion to
- * deflection, so a committed push always breaks free of the target even
- * though the raw pull rate exceeds the slowed stick rate.
+ * Gamepad aim assist, in the console-shooter lineage: target friction plus a
+ * rotational term. See `CONFIG.aimAssist` for what each number means and for
+ * the three invariants that keep it from reading as auto-aim.
  *
- * Keyboard/mouse is unaffected by construction (see `CONFIG.aimAssist`):
- * the whole system returns null unless a gamepad is connected AND the pad
- * produced the most recent input activity, so a single mouse movement
- * disengages it the same frame — and even while engaged, the slowdown is
- * only ever multiplied into the stick terms of the camera update.
+ * The rotation is two terms with very different jobs:
+ *
+ * - **Tracking (adhesion)** follows motion. Each frame the target's direction
+ *   from the eye has moved by some angle; the assist gives back a share of
+ *   it, so a strafing enemy drags the reticle along instead of sliding out
+ *   from under it. It is a *delta*, not a rate, so it is frame rate
+ *   independent by construction and needs no dt. Crucially it is zero
+ *   against a stationary target — it can help you hold an aim, never take
+ *   one.
+ * - **Magnetism** recovers error. A pull toward the target's centre,
+ *   strongest at the rim of the inner bubble and zero inside
+ *   `magnetDeadzone` of it, so it closes a near miss onto the body and lets
+ *   go.
+ *
+ * They divide the work by where the reticle is rather than by size: near the
+ * centre tracking is all there is, and near the rim magnetism is deliberately
+ * the larger of the two, because that is the term whose job is to get back.
+ * Measured against a bot strafing at 4 m/s across 15 m with the trigger held,
+ * the pair settles ~0.035 rad off its centre and holds there — the reticle
+ * stays with the target, roughly two body-widths behind the middle of it. The
+ * assist keeps you in the fight; the last correction is still the player's.
+ *
+ * Tracking is split by cause — the target moving versus the player strafing
+ * around it — because compensating the player's own motion is the half that
+ * feels like the game is playing for you, so it is scaled down separately
+ * (`selfMotionMult`).
+ *
+ * Keyboard/mouse is unaffected by construction: the whole system returns null
+ * unless a gamepad is connected AND the pad produced the most recent input
+ * activity, so a single mouse movement disengages it the same frame — and
+ * even while engaged, the slowdown is only ever multiplied into the stick
+ * terms of the camera update.
  *
  * Costs at most one ray pick per frame: candidates are filtered by angle
  * first, and only the winner is tested against `solid` colliders — the same
@@ -49,11 +78,41 @@ export class AimAssistSystem {
   /** The device that produced the most recent look input. */
   private lastDevice: "mouse" | "stick" = "mouse";
 
+  /** The target being assisted, held across frames for hysteresis. */
+  private held: AimTarget | null = null;
+  /** Engage ramp, 0..1 — scales everything the assist does. */
+  private engage = 0;
+  /** Last frame's slowdown depth, so a lost target eases out of it. */
+  private depth = 0;
+
+  /**
+   * Last frame's target centre and eye position, for the angular-velocity
+   * term. Invalid whenever the held target changed or was missing, in which
+   * case tracking sits out a frame rather than differencing two unrelated
+   * positions.
+   */
+  private prevCenter = new Vector3();
+  private prevOrigin = new Vector3();
+  private haveHistory = false;
+
   constructor(private scene: Scene) {}
 
   /**
    * Computes this frame's assist, or null when inactive. Call immediately
    * before `CameraSystem.update`, with the camera's current pose.
+   *
+   * `origin` is the player's EYE, not the rendered camera: the tracking term
+   * differences the target's direction across frames, and the camera's bob
+   * and landing dip would arrive in that difference as several centimetres of
+   * per-frame jitter — a shake, at bob frequency, on an otherwise smooth
+   * track. The two are centimetres apart, which is nothing to a cone test or
+   * a line-of-sight ray over metres.
+   *
+   * `lookRate` is the yaw rate a full stick deflection currently produces
+   * (`CameraSystem.stickYawRate`), carrying the fitted optic's multiplier.
+   * Both rotation terms are bounded as fractions of it, which is what makes
+   * "the player always out-turns the assist" true at every magnification
+   * instead of true at the one it was tuned against.
    *
    * `targets` is the shooter's enemy list (the same one hitscan fires at);
    * it is read synchronously and never retained, so a reused scratch array
@@ -62,10 +121,11 @@ export class AimAssistSystem {
   update(
     dt: number,
     input: InputManager,
-    camPos: Vector3,
+    origin: Vector3,
     forward: Vector3,
     aimYaw: number,
     aimPitch: number,
+    lookRate: number,
     targets: readonly AimTarget[],
   ): AssistFrame | null {
     // Device arbitration. Any mouse movement disengages instantly; any real
@@ -77,74 +137,207 @@ export class AimAssistSystem {
     } else if (input.padActive) {
       this.lastDevice = "stick";
     }
-    if (!input.gamepadConnected || this.lastDevice !== "stick") return null;
+    if (!input.gamepadConnected || this.lastDevice !== "stick") {
+      this.clear();
+      return null;
+    }
 
     const a = CONFIG.aimAssist;
 
-    // --- acquire: the live enemy nearest the crosshair inside the cone ---
-    const cosCone = Math.cos(a.acquireAngle);
+    // --- acquire: the live enemy nearest the crosshair, inside its own
+    // slowdown bubble. The bubble is a sphere around the target, so its
+    // half-angle shrinks with distance instead of fanning out. ---
     let best: AimTarget | null = null;
-    let bestDot = cosCone; // a candidate must beat the cone threshold to win
+    let bestScore = Infinity;
+    let bestAngle = 0;
+    let bestDist = 0;
     for (const t of targets) {
       if (t.invulnerable) continue;
-      const to = t.center.subtract(camPos);
+      const to = t.center.subtract(origin);
       const distSq = to.lengthSquared();
       if (distSq > a.maxDistance * a.maxDistance || distSq < 0.25) continue;
-      const dot = Vector3.Dot(forward, to.scale(1 / Math.sqrt(distSq)));
-      if (dot > bestDot) {
+      const dist = Math.sqrt(distSq);
+      const dot = clamp(Vector3.Dot(forward, to.scale(1 / dist)), -1, 1);
+      const angle = Math.acos(dot);
+      if (angle > bubbleAngle(a.slowdownRadius, dist)) continue;
+      // Hysteresis: the held target is worth a small angular head start, so
+      // two overlapping enemies don't trade the assist frame by frame — a
+      // swap costs the engage ramp and the tracking history both.
+      const score = t === this.held ? angle - a.holdBias : angle;
+      if (score < bestScore) {
         best = t;
-        bestDot = dot;
+        bestScore = score;
+        bestAngle = angle;
+        bestDist = dist;
       }
     }
-    if (!best) return null;
 
     // --- LOS: the same solid-collider pick hitscan uses, so walls win ---
-    const toTarget = best.center.subtract(camPos);
-    const dist = toTarget.length();
-    const dir = toTarget.scale(1 / dist);
-    const wall = this.scene.pickWithRay(
-      new Ray(camPos, dir, dist),
-      (m) => !!m.metadata && m.metadata.solid === true,
-    );
-    if (wall && wall.hit) return null;
+    if (best) {
+      const to = best.center.subtract(origin);
+      const dir = to.scale(1 / bestDist);
+      const wall = this.scene.pickWithRay(
+        new Ray(origin, dir, bestDist),
+        (m) => !!m.metadata && m.metadata.solid === true,
+      );
+      if (wall && wall.hit) best = null;
+    }
 
-    // --- rotation: full pull in ADS; at hip only while firing or steering
-    // with the stick, so a resting hip camera never rotates on its own ---
-    const stickActive = input.stickLookX !== 0 || input.stickLookY !== 0;
-    const speed = input.ads
-      ? a.rotateAdsSpeed
-      : input.fire || stickActive
-        ? a.rotateHipSpeed
-        : 0;
+    // --- ramps. Losing the target decays the engagement rather than
+    // dropping it, so the slowdown eases off and a re-acquire inside the
+    // release window resumes instead of restarting. ---
+    if (!best) {
+      this.haveHistory = false;
+      this.engage = Math.max(0, this.engage - dt / a.releaseTime);
+      if (this.engage === 0) this.held = null;
+      return this.engage > 0 ? { stickMult: this.slow(), yaw: 0, pitch: 0 } : null;
+    }
+    if (best !== this.held) {
+      this.held = best;
+      this.haveHistory = false;
+      this.engage = 0;
+    }
+    this.engage = Math.min(1, this.engage + dt / a.engageTime);
+
+    // --- friction: full at the centre of the bubble, gone at its rim. A
+    // gradient, so there is no sensitivity step to feel at the boundary. ---
+    this.depth = 1 - smoothstep01(bestAngle / bubbleAngle(a.slowdownRadius, bestDist));
+    const stickMult = this.slow();
+
+    // --- rotation. Gated three ways: it happens only inside the tighter
+    // inner bubble, only while the player is driving (stick past the
+    // threshold, or the trigger held), and it fades out with distance. ---
+    const rotAngle = bubbleAngle(a.rotateRadius, bestDist);
+    const drive = Math.max(
+      input.fire ? 1 : 0,
+      smoothstep01(
+        (Math.max(
+          Math.hypot(input.stickLookX, input.stickLookY),
+          Math.hypot(input.moveX, input.moveY),
+        ) -
+          a.stickThreshold) /
+          a.stickThreshold,
+      ),
+    );
+    const falloff =
+      1 -
+      smoothstep01(
+        (bestDist - a.rotateFullRange) / (a.maxDistance - a.rotateFullRange),
+      );
+    const gain = bestAngle <= rotAngle ? this.engage * drive * falloff : 0;
 
     let yaw = 0;
     let pitch = 0;
-    if (speed > 0) {
-      // Solve the yaw/pitch that would put the crosshair on the target,
-      // then approach it at the capped rate — a pull, never a snap.
-      const wantYaw = Math.atan2(dir.x, dir.z);
-      const wantPitch = Math.asin(clamp(dir.y, -1, 1));
-      const cap = speed * dt;
-      yaw = clamp(wrapPi(wantYaw - aimYaw), -cap, cap);
-      pitch = clamp((wantPitch - aimPitch) * a.verticalMult, -cap, cap);
+    if (gain > 0) {
+      // Tracking (adhesion). The target's direction has moved since last
+      // frame; hand back a share of that movement. Splitting it by cause is
+      // three angle solves rather than two: hold the eye still to isolate
+      // what the TARGET did, then hold the target still to isolate what the
+      // PLAYER did. To first order the two sum to the whole delta.
+      if (this.haveHistory) {
+        const wasYaw = dirYaw(this.prevCenter, this.prevOrigin);
+        const wasPitch = dirPitch(this.prevCenter, this.prevOrigin);
+        const tgtYaw = wrapPi(dirYaw(best.center, this.prevOrigin) - wasYaw);
+        const tgtPitch = dirPitch(best.center, this.prevOrigin) - wasPitch;
+        const selfYaw = wrapPi(dirYaw(this.prevCenter, origin) - wasYaw);
+        const selfPitch = dirPitch(this.prevCenter, origin) - wasPitch;
+        const f = input.ads ? a.trackAds : a.trackHip;
+        yaw = f * (tgtYaw + a.selfMotionMult * selfYaw);
+        pitch = f * (tgtPitch + a.selfMotionMult * selfPitch);
+      }
 
-      // The pull must be defeatable: ADS pull speed deliberately exceeds the
-      // slowed stick rate, so without this the target would be inescapable.
-      // Stick deflection AGAINST the pull cancels it proportionally — full
-      // stick away means no pull at all, so a committed push always walks
-      // the crosshair out of the acquire cone and drops the target, while a
-      // resting stick keeps the full sticky track. (Stick signs match
+      // Magnetism: strongest at the rim of the inner bubble, zero inside the
+      // deadzone. It walks a near miss onto the body and stops there — it can
+      // never seat the reticle on the centre.
+      const t = clamp(
+        (bestAngle / rotAngle - a.magnetDeadzone) / (1 - a.magnetDeadzone),
+        0,
+        1,
+      );
+      const pull =
+        (input.ads ? a.magnetAds : a.magnetHip) *
+        lookRate *
+        smoothstep01(t) *
+        dt;
+      const dir = best.center.subtract(origin).normalize();
+      yaw += clamp(wrapPi(Math.atan2(dir.x, dir.z) - aimYaw), -pull, pull);
+      pitch += clamp(Math.asin(clamp(dir.y, -1, 1)) - aimPitch, -pull, pull);
+
+      pitch *= a.verticalMult;
+      yaw *= gain;
+      pitch *= gain;
+
+      // Invariant 1: the assist can never out-turn the player. The cap is a
+      // fraction of the rate a full stick produces THROUGH THE FITTED OPTIC,
+      // so a 3.5x scope's slower look slows the assist with it.
+      const cap = a.maxRateFraction * lookRate * dt;
+      yaw = clamp(yaw, -cap, cap);
+      pitch = clamp(pitch, -cap, cap);
+
+      // Invariant 3: stick deflection AGAINST the rotation cancels it in
+      // proportion — full stick away means none at all, so a committed push
+      // always walks the crosshair out of the bubble and drops the target,
+      // while a resting stick keeps the track. (Stick signs match
       // CameraSystem: +lookX turns +yaw, +lookY turns -pitch.)
       yaw *= 1 - clamp(-Math.sign(yaw) * input.stickLookX, 0, 1);
       pitch *= 1 - clamp(Math.sign(pitch) * input.stickLookY, 0, 1);
     }
 
-    return { stickMult: a.slowdownMult, yaw, pitch };
+    this.prevCenter.copyFrom(best.center);
+    this.prevOrigin.copyFrom(origin);
+    this.haveHistory = true;
+    return { stickMult, yaw, pitch };
   }
+
+  /** The stick multiplier for the current engagement and bubble depth. */
+  private slow(): number {
+    return 1 - this.engage * this.depth * (1 - CONFIG.aimAssist.slowdownMult);
+  }
+
+  /** Drops everything held across frames — used when the mouse takes over. */
+  private clear(): void {
+    this.held = null;
+    this.engage = 0;
+    this.depth = 0;
+    this.haveHistory = false;
+  }
+}
+
+/**
+ * Half-angle subtended by a sphere of `radius` at `dist`, capped so a target
+ * at arm's length cannot own a third of the screen. The cap is stated for the
+ * outer bubble and scaled by radius, so the inner one stays strictly inside it
+ * at every distance — a flat cap on both makes them identical inside ~4 m,
+ * which silently turns the whole slowdown bubble into a rotation bubble at
+ * exactly the range where rotation is strongest.
+ */
+function bubbleAngle(radius: number, dist: number): number {
+  const a = CONFIG.aimAssist;
+  return Math.min(
+    Math.atan(radius / dist),
+    (a.maxAngle * radius) / a.slowdownRadius,
+  );
+}
+
+function dirYaw(to: Vector3, from: Vector3): number {
+  return Math.atan2(to.x - from.x, to.z - from.z);
+}
+
+function dirPitch(to: Vector3, from: Vector3): number {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  return Math.atan2(dy, Math.hypot(dx, dz));
 }
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
+}
+
+/** Hermite ease over [0,1], clamped — the shape every ramp here uses. */
+function smoothstep01(x: number): number {
+  const t = clamp(x, 0, 1);
+  return t * t * (3 - 2 * t);
 }
 
 /** Wraps an angle to [-PI, PI] so the pull takes the short way around. */
