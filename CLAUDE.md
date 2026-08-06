@@ -2,6 +2,9 @@
 
 Single source of truth for AI coding agents (and contributors) working in this
 repository. `AGENTS.md` is a pointer to this file; `README.md` is user-facing.
+`FINDINGS.md` is the open-threads list — things measured and found worth doing
+but not yet done, each with the arithmetic behind it. Read it before starting
+performance work, and delete an entry there when you fix or disprove it.
 
 ## Project overview
 
