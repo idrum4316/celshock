@@ -4,6 +4,9 @@
  * Why hand-written: Babylon's image-processing pass re-gammas the cel shader's
  * already display-ready colors and washes the palette out — which is also why
  * pipeline.imageProcessingEnabled stays false. Keep the grade in this pass.
+ * Invariants: this is the LAST pass on the camera, and `detach`/`attach` exist
+ * only so the motion blur ahead of it can be removed and put back without
+ * ending up behind it — see Game.setMotionBlurEnabled.
  */
 import { Camera, Effect, PostProcess, Scene } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -65,11 +68,13 @@ void main() {
 
 export class HorrorPost {
   private post: PostProcess;
+  private readonly camera: Camera;
   private time = 0;
   private damage = 0;
 
   constructor(scene: Scene, camera: Camera) {
     const g = CONFIG.graphics;
+    this.camera = camera;
     this.post = new PostProcess(
       "horror",
       "horror",
@@ -87,6 +92,27 @@ export class HorrorPost {
       effect.setFloat("aberration", g.aberration);
       effect.setFloat("damage", this.damage);
     };
+  }
+
+  /**
+   * Takes the grade off the camera, and puts it back on the END of the chain.
+   *
+   * The pair exists for one caller: turning the motion blur off removes a pass
+   * from the middle of the chain, and Babylon's `attachPostProcess` APPENDS, so
+   * putting it back would land it after this grade. Detaching and re-attaching
+   * the grade behind it is what keeps the documented order — GodRays, then the
+   * blur, then this — without anyone having to compute an insert index against
+   * a chain that also holds the pipeline's FXAA.
+   *
+   * Grain over a smear is the symptom if this goes wrong: it reads as a dirty
+   * lens rather than as motion, and nothing throws.
+   */
+  detach(): void {
+    this.camera.detachPostProcess(this.post);
+  }
+
+  attach(): void {
+    this.camera.attachPostProcess(this.post);
   }
 
   /** Kicks the red edge flash; call when the player takes a hit. */

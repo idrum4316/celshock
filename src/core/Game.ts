@@ -67,10 +67,12 @@ import { DeployScreen } from "../ui/DeployScreen";
 import { HUD, type CaptureStatus } from "../ui/HUD";
 import { OverlayScreen } from "../ui/OverlayScreen";
 import { kitLabel, LoadoutScreen } from "../ui/LoadoutScreen";
+import { SettingsScreen } from "../ui/SettingsScreen";
 import { Minimap } from "../ui/Minimap";
 import { enterFullscreenOnTouch } from "../pwa/register";
 import { CameraSystem } from "./CameraSystem";
 import { InputManager } from "./InputManager";
+import { readSettings, writeSettings, type Settings } from "./settings";
 import { Sfx } from "./Sfx";
 
 /**
@@ -83,6 +85,12 @@ import { Sfx } from "./Sfx";
  * on. Nothing simulates while it is up — the scene still renders, which is what
  * makes a paused round look held rather than gone.
  *
+ * `loadout` and `settings` are lids of the same shape, each remembering what it
+ * covered. The kit screen covers `menu` or `deploy`; the settings screen also
+ * covers `paused`, because turning an effect off is something you judge against
+ * the scene rather than from the title card — which makes it the one lid that
+ * can be raised over another one.
+ *
  * `editor` sits outside that cycle: it is a dev-only side state reachable from
  * anywhere with F2, and leaving it always restarts the round rather than
  * resuming, because the systems that cache the GameMap cannot be handed a map
@@ -94,6 +102,7 @@ type GameState =
   | "playing"
   | "paused"
   | "loadout"
+  | "settings"
   | "roundover"
   | "editor";
 
@@ -193,6 +202,7 @@ export class Game {
   private overlayScreen: OverlayScreen;
   private deployScreen: DeployScreen;
   private loadoutScreen: LoadoutScreen;
+  private settingsScreen: SettingsScreen;
   private minimap: Minimap;
   private sfx: Sfx;
   private mapBuilder: MapBuilder;
@@ -262,6 +272,15 @@ export class Game {
   private weapon: WeaponId = readWeapon();
   /** Which state the loadout screen is a lid over; where closing it returns. */
   private loadoutFrom: "menu" | "deploy" = "menu";
+  /**
+   * The display settings, and which state their screen is a lid over.
+   *
+   * `paused` is in the list where the kit screen's is not: a round you are
+   * standing in is not somewhere you change what you carry, but it is exactly
+   * where you want to judge an effect you have just turned off.
+   */
+  private settings: Settings = readSettings();
+  private settingsFrom: "menu" | "deploy" | "paused" = "menu";
   /** Reused each frame: the player plus every bot, for objective occupancy. */
   private readonly combatants: Combatant[] = [];
   /** Scratch for the shadow focus point — no per-frame allocation. */
@@ -327,6 +346,7 @@ export class Game {
     this.overlayScreen = new OverlayScreen();
     this.deployScreen = new DeployScreen();
     this.loadoutScreen = new LoadoutScreen();
+    this.settingsScreen = new SettingsScreen(this.settings);
     this.minimap = new Minimap();
     this.lighting = new LightingSystem();
     this.atmosphere = new Atmosphere(this.scene);
@@ -486,10 +506,14 @@ export class Game {
     this.loadoutScreen.onWeapon = (id) => this.setWeapon(id);
     this.loadoutScreen.onSight = (id) => this.setSight(id);
     this.loadoutScreen.onClose = () => this.closeLoadout();
+    this.overlayScreen.onOpenSettings = () => this.openSettings();
+    this.settingsScreen.onToggle = (key, value) => this.setSetting(key, value);
+    this.settingsScreen.onClose = () => this.closeSettings();
     this.overlayScreen.onPauseAction = (action) => {
       // Restart needs nothing put back by hand: `startRound` lifts the lid,
       // hides the overlay and ends in `enterDeploy`, which sets the state.
       if (action === "resume") this.resume();
+      else if (action === "settings") this.openSettings();
       else if (action === "restart") this.startRound();
       else this.enterMenu();
     };
@@ -497,6 +521,10 @@ export class Game {
     // built with the defaults and the camera's zoom follows from the fit, so
     // deploying straight off a reload must not start on the wrong weapon.
     this.applyLoadout();
+    // …and the remembered display settings, for the same reason: the blur is
+    // attached by its own constructor, so a stored "off" has to be applied
+    // before the first frame rather than on the first visit to the screen.
+    this.applySettings();
     this.showMenu();
     // Debug/test handle (used by automated smoke tests).
     (window as unknown as { __celshock: Game }).__celshock = this;
@@ -581,6 +609,86 @@ export class Game {
     CONFIG.lighting.kitLamps.forEach((_, n) =>
       this.lighting.removeCarried(kitLampId(n)),
     );
+  }
+
+  /**
+   * Raises the settings lid over the menu, the deploy screen or a pause.
+   *
+   * Unlike the kit screen there is nothing to pose and nothing to light: the
+   * screen is DOM over whatever is already rendering, so opening it is the
+   * state change and the `show`. The pause card underneath stays up on purpose
+   * — the settings screen is opaque where it matters and the card returning is
+   * then the same element, not a redraw.
+   */
+  private openSettings(): void {
+    if (
+      this.state !== "menu" &&
+      this.state !== "deploy" &&
+      this.state !== "paused"
+    ) {
+      return;
+    }
+    this.settingsFrom = this.state;
+    this.state = "settings";
+    this.settingsScreen.setValues(this.settings);
+    this.settingsScreen.show();
+  }
+
+  private closeSettings(): void {
+    if (this.state !== "settings") return;
+    this.settingsScreen.hide();
+    this.state = this.settingsFrom;
+    // The menu paints its own markup and was covered while the settings were
+    // changed, so it is redrawn on the way out — the same reason
+    // `closeLoadout` does it. The pause card was never taken down.
+    if (this.state === "menu") this.showMenu();
+  }
+
+  /**
+   * One pick from the settings screen: stored, persisted, applied, and pushed
+   * back to the screen. The screen never writes its own state — it renders
+   * what it is given — so this is the only path a toggle can take, and a
+   * setting cannot show as applied when it is not.
+   */
+  private setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void {
+    if (this.settings[key] === value) return;
+    this.settings = { ...this.settings, [key]: value };
+    writeSettings(this.settings);
+    this.applySettings();
+    this.settingsScreen.setValues(this.settings);
+  }
+
+  /** Pushes every setting at whatever owns it. Called on load and on change. */
+  private applySettings(): void {
+    this.hud.setFpsVisible(this.settings.fpsCounter);
+    this.setMotionBlurEnabled(this.settings.motionBlur);
+  }
+
+  /**
+   * Adds or removes the motion blur pass, keeping the chain's order.
+   *
+   * The order is load-bearing and documented on both passes: GodRays, then the
+   * blur, then the grade — the shafts belong to the frame they smear with, and
+   * grain over a smear reads as a dirty lens. Babylon's `attachPostProcess`
+   * APPENDS, so simply re-attaching the blur would put it behind the grade.
+   * Taking the grade off and putting it back after is what restores the order
+   * without computing an index into a chain that also holds the pipeline's own
+   * FXAA — and it is Game's job because Game is what assembled the chain.
+   *
+   * Nothing throws if this is wrong. The symptom is smeared grain.
+   */
+  private setMotionBlurEnabled(on: boolean): void {
+    if (on === this.motionBlur.isEnabled) return;
+    const camera = this.cameraSys.camera;
+    const pass = this.motionBlur.pass;
+    if (on) {
+      this.post.detach();
+      camera.attachPostProcess(pass);
+      this.post.attach();
+    } else {
+      camera.detachPostProcess(pass);
+    }
+    this.motionBlur.setEnabled(on);
   }
 
   private closeLoadout(): void {
@@ -703,8 +811,14 @@ export class Game {
   }
 
   private tick(): void {
-    const dt = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
+    const real = this.engine.getDeltaTime() / 1000;
+    const dt = Math.min(real, 0.05);
     this.input.update();
+    // Every state, including the ones that simulate nothing: the readout is an
+    // instrument, and a frame rate that stops being reported the moment you
+    // open a menu is a frame rate you cannot investigate. It takes the real
+    // delta rather than the clamped one — see `HUD.setFps`.
+    this.hud.setFps(this.engine.getFps(), real);
 
     switch (this.state) {
       case "menu":
@@ -719,6 +833,10 @@ export class Game {
           if (this.input.menuRightPressed) this.setDifficulty(this.difficulty + 1);
           if (this.input.loadoutPressed) {
             this.openLoadout();
+            break;
+          }
+          if (this.input.settingsPressed) {
+            this.openSettings();
             break;
           }
         }
@@ -736,6 +854,10 @@ export class Game {
         // the weapon is already put away.
         if (this.input.loadoutPressed) {
           this.openLoadout();
+          break;
+        }
+        if (this.input.settingsPressed) {
+          this.openSettings();
           break;
         }
         this.respawnT -= dt;
@@ -786,6 +908,35 @@ export class Game {
         if (this.input.menuRightPressed) this.loadoutScreen.cycle(1);
         this.updateKitStage(dt);
         break;
+      case "settings":
+        // Up/down picks the row, left/right and Enter flip it. The confirm is
+        // NOT an exit here, which is the one place this screen departs from the
+        // kit screen's shape: a boolean has nothing to step through, so A and
+        // Enter are the natural "toggle this" and spending them on closing
+        // would leave a pad with no way to change a setting at all. B, Escape
+        // and `O` are the ways out, and every pick is already applied.
+        if (
+          this.input.menuBackPressed ||
+          this.input.pausePressed ||
+          this.input.settingsPressed
+        ) {
+          // B is the pad's crouch toggle as well; the press that closed this
+          // screen has already flipped the latch behind it. Same correction the
+          // pause branch and `spawnPlayer` make, and for the same reason.
+          if (this.input.menuBackPressed) this.input.clearCrouchToggle();
+          this.closeSettings();
+          break;
+        }
+        if (this.input.menuUpPressed) this.settingsScreen.moveRow(-1);
+        if (this.input.menuDownPressed) this.settingsScreen.moveRow(1);
+        if (
+          this.input.menuLeftPressed ||
+          this.input.menuRightPressed ||
+          this.input.menuConfirmPressed
+        ) {
+          this.settingsScreen.toggleRow();
+        }
+        break;
       case "playing":
         if (this.input.pausePressed) {
           this.pause();
@@ -807,6 +958,13 @@ export class Game {
           // deliberately crouched behind cover.
           if (this.input.menuBackPressed) this.input.clearCrouchToggle();
           this.resume();
+          break;
+        }
+        // The one lid that can be raised over another. Checked after the
+        // resume, so a frame carrying both keys ends the pause rather than
+        // opening a screen over a round that is about to un-hold.
+        if (this.input.settingsPressed) {
+          this.openSettings();
           break;
         }
         if (this.input.menuUpPressed) this.overlayScreen.movePauseSelection(-1);
@@ -922,6 +1080,7 @@ export class Game {
     this.clearPause();
     this.deployScreen.hide();
     this.stowKit();
+    this.settingsScreen.hide();
     this.minimap.setVisible(false);
     this.player.setBodyHidden(true);
     this.hud.setScoreboard(false);
@@ -980,8 +1139,9 @@ export class Game {
     this.hud.setEditing(true);
     this.deployScreen.hide();
     // F2 is reachable from the loadout screen too, and it would sit over the
-    // editor's own panel.
+    // editor's own panel. The settings screen is above both and owes the same.
     this.stowKit();
+    this.settingsScreen.hide();
     this.minimap.setVisible(false);
     this.player.setBodyHidden(true);
     if (document.pointerLockElement) document.exitPointerLock();
@@ -1100,8 +1260,9 @@ export class Game {
 
   private startRound(): void {
     this.overlayScreen.hide();
-    // Reachable from the menu, so the kit screen may still be up over it.
+    // Reachable from the menu, so either lid may still be up over it.
     this.stowKit();
+    this.settingsScreen.hide();
     // Reachable straight from the pause menu ("Restart round"), and harmless
     // from anywhere else.
     this.clearPause();

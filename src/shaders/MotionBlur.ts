@@ -7,7 +7,9 @@
  * of it. Driven from the player's AIM angles, never from the rendered camera
  * matrix — the view punch's per-shot jitter would otherwise turn every shot
  * into a random full-screen smear. Game must call reset() whenever the camera
- * is teleported, or the jump reads as one blurred frame.
+ * is teleported, or the jump reads as one blurred frame. Turning it off is a
+ * DETACH (`pass` + `setEnabled`, sequenced by Game.setMotionBlurEnabled), not a
+ * zeroed strength: the shader's early-out is still a full-screen copy.
  */
 import { Camera, Effect, PostProcess, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -126,6 +128,14 @@ export class MotionBlur {
    * the stale basis is replaced rather than smeared through.
    */
   private primed = false;
+  /**
+   * The player's setting. False DETACHES the pass rather than zeroing its
+   * strength: the shader's early-out makes it a straight copy, which is still
+   * a full-screen read and write, and a graphics setting that costs nothing to
+   * turn off is not a graphics setting. `Game` owns the detach, because the
+   * chain's order is Game's to know; this flag is what the pass itself reads.
+   */
+  private enabled = true;
 
   constructor(scene: Scene, camera: Camera) {
     const c = CONFIG.graphics.motionBlur;
@@ -166,6 +176,35 @@ export class MotionBlur {
   }
 
   /**
+   * The pass, for `Game` to attach and detach. Exposed rather than given an
+   * `attach`/`detach` pair of its own because the ORDER is the caller's
+   * business: this pass has to land between GodRays and HorrorPost, and only
+   * the place that assembled the chain knows that.
+   */
+  get pass(): PostProcess {
+    return this.post;
+  }
+
+  /** Whether the pass is attached — the flag Game tests before reordering. */
+  get isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /**
+   * Turns the effect on or off. Detaching is Game's half; this is the half
+   * that stops `update` doing arithmetic for a pass that is not running, and
+   * that re-primes on the way back on — the stored basis is however many
+   * seconds stale by then, and the contract above is explicit that a stale
+   * basis renders as one frame of full-screen smear.
+   */
+  setEnabled(on: boolean): void {
+    if (on === this.enabled) return;
+    this.enabled = on;
+    this.strength = 0;
+    if (on) this.reset();
+  }
+
+  /**
    * `yaw`/`pitch` are the player's aim, NOT the rendered camera's orientation.
    * The two differ by the view punch's shake, which is fresh noise every frame
    * and would smear the screen at random on every shot. Recoil is included,
@@ -175,6 +214,9 @@ export class MotionBlur {
    * just because the player is sitting in a menu.
    */
   update(yaw: number, pitch: number): void {
+    // Detached: no pass to feed, and the basis it would be tracking is
+    // discarded by `setEnabled` on the way back on anyway.
+    if (!this.enabled) return;
     const c = CONFIG.graphics.motionBlur;
     const cp = Math.cos(pitch);
     const sp = Math.sin(pitch);

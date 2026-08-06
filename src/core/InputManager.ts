@@ -129,6 +129,15 @@ export class InputManager {
    * kit out of reach inside a round you are already standing in.
    */
   loadoutPressed = false;
+  /**
+   * Edge-triggered "open the settings" (O). Keyboard only, deliberately: the
+   * face buttons are all spoken for (A confirms, B backs out and crouches, X
+   * reloads, Y opens the kit), and a pad reaches the screen through the menu
+   * button and the pause list instead. Read in the menu, deploy and paused
+   * states — settings are reachable from a held round where the kit is not,
+   * because turning the blur off is a thing you judge against a live scene.
+   */
+  settingsPressed = false;
   pointerLocked = false;
   gamepadConnected = false;
   /**
@@ -182,6 +191,7 @@ export class InputManager {
   private prevMenuBack = false;
   private prevPause = false;
   private prevLoadout = false;
+  private prevSettings = false;
   private prevPadSprint = false;
   private prevCrouchToggle = false;
   /** Latched L3 sprint state — toggled on each L3 press, cleared on blur. */
@@ -423,6 +433,11 @@ export class InputManager {
     const loadoutNow = this.keys.has("KeyL") || (pad ? buttonHeld(pad, 3, trig) : false);
     this.loadoutPressed = loadoutNow && !this.prevLoadout;
     this.prevLoadout = loadoutNow;
+
+    // The settings screen's key. No pad binding — see the field's note.
+    const settingsNow = this.keys.has("KeyO");
+    this.settingsPressed = settingsNow && !this.prevSettings;
+    this.prevSettings = settingsNow;
   }
 
   /**
@@ -536,6 +551,9 @@ const BOUND_CODES = new Set([
   "KeyC",
   "KeyG",
   "KeyL",
+  // Ctrl+O is the file-open dialog, and crouch is Ctrl — exactly the accident
+  // the note above describes, so the settings key has to be suppressed too.
+  "KeyO",
   "Space",
   "Tab",
   "Backspace",

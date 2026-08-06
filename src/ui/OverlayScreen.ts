@@ -43,10 +43,17 @@ const CONTROLS: readonly [string, string, string][] = [
   ["Pause", "Start", "Esc"],
 ];
 
-/** What the pause menu can do, and the label for each. In screen order. */
-export type PauseAction = "resume" | "restart" | "quit";
+/**
+ * What the pause menu can do, and the label for each. In screen order.
+ *
+ * `settings` sits above the two destructive items on purpose: it is the only
+ * one you can pick and come back from, and putting it under "Quit to menu"
+ * would file the harmless action below the one that ends the round.
+ */
+export type PauseAction = "resume" | "settings" | "restart" | "quit";
 const PAUSE_ITEMS: readonly [PauseAction, string][] = [
   ["resume", "Resume"],
+  ["settings", "Settings"],
   ["restart", "Restart round"],
   ["quit", "Quit to menu"],
 ];
@@ -61,6 +68,8 @@ export class OverlayScreen {
   onDifficulty: (tier: number) => void = () => {};
   /** Wired by Game: the player asked for the loadout screen. */
   onOpenLoadout: () => void = () => {};
+  /** Wired by Game: the player asked for the settings screen. */
+  onOpenSettings: () => void = () => {};
   /** Wired by Game: the player asked to start a round. */
   onStart: () => void = () => {};
   /** Wired by Game: the player picked something from the pause list. */
@@ -157,6 +166,11 @@ export class OverlayScreen {
           <button class="kit-open"><b>${kit}</b><i>Change kit</i></button>
           <span class="hint">L / Y</span>
         </div>
+        <div class="kit">
+          <span class="label">Display</span>
+          <button class="settings-open"><b>Settings</b><i>Counter &middot; effects</i></button>
+          <span class="hint">O</span>
+        </div>
       </div>
       <button class="ov-start"><b>Deploy</b><i>Enter &middot; A &middot; Start</i></button>
       ${this.controlsTable()}
@@ -174,6 +188,11 @@ export class OverlayScreen {
     // player out from under the screen they just asked for.
     const kitBtn = this.root.querySelector<HTMLElement>("button.kit-open");
     if (kitBtn) kitBtn.onpointerdown = () => this.onOpenLoadout();
+    // Pointerdown for the same reason, and it is not optional here either: a
+    // `click` fires on mouse UP, by which time the overlay's own confirm has
+    // already read the mouse-down and started the round underneath.
+    const setBtn = this.root.querySelector<HTMLElement>("button.settings-open");
+    if (setBtn) setBtn.onpointerdown = () => this.onOpenSettings();
     this.bindStart();
   }
 

@@ -38,6 +38,37 @@ const ARC_THICKNESS = 8;
 const ARC_TIP = 5;
 const ARC_TIP_HALF_U = 0.1;
 
+/**
+ * Seconds between writes to the frame-rate readout. Not a gameplay tunable —
+ * it is how fast a number can change and still be read, which is a fact about
+ * eyes, so it stays here rather than in CONFIG (the same split the editor's
+ * `tuning.ts` makes). Four a second is fast enough to see a dip and slow
+ * enough to hold still while you read it.
+ */
+const FPS_INTERVAL = 0.25;
+/**
+ * The window the 1% low is taken over, and the ring that holds it.
+ *
+ * The rate beside it is Babylon's own 30-frame rolling MEAN, and a mean is
+ * close to the worst statistic for judging smoothness: it is dominated by the
+ * frames that arrive quickly, while what you feel is the ones that do not.
+ * Measured, a 5/5/5/33 ms stream reads 83 fps as a mean and 30 fps as a 1%
+ * low — a game hitching four times a second, with the headline number saying
+ * everything is fine. The pair is the point; neither number alone is
+ * diagnostic.
+ *
+ * Five seconds is long enough that a single spike does not define the reading
+ * and short enough that the number still responds to what you just did. The
+ * ring is sized for that window at 240 Hz with room to spare; the window is
+ * trimmed by TIME rather than by count, so it means five seconds at every
+ * frame rate rather than "the last N frames", which would be five seconds at
+ * 60 and two at 144.
+ */
+const FPS_WINDOW = 5;
+const FPS_MAX_SAMPLES = 1536;
+/** Below this the percentile is noise, and the low reads `--` instead. */
+const FPS_MIN_SAMPLES = 30;
+
 /** One live directional damage arc, pointing at where a shot came from. */
 interface DamageArc {
   el: HTMLElement;
@@ -169,6 +200,28 @@ export class HUD {
   private hitT = 0;
   private vignetteT = 0;
   private messageT = 0;
+  /** The frame-rate readout, and the clock that rations writes to it. */
+  private fpsBox: HTMLElement;
+  private fpsNum: HTMLElement;
+  private fpsMs: HTMLElement;
+  private fpsLow: HTMLElement;
+  private fpsAccum = 0;
+  private fpsText = "";
+  private fpsMsText = "";
+  private fpsLowText = "";
+  /**
+   * The frame times behind the 1% low, as a ring — a circular buffer rather
+   * than a shifted array because this is written on every frame at up to
+   * 240 Hz, and a readout whose own allocations cause a hitch is worse than no
+   * readout. Both this and the sort scratch are allocated once, for the same
+   * reason.
+   */
+  private readonly frameTimes = new Float64Array(FPS_MAX_SAMPLES);
+  private readonly frameScratch = new Float64Array(FPS_MAX_SAMPLES);
+  private frameStart = 0;
+  private frameCount = 0;
+  /** Seconds held in the ring — the trim condition, kept incrementally. */
+  private frameSum = 0;
   /** Fixed pool, grown to CONFIG.damageIndicator.maxArcs and never past it. */
   private damageArcs: DamageArc[] = [];
   /** The view yaw the arcs are projected against; pushed every frame. */
@@ -199,6 +252,11 @@ export class HUD {
       <div id="killfeed"></div>
       <div id="scoreboard" class="frame hidden"></div>
       <div id="lock-hint" class="hidden"><b>CLICK</b> TO CAPTURE THE MOUSE</div>
+      <div id="hud-fps" class="hidden">
+        <span class="fps-main"><b>--</b><em>FPS</em></span>
+        <span class="fps-sub"><b>--</b><em>ms</em></span>
+        <span class="fps-sub"><b>--</b><em>low</em></span>
+      </div>
       <div id="capture-status" class="hidden">
         <div class="cap-head"><span class="cap-id"></span><span class="cap-name"></span></div>
         <div class="cap-meter"><div class="cap-meter-fill"></div><i class="ticks"></i></div>
@@ -226,6 +284,11 @@ export class HUD {
         </div>
       </div>
     `;
+    this.fpsBox = document.getElementById("hud-fps")!;
+    const fpsFields = this.fpsBox.querySelectorAll("b");
+    this.fpsNum = fpsFields[0] as HTMLElement;
+    this.fpsMs = fpsFields[1] as HTMLElement;
+    this.fpsLow = fpsFields[2] as HTMLElement;
     this.healthFill = document.getElementById("health-fill")!;
     this.healthText = document.getElementById("health-text")!;
     this.healthBar = this.root.querySelector("#hud-left .hp-bar") as HTMLElement;
@@ -283,6 +346,142 @@ export class HUD {
       if (this.messageT <= 0) this.message.classList.add("hidden");
     }
     this.updateDamageArcs(dt);
+  }
+
+  /** Puts the frame-rate readout up or takes it away. A player setting. */
+  setFpsVisible(on: boolean): void {
+    this.fpsBox.classList.toggle("hidden", !on);
+    if (!on) {
+      // So the next time it is shown starts from the current rate rather than
+      // from whatever was on screen when it was switched off. The ring goes
+      // with it: nothing is sampled while the readout is down, so what is left
+      // in it is however long ago the player last looked.
+      this.fpsAccum = Infinity;
+      this.fpsText = "";
+      this.fpsMsText = "";
+      this.fpsLowText = "";
+      this.frameStart = 0;
+      this.frameCount = 0;
+      this.frameSum = 0;
+    }
+  }
+
+  /**
+   * The frame rate, throttled to a readable cadence.
+   *
+   * It takes its OWN clock rather than riding `update`'s `dt`, and that is not
+   * redundancy: `update` is called with `dt = 0` while the game is paused (so
+   * the killfeed freezes with the world), and a counter that stops counting
+   * because the round is held is a counter that lies about the frame rate it
+   * is still being handed. `realDt` is the engine's unclamped delta, so the
+   * cadence is the same at 30 fps and at 240.
+   *
+   * The rate itself is Babylon's own smoothed average — a raw 1/dt flickers
+   * through a three-digit range and is unreadable — and each DOM write is
+   * skipped when its rounded string has not moved, which at a steady rate is
+   * most of the time. The HUD's rule against per-frame text writes is what
+   * both halves are for.
+   *
+   * THREE numbers, because one is not diagnostic. The rate is throughput; the
+   * milliseconds beside it are the same fact stated so it can be compared
+   * (frame time scales linearly with what you turned on, where a rate does
+   * not — 7.0 to 6.2 ms is legible in a way 143 to 161 fps is not); and the
+   * low is the worst of the last few seconds, which is the one that tracks
+   * how the game FEELS. A high rate beside a low `low` is judder, and it is
+   * the case a single averaged number cannot show.
+   */
+  setFps(fps: number, realDt: number): void {
+    if (this.fpsBox.classList.contains("hidden")) return;
+    this.pushFrameTime(realDt);
+    this.fpsAccum += realDt;
+    if (this.fpsAccum < FPS_INTERVAL) return;
+    this.fpsAccum = 0;
+
+    const text = String(Math.round(fps));
+    if (text !== this.fpsText) {
+      this.fpsText = text;
+      this.fpsNum.textContent = text;
+    }
+    // The mean frame time. Derived from the rate rather than measured
+    // separately, because `fps` IS 1000/mean — two independently computed
+    // figures for one quantity would sooner or later disagree on screen.
+    const ms = fps > 0 ? (1000 / fps).toFixed(1) : "--";
+    if (ms !== this.fpsMsText) {
+      this.fpsMsText = ms;
+      this.fpsMs.textContent = ms;
+    }
+    const low = this.onePercentLow();
+    const lowText = low > 0 ? String(Math.round(low)) : "--";
+    if (lowText !== this.fpsLowText) {
+      this.fpsLowText = lowText;
+      this.fpsLow.textContent = lowText;
+    }
+  }
+
+  /**
+   * Adds a frame to the ring and trims it back to `FPS_WINDOW` seconds.
+   *
+   * Trimming by accumulated TIME rather than by sample count is what makes the
+   * window mean the same thing at 60 Hz and at 240; the count cap behind it is
+   * only a backstop for a rate high enough to overrun the ring inside the
+   * window, and it drops the oldest sample rather than refusing the newest.
+   */
+  private pushFrameTime(dt: number): void {
+    if (this.frameCount === FPS_MAX_SAMPLES) this.dropOldestFrame();
+    this.frameTimes[(this.frameStart + this.frameCount) % FPS_MAX_SAMPLES] = dt;
+    this.frameSum += dt;
+    this.frameCount += 1;
+    // Always leave one sample, so a single frame longer than the whole window
+    // (a map build, an alt-tab) is still reported rather than emptying it.
+    while (this.frameCount > 1 && this.frameSum > FPS_WINDOW) {
+      this.dropOldestFrame();
+    }
+  }
+
+  private dropOldestFrame(): void {
+    this.frameSum -= this.frameTimes[this.frameStart];
+    this.frameStart = (this.frameStart + 1) % FPS_MAX_SAMPLES;
+    this.frameCount -= 1;
+  }
+
+  /**
+   * The "1% low": the rate implied by the MEAN of the slowest 1% of frames in
+   * the window. Zero until the ring holds enough frames for that to mean
+   * anything, which the caller shows as `--`.
+   *
+   * The mean of the worst 1%, deliberately, and not the 99th percentile —
+   * they sound interchangeable and are not. A percentile is a single sample
+   * from the tail, so it cannot move until a full 1% of frames are bad: over
+   * a 5 s window at 120 Hz that is six frames, and a lone 100 ms stall sits at
+   * index 599 of 600 where p99 reads index 594 and never sees it. Measured,
+   * that stall left a p99 reading a clean 120 — a hitch you would certainly
+   * feel, reported as perfect. Averaging the tail lets one bad frame pull the
+   * figure down in proportion to how bad it was, which is the behaviour this
+   * number exists to have.
+   *
+   * A full sort at four times a second over a few hundred floats is far below
+   * anything that would matter, and it is done into a preallocated scratch so
+   * the readout allocates nothing per update. `Float64Array.sort` is numeric
+   * by default — the ascending-string default that catches `Array.sort` out
+   * does not apply here.
+   */
+  private onePercentLow(): number {
+    if (this.frameCount < FPS_MIN_SAMPLES) return 0;
+    for (let i = 0; i < this.frameCount; i++) {
+      this.frameScratch[i] =
+        this.frameTimes[(this.frameStart + i) % FPS_MAX_SAMPLES];
+    }
+    const window = this.frameScratch.subarray(0, this.frameCount);
+    window.sort();
+    // At least one frame, so a short window still reports its worst rather
+    // than dividing by zero.
+    const tail = Math.max(1, Math.floor(this.frameCount * 0.01));
+    let sum = 0;
+    for (let i = this.frameCount - tail; i < this.frameCount; i++) {
+      sum += window[i];
+    }
+    const mean = sum / tail;
+    return mean > 0 ? 1 / mean : 0;
   }
 
   /**

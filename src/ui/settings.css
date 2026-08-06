@@ -1,0 +1,207 @@
+/**
+ * settings.css — The settings screen: a scrim, a panel, and a list of toggles.
+ * Owns #settings and nothing else. Scaled by --ov-scale (declared in base.css,
+ * where #settings is in the selector list) — unlike #loadout, this screen has
+ * no hole in it for the 3D scene to show through, so a transform is safe.
+ */
+
+/* Above #loadout's 11, and that is load-bearing rather than tidy: this
+   screen is reachable from the PAUSE lid as well as the menu, so it can
+   be raised over a pause card that is itself over the deploy map. It
+   takes pointer events for its whole area for the same reason the pause
+   card does — a click on the empty half must not fall through to the
+   deploy map's markers or the menu's mouse-down confirm underneath. */
+#settings {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  background:
+    radial-gradient(
+      ellipse at 50% 45%,
+      rgba(6, 9, 16, 0.9) 0%,
+      rgba(2, 3, 6, 0.97) 70%
+    );
+}
+
+#settings .se-panel {
+  --cham: 16px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  /* ONE content width, the rule every screen in here follows: the
+     heading, every row and the foot all measure to this, so the labels,
+     the controls and the hints share three edges down the panel instead
+     of centring on themselves. */
+  --col: 620px;
+  width: min(var(--col), calc(100vw - 64px));
+  padding: 26px 30px 22px;
+}
+
+/* Rules either side, matching the kit screen's heading and the deploy
+   screen's. */
+#settings h2 {
+  position: relative;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.55em;
+  color: var(--hot);
+  padding: 0 26px;
+}
+#settings h2::before,
+#settings h2::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 54px;
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgba(255, 230, 128, 0.55));
+}
+#settings h2::before { right: 100%; }
+#settings h2::after {
+  left: 100%;
+  background: linear-gradient(to left, transparent, rgba(255, 230, 128, 0.55));
+}
+
+#settings .se-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+/* A section opener. It is a label for the rows under it, so it sits on
+   the same left edge they do rather than being centred over them. */
+#settings .se-head {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.3);
+  padding: 10px 12px 2px;
+}
+#settings .se-head:not(:first-child) {
+  margin-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* THREE COLUMNS, and the row is `display: contents` so they are the
+   grid's, not the row's — the same construction the menu's `.ov-settings`
+   uses and for the same reason: rows centred on their own contents put
+   their labels, their controls and their hints at three different x
+   each, which is what reads as a pile rather than a panel.
+
+   The control column is fixed rather than `1fr` so a long hint cannot
+   push the toggles around; the hint takes whatever is left. */
+#settings .se-body {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 168px 1fr;
+  align-items: center;
+  gap: 0 16px;
+}
+#settings .se-head { grid-column: 1 / -1; }
+#settings .se-row {
+  display: contents;
+}
+/* The highlight has to be painted on the CELLS, because the row itself
+   is `display: contents` and therefore has no box of its own to fill.
+   Three rules rather than one, so the bar lands only on the left edge. */
+#settings .se-row > * {
+  padding: 9px 0;
+  transition: background 0.12s;
+}
+#settings .se-row.active > * { background: rgba(255, 255, 255, 0.045); }
+#settings .se-row > .se-label {
+  padding-left: 12px;
+  border-left: 2px solid transparent;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #cdd6e6;
+}
+#settings .se-row.active > .se-label { border-left-color: var(--hot); }
+#settings .se-row > .se-hint {
+  padding-right: 12px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.34);
+}
+
+#settings .se-choice { display: flex; gap: 6px; }
+#settings button.se-opt {
+  font: inherit;
+  flex: 1 1 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 7px 0;
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.05);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+  transition: background 0.12s, color 0.12s;
+}
+#settings button.se-opt:hover { background: rgba(255, 255, 255, 0.11); }
+#settings button.se-opt.on {
+  color: #10131b;
+  background: var(--hot);
+}
+
+#settings .se-foot {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+}
+#settings kbd {
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 3px 7px;
+  margin-right: 4px;
+  color: #cfd6e2;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+/* Pad glyphs are tinted, the same tell the controls table uses, so the
+   two keys on the Back button read as alternatives rather than a chord. */
+#settings kbd.pad {
+  color: var(--hot);
+  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
+}
+#settings button.se-back {
+  margin-left: auto;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  color: var(--hot);
+  background: rgba(255, 230, 128, 0.1);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+}
+#settings button.se-back:hover { background: rgba(255, 230, 128, 0.22); }
+
+/* A landscape phone gets the scale from --ov-scale, but the hints are
+   the first thing to run out of room inside a panel that is already
+   narrower than the viewport. They are the part you can read on a desk. */
+@media (max-width: 700px) {
+  #settings .se-body { grid-template-columns: minmax(110px, auto) 150px; }
+  #settings .se-row > .se-hint { display: none; }
+}

@@ -174,25 +174,31 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
    the scrim that the 3D turntable is placed through, back-projected
    from the SAME viewport fractions the CSS uses (see
    CONFIG.viewmodel.inspect) — a transform would move the hole and
-   leave the weapon behind it. */
+   leave the weapon behind it. `#settings` has no such hole, so it is
+   in the list. */
 #hud { --ov-scale: 1; }
 @media (max-height: 620px) { #hud { --ov-scale: 0.75; } }
 @media (max-height: 430px) { #hud { --ov-scale: 0.45; } }
-#overlay, #deploy {
+#overlay, #deploy, #settings {
   width: calc(100% / var(--ov-scale));
   height: calc(100% / var(--ov-scale));
   transform: scale(var(--ov-scale));
   transform-origin: top left;
 }
 
-/* --- the loadout button, on the menu and on the deploy screen ---
-   Both open the same screen, so both read the same: a label, the kit
-   currently in the player's hands, and the key that gets there. The
-   menu's `#overlay` is pointer-events:none (inherited from #hud), so
-   the button claims them for itself — the same carve-out the tier
+/* --- the screen-opening buttons on the menu and the deploy screen ---
+   The loadout button (both screens) and the settings button (the menu).
+   All of them open a screen from a settings row, so all of them read the
+   same: a label, what is currently chosen, and the key that gets there.
+   Shared here rather than in one screen's sheet because two screens draw
+   the kit one, which is the bar base.css is for.
+
+   The menu's `#overlay` is pointer-events:none (inherited from #hud), so
+   each button claims them for itself — the same carve-out the tier
    buttons and the pause actions get. #deploy already opts in for its
    whole area. */
 #overlay button.kit-open,
+#overlay button.settings-open,
 #deploy-kit {
   font: inherit;
   pointer-events: auto;
@@ -210,6 +216,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   transition: background 0.12s, color 0.12s;
 }
 #overlay button.kit-open b,
+#overlay button.settings-open b,
 #deploy-kit b {
   font-size: 12px;
   font-weight: 700;
@@ -217,6 +224,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   text-transform: uppercase;
 }
 #overlay button.kit-open i,
+#overlay button.settings-open i,
 #deploy-kit i {
   font-style: normal;
   font-size: 10px;
@@ -225,6 +233,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   color: rgba(255, 255, 255, 0.4);
 }
 #overlay button.kit-open:hover,
+#overlay button.settings-open:hover,
 #deploy-kit:hover {
   background: rgba(255, 230, 128, 0.18);
   color: var(--hot);
@@ -238,6 +247,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
    ("Marksman rifle · Scope") is within a few pixels of the space, and a
    wrapped caption makes the button taller than the one beside it. */
 #overlay button.kit-open,
+#overlay button.settings-open,
 #deploy-kit {
   flex-direction: row;
   align-items: baseline;
@@ -245,7 +255,9 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   gap: 14px;
 }
 #overlay button.kit-open b,
+#overlay button.settings-open b,
 #overlay button.kit-open i,
+#overlay button.settings-open i,
 #deploy-kit b,
 #deploy-kit i,
 #deploy-kit .lbl { white-space: nowrap; }

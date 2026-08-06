@@ -140,8 +140,12 @@
    one of these, so anything left standing paints over it. The menu's own
    backdrop is nearly opaque, which is why its ghost through the scrim was
    never doing any work anyway; the crosshair sitting in the middle of a
-   kit screen was doing worse than nothing. */
-#hud.kitting > *:not(#loadout) { visibility: hidden; }
+   kit screen was doing worse than nothing.
+
+   `#hud-fps` is carved out: it is an instrument rather than chrome, and
+   the kit screen is a perfectly reasonable place to want to read the
+   frame rate. It sits in a corner the panel does not reach. */
+#hud.kitting > *:not(#loadout):not(#hud-fps) { visibility: hidden; }
 /* Same rules-either-side heading as the deploy screen's. */
 #loadout h2 {
   position: relative;
