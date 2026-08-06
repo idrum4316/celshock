@@ -60,6 +60,11 @@ import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
  * coming THROUGH a thin surface rather than off it, for awnings and foliage.
  * Everything not explicitly translucent stays opaque.
  *
+ * The rim highlight is gated OFF near-level surfaces, and must stay that way:
+ * on a plane the grazing angle is just the distance from the eye, so an
+ * ungated rim draws a hard-edged, camera-locked disc on the floor that slides
+ * around with the player. See the gate itself for the measurement.
+ *
  * Atmosphere is distance fog plus a separate height-based ground mist, so
  * arenas fade into darkness and the floor sits in a low-lying haze.
  *
@@ -231,6 +236,11 @@ vec3 perturbNormal(vec3 n) {
 void main() {
   vec3 n = facetNormal();
 
+  // How level this facet is, read off the TRUE geometry before any bump map
+  // touches it — the rim gate below keys on it, and reading it from the
+  // perturbed normal would let individual setts flick the gate on and off.
+  float level = abs(n.y);
+
   // --- directional key light (4 bands), gated by the stepped shadow ---
   // The shadow's normal-offset uses the true facet normal — the bump relief
   // is fake, and offsetting along it would leak light at stone edges.
@@ -289,10 +299,29 @@ void main() {
   vec3 over = max(col - 0.75, 0.0);
   col = min(col, vec3(0.75)) + 0.25 * over / (1.0 + over);
 
-  // Hard-edged rim highlight (step, not smooth — keeps colors flat).
+  // Hard-edged rim highlight (step, not smooth — keeps colors flat), and
+  // deliberately NOT applied to near-level surfaces.
+  //
+  // A rim light is a silhouette effect, but on a plane the grazing angle is
+  // nothing but the distance from the eye: for a floor, 1 - dot(viewDir, n) is
+  // 1 - eyeHeight/dist, which crosses the 0.72 step at eyeHeight/0.28 — 5.5 m
+  // standing, 3.75 m crouched. So an ungated rim paints every ground pixel
+  // beyond that radius and none inside it: a hard-edged disc of un-rimmed floor
+  // locked to the camera and sliding across the map with the player. With the
+  // shoulder lamp inside it that reads as a bright pool, then a dark ring, then
+  // brighter ground — measured on Hollowmere's floor colour, luminance 0.205 at
+  // 5.0 m against 0.263 at 5.6 m, a 28% step across one hard circle. A floor has
+  // no silhouette to catch, so it gets no rim.
+  //
+  // The gate is on tilt, not on distance, because distance is the symptom. Zero
+  // within 8 deg of level (every road, deck, terrace and the flat majority of
+  // the heightfield), full past 26 deg — clear of the shallowest roof pitch in
+  // the kit, ~24 deg (BuildingKit.gableRoof). Sculpted banks in between keep
+  // most of theirs, and on a slope the boundary is broken up rather than being
+  // a clean circle. Smooth, so a gentle rise doesn't draw an edge of its own.
   vec3 viewDir = normalize(camPos - vPosW);
   float rim = 1.0 - max(dot(viewDir, n), 0.0);
-  col += base * rimColor * step(0.72, rim);
+  col += base * rimColor * step(0.72, rim) * (1.0 - smoothstep(0.90, 0.99, level));
 
   // Toon specular: Blinn half-vector against the key light, quantized into
   // two hard bands (bright core + faint halo) and gated by the same shadow

@@ -1921,6 +1921,21 @@ load-bearing:
   direction, so an emissive detail must protrude past its neighbors' shells or
   the glow is swallowed (this is why the player's visor slit and the lamp lens
   stick out).
+- **The rim highlight is gated off near-level surfaces, and the gate is not
+  optional.** A rim light catches silhouettes, but on a plane the grazing angle
+  it keys on is nothing but the distance from the eye — for a floor,
+  `1 - dot(viewDir, n)` is `1 - eyeHeight/dist` — so an ungated rim fires on
+  every ground pixel past `eyeHeight / 0.28` (5.5 m standing, 3.75 m crouched)
+  and on none inside it. That is a hard-edged disc of un-rimmed floor locked to
+  the camera, sliding across the map with the player; with the shoulder lamp
+  inside it, it reads as a bright pool, a dark ring, then brighter ground
+  (measured on Hollowmere's floor: luminance 0.205 at 5.0 m against 0.263 at
+  5.6 m, a 28% step across one circle). The gate is on **tilt**, because
+  distance is only the symptom, and it reads the **facet** normal rather than
+  the bumped one — off the bumped normal, individual setts flick it on and off.
+  It costs the rim on the near-horizontal top faces of a rig (shoulders, helmet
+  crown), which were never silhouettes either — they are the same degeneracy
+  seen edge-on.
 - Fixture lights are hand-placed and must stay **spatially spread**. The 16-slot
   shader cap is absolute; `LightingSystem` picks nearest-first, so clustering
   lanterns wastes slots and flattens the darkness. The retired room generator
