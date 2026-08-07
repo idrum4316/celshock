@@ -39,20 +39,23 @@ nginx needs nothing: `application/wasm` has been in its bundled `mime.types` for
 years, unlike the web app manifest, which is why only that one has a block in
 `docker/nginx.conf`. See "Bot deaths, and the one physics engine".
 
-`src/entities/GlbSoldier.ts` and `src/entities/soldier/` are the **one
-exception on disk and are currently unreferenced**: a rigged GLB player body
-(own locomotion clips + a procedural bone overlay for aim/reload/rifle-carry),
-added by explicit request back when the camera was over the shoulder. First
-person retired it — the camera is inside the head, so there is no own-body to
-render — and `Player` no longer imports it, which is what keeps the module and
-its multi-megabyte `models/*.glb` out of the production bundle. Kept, not
-deleted, because it is the only rigged-character work in the tree and a
-spectator view would want it back. **The death cam is not that case and
-deliberately does not use it** — it stands up a bot rig instead, because four
-seconds of screen time is not worth pulling multi-megabyte `models/*.glb` back
-into the production bundle, and the bot rig is already what the ragdoll's bone
-table is measured against. See "The death cam". Do not wire the GLB body into
-anything new, and do not extend the GLB approach to bots or weapons.
+**There is no rigged character asset in the tree, and "zero model files" above
+is now literally true.** `src/entities/GlbSoldier.ts` and
+`src/entities/soldier/` used to be the one exception on disk: a rigged GLB
+player body (own locomotion clips + a procedural bone overlay for
+aim/reload/rifle-carry), added by explicit request back when the camera was
+over the shoulder. First person retired it — the camera is inside the head, so
+there is no own-body to render — and once `Player` stopped importing it the
+module and its multi-megabyte `models/*.glb` were already out of the production
+bundle. It was kept unreferenced for a while against a spectator view that
+never came, and has now been deleted along with the asset and
+`@babylonjs/loaders`, which nothing else imported. The one thing that might
+have wanted it back — **the death cam — deliberately does not**: it stands up a
+bot rig, because four seconds of screen time is not worth a multi-megabyte
+asset in the bundle, and the bot rig is already what the ragdoll's bone table
+is measured against. See "The death cam". Everything a character needs is
+procedural (`SoldierModel.ts`); do not reintroduce a GLB body, and do not
+extend that approach to bots or weapons.
 
 **Every source file has a contract header** at the top stating what it owns,
 its invariants, and what it must never do. Read it before editing that file.
@@ -283,9 +286,6 @@ src/
     sights.ts               # SightId + the derivation from a sight's
                             #   magnification to FOV, sensitivity and the
                             #   viewmodel's zoom compensation
-    GlbSoldier.ts           # UNREFERENCED since the first-person conversion —
-    soldier/                #   the retired rigged GLB body and its pieces.
-                            #   See "Project overview". Do not re-wire.
     Combatant.ts            # Team + the shared shootable/shooter interface
     Bot.ts                  # Bot FSM: advance / hunt / engage / takeCover /
                             #   suppressed / retreat / capture, + movement,
@@ -2068,11 +2068,12 @@ subtract turns a piece of feedback into a punishment.
 
 Seven things are load-bearing:
 
-- **The body is the BOT rig**, and `entities/GlbSoldier.ts` stays retired. The
-  bot rig is nine merged meshes, is already what `RAGDOLL_BONES` is measured
-  against, and hands to the pool with nothing adapted; the GLB body would put
-  multi-megabyte `models/*.glb` back in the production bundle for four seconds
-  of screen time. It is built at `startRound`, not at the moment of death — nine
+- **The body is the BOT rig**, and that is why the retired GLB player body
+  could be deleted outright rather than kept for it. The bot rig is nine merged
+  meshes, is already what `RAGDOLL_BONES` is measured against, and hands to the
+  pool with nothing adapted; a rigged asset would put multiple megabytes back in
+  the production bundle for four seconds of screen time. It is built at
+  `startRound`, not at the moment of death — nine
   merged meshes and their GL buffers is not a cost to pay on the frame the
   player is killed on.
 - **It is a stand-in, not the player.** `Player` has no rig and never grows one:

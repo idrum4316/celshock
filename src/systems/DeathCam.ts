@@ -11,13 +11,13 @@
  *
  * Five things are load-bearing:
  *
- * - **The body is the BOT rig, deliberately.** `entities/GlbSoldier.ts` and
- *   `entities/soldier/` are the retired rigged GLB player body and stay
- *   retired — wiring them in here would pull multi-megabyte `models/*.glb` back
- *   into the production bundle for four seconds of screen time, which is the
- *   whole reason the first-person conversion dropped them. The bot rig is nine
- *   merged meshes, is already what `RAGDOLL_BONES` is measured against, and
- *   hands to `RagdollSystem` with nothing adapted.
+ * - **The body is the BOT rig, deliberately.** There is no rigged character
+ *   asset in this tree and there must not become one: standing up an imported
+ *   body here would pull multiple megabytes into the production bundle for four
+ *   seconds of screen time, which is the whole reason the first-person
+ *   conversion dropped the one that used to exist. The bot rig is nine merged
+ *   meshes, is already what `RAGDOLL_BONES` is measured against, and hands to
+ *   `RagdollSystem` with nothing adapted.
  * - **It is a stand-in, not the player.** `Player` has no rig and never grows
  *   one: it is a capsule, a viewmodel and an eye. The corpse is a separate
  *   `RagdollSubject` stood up at the player's last position on the frame they

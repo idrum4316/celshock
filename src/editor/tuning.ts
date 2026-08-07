@@ -5,9 +5,7 @@
  * Deliberately NOT in src/config.ts. That file owns gameplay tunables — things
  * that change how the game plays and that a designer balances. Nothing here
  * reaches the shipped game: the editor is dev-only and dynamically imported, so
- * these values never load in a production build. Same rationale as
- * entities/soldier/tuning.ts, which keeps asset-measured rig constants out of
- * CONFIG for the same reason.
+ * these values never load in a production build.
  *
  * Snap defaults are not arbitrary: layout hygiene says structures are
  * axis-aligned with rotY in multiples of PI/2, so that is what the rotation

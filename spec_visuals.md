@@ -44,9 +44,9 @@ It would read as a photograph pasted onto a cartoon. Do not revisit.
 
 Babylon's SSS is a screen-space diffusion pass driven by `PrePassRenderer` and
 configured off `PBRMaterial.subSurface`. There is no PBR material anywhere in
-this world: the single `PBRMaterial` reference is in the retired `GlbSoldier`,
-and it exists only to read the albedo texture off an imported mesh and throw the
-material away. Every world surface is a custom `ShaderMaterial` writing
+this world — not one reference, since the retired `GlbSoldier` (whose only use
+of one was to read an albedo texture off an imported mesh and throw the material
+away) was deleted. Every world surface is a custom `ShaderMaterial` writing
 `gl_FragColor` directly, so opting in means rewriting all of them to emit
 prepass targets — and enabling exactly the post chain that
 `pipeline.imageProcessingEnabled = false` exists to keep out.
