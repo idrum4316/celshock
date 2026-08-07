@@ -32,7 +32,12 @@ import { Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { FlowField, NavGrid } from "../world/NavGrid";
-import { animateSoldier, buildSoldier, type SoldierRig } from "./SoldierModel";
+import {
+  animateSoldier,
+  buildSoldier,
+  resetSoldierPose,
+  type SoldierRig,
+} from "./SoldierModel";
 import { profileFor, type BotProfile } from "./BotSkill";
 import { mulberry32 } from "../world/rng";
 import { BotMemory } from "./BotMemory";
@@ -167,6 +172,23 @@ export class Bot implements Combatant {
   /** Seconds until this corpse can be recycled into a fresh spawn. */
   respawnT = 0;
 
+  /**
+   * Where the KILLING damage came from — a shooter's eye, or a grenade's blast
+   * centre — and how much of it there was. Both are already handed to
+   * `takeDamage` by every damage path in the game (`CombatSystem.fire` passes
+   * the shot's origin, `GrenadeSystem` the detonation point), so a ragdoll
+   * needs no new parameter threaded through the three call sites that converge
+   * on `Game.registerBotKill`. `BotMemory.tookHit` has been reading the same
+   * vector for a different purpose all along.
+   */
+  readonly deathFrom = new Vector3();
+  deathDamage = 0;
+  /**
+   * True while `RagdollSystem` owns this rig's joints. `Bot.update` writes no
+   * pose at all in that window — see the dead branch.
+   */
+  ragdolling = false;
+
   readonly position = new Vector3();
   readonly eyePos = new Vector3();
   readonly center = new Vector3();
@@ -204,8 +226,12 @@ export class Bot implements Combatant {
    * This bot's own random stream. Seeded rather than `Math.random()` so a round
    * plays out the same way twice — with seven stages of new movement to tune,
    * behaviour that cannot be reproduced cannot be judged.
+   *
+   * Public because `RagdollSystem` draws the tumble's jitter from it: a death
+   * has to vary and still be reproducible, and a second generator would be a
+   * second thing to seed. Read it, never reassign it.
    */
-  private rand: () => number = mulberry32(1);
+  rand: () => number = mulberry32(1);
 
   /**
    * Gives this bot its own deterministic stream. Called once by BattleSystem
@@ -315,6 +341,9 @@ export class Bot implements Combatant {
     this.flinchT = 0;
     this.blockedStreak = 0;
     this.deadT = 0;
+    // Belt to RagdollSystem's braces: a rig handed back late must never come
+    // up with a live body still claiming its joints.
+    this.ragdolling = false;
     this.pressure = 0;
     this.burstLeft = this.profile.burstSize;
     this.magLeft = CONFIG.bots.combat.magSize;
@@ -332,7 +361,13 @@ export class Bot implements Combatant {
     // CONFIG.bots.lodFreezeDistance — without this a bot respawning beyond
     // it walks around buried to the helmet until the player closes in and
     // the pose unfreezes (the "submarine" pop-up).
-    animateSoldier(this.rig, 0, 0, 0, 0, 0);
+    //
+    // `resetSoldierPose` rather than a bare `animateSoldier(..., 0)`, and the
+    // difference matters now that a corpse can have been a ragdoll: that call
+    // writes ten Euler channels and a ragdoll leaves residue in the parent,
+    // the quaternion, the scaling and every channel it does not touch. See its
+    // own note — a quaternion left behind freezes this bot for the round.
+    resetSoldierPose(this.rig);
     this.setEnabled(true);
   }
 
@@ -369,6 +404,11 @@ export class Bot implements Combatant {
       this.state = "dead";
       this.deadT = 0;
       this.target = null;
+      // Captured here rather than passed along the kill path: this is the one
+      // place that sees both the blow and where it came from.
+      if (from) this.deathFrom.copyFrom(from);
+      else this.deathFrom.copyFrom(this.center);
+      this.deathDamage = amount;
       // Reinforcements are not instant: the delay is what makes losing a
       // firefight cost the team ground as well as a ticket.
       this.respawnT = CONFIG.conquest.respawnDelay;
@@ -397,11 +437,23 @@ export class Bot implements Combatant {
   update(dt: number, ctx: BattleCtx, animate: boolean): void {
     if (this.state === "dead") {
       this.deadT += dt;
+      // While a ragdoll owns the joints this branch stands aside entirely —
+      // two things writing the same nodes is the trap the camera's bob phase
+      // documents from the other side. RagdollSystem hides the rig and hands
+      // it back itself.
+      //
       // The collapse tween ignores the pose-freeze LOD: it is five property
       // writes, and a corpse that holds its mid-stride pose past
-      // lodFreezeDistance and then vanishes reads as a pop, not a death.
-      animateSoldier(this.rig, 0, 0, 0, 0, Math.min(1, this.deadT / 0.7));
-      if (this.deadT > 0.9) this.setEnabled(false);
+      // lodFreezeDistance and then vanishes reads as a pop, not a death. A
+      // ragdoll is six rigid bodies and five constraints and cannot inherit
+      // that exemption — which is why it is gated by distance at the moment of
+      // death (`death.maxDistance`) and the tween still runs, still exempt,
+      // everywhere it declines.
+      if (!this.ragdolling) {
+        const d = CONFIG.bots.death;
+        animateSoldier(this.rig, 0, 0, 0, 0, Math.min(1, this.deadT / d.collapseTime));
+        if (this.deadT > d.hideTime) this.setEnabled(false);
+      }
       this.respawnT -= dt;
       return;
     }

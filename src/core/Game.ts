@@ -55,6 +55,7 @@ import { CombatSystem } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
 import { GrassSystem } from "../systems/GrassSystem";
 import { GrenadeSystem } from "../systems/GrenadeSystem";
+import { RagdollSystem } from "../systems/RagdollSystem";
 import { LightingSystem } from "../systems/LightingSystem";
 import { ShadowSystem } from "../systems/ShadowSystem";
 import { Sky } from "../systems/Sky";
@@ -214,6 +215,8 @@ export class Game {
   private combat: CombatSystem;
   /** Thrown grenades — the one thing on the map that is not hitscan. */
   private grenades: GrenadeSystem;
+  /** Bot corpses under physics. The only Havok in the game, and optional. */
+  private ragdolls: RagdollSystem;
   private aimAssist: AimAssistSystem;
   private battle: BattleSystem;
   private conquest: ConquestSystem;
@@ -374,6 +377,11 @@ export class Game {
     this.mapBuilder = new MapBuilder(this.scene, this.mats, this.lighting);
     this.combat = new CombatSystem(this.scene, this.mats);
     this.grenades = new GrenadeSystem(this.scene, this.mats);
+    this.ragdolls = new RagdollSystem(this.scene);
+    // Fire and forget: the WASM lands whenever it lands, and until it does
+    // every death takes the collapse tween. Not awaited anywhere — a physics
+    // engine must never stand between the player and the first frame.
+    this.ragdolls.init();
     this.aimAssist = new AimAssistSystem(this.scene);
     this.battle = new BattleSystem(this.scene, this.mats, this.combat);
     this.conquest = new ConquestSystem();
@@ -396,6 +404,12 @@ export class Game {
       this.onPlayerDamaged(amount, died, from);
     this.battle.setPlayer(this.player);
     this.battle.onBotKilled = (bot, killer) => this.registerBotKill(bot, killer, false);
+    // A corpse under physics is metres from where its feet were when it died,
+    // and `Bot.position` stops updating at that moment — so the body itself
+    // has to say where its shadow goes. Only the ragdoll system knows; every
+    // other dead bot answers 0 and keeps the old no-shadow behaviour.
+    this.shadows.corpseShadow = (cbt, out) =>
+      cbt instanceof Bot ? this.ragdolls.shadowFor(cbt, out) : 0;
     // Grenades resolve their blast against the thrower's own target list, the
     // same way a bullet does — so friendly fire is excluded by construction
     // here too, and this system never learns what a team is.
@@ -686,6 +700,9 @@ export class Game {
     // blur's own toggle takes the grade off and puts it back to keep the
     // chain's tail, so the grade has the last word on whether it is attached.
     this.post.setEnabled(this.settings.horrorGrade);
+    // Turning it off drops any body still falling, which is the honest
+    // response to "stop doing this" — the tween takes over from the next death.
+    this.ragdolls.setEnabled(this.settings.ragdolls);
   }
 
   /**
@@ -1308,6 +1325,11 @@ export class Game {
     // the map's own mist and moon, which are what colour the blast dust.
     this.grenades.setTerrain(map.terrain);
     this.grenades.setEnvironment(environment);
+    // The corpses' static world. Same reason the grenades are cleared above:
+    // a physics world still holding shapes built from the map that was just
+    // disposed is geometry that no longer exists, and in the editor that means
+    // in the middle of a rebuild. Editor builds register nothing at all.
+    this.ragdolls.setMap(map, opts?.editor === true);
     return map;
   }
 
@@ -1362,6 +1384,9 @@ export class Game {
 
     this.battle.setMap(map);
     this.battle.reset();
+    // Every rig goes back to the pool restored; a corpse cannot outlive the
+    // round it fell in.
+    this.ragdolls.reset();
     this.conquest.start(map);
     // The flags' markers read the same radius ConquestSystem tests against,
     // and follow the same terrain the ring is drawn across.
@@ -1559,6 +1584,12 @@ export class Game {
     // After the bots, so a grenade thrown on this frame's think tick flies on
     // this frame rather than sitting in the thrower's hand until the next one.
     this.grenades.update(dt);
+    // After the grenades, because a blast kill resolves in there — so a body
+    // taken this frame gets its first step this frame rather than hanging in
+    // the air for one. This is the ONLY place the physics world is stepped:
+    // `scene.physicsEnabled` is false precisely so that a pause, the deploy
+    // map and the menu — all of which render — cannot advance it.
+    this.ragdolls.update(dt);
 
     this.updateCameraAndLighting(dt);
     // Reads the camera (it fades the markers into the fog wall) but never
@@ -1898,6 +1929,11 @@ export class Game {
    * weapon put it there.
    */
   private registerBotKill(bot: Bot, killer: Team, byPlayer: boolean): void {
+    // The one place all three ways a bot can die converge, so the one place
+    // the body has to be offered to the physics pool. It needs no impact
+    // vector passed down: `Bot.takeDamage` already captured where the killing
+    // blow came from, which every damage path in the game hands it.
+    this.ragdolls.spawn(bot, this.cameraSys.camera.position);
     this.sfx.enemyDie();
     this.conquest.registerDeath(bot.team);
     this.kills[killer] += 1;

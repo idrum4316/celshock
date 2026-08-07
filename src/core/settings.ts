@@ -27,6 +27,14 @@ export type Settings = {
    * damage flash, which is painted by the same shader. Off detaches the pass.
    */
   horrorGrade: boolean;
+  /**
+   * Physics-driven bot deaths. Off falls back to the collapse tween, which is
+   * the same path a machine without the Havok WASM takes anyway.
+   *
+   * It does not avoid the download — the binary is precached with the rest of
+   * the build — only the simulation.
+   */
+  ragdolls: boolean;
 };
 
 /**
@@ -43,6 +51,7 @@ export const SETTING_DEFAULTS: Settings = {
   fpsCounter: false,
   motionBlur: CONFIG.graphics.motionBlur.strength > 0,
   horrorGrade: true,
+  ragdolls: CONFIG.bots.death.ragdoll,
 };
 
 /** One key per field, so the fields are independent in the store as well. */

@@ -176,6 +176,18 @@ export interface GameMap {
   colliders: Mesh[];
   /** The same colliders as plain boxes, for the nav grid. */
   colliderBoxes: WorldBox[];
+  /**
+   * The floor's collider blocks, a SUBSET of `colliders`.
+   *
+   * They are called out because they are the one collider with no `WorldBox`
+   * behind it (a heightfield is not a box — see the terrain section of
+   * `build`), so anything that wants the whole solid world as geometry has to
+   * take `colliderBoxes` for the boxes and these for the floor.
+   * `RagdollSystem` is the caller: it needs the real mesh to rest a body on.
+   * Picking them out of `colliders` by name would work and is exactly the sort
+   * of string-sniffing that breaks silently when a name changes.
+   */
+  terrainColliders: Mesh[];
   /** Drawn geometry, merged per colour. */
   visuals: Mesh[];
   /** Walkable-surface graph with one precomputed flow field per objective. */
@@ -337,6 +349,8 @@ export class MapBuilder {
     const size = CONFIG.map.size;
     const visuals: Mesh[] = [];
     const colliders: Mesh[] = [];
+    // A view onto the floor's own blocks within `colliders` — see GameMap.
+    const terrainColliders: Mesh[] = [];
     this.boxes = [];
     // One stream for the whole build, so scatter regions stay reproducible in
     // authored order. Seeding per region would be stabler under editing but
@@ -349,7 +363,15 @@ export class MapBuilder {
     this.item = null;
 
     const terrain = new TerrainField(layout.terrain);
-    this.buildValley(size, env, terrain, visuals, colliders, layout.ridge);
+    this.buildValley(
+      size,
+      env,
+      terrain,
+      visuals,
+      colliders,
+      terrainColliders,
+      layout.ridge,
+    );
 
     // --- authored structures ---
     // Roads are merged into one draw call per material so overlapping junctions
@@ -468,6 +490,7 @@ export class MapBuilder {
       spawns: layout.spawns,
       colliders,
       colliderBoxes: this.boxes,
+      terrainColliders,
       visuals,
       water: layout.water ?? [],
       grass: layout.grass ?? [],
@@ -488,6 +511,8 @@ export class MapBuilder {
     terrain: TerrainField,
     visuals: Mesh[],
     colliders: Mesh[],
+    /** The floor's blocks alone — see `GameMap.terrainColliders`. */
+    terrainColliders: Mesh[],
     ridge: RidgeSpec | undefined,
   ): void {
     const floorMat = this.mats.get(env.floorColor);
@@ -513,6 +538,7 @@ export class MapBuilder {
       col.metadata = { solid: true };
       col.freezeWorldMatrix();
       colliders.push(col);
+      terrainColliders.push(col);
     }
 
     // The boundary itself: four boxes, and they are the ONLY thing stopping

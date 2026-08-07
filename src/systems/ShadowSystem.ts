@@ -50,6 +50,17 @@ export class ShadowSystem {
   private readonly generator: ShadowGenerator;
   private readonly blobMaterial: StandardMaterial;
   private readonly blobs = new Map<Combatant, Mesh>();
+  /**
+   * Wired by `Game`: where a downed body's shadow goes, into `out`, and how
+   * strong (0..1). 0 means "nothing to shade", which is every corpse nobody
+   * has claimed — so the default below is exactly the old behaviour.
+   *
+   * A callback rather than an import, because a system reaching into another
+   * system is the thing `Game`'s wiring exists to prevent.
+   */
+  corpseShadow: (cbt: Combatant, out: Vector3) => number = () => 0;
+  /** Scratch for that callback — no per-frame allocation. */
+  private readonly corpseAt = new Vector3();
   /** Last texel-snapped focus; forces a first update. */
   private readonly snappedFocus = new Vector3(
     Number.POSITIVE_INFINITY,
@@ -308,18 +319,33 @@ export class ShadowSystem {
 
   private updateBlob(cbt: Combatant, camPos: Vector3, groundY: number): void {
     const blob = this.blobFor(cbt);
+    // A dead combatant normally has no shadow, and for the 0.9 s the collapse
+    // tween takes that was never visible enough to matter. A ragdoll lies
+    // there for six seconds, and a body with nothing under it reads as a
+    // decal painted on the street — so whoever owns the corpse gets to say
+    // where its shadow is and how strong. Returning 0 is the shipped
+    // behaviour, which is what an unwired system keeps doing.
+    let corpse = 0;
     if (!cbt.alive) {
-      blob.setEnabled(false);
-      return;
+      corpse = this.corpseShadow(cbt, this.corpseAt);
+      if (corpse <= 0) {
+        blob.setEnabled(false);
+        return;
+      }
     }
     blob.setEnabled(true);
-    blob.position.set(cbt.position.x, groundY + 0.04, cbt.position.z);
+    if (corpse > 0) {
+      blob.position.set(this.corpseAt.x, groundY + 0.04, this.corpseAt.z);
+    } else {
+      blob.position.set(cbt.position.x, groundY + 0.04, cbt.position.z);
+    }
     const dist = Vector3.Distance(camPos, blob.position);
     const fade = Math.min(
       1,
       Math.max(0, 1 - (dist - this.fogStart) / (this.fogEnd - this.fogStart)),
     );
-    blob.visibility = CONFIG.graphics.shadows.blobOpacity * fade;
+    blob.visibility =
+      CONFIG.graphics.shadows.blobOpacity * fade * (corpse > 0 ? corpse : 1);
   }
 
   private blobFor(cbt: Combatant): Mesh {

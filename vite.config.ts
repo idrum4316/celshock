@@ -171,4 +171,25 @@ function serviceWorker(): Plugin {
 
 export default defineConfig({
   plugins: [layoutWriter(), serviceWorker()],
+
+  optimizeDeps: {
+    // Havok's glue loads its .wasm from a URL resolved against its OWN
+    // module location. The dep optimizer rewrites that location — it copies
+    // the glue into node_modules/.vite/deps/ and leaves the 2 MB binary
+    // behind — so the URL 404s, the dev server's SPA fallback answers with
+    // index.html, and the loader gets a page where it wanted a module.
+    //
+    // The symptom names the wrong culprit twice over: first "Incorrect
+    // response MIME type. Expected 'application/wasm'" (it is text/html),
+    // then "expected magic word 00 61 73 6d, found 3c 21 64 6f" — which is
+    // `<!do`, the start of the HTML. Neither is a MIME configuration problem
+    // and no amount of server MIME tuning fixes it.
+    //
+    // Excluding it leaves the glue served from its real node_modules path,
+    // where the .wasm is its actual sibling. DEV ONLY: a production build
+    // resolves the asset itself and content-hashes it into dist/assets, which
+    // is why `vite preview` works with or without this and testing there
+    // alone will not catch a regression here.
+    exclude: ["@babylonjs/havok"],
+  },
 });

@@ -44,6 +44,11 @@ const ROWS: readonly Row[] = [
     label: "Horror filter",
     hint: "Vignette, grain, and the red damage flash",
   },
+  {
+    key: "ragdolls",
+    label: "Ragdolls",
+    hint: "Bodies fall under physics instead of collapsing",
+  },
 ];
 
 /** The selectable rows, in screen order — headings are not stepped onto. */

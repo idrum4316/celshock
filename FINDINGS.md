@@ -336,3 +336,50 @@ Caveat worth keeping: this was sampled headless at ~2 fps, where game time runs
 at ~25% of wall clock, so the *rate* of audio events per second is not the
 rate a real round produces. The ranking is sound; the absolute figure is a
 floor rather than an estimate.
+
+---
+
+## 8. A tumbling ragdoll is the most expensive thing in the frame while it lasts
+
+**Status:** measured headless, so the absolute milliseconds are inflated the
+same way finding 6's are and only the RANKING is trustworthy. Recorded because
+the ratio is larger than it looks like it should be, and because this landed
+next to finding 1's unexplained frame-time tail.
+
+With `CONFIG.bots.death.maxConcurrent` (4) corpses live, per frame:
+
+| phase | ms | note |
+| --- | --- | --- |
+| `ragdolls.update` — bodies still moving | 1.37 | 24 dynamic bodies, 20 constraints, against the map's static compound |
+| `battle.update` | 0.24 | all 16 bots, same run, as the yardstick |
+| `ragdolls.update` — everything settled | 0.002 | the engine is not touched at all |
+
+So a tumble costs roughly **5–6× the whole roster's AI** while it is happening.
+Two things bound it and are why this is a finding rather than a bug:
+
+- **It is short.** A body settles in ~1.1 s (measured: ground contact at frame
+  20, velocity under `sleepSpeed` by frame 30, frozen by ~frame 65), and from
+  then to the sink at 6 s it costs 0.002 ms. The expensive window is the fall.
+- **It is capped and gated.** Four at once, none past 35 m, and every refusal
+  takes the collapse tween instead.
+
+The static world build is separate and one-off: **33–50 ms** inside
+`installMap` for 733 boxes plus 25 terrain mesh blocks, against a map build
+already costing ~570 ms, and it happens behind the deploy screen. Body count
+is flat at 25 across three rounds, so the teardown does not leak.
+
+### What is not yet known
+
+Whether the 1.37 ms is Havok's step or the JS around it. The plugin's per-step
+sync walks every body in the engine, which is why the map is ONE static body
+rather than 758 — but that was reasoned, not measured against the alternative.
+The `hasSettled` velocity read is 24 WASM calls a frame and is the other
+candidate; it could be sampled every other frame for nothing lost.
+
+### How to settle it
+
+Time `engine._step` alone against the rest of `ragdolls.update` inside the same
+loop the table above used. If the step dominates, the lever is fewer substeps
+while several corpses are live; if the JS dominates, it is the velocity poll.
+Do it on real hardware, not headless — at 2 fps the WASM boundary cost is not
+in the same proportion it will be at 60.

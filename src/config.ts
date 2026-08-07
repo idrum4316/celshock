@@ -327,6 +327,115 @@ export const CONFIG = {
     },
 
     /**
+     * Dying: the ragdoll, and the collapse tween it falls back to.
+     *
+     * The ragdoll is Havok-powered and strictly cosmetic — nothing here feeds
+     * navigation, cover or hit detection, so a machine where the WASM never
+     * loads plays an identical round with the tween instead.
+     *
+     * That tween came first and is still the floor under everything here: it
+     * runs whenever physics is unavailable, out of budget, or too far away to
+     * be worth simulating, so `collapseTime`/`hideTime` are load-bearing rather
+     * than legacy. They were hardcoded in `Bot.update` and are here now because
+     * this file's own header says they should be.
+     *
+     * The ragdoll's SHAPE — which joints are bones, how big they are, where
+     * they pin and how far they may swing — is NOT here. That is measured off
+     * the rig's own boxes and lives with them in `SoldierModel.ts`, the same
+     * split the header draws between gameplay tunables and art.
+     */
+    death: {
+      /**
+       * Seconds for the fallback collapse to pitch forward and sink, and when
+       * the rig is hidden afterwards. The 0.2 s gap is the body lying still
+       * for a beat, so it does not vanish on the frame it lands.
+       */
+      collapseTime: 0.7,
+      hideTime: 0.9,
+      /** Master switch. False keeps the tween everywhere. */
+      ragdoll: true,
+      /**
+       * Bodies simulating at once. The next death takes the tween rather than
+       * stealing a live slot — the same refusal `GrenadeSystem`'s pool makes,
+       * and for the same reason: a corpse yanked out of a tumble is worse than
+       * one that never tumbled. A slot already sinking is committed to
+       * vanishing and may be reclaimed.
+       *
+       * Four is a squad. It is not a guess about solver cost — Havok would take
+       * far more — it is about the frame budget this game actually has:
+       * FINDINGS.md #6 puts all 16 bots' AI and animation at 0.55 ms, and
+       * finding #1 records an unexplained 28 fps 1% low that nothing should be
+       * adding an unbounded cost next to.
+       */
+      maxConcurrent: 4,
+      /**
+       * No ragdoll past this, measured ONCE at the moment of death — a corpse
+       * does not move, and re-testing per frame would switch a tumble off
+       * halfway through because the player backed away.
+       *
+       * Must not exceed `lodFreezeDistance` (35): past that a bot's pose is
+       * frozen anyway, so physics would be driving a rig the LOD has already
+       * switched off. The tween keeps its own exemption there.
+       */
+      maxDistance: 35,
+      /** Matches the grenade's exaggerated fall, not the player's. */
+      gravity: -18,
+      /**
+       * Fixed simulation step, and the most catch-up allowed in one frame.
+       *
+       * Fixed rather than the frame's own `dt`, which is what makes a tumble
+       * identical at 30, 60 and 144 fps — and reproducible headless, where the
+       * clamp at 0.05 would otherwise make every recorded death a different
+       * one. `maxSteps` bounds the spiral when a frame runs long.
+       */
+      substep: 1 / 60,
+      maxSteps: 2,
+      linearDamping: 0.15,
+      /** High: a corpse that spins like a top is the funniest failure here. */
+      angularDamping: 0.6,
+      friction: 0.8,
+      /** Near zero. A bouncing body is the second funniest. */
+      restitution: 0.02,
+      /**
+       * The throw. `from` is the shooter's eye or the blast centre, so the
+       * direction comes free; the magnitude scales with the blow, which is what
+       * makes a 130-damage frag throw a body and a 25-damage round drop it.
+       * Applied `lift` above the centre of mass, so the tumble falls out of the
+       * off-centre application rather than needing an authored spin.
+       *
+       * `spin` is a seeded angular kick that breaks the symmetry of two
+       * identical deaths. It is drawn from the bot's OWN generator — never
+       * Math.random, which would make a death impossible to reproduce.
+       */
+      impulse: { base: 6, perDamage: 0.06, max: 22, lift: 0.25, spin: 1.2 },
+      /**
+       * Hard stop on simulating, and the early-out for a body that stopped
+       * moving on its own. Once every bone is under `sleepSpeed` for
+       * `sleepTime` the corpse is frozen into its pose and costs nothing.
+       */
+      settleTime: 2.5,
+      sleepSpeed: 0.12,
+      sleepTime: 0.4,
+      /**
+       * Seconds after death that the body starts to go, how long that takes,
+       * and how far it drops.
+       *
+       * It SINKS rather than fading, and that is forced rather than chosen: the
+       * cel shader writes alpha 1.0 outright, and its materials are shared per
+       * COLOUR by `CelMaterialFactory`, so an alpha write would dim every bot
+       * on the map along with this one. Sinking through the floor is what the
+       * collapse tween always did.
+       *
+       * 5 + 1 = gone at 6 s against `conquest.respawnDelay` of 8. Keep the two
+       * seconds of margin: the rig is recycled at `respawnDelay`, and a corpse
+       * still standing when `Bot.spawn` runs is a body that teleports.
+       */
+      sinkStart: 5,
+      sinkTime: 1,
+      sinkDepth: 1.2,
+    },
+
+    /**
      * Cover. Baked once at map load into a per-surface direction mask; see
      * `src/world/CoverMap.ts` for why it is baked rather than probed.
      */

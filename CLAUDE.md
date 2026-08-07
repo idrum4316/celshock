@@ -17,6 +17,28 @@ The game ships **zero audio files and zero model files** — every mesh is built
 from Babylon primitives at runtime and all sound is synthesized WebAudio
 (`src/core/Sfx.ts`). Do not add asset files unless explicitly asked.
 
+The **one binary that does ship** is Havok's `.wasm` (~2 MB), pulled in by
+`@babylonjs/havok` for the bot ragdolls and added on an explicit request. It is
+never named by any path here: Havok's ESM glue resolves it against its own
+`import.meta.url`, which Vite follows and emits as a content-hashed asset, so it
+is versioned with the dependency. A hand-placed copy in `public/` as well is not
+belt-and-braces — it is two megabytes shipped and precached twice, which is
+exactly what happened before it was measured and taken out.
+
+**`optimizeDeps.exclude` in `vite.config.ts` is what makes that work in DEV, and
+it is load-bearing.** Resolving against the module's own location means the
+binary has to still be beside the module: the dep optimizer breaks that by
+copying the glue into `node_modules/.vite/deps/` and leaving the 2 MB binary
+behind, so the URL 404s and the dev server's SPA fallback answers with
+`index.html`. The error blames the wrong thing twice — first an
+`application/wasm` MIME complaint, then `expected magic word 00 61 73 6d, found
+3c 21 64 6f`, which is `<!do` — and no server MIME tuning fixes either.
+**A production build resolves the asset itself, so `vite preview` works with or
+without the exclusion and testing only there will not catch this.** Deployed
+nginx needs nothing: `application/wasm` has been in its bundled `mime.types` for
+years, unlike the web app manifest, which is why only that one has a block in
+`docker/nginx.conf`. See "Bot deaths, and the one physics engine".
+
 `src/entities/GlbSoldier.ts` and `src/entities/soldier/` are the **one
 exception on disk and are currently unreferenced**: a rigged GLB player body
 (own locomotion clips + a procedural bone overlay for aim/reload/rifle-carry),
@@ -137,6 +159,23 @@ have already cost time:
   sight ~0.22 m low and reads exactly like a misaligned optic. Watch
   `player.swapT` reach -1 AND the sway decay before believing a number; at
   headless frame rates that is several seconds after the button.
+- **A ragdoll is steppable synchronously, like a grenade, and must be**:
+  `g.ragdolls.update(1/60)` in a loop inside one `page.evaluate` runs a whole
+  tumble, settle, sink and retire in a fraction of a second, where waiting at
+  2 fps would take minutes. Set the body up by hand — move a bot, call
+  `bot.takeDamage(999, shooterOrigin)`, then `g.ragdolls.spawn(bot, camPos)`,
+  which returns whether it was accepted. Four traps. **Reading a rig joint's
+  world position needs `computeWorldMatrix(true)` first** — outside the render
+  loop `getAbsolutePosition()` returns a stale cache, and a joint that looks
+  pinned while its proxy falls is that, not a broken hand-off. **A bot reused
+  between takes has to be put back to `alive = true` with `hp` restored**, the
+  same trap the grenade notes record. **The camera's pitch is negative for
+  down** (`forward.y = sin(pitch)`), and placing test bodies along
+  `cameraSys.forward` while it is pitched throws them into the air — build a
+  horizontal basis from `aimYaw` instead. And **the settled pose is a numeric
+  question before it is a visual one**: the joints' height spread says whether a
+  body is face-down (all within ~0.01 m) or on its side (~0.5 m), which a
+  headless screenshot at this scale will not.
 - **The ash field is frozen for a pixel diff with `stop()` + `reset()`**, on
   `g.atmosphere.system` — it empties the field and, crucially, keeps it empty.
   That still holds now the field runs on `GPUParticleSystem`, but only because
@@ -244,6 +283,10 @@ src/
     GrenadeSystem.ts        # The one thing that isn't hitscan: thrown
                             #   grenades, their bounces, the fuse, the blast,
                             #   + BlastDust, the cloud it lifts off the ground
+    RagdollSystem.ts        # Bot corpses under physics: the ONLY Havok in the
+                            #   game, the only place a physics engine is
+                            #   touched, and entirely optional — every refusal
+                            #   falls back to Bot's collapse tween
     AimAssistSystem.ts      # Gamepad-only aim assist: an outer bubble that
                             #   slows the stick, an inner one that rotates —
                             #   mostly adhesion (matching the target's angular
@@ -1892,6 +1935,72 @@ This looked exactly like "bots don't shoot" and is worth remembering. It is also
 why losing a target does not simply null it: `BotMemory.lastAimed` outlives
 `target`, and re-acquiring the same enemy resumes at `profile.reacquireDelay`
 instead of from zero.
+
+### Bot deaths, and the one physics engine
+
+A killed bot falls under **Havok** (`src/systems/RagdollSystem.ts`). This is the
+only physics engine in the tree, the only place `@babylonjs/havok` is imported,
+and a deliberate exception to "no asset files" — it ships a 2 MB WASM binary,
+requested explicitly. It buys nothing but the fall: **nothing here feeds
+navigation, cover or hit detection.** A corpse is not in `NavGrid`, not in
+`ObstacleField`, not in `hittablesAgainst`; bots walk through bodies and rounds
+pass through them, exactly as before. Do not "fix" that by feeding corpses into
+`ObstacleField`, whose buckets are baked at map load.
+
+**The collapse tween in `Bot.update`'s dead branch is not legacy — it is the
+floor under all of this**, and it runs on four separate refusals: the WASM has
+not loaded, the WASM failed, the setting is off, the pool is full, or the death
+was past `death.maxDistance`. Deleting it is the single worst change available
+here. It is also what keeps `Bot.ts`'s own note true: the tween is exempt from
+the pose-freeze LOD *because it is five property writes*, a ragdoll cannot
+inherit that exemption, so the ragdoll is gated by distance at the moment of
+death and the tween still runs, still exempt, everywhere it declines.
+
+Six things are load-bearing:
+
+- **`scene.physicsEnabled` is FALSE and must stay false.** Babylon steps physics
+  from `scene.animate()` on every RENDERED frame, and this game renders in every
+  state — so a scene-driven step would leave corpses tumbling under the pause
+  card, under the deploy map and behind the menu. `RagdollSystem.update` steps
+  the world by hand and is called only from `Game.updateGameplay`, which is what
+  a pause already stops. Measured: bit-identical body position across 12
+  rendered frames while paused.
+- **Havok never touches a rig node.** It writes pool-owned PROXY
+  `TransformNode`s and the rig's joints are parented to those. This is not
+  fastidiousness: Havok's sync calls `decomposeToTransformNode` on any node with
+  a parent, which force-creates a `rotationQuaternion` — and while one is set
+  Babylon ignores `rotation`, which is what `animateSoldier` writes. One leaked
+  quaternion is a bot that respawns frozen mid-tumble for the rest of the round,
+  with its position still updating correctly underneath. `setParent` is safe in
+  both directions (verified: it writes Euler when there is no quaternion), which
+  is what makes the hand-off and the hand-back clean.
+- **`resetSoldierPose` is the authoritative restore, and
+  `animateSoldier(rig, 0,0,0,0, 0)` is not a substitute.** That call writes ten
+  Euler channels; the rig has far more, and never a `parent`, a
+  `rotationQuaternion`, a `scaling` or anything on `gun`. `Bot.spawn` calls the
+  former. Verified across three lives on one rig — a leak shows on life 2.
+- **The map is registered as ONE static body** — a `PhysicsShapeContainer` of
+  the ~733 collider boxes plus the 25 terrain blocks as mesh shapes (the floor
+  is the documented collider exception and has no `WorldBox`, hence
+  `GameMap.terrainColliders`). Built in `installMap` like everything else that
+  consumes a `GameMap`, skipped on editor builds, and torn down leaf by leaf or
+  the WASM heap grows one map build at a time. Measured 33–50 ms headless, and
+  25 bodies flat across three rounds.
+- **The rifle is not a bone.** It stays parented to `torso` and rides that body.
+  Giving it one drops it out of hands that cannot open — the arm is a single
+  welded segment with no elbow, wrist or finger — so the weapon falls away while
+  two fists stay cupped around nothing.
+- **A corpse sinks; it cannot fade.** The cel shader writes alpha 1.0 outright
+  and its materials are shared per COLOUR by `CelMaterialFactory`, so an alpha
+  write would dim every bot on the map. Sinking through the floor is what the
+  tween always did.
+
+The bone table, the pivots and the joint limits live in `SoldierModel.ts` with
+the boxes they are measured from; `CONFIG.bots.death` owns the sim (impulse,
+gravity, damping, corpse life). The impulse needs no new plumbing: `takeDamage`
+is already handed the shooter's origin (or the blast centre), so `Bot` captures
+`deathFrom`/`deathDamage` there and `Game.registerBotKill` — the one place all
+three ways of dying converge — offers the body to the pool.
 
 ### Bot perception, cover and skill
 
