@@ -22,6 +22,11 @@ export type Settings = {
   fpsCounter: boolean;
   /** The camera-rotation smear. Off detaches the pass, not just its effect. */
   motionBlur: boolean;
+  /**
+   * The horror grade — vignette, grain, aberration, and with them the red
+   * damage flash, which is painted by the same shader. Off detaches the pass.
+   */
+  horrorGrade: boolean;
 };
 
 /**
@@ -30,11 +35,14 @@ export type Settings = {
  * The blur's default is derived from `CONFIG` rather than restated, so the
  * config stays the single answer to "does this effect ship on" — its own note
  * already documents 0 as the disabled value. The counter is off because it is
- * an instrument, not chrome.
+ * an instrument, not chrome. The grade is the plain `true` the other two are
+ * not: it is three independent terms with no single number that disables it,
+ * so deriving would mean inventing a fourth that the shader does not read.
  */
 export const SETTING_DEFAULTS: Settings = {
   fpsCounter: false,
   motionBlur: CONFIG.graphics.motionBlur.strength > 0,
+  horrorGrade: true,
 };
 
 /** One key per field, so the fields are independent in the store as well. */

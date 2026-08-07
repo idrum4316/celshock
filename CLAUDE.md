@@ -192,6 +192,11 @@ src/
                             #   by whatever optic is fitted, and comes up at
                             #   the carried weapon's own rate
     Sfx.ts                  # Procedural WebAudio, spatialised and voice-capped
+    settings.ts             # The player's display settings: the Settings
+                            #   shape, its defaults and the localStorage round
+                            #   trip. Applies nothing — that is
+                            #   Game.applySettings, which is the ONLY place a
+                            #   setting reaches whatever owns it
   entities/
     Player.ts               # Movement, sprint, jump, weapon state, viewmodel
     ViewModel.ts            # The first-person weapon: the carried gun + gloved
@@ -326,6 +331,10 @@ src/
       loadout.css           #   stat chart derived from CONFIG.weapons, and the
                             #   turntable stage — a hole in its own scrim, with
                             #   the live viewmodel posed on it
+    SettingsScreen.ts       # The settings screen: a list of toggles over a
+      settings.css          #   scrim, built from a ROW TABLE rather than
+                            #   markup. Owns no setting — every pick leaves
+                            #   through onToggle and comes back as setValues
     Minimap.ts              # Corner minimap: flags, friendlies, firing enemies
       minimap.css
   pwa/
@@ -1060,7 +1069,8 @@ take the tickets and vitals with it, which under a pause are still true.
 **One stylesheet per module that writes markup, imported by that module.**
 `HUD.ts` imports `hud.css`, `OverlayScreen.ts` imports `overlay.css`,
 `DeployScreen.ts` imports `deploy.css`,
-`LoadoutScreen.ts` imports `loadout.css`, `Minimap.ts` imports `minimap.css`,
+`LoadoutScreen.ts` imports `loadout.css`, `SettingsScreen.ts` imports
+`settings.css`, `Minimap.ts` imports `minimap.css`,
 and `editor/EditorPanel.ts` imports `editor/panel.css`. `main.ts` imports
 `base.css` first. Vite bundles them into one hashed stylesheet that the built
 `index.html` links from its head.
@@ -2069,6 +2079,20 @@ load-bearing:
   by a wall the player walks into. Putting world geometry in group 1 makes it
   draw through everything; putting the weapon back in group 0 puts the wall
   through the weapon.
+- **The post-process chain has an order, and a display setting that switches
+  an effect off REMOVES its pass** rather than zeroing its uniforms — a pass
+  attached but idle still reads and writes the whole frame, which is the same
+  thing `syncGodRays` detaches for. The order is FXAA, shafts, motion blur,
+  horror grade, and it is enforced by where each one re-attaches:
+  `attachPostProcess` appends, so the blur's toggle takes the grade off and
+  puts it back behind it (`Game.setMotionBlurEnabled`), and the grade's own
+  toggle always appends because the tail is where it belongs. `HorrorPost`
+  owns whether it is attached, so the blur's dance can never resurrect a grade
+  the player turned off — the guard is in `attach`, not at the call sites.
+  Nothing throws if any of this is wrong; the symptom is grain over a smear,
+  which reads as a dirty lens. Note the red damage flash is painted by the
+  grade's shader and goes off with it, and the HUD's damage arcs are what is
+  left telling the player where a hit came from.
 - The cobblestone texture is 512² over a 1.5 m tile (`textures.ts`). That is
   sized for a camera **1.55 m above the street**: at the 256 it was authored
   at, when the camera sat 3.3 m back, looking down at your own feet turned the

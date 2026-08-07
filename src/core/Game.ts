@@ -682,6 +682,10 @@ export class Game {
   private applySettings(): void {
     this.hud.setFpsVisible(this.settings.fpsCounter);
     this.setMotionBlurEnabled(this.settings.motionBlur);
+    // After the blur, and that is the order rather than a preference: the
+    // blur's own toggle takes the grade off and puts it back to keep the
+    // chain's tail, so the grade has the last word on whether it is attached.
+    this.post.setEnabled(this.settings.horrorGrade);
   }
 
   /**

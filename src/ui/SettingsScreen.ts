@@ -39,6 +39,11 @@ const ROWS: readonly Row[] = [
     label: "Motion blur",
     hint: "Smears the view on a fast turn",
   },
+  {
+    key: "horrorGrade",
+    label: "Horror filter",
+    hint: "Vignette, grain, and the red damage flash",
+  },
 ];
 
 /** The selectable rows, in screen order — headings are not stepped onto. */

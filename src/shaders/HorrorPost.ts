@@ -4,9 +4,10 @@
  * Why hand-written: Babylon's image-processing pass re-gammas the cel shader's
  * already display-ready colors and washes the palette out — which is also why
  * pipeline.imageProcessingEnabled stays false. Keep the grade in this pass.
- * Invariants: this is the LAST pass on the camera, and `detach`/`attach` exist
- * only so the motion blur ahead of it can be removed and put back without
- * ending up behind it — see Game.setMotionBlurEnabled.
+ * Invariants: this is the LAST pass on the camera; `detach`/`attach` exist so
+ * the motion blur ahead of it can be removed and put back without ending up
+ * behind it (see Game.setMotionBlurEnabled), and both honour `setEnabled`, so
+ * that dance can never re-attach a grade the player turned off.
  */
 import { Camera, Effect, PostProcess, Scene } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -71,6 +72,11 @@ export class HorrorPost {
   private readonly camera: Camera;
   private time = 0;
   private damage = 0;
+  /** Whether the player wants the grade at all. */
+  private enabled = true;
+  /** Whether the pass is on the camera right now — the constructor puts it
+   *  there, so the two start in agreement and only this file moves them. */
+  private attached = true;
 
   constructor(scene: Scene, camera: Camera) {
     const g = CONFIG.graphics;
@@ -97,22 +103,52 @@ export class HorrorPost {
   /**
    * Takes the grade off the camera, and puts it back on the END of the chain.
    *
-   * The pair exists for one caller: turning the motion blur off removes a pass
-   * from the middle of the chain, and Babylon's `attachPostProcess` APPENDS, so
-   * putting it back would land it after this grade. Detaching and re-attaching
-   * the grade behind it is what keeps the documented order — GodRays, then the
-   * blur, then this — without anyone having to compute an insert index against
-   * a chain that also holds the pipeline's FXAA.
+   * The pair exists for two callers now. Turning the motion blur off removes a
+   * pass from the middle of the chain, and Babylon's `attachPostProcess`
+   * APPENDS, so putting it back would land it after this grade; detaching and
+   * re-attaching the grade behind it is what keeps the documented order —
+   * GodRays, then the blur, then this — without anyone having to compute an
+   * insert index against a chain that also holds the pipeline's FXAA. The
+   * other caller is `setEnabled` below.
    *
    * Grain over a smear is the symptom if this goes wrong: it reads as a dirty
    * lens rather than as motion, and nothing throws.
+   *
+   * Both are idempotent, and `attach` additionally refuses while the grade is
+   * switched off — the blur's dance is a detach and a re-attach around some
+   * other work, and it must not resurrect a pass the player took away. That is
+   * also why the grade always APPENDS rather than going back into the slot it
+   * came out of, the way `Game.syncGodRays` does: the tail is where it belongs,
+   * and a blur attached while it was away is already sitting past its old
+   * index. The cost is one null hole per off/on cycle in the camera's list,
+   * which is bounded by clicks on a settings row rather than by frames.
    */
   detach(): void {
+    if (!this.attached) return;
     this.camera.detachPostProcess(this.post);
+    this.attached = false;
   }
 
   attach(): void {
+    if (this.attached || !this.enabled) return;
     this.camera.attachPostProcess(this.post);
+    this.attached = true;
+  }
+
+  /**
+   * Turns the whole grade on or off — a display setting, not a mood.
+   *
+   * Detaching rather than zeroing the uniforms, for the reason the motion blur
+   * states about itself: a pass switched off in its shader still reads and
+   * writes the entire frame. Note the red damage flash goes with it, since it
+   * is painted by this shader; the HUD's directional damage arcs are not, and
+   * are what a player with the grade off still reads a hit from.
+   */
+  setEnabled(on: boolean): void {
+    if (on === this.enabled) return;
+    this.enabled = on;
+    if (on) this.attach();
+    else this.detach();
   }
 
   /** Kicks the red edge flash; call when the player takes a hit. */
