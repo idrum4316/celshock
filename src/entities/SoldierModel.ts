@@ -258,6 +258,39 @@ export interface SoldierRig {
   rest: readonly JointRest[];
 }
 
+/**
+ * Everything `RagdollSystem` needs of a body it is about to throw. `Bot`
+ * satisfies it structurally and so does the player's corpse stand-in, which is
+ * the whole point: the pool has no business knowing which of the two it holds.
+ *
+ * It lives HERE rather than in `RagdollSystem` because it is a fact about a
+ * soldier rig, and because the alternative is `DeathCam` importing a type from
+ * another system — the one thing the wiring rules in CLAUDE.md forbid. Nothing
+ * implementing it has to import it either; TypeScript's structural typing is
+ * what keeps `Bot` free of any knowledge that a physics engine exists.
+ */
+export interface RagdollSubject {
+  readonly rig: SoldierRig;
+  /** The body's feet, used once for the distance gate at the moment of death. */
+  readonly position: Vector3;
+  /** The body's centre of mass, which the killing impulse is aimed away from. */
+  readonly center: Vector3;
+  /** Where the killing blow came from: a shooter's eye, or a blast centre. */
+  readonly deathFrom: Vector3;
+  /** How much of it there was, which scales the throw. */
+  readonly deathDamage: number;
+  /**
+   * Set by the pool for as long as it owns the joints. Whoever poses this rig
+   * has to leave it alone in that window, or two writers fight over one node.
+   */
+  ragdolling: boolean;
+  /** A live body is released immediately — the pool's self-defence guard. */
+  readonly alive: boolean;
+  /** A SEEDED stream, so two identical deaths still fall differently. */
+  rand(): number;
+  setEnabled(on: boolean): void;
+}
+
 /** Builds one soldier in the given team's colours. */
 export function buildSoldier(
   scene: Scene,

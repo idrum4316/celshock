@@ -812,6 +812,25 @@
 #hud.paused #capture-status,
 #hud.paused #lock-hint { display: none; }
 
+/* --- death cam ---
+   Raised by HUD.setDeathCam while the player is down and the camera is
+   watching their body. It hides the same four things a pause does and is
+   a class of its own anyway: the two agree by coincidence, not by
+   meaning. A pause hides them because the world stopped; this hides them
+   because the world did NOT and the player is simply no longer in it —
+   a crosshair over a camera nobody is aiming, a capture panel for a zone
+   nobody is standing in, arcs bearing on a yaw that is now the cam's.
+   The gauges stay for the mirror-image reason: they are live and true,
+   and watching the tickets run while you wait is half of why the cam is
+   worth showing at all. The lock hint goes because the lock is still
+   held — asking for it back would be the one instruction on screen that
+   is not merely useless but wrong. */
+#hud.dying #crosshair,
+#hud.dying #hitmarker,
+#hud.dying #damage-dirs,
+#hud.dying #capture-status,
+#hud.dying #lock-hint { display: none; }
+
 /* --- map editor (dev only) --- */
 /* The gameplay chrome is meaningless with no player, and the crosshair
    actively gets in the way of clicking things. HUD.setEditing() puts

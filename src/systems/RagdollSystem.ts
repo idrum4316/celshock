@@ -1,8 +1,14 @@
 /**
- * RagdollSystem.ts — Physics-driven bot deaths: the ONLY thing in this game
- * that runs a physics engine, and the only place `@babylonjs/havok` is
- * reached. Owns the Havok world, the static map registered into it, a pool of
- * corpses, and the hand-off of a rig's joints to the solver and back.
+ * RagdollSystem.ts — Physics-driven deaths: the ONLY thing in this game that
+ * runs a physics engine, and the only place `@babylonjs/havok` is reached.
+ * Owns the Havok world, the static map registered into it, a pool of corpses,
+ * and the hand-off of a rig's joints to the solver and back.
+ *
+ * It holds `RagdollSubject`s, not `Bot`s, and deliberately cannot tell the two
+ * kinds apart: a bot killed in the fight and the stand-in body `DeathCam`
+ * stands up where the player fell are the same thing to this file. Every rule
+ * below applies to both, which is what stopped the player's corpse needing a
+ * second copy of any of it.
  *
  * Invariants, each of which has a way of failing silently:
  * - `scene.physicsEnabled` is FALSE and stays false. Babylon steps physics from
@@ -44,12 +50,12 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import type { Bot } from "../entities/Bot";
 import {
   RAGDOLL_BONES,
   RAGDOLL_LINKS,
   resetSoldierPose,
   type BoneJoint,
+  type RagdollSubject,
   type SoldierRig,
 } from "../entities/SoldierModel";
 import type { GameMap } from "../world/MapBuilder";
@@ -70,7 +76,7 @@ interface Slot {
   bones: Bone[];
   constraints: Physics6DoFConstraint[];
   /** Null when the slot is free. */
-  bot: Bot | null;
+  subject: RagdollSubject | null;
   rig: SoldierRig | null;
   /** Seconds since this corpse was taken. */
   t: number;
@@ -132,7 +138,7 @@ export class RagdollSystem {
 
   /** How many corpses are simulating. Test hook. */
   get activeCount(): number {
-    return this.slots.reduce((n, s) => n + (s.bot ? 1 : 0), 0);
+    return this.slots.reduce((n, s) => n + (s.subject ? 1 : 0), 0);
   }
 
   setEnabled(on: boolean): void {
@@ -181,7 +187,7 @@ export class RagdollSystem {
       .catch((err) => {
         this.state = "failed";
         console.warn(
-          "Havok unavailable — bot deaths fall back to the collapse tween.",
+          "Havok unavailable — deaths fall back to the collapse tween.",
           err,
         );
       });
@@ -207,26 +213,29 @@ export class RagdollSystem {
   }
 
   /**
-   * Offer a dead bot to the pool. Returns false if it was refused, and the
-   * caller must then leave `Bot`'s collapse tween alone.
+   * Offer a dead body to the pool. Returns false if it was refused, and the
+   * caller must then run the collapse tween instead — `Bot`'s, or the death
+   * cam's copy of it for the player's corpse.
    *
    * Distance is sampled ONCE, here: a corpse does not move, and re-testing per
    * frame would switch a tumble off halfway through because the player backed
    * away from it.
    */
-  spawn(bot: Bot, camPos: Vector3): boolean {
+  spawn(subject: RagdollSubject, camPos: Vector3): boolean {
     const d = CONFIG.bots.death;
     if (!this.enabled || this.state !== "ready" || !this.worldBody) return false;
-    if (Vector3.Distance(bot.position, camPos) > d.maxDistance) return false;
+    if (Vector3.Distance(subject.position, camPos) > d.maxDistance) return false;
     // A body already held is not offered twice. `registerBotKill` is the one
     // caller and fires once, but a rig in two slots would be two sets of
     // bodies fighting over the same joints.
-    if (bot.ragdolling || this.slots.some((s) => s.bot === bot)) return false;
+    if (subject.ragdolling || this.slots.some((s) => s.subject === subject)) {
+      return false;
+    }
     const slot = this.takeSlot();
     if (!slot) return false;
 
-    const rig = bot.rig;
-    slot.bot = bot;
+    const rig = subject.rig;
+    slot.subject = subject;
     slot.rig = rig;
     slot.t = 0;
     slot.stillT = 0;
@@ -241,10 +250,10 @@ export class RagdollSystem {
       const rest = rig.rest.find((r) => r.node === rig[bone.joint]);
       if (rest) slot.restParent.set(bone.joint, rest.parent);
     }
-    bot.ragdolling = true;
+    subject.ragdolling = true;
     // The rig must be visible for the corpse to be worth simulating; the LOD
     // in BattleSystem re-enables it every frame while `state === "dead"`.
-    bot.setEnabled(true);
+    subject.setEnabled(true);
 
     for (const bone of slot.bones) {
       const joint = rig[bone.joint];
@@ -272,7 +281,7 @@ export class RagdollSystem {
       bone.body.disablePreStep = false;
     }
 
-    this.applyImpulse(slot, bot);
+    this.applyImpulse(slot, subject);
     return true;
   }
 
@@ -287,7 +296,7 @@ export class RagdollSystem {
 
     // Step only while something is still moving. Once every corpse has frozen
     // the engine is not touched at all.
-    const simulating = this.slots.some((s) => s.bot && !s.frozen);
+    const simulating = this.slots.some((s) => s.subject && !s.frozen);
     if (simulating) {
       // Fixed steps, bounded so a long frame cannot spiral.
       let left = Math.min(dt, d.substep * d.maxSteps);
@@ -298,19 +307,19 @@ export class RagdollSystem {
       // The teleport is read in on the first step only; from here the sim owns
       // the bodies and must not be overwritten by their nodes.
       for (const slot of this.slots) {
-        if (!slot.bot || slot.frozen) continue;
+        if (!slot.subject || slot.frozen) continue;
         for (const bone of slot.bones) bone.body.disablePreStep = true;
       }
     }
 
     for (const slot of this.slots) {
-      if (!slot.bot || !slot.rig) continue;
+      if (!slot.subject || !slot.rig) continue;
       // The rig was recycled out from under us. It should not be possible —
       // a corpse is gone at `sinkStart + sinkTime` (6 s) and Conquest wants
       // the rig at `respawnDelay` (8 s) — but the failure if it ever were is
       // a slot re-parenting a LIVE bot's joints for the rest of the round, so
       // it is checked here rather than left to that margin holding.
-      if (slot.bot.alive) {
+      if (slot.subject.alive) {
         this.release(slot);
         continue;
       }
@@ -338,8 +347,8 @@ export class RagdollSystem {
    * which is every bot this system is not holding, so an unwired `ShadowSystem`
    * behaves exactly as it did before.
    */
-  shadowFor(bot: Bot, out: Vector3): number {
-    const slot = this.slots.find((s) => s.bot === bot);
+  shadowFor(subject: RagdollSubject, out: Vector3): number {
+    const slot = this.slots.find((s) => s.subject === subject);
     if (!slot || !slot.rig) return 0;
     const d = CONFIG.bots.death;
     out.copyFrom(slot.rig.torso.getAbsolutePosition());
@@ -348,9 +357,24 @@ export class RagdollSystem {
     return Math.max(0, 1 - (slot.t - d.sinkStart) / d.sinkTime);
   }
 
+  /**
+   * Drops ONE body early, if this pool is holding it. Idempotent, and a no-op
+   * for a body it never took — so a caller may offer and retire without ever
+   * checking which of the five refusals it hit.
+   *
+   * A bot never needs this: its corpse outlives the death cam's whole window
+   * and retires on its own clock. The player's does, because the deploy screen
+   * comes up over the top of it and a body left lying there would come back
+   * mid-sink on the next life.
+   */
+  retire(subject: RagdollSubject): void {
+    const slot = this.slots.find((s) => s.subject === subject);
+    if (slot) this.release(slot);
+  }
+
   /** Drops every corpse and restores every rig. Round start and map rebuild. */
   reset(): void {
-    for (const slot of this.slots) if (slot.bot) this.release(slot);
+    for (const slot of this.slots) if (slot.subject) this.release(slot);
   }
 
   dispose(): void {
@@ -459,7 +483,7 @@ export class RagdollSystem {
       this.slots.push({
         bones,
         constraints,
-        bot: null,
+        subject: null,
         rig: null,
         t: 0,
         stillT: 0,
@@ -552,7 +576,7 @@ export class RagdollSystem {
    * sinking is committed to vanishing, so it is fair game.
    */
   private takeSlot(): Slot | null {
-    const free = this.slots.find((s) => !s.bot);
+    const free = this.slots.find((s) => !s.subject);
     if (free) return free;
     // Only one already going, never one merely lying still: a corpse that has
     // settled is a corpse the player can see, and yanking it is the pop this
@@ -565,17 +589,20 @@ export class RagdollSystem {
     return null;
   }
 
-  private applyImpulse(slot: Slot, bot: Bot): void {
+  private applyImpulse(slot: Slot, subject: RagdollSubject): void {
     const imp = CONFIG.bots.death.impulse;
     const chest = slot.bones.find((b) => b.joint === "torso");
     if (!chest) return;
 
     // Direction is free: `deathFrom` is the shooter's eye or the blast centre.
     // Y is kept, so a round from a rooftop pushes a body down.
-    bot.center.subtractToRef(bot.deathFrom, this.v1);
+    subject.center.subtractToRef(subject.deathFrom, this.v1);
     if (this.v1.lengthSquared() < 1e-6) this.v1.copyFrom(UP);
     this.v1.normalize();
-    const mag = Math.min(imp.max, imp.base + bot.deathDamage * imp.perDamage);
+    const mag = Math.min(
+      imp.max,
+      imp.base + subject.deathDamage * imp.perDamage,
+    );
     this.v1.scaleInPlace(mag);
 
     // Applied ABOVE the centre of mass, so the tumble falls out of the
@@ -586,13 +613,13 @@ export class RagdollSystem {
     );
     chest.body.applyImpulse(this.v1, this.v2);
 
-    // A seeded kick so two identical deaths do not fall identically. The bot's
-    // OWN stream — never Math.random, which would make a death impossible to
-    // reproduce.
+    // A seeded kick so two identical deaths do not fall identically. The
+    // BODY'S OWN stream — never Math.random, which would make a death
+    // impossible to reproduce.
     this.v2.set(
-      (bot.rand() * 2 - 1) * imp.spin,
-      (bot.rand() * 2 - 1) * imp.spin,
-      (bot.rand() * 2 - 1) * imp.spin,
+      (subject.rand() * 2 - 1) * imp.spin,
+      (subject.rand() * 2 - 1) * imp.spin,
+      (subject.rand() * 2 - 1) * imp.spin,
     );
     chest.body.applyAngularImpulse(this.v2);
   }
@@ -644,9 +671,9 @@ export class RagdollSystem {
    * rather than two.
    */
   private release(slot: Slot): void {
-    const { bot, rig } = slot;
-    if (!bot || !rig) {
-      slot.bot = null;
+    const { subject, rig } = slot;
+    if (!subject || !rig) {
+      slot.subject = null;
       slot.rig = null;
       return;
     }
@@ -662,13 +689,13 @@ export class RagdollSystem {
     // own, and a respawn writes it through `syncTransform` — but a rig retired
     // by `reset()` mid-sink would otherwise keep the offset.
     if (slot.sinking) rig.root.position.y = slot.sinkFromY;
-    bot.setEnabled(false);
+    subject.setEnabled(false);
     // The authoritative restore: parents, positions, rotations, quaternions
     // and scalings, on every posed node. See its own note for why
     // `animateSoldier(..., 0)` is not a substitute.
     resetSoldierPose(rig);
-    bot.ragdolling = false;
-    slot.bot = null;
+    subject.ragdolling = false;
+    slot.subject = null;
     slot.rig = null;
     slot.frozen = false;
     slot.sinking = false;

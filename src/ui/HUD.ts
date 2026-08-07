@@ -876,4 +876,21 @@ export class HUD {
   setPaused(on: boolean): void {
     this.root.classList.toggle("paused", on);
   }
+
+  /**
+   * The death cam is up: the player is down and the camera has left their head.
+   *
+   * It hides the same four things a pause does and is deliberately NOT the same
+   * class, because the two agree by coincidence rather than by meaning. A pause
+   * hides them because the world is frozen; this hides them because the world
+   * is still moving and the player is no longer in it — a crosshair over a
+   * camera nobody is aiming, a capture panel for a zone nobody is standing in,
+   * and damage arcs bearing on a view yaw that has stopped being the player's.
+   * The gauges stay for the opposite reason to a pause's: not because they are
+   * frozen and true, but because they are LIVE and true, and watching the
+   * tickets while you wait is half of why the cam is worth showing.
+   */
+  setDeathCam(on: boolean): void {
+    this.root.classList.toggle("dying", on);
+  }
 }

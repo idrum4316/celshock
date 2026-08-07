@@ -2,7 +2,10 @@
  * CameraSystem.ts — First-person camera: aim yaw/pitch, ADS blend (FOV +
  * sensitivity), recoil, per-shot view punch, head bob.
  * Owns: the scene's active camera. The camera sits AT the player's eye — it
- * never leaves the head, so there is no occlusion pick and no pull-in.
+ * never leaves the head, so there is no occlusion pick and no pull-in. The one
+ * exception is `place()`, which hands the camera to `DeathCam` when there is no
+ * longer a head to sit in; that caller owns its own pull-in, because it is the
+ * only thing here that ever looks at the player from outside.
  * How far ADS zooms, how much it slows the look, and how fast it gets there
  * all belong to the LOADOUT (`setLoadout`), not to CONFIG.camera — the
  * camera's own numbers are the hip-fire ones. Zoom and sensitivity are the
@@ -288,6 +291,30 @@ export class CameraSystem {
       -r.maxYaw,
       Math.min(r.maxYaw, this.recoilYaw + yaw * r.recoverFraction),
     );
+  }
+
+  /**
+   * Points the camera at something that is not the player's eye, and is the
+   * ONLY way that is allowed to happen.
+   *
+   * `DeathCam` is the one caller: once the player is down there is no eye to
+   * sit at, and the body on the ground is what the frame is about. It is a
+   * plain placement rather than a mode on this system because everything else
+   * here — the look input, the ADS blend, the recoil, the bob, the landing
+   * spring — is about a body that is still standing up, and none of it should
+   * run while one is not. `update` is simply not called in that window, so no
+   * state advances and the aim is exactly where it was left when the round
+   * comes back.
+   *
+   * The roll and the FOV are written explicitly rather than left alone: both
+   * are this system's own state, and a camera handed over mid-landing would
+   * otherwise watch the body through a tilted, zoomed frame for four seconds.
+   */
+  place(eye: Vector3, target: Vector3): void {
+    this.camera.position.copyFrom(eye);
+    this.camera.setTarget(target);
+    this.camera.rotation.z = 0;
+    this.camera.fov = CONFIG.camera.fovHip;
   }
 
   /**

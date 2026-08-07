@@ -53,6 +53,7 @@ import { BattleSystem } from "../systems/BattleSystem";
 import { CaptureZoneSystem } from "../systems/CaptureZoneSystem";
 import { CombatSystem } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
+import { DeathCam } from "../systems/DeathCam";
 import { GrassSystem } from "../systems/GrassSystem";
 import { GrenadeSystem } from "../systems/GrenadeSystem";
 import { RagdollSystem } from "../systems/RagdollSystem";
@@ -77,14 +78,21 @@ import { readSettings, writeSettings, type Settings } from "./settings";
 import { Sfx } from "./Sfx";
 
 /**
- * `menu` -> `deploy` -> `playing`, with `deploy` re-entered on every death,
- * and `roundover` when one side runs out of tickets.
+ * `menu` -> `deploy` -> `playing` -> `dying` -> `deploy`, with `roundover` when
+ * one side runs out of tickets.
+ *
+ * `dying` is the death cam: the player is down, a body is falling where they
+ * stood, and the camera has left the head to watch it. It is a STEP in the
+ * cycle rather than a lid, and that distinction is the whole feature — the
+ * fight carries on underneath it (`updateWorld` runs in full), where a lid
+ * stops everything. It ends on its own clock, and the deploy screen it opens
+ * subtracts the time already spent, so a life costs what it always did.
  *
  * `paused` is the other side state, and unlike the rest it remembers where it
- * came from (`pausedFrom`): a pause is a lid over `playing` or `deploy`, and
- * resuming puts the state back exactly as it was rather than moving the game
- * on. Nothing simulates while it is up — the scene still renders, which is what
- * makes a paused round look held rather than gone.
+ * came from (`pausedFrom`): a pause is a lid over `playing`, `dying` or
+ * `deploy`, and resuming puts the state back exactly as it was rather than
+ * moving the game on. Nothing simulates while it is up — the scene still
+ * renders, which is what makes a paused round look held rather than gone.
  *
  * `loadout` and `settings` are lids of the same shape, each remembering what it
  * covered. The kit screen covers `menu` or `deploy`; the settings screen also
@@ -101,6 +109,7 @@ type GameState =
   | "menu"
   | "deploy"
   | "playing"
+  | "dying"
   | "paused"
   | "loadout"
   | "settings"
@@ -215,8 +224,10 @@ export class Game {
   private combat: CombatSystem;
   /** Thrown grenades — the one thing on the map that is not hitscan. */
   private grenades: GrenadeSystem;
-  /** Bot corpses under physics. The only Havok in the game, and optional. */
+  /** Corpses under physics. The only Havok in the game, and optional. */
   private ragdolls: RagdollSystem;
+  /** The player's own death: a stand-in body, and the camera that watches it. */
+  private deathCam: DeathCam;
   private aimAssist: AimAssistSystem;
   private battle: BattleSystem;
   private conquest: ConquestSystem;
@@ -263,7 +274,7 @@ export class Game {
 
   private state: GameState = "menu";
   /** Which state the pause menu is a lid over; where `resume()` puts it back. */
-  private pausedFrom: "playing" | "deploy" = "playing";
+  private pausedFrom: "playing" | "dying" | "deploy" = "playing";
   /**
    * Whether the pointer was locked as of the last `pointerlockchange`. Losing
    * the lock is what pauses the game, and only a *transition* out of it counts
@@ -307,6 +318,8 @@ export class Game {
   private readonly grenadeHand = new Vector3();
   /** Counts down while the player is waiting to redeploy. */
   private respawnT = 0;
+  /** Where the player's feet were when they died — scratch for `enterDying`. */
+  private readonly deathFeet = new Vector3();
   /** Round scoreboard: kills and losses per team, plus the player's own line. */
   private readonly kills: [number, number] = [0, 0];
   private readonly losses: [number, number] = [0, 0];
@@ -382,6 +395,7 @@ export class Game {
     // every death takes the collapse tween. Not awaited anywhere — a physics
     // engine must never stand between the player and the first frame.
     this.ragdolls.init();
+    this.deathCam = new DeathCam(this.scene, this.mats);
     this.aimAssist = new AimAssistSystem(this.scene);
     this.battle = new BattleSystem(this.scene, this.mats, this.combat);
     this.conquest = new ConquestSystem();
@@ -408,8 +422,21 @@ export class Game {
     // and `Bot.position` stops updating at that moment — so the body itself
     // has to say where its shadow goes. Only the ragdoll system knows; every
     // other dead bot answers 0 and keeps the old no-shadow behaviour.
-    this.shadows.corpseShadow = (cbt, out) =>
-      cbt instanceof Bot ? this.ragdolls.shadowFor(cbt, out) : 0;
+    // The player answers through the death cam's stand-in body rather than
+    // through itself, for the same reason and with the same result: `Player`
+    // has no rig to have fallen anywhere, and the corpse does.
+    this.shadows.corpseShadow = (cbt, out) => {
+      if (cbt instanceof Bot) return this.ragdolls.shadowFor(cbt, out);
+      const corpse = cbt === this.player ? this.deathCam.subject : null;
+      return corpse ? this.ragdolls.shadowFor(corpse, out) : 0;
+    };
+    // The death cam offers and retires its body through the same pool every
+    // bot goes through — a callback rather than an import, because a system
+    // may not reach into another one. Its default is the refusal, so the
+    // collapse tween is what an unwired cam falls back to.
+    this.deathCam.onSpawnRagdoll = (corpse) =>
+      this.ragdolls.spawn(corpse, this.cameraSys.camera.position);
+    this.deathCam.onRetireRagdoll = (corpse) => this.ragdolls.retire(corpse);
     // Grenades resolve their blast against the thrower's own target list, the
     // same way a bullet does — so friendly fire is excluded by construction
     // here too, and this system never learns what a team is.
@@ -499,7 +526,15 @@ export class Game {
     // (Start) and for the keyboard player who was not locked to begin with.
     document.addEventListener("pointerlockchange", () => {
       const locked = document.pointerLockElement === canvas;
-      if (!locked && this.hadPointerLock && this.state === "playing") {
+      // `dying` counts too. The death cam deliberately KEEPS the lock — there
+      // is nothing to click, and dropping it on the way in would pause the
+      // very shot it is about to show — so it has a lock to lose like any
+      // other live frame, and an alt-tab out of one must hold the round.
+      if (
+        !locked &&
+        this.hadPointerLock &&
+        (this.state === "playing" || this.state === "dying")
+      ) {
         this.pause();
       }
       this.hadPointerLock = locked;
@@ -1040,6 +1075,16 @@ export class Game {
         }
         this.updateGameplay(dt);
         break;
+      case "dying":
+        // Pausable like any other live frame — a death cam is four seconds
+        // during which the round is still going, so it must not be four
+        // seconds during which Escape does nothing.
+        if (this.input.pausePressed) {
+          this.pause();
+          break;
+        }
+        this.updateDeathCam(dt);
+        break;
       case "paused":
         // Pause is checked first and breaks: Start raises `pausePressed` and
         // `confirmPressed` on the same frame, and resuming must not also fire
@@ -1131,7 +1176,13 @@ export class Game {
    * already do, and it is why a paused round reads as held rather than gone.
    */
   private pause(): void {
-    if (this.state !== "playing" && this.state !== "deploy") return;
+    if (
+      this.state !== "playing" &&
+      this.state !== "dying" &&
+      this.state !== "deploy"
+    ) {
+      return;
+    }
     this.pausedFrom = this.state;
     this.state = "paused";
     this.hud.setPaused(true);
@@ -1157,7 +1208,11 @@ export class Game {
     this.overlayScreen.hide();
     this.clearPause();
     this.state = this.pausedFrom;
-    if (this.state === "playing") {
+    // `dying` too. The death cam is a live frame that holds the lock, so a
+    // pause over it has to give back what it took — the alternative is a cam
+    // that resumes unlocked and a player who is silently mouse-free for the
+    // rest of it and into whatever comes next.
+    if (this.state === "playing" || this.state === "dying") {
       // The click that chose "Resume" is still held, and it is about to become
       // the click that takes the pointer lock back — the same trap the deploy
       // map's click documents in `spawnPlayer`.
@@ -1241,6 +1296,11 @@ export class Game {
     // editor's own panel. The settings screen is above both and owes the same.
     this.stowKit();
     this.settingsScreen.hide();
+    // And from the death cam, whose body would otherwise be left standing in
+    // the map the editor is about to rebuild — `installMap` frees the ragdoll
+    // slot underneath it, so the cam has to be told rather than find out.
+    this.deathCam.stop();
+    this.hud.setDeathCam(false);
     this.minimap.setVisible(false);
     this.player.setBodyHidden(true);
     if (document.pointerLockElement) document.exitPointerLock();
@@ -1393,6 +1453,10 @@ export class Game {
     this.zones.build(map.controlPoints, map.terrain, map.nav, env);
     this.player.fullReset();
     this.player.team = 0;
+    // Built here, not at the moment of death: nine merged meshes and their GL
+    // buffers is not a cost to pay on the frame the player is killed on. It is
+    // a no-op on every round after the first, since the team never changes.
+    this.deathCam.prepare(this.player.team);
     this.minimap.setMap(map, this.player.team);
     this.kills[0] = this.kills[1] = 0;
     this.losses[0] = this.losses[1] = 0;
@@ -1567,6 +1631,35 @@ export class Game {
       if (this.player.reloading) this.sfx.reload(this.player.reloadTime);
     }
 
+    if (!this.updateWorld(dt)) return;
+
+    this.updateCameraAndLighting(dt);
+    // Reads the camera (it fades the markers into the fog wall) but never
+    // moves it, so it belongs after the tail above rather than inside it.
+    this.zones.update(
+      dt,
+      this.conquest.points,
+      this.player.team,
+      this.cameraSys.camera.position,
+    );
+    this.updateHud(dt);
+  }
+
+  /**
+   * Everything in a frame that is about the FIGHT rather than about the player:
+   * the objectives, the bots, the rounds already in the air, and the bodies on
+   * the ground. Returns false when the round ended on this frame, which is the
+   * caller's cue to do nothing else with a game that is over.
+   *
+   * It is its own method because the death cam needs every line of it and not
+   * one line of what surrounds it. The whole point of watching your own body
+   * fall is that the fight carries on around it — tickets bleed, a squad takes
+   * the flag you died on, your killer walks past — and a death cam over a world
+   * that stopped is a screenshot. Splitting it here is what makes that true by
+   * construction rather than by keeping two copies of the sequence in step, the
+   * same failure `installMap` exists to prevent one layer down.
+   */
+  private updateWorld(dt: number): boolean {
     // --- objectives ---
     // Runs before the bots so their think tick sees this frame's ownership.
     this.combatants.length = 0;
@@ -1574,7 +1667,7 @@ export class Game {
     this.conquest.update(dt, this.combatants);
     if (this.conquest.winner !== null) {
       this.endRound(this.conquest.winner);
-      return;
+      return false;
     }
 
     // --- bots ---
@@ -1590,17 +1683,43 @@ export class Game {
     // `scene.physicsEnabled` is false precisely so that a pause, the deploy
     // map and the menu — all of which render — cannot advance it.
     this.ragdolls.update(dt);
+    return true;
+  }
 
-    this.updateCameraAndLighting(dt);
-    // Reads the camera (it fades the markers into the fog wall) but never
-    // moves it, so it belongs after the tail above rather than inside it.
+  /**
+   * The frame while the player is down: the same fight, watched from outside.
+   *
+   * It runs the world first and the camera second, the same order
+   * `updateGameplay` does and for the same reason — everything downstream of
+   * the camera (shader fog, light slots, audio panning) keys off where the
+   * viewer is, and the viewer here is following a body that the ragdoll step
+   * above has just moved.
+   *
+   * The wait is not additive: the deploy screen opens with `respawnDelay` minus
+   * the time already spent here, so a life still costs the same eight seconds
+   * it did before there was anything to watch.
+   */
+  private updateDeathCam(dt: number): void {
+    if (!this.updateWorld(dt)) return;
+    this.deathCam.update(dt);
+    // The one place the camera is allowed off the player's eye.
+    this.cameraSys.place(this.deathCam.eye, this.deathCam.look);
+    // The body, not the corpse's last standing position: the shadow window has
+    // to cover what is on screen, and what is on screen is wherever the tumble
+    // ended up.
+    this.shadowFocus.copyFrom(this.deathCam.look);
+    this.updateSceneForCamera(dt, this.shadowFocus, this.player, this.combatants);
     this.zones.update(
       dt,
       this.conquest.points,
       this.player.team,
       this.cameraSys.camera.position,
     );
-    this.updateHud(dt);
+    this.updateHud(dt, true);
+    const dc = CONFIG.player.deathCam;
+    if (this.deathCam.elapsed >= dc.time) {
+      this.enterDeploy(Math.max(0, CONFIG.conquest.respawnDelay - dc.time));
+    }
   }
 
   /**
@@ -1756,27 +1875,42 @@ export class Game {
   }
 
   /** Pushes this frame's state to the DOM HUD and the minimap. */
-  private updateHud(dt: number): void {
+  /**
+   * `dying` is the death cam's frame: the gauges are still true and still
+   * wanted (the round is live, and watching the tickets while you wait is half
+   * the point of showing it at all), but everything about AIMING has stopped
+   * being. The crosshair, the capture panel and the arcs are the three the cam
+   * has to switch off, and each is off for its own reason rather than because
+   * the state changed — see below.
+   */
+  private updateHud(dt: number, dying = false): void {
     this.hud.setHealth(this.player.health, this.player.maxHealth);
     this.hud.setAmmo(this.player.ammo, this.player.magSize, this.player.reloading);
     this.hud.setGrenades(this.player.grenades, CONFIG.grenade.carried);
-    // The crosshair ring IS the live spread: radians at the aim plane,
-    // projected through the current FOV into screen pixels.
-    const spreadPx =
-      (Math.tan(this.player.spread(this.cameraSys.adsBlend)) /
-        Math.tan(this.cameraSys.camera.fov / 2)) *
-      (window.innerHeight / 2);
-    this.hud.setCrosshair(this.cameraSys.adsBlend, spreadPx);
+    if (!dying) {
+      // The crosshair ring IS the live spread: radians at the aim plane,
+      // projected through the current FOV into screen pixels. Skipped rather
+      // than merely hidden while dying — there is no weapon being aimed, so
+      // there is no spread to project.
+      const spreadPx =
+        (Math.tan(this.player.spread(this.cameraSys.adsBlend)) /
+          Math.tan(this.cameraSys.camera.fov / 2)) *
+        (window.innerHeight / 2);
+      this.hud.setCrosshair(this.cameraSys.adsBlend, spreadPx);
+    }
     // Damage arcs are world-anchored, so they need this frame's aim yaw to be
     // re-projected onto the screen — pushed here like every other HUD input.
-    this.hud.setViewYaw(this.cameraSys.aimYaw);
+    this.hud.setViewYaw(dying ? this.deathCam.yaw : this.cameraSys.aimYaw);
     this.hud.setTickets(
       [CONFIG.teams[0].name, CONFIG.teams[1].name],
       this.conquest.tickets,
       this.player.team,
     );
     this.hud.setFlags(this.conquest.points, this.player.team);
-    this.hud.setCapture(this.captureStatus());
+    // Null while dying: `captureStatus` asks which zone the PLAYER is standing
+    // in, and a body on the ground is not standing in one — a panel counting a
+    // capture nobody is contributing to is worse than no panel.
+    this.hud.setCapture(dying ? null : this.captureStatus());
     this.hud.setScoreboard(this.input.scoreboard, {
       map: this.mapDef.name,
       teams: [CONFIG.teams[0].name, CONFIG.teams[1].name],
@@ -1792,7 +1926,9 @@ export class Game {
     this.minimap.update(
       dt,
       this.player.position,
-      this.cameraSys.yaw,
+      // The cam's own bearing, so the map keeps agreeing with the picture
+      // above it while the camera orbits away from the player's last heading.
+      dying ? this.deathCam.yaw : this.cameraSys.yaw,
       this.conquest.points,
       this.battle.bots,
       this.player.team,
@@ -1835,6 +1971,12 @@ export class Game {
    */
   private enterDeploy(delay: number): void {
     this.respawnT = delay;
+    // The single funnel for "the death cam's job is over", so every path out
+    // of it — the clock running down, the round ending, F2 — retires the body
+    // and hands the rig back without any of them remembering to. Idempotent,
+    // and a no-op for the deploy that starts a round.
+    this.deathCam.stop();
+    this.hud.setDeathCam(false);
     this.minimap.setVisible(false);
     // `updateGameplay` stops here, so the viewmodel would freeze mid-pose in
     // front of a dead player's last view. In third person the body simply
@@ -1853,6 +1995,11 @@ export class Game {
 
   private endRound(winner: Team): void {
     this.state = "roundover";
+    // The round can end on a frame the death cam is up — a squad taking the
+    // last flag while the player watches their own body — and the result card
+    // is not somewhere a corpse follows them to.
+    this.deathCam.stop();
+    this.hud.setDeathCam(false);
     this.deployScreen.hide();
     this.player.setBodyHidden(true); // same reason as enterDeploy
     this.hud.setScoreboard(false);
@@ -1911,8 +2058,52 @@ export class Game {
         "YOU",
         true,
       );
-      this.enterDeploy(CONFIG.conquest.respawnDelay);
+      this.enterDying(from, amount);
     }
+  }
+
+  /**
+   * Raises the death cam: a stand-in body where the player was standing, thrown
+   * by the round that killed them, and the camera out of the head to watch it.
+   *
+   * The pointer lock is deliberately KEPT. There is nothing to click for four
+   * seconds, and dropping it would trip the lock-loss pause on the very frame
+   * the shot begins — pausing the thing the player was about to be shown.
+   * `enterDeploy` is still what releases it, one state later.
+   *
+   * If the cam cannot come up at all — no rig, which means no round has started
+   * — this falls straight through to the deploy screen at the full delay. A
+   * state whose exit condition is a clock that never starts is a game that
+   * never respawns you, and that is the one failure here worth spelling out.
+   */
+  private enterDying(from: Vector3 | undefined, amount: number): void {
+    this.deathFeet.set(
+      this.player.position.x,
+      this.player.floorY,
+      this.player.position.z,
+    );
+    this.deathCam.start(
+      this.deathFeet,
+      this.cameraSys.yaw,
+      this.cameraSys.camera.position,
+      this.cameraSys.forward,
+      from,
+      amount,
+    );
+    if (!this.deathCam.active) {
+      this.enterDeploy(CONFIG.conquest.respawnDelay);
+      return;
+    }
+    // The weapon is parented to the camera, so it would ride the cam out of
+    // the head and hang in front of the body — the same reason `enterDeploy`
+    // puts it away, arriving one state earlier.
+    this.player.setBodyHidden(true);
+    // Anything on the HUD that is about aiming is now a lie: there is no
+    // crosshair to believe and the damage arcs are anchored to a view yaw that
+    // has stopped being the player's.
+    this.hud.setDeathCam(true);
+    this.hud.clearDamageDirections();
+    this.state = "dying";
   }
 
   /**

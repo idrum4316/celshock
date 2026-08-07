@@ -47,8 +47,12 @@ person retired it — the camera is inside the head, so there is no own-body to
 render — and `Player` no longer imports it, which is what keeps the module and
 its multi-megabyte `models/*.glb` out of the production bundle. Kept, not
 deleted, because it is the only rigged-character work in the tree and a
-killcam or spectator view would want it back. Do not wire it into anything
-new, and do not extend the GLB approach to bots or weapons.
+spectator view would want it back. **The death cam is not that case and
+deliberately does not use it** — it stands up a bot rig instead, because four
+seconds of screen time is not worth pulling multi-megabyte `models/*.glb` back
+into the production bundle, and the bot rig is already what the ragdoll's bone
+table is measured against. See "The death cam". Do not wire the GLB body into
+anything new, and do not extend the GLB approach to bots or weapons.
 
 **Every source file has a contract header** at the top stating what it owns,
 its invariants, and what it must never do. Read it before editing that file.
@@ -176,6 +180,23 @@ have already cost time:
   question before it is a visual one**: the joints' height spread says whether a
   body is face-down (all within ~0.01 m) or on its side (~0.5 m), which a
   headless screenshot at this scale will not.
+- **The death cam is the one thing here that is NOT steppable synchronously**,
+  and that is by design rather than an oversight: it is a game state, so it
+  advances only from `tick`, which means real rendered frames at ~2 fps. Budget
+  for it — its 4 s of game time is ~80 s of wall clock at the 0.05 clamp — and
+  SAMPLE `g.deathCam.elapsed` in a loop rather than sleeping a fixed wait and
+  hoping. Everything else about it is forceable: `g.player.takeDamage(999, from)`
+  enters it from a live round with a known impact bearing, `g.deathCam.corpse`
+  is the stand-in body (`.rig`, `.ragdolling`), and `g.deathCam.stop()` plus
+  `g.state = "playing"` and `g.player.fullReset()` gets back out for a second
+  take without restarting the round. Two things worth knowing. The corpse rig is
+  built ONCE per process and never rebuilt, so the hand-back matters more here
+  than it does for a bot: assert `rotationQuaternion === null` on all nine posed
+  joints after a cam, plus each one's parent and local position against
+  `rig.rest` — a leak is permanent rather than one bad life. And the fallback
+  path is reached with `g.ragdolls.setEnabled(false)` before the kill, where the
+  thing to check is that the rig is STILL ENABLED past `bots.death.hideTime`,
+  which is the one way it differs from `Bot`'s copy of the same tween.
 - **The ash field is frozen for a pixel diff with `stop()` + `reset()`**, on
   `g.atmosphere.system` — it empties the field and, crucially, keeps it empty.
   That still holds now the field runs on `GPUParticleSystem`, but only because
@@ -283,10 +304,16 @@ src/
     GrenadeSystem.ts        # The one thing that isn't hitscan: thrown
                             #   grenades, their bounces, the fuse, the blast,
                             #   + BlastDust, the cloud it lifts off the ground
-    RagdollSystem.ts        # Bot corpses under physics: the ONLY Havok in the
+    RagdollSystem.ts        # Corpses under physics: the ONLY Havok in the
                             #   game, the only place a physics engine is
                             #   touched, and entirely optional — every refusal
-                            #   falls back to Bot's collapse tween
+                            #   falls back to a collapse tween. Holds
+                            #   RagdollSubjects, and cannot tell a dead bot
+                            #   from the player's stand-in body
+    DeathCam.ts             # The player's own death: ONE bot rig stood up
+                            #   where they fell, thrown by the round that did
+                            #   it, and the camera out of the head to watch —
+                            #   plus the only occlusion pick outside combat
     AimAssistSystem.ts      # Gamepad-only aim assist: an outer bubble that
                             #   slows the stick, an inner one that rotates —
                             #   mostly adhesion (matching the target's angular
@@ -422,14 +449,19 @@ applies the environment and repaints the sky, while the editor drives
 owns what is about a *fight* rather than a map — battle, conquest, the flag
 markers and the minimap.
 
-`Game`'s state machine is `menu -> deploy -> playing`, with `deploy` re-entered
-on every death and `roundover` when a side runs out of tickets. The 3D scene
-renders in every state, which is what lets the deploy screen and the menu sit
-over a live view.
+`Game`'s state machine is `menu -> deploy -> playing -> dying -> deploy`, with
+`roundover` when a side runs out of tickets. The 3D scene renders in every
+state, which is what lets the deploy screen and the menu sit over a live view.
+
+**`dying` is the death cam and is a STEP, not a lid** — see "The death cam".
+That distinction is the feature rather than a detail: `updateWorld` runs in
+full underneath it, so the fight the player just lost carries on while they
+watch their own body land. A lid would stop it.
 
 **`loadout` and `paused` are lids, not steps in that cycle.** Each records
 which state it covered (`loadoutFrom` / `pausedFrom`) and puts it back. The
-loadout screen covers `menu` or `deploy`; a pause covers `playing` or `deploy`.
+loadout screen covers `menu` or `deploy`; a pause covers `playing`, `dying` or
+`deploy`.
 
 A pause taken while waiting out a respawn therefore returns to the deploy map
 rather than dropping the player into the world.
@@ -1936,9 +1968,10 @@ why losing a target does not simply null it: `BotMemory.lastAimed` outlives
 `target`, and re-acquiring the same enemy resumes at `profile.reacquireDelay`
 instead of from zero.
 
-### Bot deaths, and the one physics engine
+### Deaths, and the one physics engine
 
-A killed bot falls under **Havok** (`src/systems/RagdollSystem.ts`). This is the
+A killed bot falls under **Havok** (`src/systems/RagdollSystem.ts`), and so does
+the stand-in body the death cam stands up when the player is killed. This is the
 only physics engine in the tree, the only place `@babylonjs/havok` is imported,
 and a deliberate exception to "no asset files" — it ships a 2 MB WASM binary,
 requested explicitly. It buys nothing but the fall: **nothing here feeds
@@ -2001,6 +2034,90 @@ gravity, damping, corpse life). The impulse needs no new plumbing: `takeDamage`
 is already handed the shooter's origin (or the blast centre), so `Bot` captures
 `deathFrom`/`deathDamage` there and `Game.registerBotKill` — the one place all
 three ways of dying converge — offers the body to the pool.
+
+**The pool holds `RagdollSubject`s and cannot tell the two kinds apart.** That
+interface lives in `SoldierModel.ts`, beside the rig and the bone table it is a
+fact about — not in `RagdollSystem`, because `DeathCam` needs it too and a
+system may not import another one. `Bot` satisfies it structurally and imports
+nothing, which is what keeps `Bot.ts` free of any knowledge that a physics
+engine exists. `retire(subject)` is the one thing the player's corpse needs that
+a bot's does not: a bot's body outlives the death cam's whole window and goes on
+its own clock, while the player's has to be gone before the deploy screen comes
+up over it.
+
+### The death cam
+
+Killing the player used to cut straight to the deploy map. Now `Game` goes
+`playing -> dying` first: a body is stood up where they fell, thrown by the
+round that did it, and the camera leaves the head to watch it land
+(`src/systems/DeathCam.ts`, `CONFIG.player.deathCam`).
+
+**It is a step in the state machine, not a lid, and that is the whole feature.**
+`updateWorld` — objectives, bots, rounds in the air, bodies on the ground — runs
+in full underneath it, so the tickets bleed, a squad takes the flag you died on,
+and your killer walks past while you watch. A lid stops all of that, and a death
+cam over a frozen world is a screenshot. `updateWorld` was split out of
+`updateGameplay` for exactly this: the cam needs every line of it and not one
+line of what surrounds it, and two copies of that sequence would drift apart the
+way `installMap`'s note describes one layer down.
+
+**It costs no time.** `enterDeploy` is opened with `respawnDelay` MINUS the time
+already spent, so a life is still eight seconds end to end and the only thing
+that changed is what fills the first four. Lengthening `time` without that
+subtract turns a piece of feedback into a punishment.
+
+Seven things are load-bearing:
+
+- **The body is the BOT rig**, and `entities/GlbSoldier.ts` stays retired. The
+  bot rig is nine merged meshes, is already what `RAGDOLL_BONES` is measured
+  against, and hands to the pool with nothing adapted; the GLB body would put
+  multi-megabyte `models/*.glb` back in the production bundle for four seconds
+  of screen time. It is built at `startRound`, not at the moment of death — nine
+  merged meshes and their GL buffers is not a cost to pay on the frame the
+  player is killed on.
+- **It is a stand-in, not the player.** `Player` has no rig and never grows one:
+  it is a capsule, a viewmodel and an eye. The corpse is a separate object stood
+  up at `Player.floorY` (the FEET — `Player.position` is the middle of the
+  collider capsule) and hidden again at the end, so nothing in movement,
+  collision or hit detection ever gains a mesh to disagree with.
+- **The camera leaves the head through `CameraSystem.place`, the one exception
+  to that system's own invariant**, and `update` is simply not called in that
+  window — so no look input, ADS blend, recoil, bob or landing spring advances,
+  and the aim is exactly where it was left when the round comes back. `place`
+  writes the roll and the FOV explicitly, or a camera handed over mid-landing
+  would watch the body through a tilted, zoomed frame for four seconds.
+- **The pull-in is the only occlusion pick in the game outside combat**, and it
+  is cast from the BODY outward, never from the camera in — a ray the other way
+  starts inside whatever the camera has already backed into and reports the far
+  face of it, walking the camera further into the stone. Its origin is the
+  body's own chest rather than the look point, which during the rise is still
+  partly what the player was looking at and can be inside a wall they died
+  facing. Measured against the valley rim: the camera stops 0.22–0.27 m short of
+  the collider face and never crosses it. It is affordable because
+  `Player.probeGround` — the frame's most expensive pick — is not running while
+  the player is dead.
+- **The frame is anchored on the corpse's own chest joint**, smoothed at
+  `followRate`, which is what makes one set of numbers work at both ends of the
+  fall: a standing body puts the chest at ~1.1 m and a fallen one at ~0.3 m, and
+  the camera comes down with it. The joint is read with `computeWorldMatrix(true)`
+  first — while the ragdoll owns it, its parent is a proxy node the solver moved
+  this frame, and `getAbsolutePosition` alone returns a stale cache.
+- **Physics is optional here exactly as it is for a bot**, and the fallback is
+  `Bot`'s collapse tween with one difference: it is NOT followed by the hide at
+  `hideTime`. A body that vanishes two thirds of a second into a four-second
+  shot of it is the thing this state exists to remove.
+- **The pointer lock is deliberately KEPT.** There is nothing to click, and
+  dropping it would trip the lock-loss pause on the very frame the shot begins.
+  `enterDeploy` is still what releases it, one state later — and it is also the
+  single funnel for retiring the body, so every path out (the clock, the round
+  ending, F2) hands the rig back without remembering to.
+
+`HUD.setDeathCam` raises `.dying`, which hides the same four things `.paused`
+does and is a class of its own anyway: the two agree by coincidence, not by
+meaning. A pause hides them because the world stopped; this hides them because
+the world did *not* and the player is simply no longer in it. The gauges stay
+for the mirror-image reason — they are live and true, and watching the tickets
+run while you wait is half of why the cam is worth showing.
 
 ### Bot perception, cover and skill
 
