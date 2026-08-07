@@ -424,7 +424,36 @@ export function buildChapel(scene: Scene, mats: CelMaterialFactory): Structure {
 
 /**
  * The barn: a big open timber shed with a hayloft platform reachable by an
- * external ramp. Holds flag D and is the map's main piece of verticality.
+ * external ramp. Holds flag D and is the map's main piece of verticality —
+ * "the map's best perch and the ramp to it is exposed", per the layout's own
+ * design intent, which only means anything if the perch can be reached.
+ *
+ * Five things here are load-bearing rather than decorative, and every one of
+ * them is what the ramp needed to stop being a dead end you could walk up and
+ * nothing more:
+ *
+ * - **The east wall is built AROUND the loft opening** — two jambs, a sill and
+ *   a lintel — not as one full-height slab with a plank glued on where a door
+ *   should be. `b.wall` emits a collider, so a solid wall is solid at the loft
+ *   whatever is drawn on it.
+ * - **The sill's top face IS the threshold.** It stands flush with both the
+ *   loft floor and the deck outside, so `NavGrid` finds one continuous height
+ *   through the opening: `severLinks` spares a box standing no more than
+ *   `stepHeight` above the higher end of a link, which is exactly what a flush
+ *   sill is.
+ * - **The ramp lands on a level deck, not on the doorway.** A pitched
+ *   collider's top face is a different height on each side of a threshold, and
+ *   the deck is what gives the ramp and the loft one flat surface to meet on.
+ * - **The pitch is derived from the RUN and the slab is cut to the SLOPE.**
+ *   Those are not the same number, and conflating them (`pitch =
+ *   atan2(rise, slabLength)`) is what left the old ramp 0.3 m short of the
+ *   loft and 1.5 m past the barn's north end. `stepHeight` (0.6) over
+ *   `cellSize` (1.5) also caps the gradient at 0.4 — a steeper ramp severs
+ *   itself from its own top and is walkable by the player and invisible to
+ *   every bot.
+ * - **The ramp runs on past the ground rather than stopping level with the
+ *   barn's own floor** — see `rampDrop`, which is what makes it meet the
+ *   terrain whatever `y` the placement carries.
  */
 export function buildBarn(scene: Scene, mats: CelMaterialFactory): Structure {
   const b = new Build(scene, mats, "barn");
@@ -433,44 +462,195 @@ export function buildBarn(scene: Scene, mats: CelMaterialFactory): Structure {
   const h = 8;
   const t = 0.4;
 
+  // The loft is what the rest of the building is dimensioned against.
+  /** Walkable height of the hayloft — the surface, not the slab's centre. */
+  const loftTop = 4.2;
+  const loftT = 0.3;
+  const loftD = d / 3;
+  /** Flush with the north wall's inner face, so the hay door opens onto it. */
+  const loftZ = d / 2 - t / 2 - loftD / 2;
+
+  // The loft doorway in the east wall, and the deck the ramp lands on.
+  const doorW = 3.2;
+  const doorH = 2.4;
+  const doorS = loftZ - doorW / 2;
+  const doorN = loftZ + doorW / 2;
+  const deckW = 3.4;
+  const deckD = doorW + 1.2;
+  const deckX = w / 2 + t / 2 + deckW / 2;
+  /** The deck's south edge — where the ramp arrives. */
+  const deckS = loftZ - deckD / 2;
+
   b.box(w, 0.2, d, 0, 0.1, 0, PLANK);
   b.doorWall(w, h, t, 0, h / 2, -d / 2, PLANK, 4.5, 5);
-  b.doorWall(w, h, t, 0, h / 2, d / 2, PLANK, 4.5, 5);
+  // The north cart door runs up PAST the loft floor, which is what turns its
+  // upper half into a hay door: the perch's whole value is the sightline over
+  // the paddocks, and a wall at the loft's north edge is a room with a view of
+  // planks.
+  b.doorWall(w, h, t, 0, h / 2, d / 2, PLANK, 4.5, loftTop + doorH);
   b.wall(t, h, d, -w / 2, h / 2, 0, PLANK);
-  b.wall(t, h, d, w / 2, h / 2, 0, PLANK);
+
+  // East wall, in four pieces around the loft doorway.
+  const jambS = doorS + d / 2;
+  b.wall(t, h, jambS, w / 2, h / 2, doorS - jambS / 2, PLANK);
+  const jambN = d / 2 - doorN;
+  b.wall(t, h, jambN, w / 2, h / 2, doorN + jambN / 2, PLANK);
+  b.wall(t, loftTop, doorW, w / 2, loftTop / 2, loftZ, PLANK);
+  const lintel = h - loftTop - doorH;
+  b.wall(t, lintel, doorW, w / 2, h - lintel / 2, loftZ, PLANK);
+  // Frame, so the opening reads as a door rather than as missing wall.
+  for (const sz of [-1, 1]) {
+    const z = loftZ + sz * (doorW / 2 - 0.08);
+    b.box(t + 0.14, doorH, 0.16, w / 2, loftTop + doorH / 2, z, TIMBER);
+  }
+  b.box(t + 0.14, 0.16, doorW, w / 2, loftTop + doorH - 0.08, loftZ, TIMBER);
+
   for (let i = -3; i <= 3; i++) {
+    const z = i * 3.2;
     for (const sx of [-1, 1]) {
-      b.box(0.3, h, 0.3, (sx * w) / 2, h / 2, i * 3.2, TIMBER);
+      // No corner post standing across the loft doorway.
+      if (sx > 0 && Math.abs(z - loftZ) < doorW / 2 + 0.3) continue;
+      b.box(0.3, h, 0.3, (sx * w) / 2, h / 2, z, TIMBER);
     }
   }
   b.gableRoof(w, d, 3.4, 0, h, 0, PLANK, 0.6);
 
   // Hayloft: a solid floor over the north third, walkable from the ramp.
-  const loftY = 4.2;
-  const loftD = d / 3;
-  const loftZ = d / 2 - loftD / 2;
-  b.box(w - t * 2, 0.3, loftD, 0, loftY, loftZ, PLANK);
-  b.block({ w: w - t * 2, h: 0.3, d: loftD, x: 0, y: loftY, z: loftZ });
-  b.box(w - t * 2, 0.5, 0.2, 0, loftY + 0.4, loftZ - loftD / 2, TIMBER); // lip
-
-  // External ramp up the east side to the loft doorway.
-  const rampLen = 11;
-  const pitch = Math.atan2(loftY, rampLen);
-  b.box(3, 0.3, rampLen, w / 2 + 1.9, loftY / 2, loftZ, PLANK, { x: -pitch });
+  b.box(w - t * 2, loftT, loftD, 0, loftTop - loftT / 2, loftZ, PLANK);
   b.block({
-    w: 3,
-    h: 0.3,
-    d: rampLen,
-    x: w / 2 + 1.9,
-    y: loftY / 2,
+    w: w - t * 2,
+    h: loftT,
+    d: loftD,
+    x: 0,
+    y: loftTop - loftT / 2,
     z: loftZ,
-    rotX: -pitch,
   });
-  b.box(0.3, 1.2, rampLen, w / 2 + 3.3, loftY / 2 + 0.8, loftZ, TIMBER, {
-    x: -pitch,
+  for (let i = -2; i <= 2; i++) {
+    const z = loftZ + (i * loftD) / 5;
+    b.box(w - t * 2, 0.22, 0.22, 0, loftTop - loftT - 0.11, z, TIMBER); // joist
+  }
+  // The south edge's lip is VISUAL ONLY, deliberately: the drop into the barn
+  // is the loft's second exit and the thing you shoot down through. A collider
+  // here is a rail you can neither step off nor fire over.
+  b.box(w - t * 2, 0.5, 0.2, 0, loftTop + 0.25, loftZ - loftD / 2, TIMBER);
+  // Loose hay. Flat pads rather than bales: anything up here tall enough to
+  // read as cover has to be a collider, and a bale's top face would be a
+  // standable surface 0.9 m clear of the floor that nothing can link to.
+  for (const sx of [-1, 1]) {
+    const x = sx * (w / 2 - 2.4);
+    b.box(2.6, 0.14, 2.2, x, loftTop + 0.07, loftZ + loftD / 2 - 1.4, THATCH);
+  }
+
+  // The deck outside the loft door.
+  const deckT = 0.3;
+  b.box(deckW, deckT, deckD, deckX, loftTop - deckT / 2, loftZ, PLANK);
+  b.block({
+    w: deckW,
+    h: deckT,
+    d: deckD,
+    x: deckX,
+    y: loftTop - deckT / 2,
+    z: loftZ,
   });
-  // Loft doorway in the east wall — the ramp arrives here.
-  b.box(0.5, 2.4, 3, w / 2, loftY + 1.4, loftZ, PLANK);
+  for (const sz of [-1, 1]) {
+    const z = loftZ + sz * (deckD / 2 - 0.3);
+    const postH = loftTop - deckT;
+    b.box(0.28, postH, 0.28, deckX + deckW / 2 - 0.3, postH / 2, z, TIMBER);
+  }
+
+  // External ramp up the east side to that deck. 0.35 rise over run, inside
+  // the nav graph's 0.4 slope limit.
+  const rampGrade = 0.35;
+  /**
+   * How far below the barn's own floor the ramp keeps going. A ramp whose foot
+   * stops exactly at the structure's origin only meets the ground when the
+   * placement's `y` is zero and the floor under it is level, and it misses by
+   * centimetres otherwise — the second barn on Hollowmere carries `y: 0.33`,
+   * which lifted the foot to 0.62 above the ground it stands on, two
+   * centimetres past `stepHeight`, and severed the whole loft from the graph.
+   * A `stepHeight` of overrun buries the last 1.7 m instead, where the terrain
+   * simply wins the surface (`addSurface` keeps the higher of two within
+   * `HEIGHT_EPS`) and costs nothing.
+   */
+  const rampDrop = 0.6;
+  const rampRun = (loftTop + rampDrop) / rampGrade;
+  const rampT = 0.3;
+  const rampPitch = Math.atan2(loftTop + rampDrop, rampRun);
+  /** The slab's own length: it spans the run only once it is tilted. */
+  const rampLen = Math.hypot(rampRun, loftTop + rampDrop);
+  // Placed by its TOP face — the surface walked on has to meet the deck at one
+  // end and pass through the ground at the other. `topFaceHeight` measures the
+  // slab's half-thickness VERTICALLY, so that term is h/2/cos, not h/2*cos.
+  const rampY = (loftTop - rampDrop) / 2 - rampT / 2 / Math.cos(rampPitch);
+  const rampZ = deckS - rampRun / 2;
+  /** The ramp's walked surface at a point `lz` along the slab. */
+  const rampTopAt = (lz: number): number =>
+    rampY + rampT / 2 / Math.cos(rampPitch) + lz * Math.tan(rampPitch);
+  b.box(deckW, rampT, rampLen, deckX, rampY, rampZ, PLANK, { x: -rampPitch });
+  b.block({
+    w: deckW,
+    h: rampT,
+    d: rampLen,
+    x: deckX,
+    y: rampY,
+    z: rampZ,
+    rotX: -rampPitch,
+  });
+  // Cleats across the ramp. Local (0, y, z) on a slab pitched by -rampPitch
+  // lands at world (0, y*cos + z*sin, z*cos - y*sin).
+  for (let i = -4; i <= 4; i++) {
+    const ly = rampT / 2 + 0.04;
+    const lz = (i * rampLen) / 10;
+    // Nothing below the ground line: the last stretch of slab is buried.
+    if (rampTopAt(lz) < 0.1) continue;
+    b.box(
+      deckW - 0.3,
+      0.08,
+      0.14,
+      deckX,
+      rampY + ly * Math.cos(rampPitch) + lz * Math.sin(rampPitch),
+      rampZ - ly * Math.sin(rampPitch) + lz * Math.cos(rampPitch),
+      TIMBER,
+      { x: -rampPitch },
+    );
+  }
+
+  // Handrail up the ramp's outer edge and round the deck. Visual only, the
+  // same call `buildRamp` makes for its kerb stones: a 0.16 m collider is
+  // thinner than a nav cell, so all it reliably does is drop a standable
+  // surface a rail's height above the ramp into whichever cells happen to
+  // sample it — an island nothing can reach, for a rail that reads perfectly
+  // well as the edge of the route without one.
+  const railH = 1.1;
+  const railX = deckX + deckW / 2 - 0.08;
+  const railOff = (rampT + railH) / 2;
+  b.box(
+    0.16,
+    railH,
+    rampLen,
+    railX,
+    rampY + railOff * Math.cos(rampPitch),
+    rampZ - railOff * Math.sin(rampPitch),
+    TIMBER,
+    { x: -rampPitch },
+  );
+  b.box(0.16, railH, deckD, railX, loftTop + railH / 2, loftZ, TIMBER);
+  b.box(deckW, railH, 0.16, deckX, loftTop + railH / 2, loftZ + deckD / 2 - 0.08, TIMBER);
+
+  // A lantern over the loft door, hung off the wall on a bracket: the same
+  // iron arm / tapered housing / capped flame `lamp` is built from, because a
+  // bare `glow` is a flame floating in mid-air with nothing holding it. The
+  // arm beds into the LINTEL rather than crossing the opening, and the housing
+  // hangs clear above the door's head. The farmstead is the darkest district
+  // on the map and the ramp is meant to be an exposed approach, which it can
+  // only be if the player can see it is there.
+  const lampY = loftTop + doorH + 0.5;
+  const lampX = w / 2 + t / 2 + 0.7;
+  b.box(0.9, 0.1, 0.1, w / 2 + t / 2 + 0.4, lampY + 0.3, loftZ, IRON);
+  b.cyl(0.62, 0.42, 0.3, 6, lampX, lampY, loftZ, IRON);
+  b.glow(0.3, 0.3, 0.3, lampX, lampY, loftZ, FLAME);
+  b.cyl(0.18, 0.1, 0.5, 6, lampX, lampY + 0.4, loftZ, IRON);
+  b.light(FLAME, 22, 1.9, 0.28, lampX, lampY, loftZ);
 
   return b;
 }

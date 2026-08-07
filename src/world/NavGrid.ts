@@ -247,10 +247,38 @@ export class NavGrid {
    * a gradient of 0.4 (~22 deg) and severs itself above that. Nothing else
    * enforces it, which is why the editor validates a terrain rect's skirt
    * against the same ratio.
+   *
+   * ## Why blocked surfaces are decided FIRST
+   *
+   * A surface keeps one link per direction — the nearest neighbour within a
+   * step — and a surface with no headroom can never be stood on, so letting
+   * one win that slot spends the link on a dead end. That is not a rounding
+   * error: it is what made every ramp on the map a coin toss.
+   *
+   * Walk one. The ground under a ramp is blocked for as long as the slab is
+   * within `HEADROOM` of it, and the ramp's own top face is a *separate*
+   * surface only once it stands more than `HEIGHT_EPS` (0.35 m) above that
+   * ground — below which `addSurface` merges the two and the entry is free.
+   * So there is a band, from 0.35 m up to the `step` (0.6 m) where the buried
+   * ground drops out of range entirely, in which both surfaces are candidates
+   * and the blocked one is nearer. At the barn's 0.35 gradient a 1.5 m cell
+   * climbs 0.525 m, so whether a ramp's samples land in that band is decided
+   * by where the grid's cell centres happen to fall against its foot — i.e. by
+   * the placement's world position. The barn's loft ramp landed in it and the
+   * hayloft was unreachable by every bot on the map; the boathouse's identical
+   * ramp escaped only because the bog floor slopes away under it.
+   *
+   * Skipping blocked candidates cannot cost connectivity, because the flood
+   * fill already refuses to traverse a blocked surface — the link was a dead
+   * end either way. `clearBlocked` reads only `counts`/`heights`, so it is
+   * free to run before the graph it now informs.
    */
   private link(boxes: WorldBox[]): void {
     const step = CONFIG.nav.stepHeight;
     const linkStride = NEIGHBOURS.length;
+
+    // Anything with a solid box sitting on top of it is not standable.
+    this.clearBlocked(boxes);
 
     for (let cz = 0; cz < this.dim; cz++) {
       for (let cx = 0; cx < this.dim; cx++) {
@@ -264,15 +292,17 @@ export class NavGrid {
             const nz = cz + dz;
             if (nx < 0 || nz < 0 || nx >= this.dim || nz >= this.dim) continue;
             const ncell = nz * this.dim + nx;
-            // Nearest neighbouring surface within a step, if any.
+            // Nearest STANDABLE neighbouring surface within a step, if any.
             let best = -1;
             let bestDy = Infinity;
             for (let ni = 0; ni < this.counts[ncell]; ni++) {
-              const ny = this.heights[ncell * MAX_SURFACES + ni];
+              const other = ncell * MAX_SURFACES + ni;
+              if (this.blocked[other]) continue;
+              const ny = this.heights[other];
               const dy = Math.abs(ny - y);
               if (dy <= step && dy < bestDy) {
                 bestDy = dy;
-                best = ncell * MAX_SURFACES + ni;
+                best = other;
               }
             }
             this.links[surface * linkStride + n] = best;
@@ -283,9 +313,6 @@ export class NavGrid {
 
     // Links that pass straight through a wall thinner than a cell.
     this.severLinks(boxes);
-
-    // Anything with a solid box sitting on top of it is not standable.
-    this.clearBlocked(boxes);
 
     // Flood from the map's outer ring, which is guaranteed open ground.
     const queue: number[] = [];

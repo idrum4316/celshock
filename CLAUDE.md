@@ -1957,6 +1957,30 @@ only counts as a barrier where it stands more than `stepHeight` above both ends
 of the link, so decks, kerbs and the terrace's own top face don't cut the links
 leading onto themselves.
 
+**A surface keeps ONE link per direction — the nearest STANDABLE neighbour —
+and that is why `clearBlocked` runs before `link` rather than after it.** A
+surface with no headroom can never be stood on, so letting one win the single
+slot spends the link on a dead end the flood fill already refuses to traverse.
+It is not a rounding error: it is what made every ramp on the map a coin toss.
+The ground *under* a ramp is blocked for as long as the slab is within
+`HEADROOM` of it, while the ramp's own top face is a separate surface only once
+it stands more than `HEIGHT_EPS` (0.35 m) above that ground — below which
+`addSurface` merges the two and the climb is free. Between 0.35 m and the
+`stepHeight` at which the buried ground drops out of range entirely there is a
+band where both are candidates and the blocked one is nearer, and whether a
+ramp's cell centres land in that band is decided by the placement's world
+position. The barn's loft ramp landed in it and the hayloft was unreachable by
+every bot on the map; the boathouse's identical ramp escaped only because the
+bog floor slopes away underneath it.
+
+**A ramp must also run on PAST the ground rather than stopping level with its
+own structure's floor.** Nothing guarantees a placement's `y` is zero or the
+floor under it level, and a foot that ends up even a couple of centimetres over
+`stepHeight` above the terrain severs everything above it — Hollowmere's second
+barn carries `y: 0.33` and did exactly that. A `stepHeight` of overrun buries
+the last stretch instead, where the terrain simply wins the surface and it
+costs nothing. `buildBarn`'s `rampDrop` is the worked example.
+
 One flow field per objective (5 flags + 2 home spawns) is precomputed at load;
 the map is static so nothing is ever recomputed. Bots read `nav.steer()` and
 never run their own pathfinding.
