@@ -1525,6 +1525,17 @@ export class Game {
     this.input.clearCrouchToggle();
     this.input.clearSprintToggle();
     this.state = "playing";
+    // `enterDeploy` dropped the lock, and until now the only thing that ever
+    // took it back was a click — the `pointerdown` handler in the constructor,
+    // which is the deploy map's own click arriving a moment later. A pad player
+    // never generates one, so every deployment left them in the world with the
+    // OS cursor sitting over the crosshair until they reached for the mouse.
+    // Taking it here covers both: the click path asks twice in the same gesture
+    // (harmless — the second request resolves onto the same lock) and the pad
+    // path asks at all. It is a best effort, exactly as `requestLock`'s note
+    // says: a browser that insists on a user gesture refuses, and a pad player
+    // there is no worse off than before.
+    this.requestLock();
   }
 
   /**
