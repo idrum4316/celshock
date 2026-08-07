@@ -20,17 +20,21 @@
  * - The light position is snapped to the shadow map's texel grid as it
  *   tracks the player, so shadow edges stay rock steady instead of crawling.
  * - The depth map re-renders only when the snapped focus moves.
+ * - The depth pass draws only the casters standing in the window (see
+ *   getCustomRenderList) — Babylon culls nothing off an explicit renderList.
  * - Meshes with metadata.noShadowCaster (flat ground sheets, roads) must
  *   never be registered — they are receivers, and casting from them is acne.
  * - Blob discs are isPickable=false, metadata.noOutline, and never casters.
+ * - updateBlobs takes the player's ground height rather than probing for it:
+ *   Player.floorY is that number, already found this frame.
  */
 import {
+  type AbstractMesh,
   Color3,
   DirectionalLight,
   DynamicTexture,
   Mesh,
   MeshBuilder,
-  Ray,
   RenderTargetTexture,
   type Scene,
   ShadowGenerator,
@@ -46,14 +50,21 @@ export class ShadowSystem {
   private readonly generator: ShadowGenerator;
   private readonly blobMaterial: StandardMaterial;
   private readonly blobs = new Map<Combatant, Mesh>();
-  /** Reused ray for the player's ground probe — no per-frame allocation. */
-  private readonly groundRay = new Ray(Vector3.Zero(), new Vector3(0, -1, 0), 12);
   /** Last texel-snapped focus; forces a first update. */
   private readonly snappedFocus = new Vector3(
     Number.POSITIVE_INFINITY,
     Number.POSITIVE_INFINITY,
     Number.POSITIVE_INFINITY,
   );
+  /**
+   * The two cross-axes of the light's own basis, kept from `update` so the
+   * render-list cull can project casters into it. The third is the light's
+   * direction, which `DirectionalLight` already holds.
+   */
+  private readonly xAxis = new Vector3(1, 0, 0);
+  private readonly yAxis = new Vector3(0, 1, 0);
+  /** Scratch for the cull, rebuilt on the frames the depth pass re-renders. */
+  private readonly windowCasters: AbstractMesh[] = [];
   private fogStart = 24;
   private fogEnd = 78;
 
@@ -82,6 +93,15 @@ export class ShadowSystem {
       // the texel-snapped light window didn't move.
       map.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
       map.resetRefreshCounter();
+      // Draw only what stands in the window. Babylon culls NOTHING off an
+      // explicit renderList — `ObjectRenderer._prepareRenderingManager`
+      // dispatches every mesh that is enabled and visible — so without this
+      // the depth pass submits the whole village on every re-render: measured
+      // at 314 casters and 79k triangles, against ~150 that can reach the
+      // window. It is called only on the frames that actually re-render,
+      // which is why the cull is computed here rather than kept up to date in
+      // `update`.
+      map.getCustomRenderList = () => this.cullToWindow(map.renderList ?? []);
     }
     mats.setShadowMap(this.generator.getShadowMap()!);
     mats.setShadowParams(c.bias, c.darkness, c.normalBias);
@@ -147,6 +167,66 @@ export class ShadowSystem {
   }
 
   /**
+   * The casters that can write into the current shadow window.
+   *
+   * The light is ORTHOGRAPHIC, so a caster's shadow lands at its own position
+   * in the light's plane — depth slides it along the view axis and never
+   * sideways. That is what makes this exact rather than a guess: testing a
+   * caster's bounds against the window in that plane cannot drop anything that
+   * could have darkened a texel, so the depth map is identical to the one the
+   * full list produces. A cull that had to allow for shadows cast in from
+   * outside would need the window extended along the light, and this one does
+   * not.
+   *
+   * The caster is measured as its world BOX rather than its bounding sphere —
+   * the |e·a| half-extent projection, exact for an AABB — because a block
+   * merge produces meshes that are wide and flat, and a sphere around one has
+   * a 34 m radius where the block is four metres tall. Measured on Hollowmere:
+   * 314 casters to 153 through the sphere, to ~150 through the box.
+   *
+   * **What bounds this is the granularity of a caster, not the test.** Every
+   * caster is one `BlockMerge` mesh — one per 48 m map block per colour, ~12
+   * to a block — so a 110 m window straddling four blocks each way admits
+   * everything in sixteen of them however tight the arithmetic. Splitting them
+   * finer would cull better and cost the main pass the draw calls the merge
+   * exists to save, which is a bad trade in the other direction.
+   *
+   * Every caster's world matrix is frozen, so this is a handful of dot
+   * products per caster on the frames that re-render.
+   */
+  private cullToWindow(all: readonly AbstractMesh[]): AbstractMesh[] {
+    const c = CONFIG.graphics.shadows;
+    const half = c.frustumSize / 2;
+    const dir = this.light.direction;
+    const ax = this.xAxis;
+    const ay = this.yAxis;
+    // Where the light's camera sits along its own view axis. The window's
+    // near and far planes are measured from there.
+    const camDepth = this.snappedFocus.z - c.distance;
+    const near = camDepth + this.light.shadowMinZ;
+    const far = camDepth + this.light.shadowMaxZ;
+    const list = this.windowCasters;
+    list.length = 0;
+    for (const mesh of all) {
+      const box = mesh.getBoundingInfo().boundingBox;
+      const p = box.centerWorld;
+      const e = box.extendSizeWorld;
+      const u = p.x * ax.x + p.y * ax.y + p.z * ax.z;
+      const ru = Math.abs(e.x * ax.x) + Math.abs(e.y * ax.y) + Math.abs(e.z * ax.z);
+      if (Math.abs(u - this.snappedFocus.x) > half + ru) continue;
+      const v = p.x * ay.x + p.y * ay.y + p.z * ay.z;
+      const rv = Math.abs(e.x * ay.x) + Math.abs(e.y * ay.y) + Math.abs(e.z * ay.z);
+      if (Math.abs(v - this.snappedFocus.y) > half + rv) continue;
+      const w = p.x * dir.x + p.y * dir.y + p.z * dir.z;
+      const rw =
+        Math.abs(e.x * dir.x) + Math.abs(e.y * dir.y) + Math.abs(e.z * dir.z);
+      if (w + rw < near || w - rw > far) continue;
+      list.push(mesh);
+    }
+    return list;
+  }
+
+  /**
    * Forces the depth pass to re-render next frame even though the snapped
    * focus has not moved. `update()` skips the render when the window has not
    * shifted, which is right in play — the map is static — but wrong when a
@@ -168,9 +248,16 @@ export class ShadowSystem {
     const c = CONFIG.graphics.shadows;
     const dir = this.light.direction;
     const texel = c.frustumSize / c.mapSize;
-    // LookAtLH basis: x = normalize(cross(up, z)), y = cross(z, x).
-    const xAxis = Vector3.Cross(Vector3.Up(), dir).normalize();
-    const yAxis = Vector3.Cross(dir, xAxis).normalize();
+    // LookAtLH basis: x = normalize(cross(up, z)), y = cross(z, x). Kept on
+    // the instance rather than in locals because the render-list cull projects
+    // into the same basis, and because this runs every frame — the ToRef forms
+    // are what stop it allocating four vectors to do it.
+    const xAxis = this.xAxis;
+    const yAxis = this.yAxis;
+    Vector3.CrossToRef(Vector3.UpReadOnly, dir, xAxis);
+    xAxis.normalize();
+    Vector3.CrossToRef(dir, xAxis, yAxis);
+    yAxis.normalize();
     const sx = Math.round(Vector3.Dot(focus, xAxis) / texel) * texel;
     const sy = Math.round(Vector3.Dot(focus, yAxis) / texel) * texel;
     // The depth axis is snapped too: an unsnapped window sliding along the
@@ -183,11 +270,11 @@ export class ShadowSystem {
       sz !== this.snappedFocus.z
     ) {
       this.snappedFocus.set(sx, sy, sz);
-      this.light.position.copyFrom(
-        xAxis
-          .scale(sx)
-          .addInPlace(yAxis.scale(sy))
-          .addInPlace(dir.scale(sz - c.distance)),
+      const depth = sz - c.distance;
+      this.light.position.set(
+        xAxis.x * sx + yAxis.x * sy + dir.x * depth,
+        xAxis.y * sx + yAxis.y * sy + dir.y * depth,
+        xAxis.z * sx + yAxis.z * sy + dir.z * depth,
       );
       this.generator.getShadowMap()?.resetRefreshCounter();
     }
@@ -195,17 +282,27 @@ export class ShadowSystem {
   }
 
   /**
-   * Moves every combatant's blob to their feet. Bots' `position.y` IS the
-   * nav surface they stand on; the player can be airborne, so their ground
-   * comes from a downward raycast against the collider set (one pick per
-   * frame). Blobs fade out toward the fog wall.
+   * Moves every combatant's blob to their feet. Bots' `position.y` IS the nav
+   * surface they stand on; the player can be airborne, so their blob needs the
+   * floor found under them rather than their own height.
+   *
+   * That floor is PASSED IN, and it is `Player.floorY` — the number
+   * `Player.probeGround` found on this same frame, a few calls earlier in
+   * `updateGameplay`. This used to cast its own downward ray for it, which was
+   * the identical probe against the identical collider set for the identical
+   * body: measured at 1.45 ms a frame, because `scene.pickWithRay` with a
+   * predicate walks all 1,775 meshes and ray-tests all 758 solid colliders.
+   * Two whole-scene picks a frame where the game only ever needed one.
+   *
+   * Blobs fade out toward the fog wall.
    */
   updateBlobs(
     player: Combatant,
     bots: readonly Combatant[],
     camPos: Vector3,
+    playerGroundY: number,
   ): void {
-    this.updateBlob(player, camPos, this.groundYUnder(player.position));
+    this.updateBlob(player, camPos, playerGroundY);
     for (const bot of bots) this.updateBlob(bot, camPos, bot.position.y);
   }
 
@@ -240,15 +337,5 @@ export class ShadowSystem {
       this.blobs.set(cbt, blob);
     }
     return blob;
-  }
-
-  /** Ground height under a point: first `solid` collider straight down. */
-  private groundYUnder(pos: Vector3): number {
-    this.groundRay.origin.set(pos.x, pos.y + 1, pos.z);
-    const hit = this.scene.pickWithRay(
-      this.groundRay,
-      (m) => m.metadata?.solid === true,
-    );
-    return hit?.hit && hit.pickedPoint ? hit.pickedPoint.y : pos.y;
   }
 }

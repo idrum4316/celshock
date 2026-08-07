@@ -3,9 +3,11 @@
  * pixels away from the moon, added back over the image. Owns the pass and the
  * moon's projected screen position; owns no scene state.
  * Invariants: runs BEFORE HorrorPost so the grade still lands on top of the
- * shafts, and early-outs to a straight copy whenever the moon is off screen —
- * the loop is the only expensive thing in the pass, and most of a round is
- * spent looking somewhere else. Fed by Game each frame from Sky.moonDirection.
+ * shafts, and is DETACHED by Game (see `isLive`) whenever the moon is behind
+ * the camera or off the side of the screen, which is most of a round. The
+ * shader's `presence <= 0` early-out is the second line of defence for the
+ * transition frame, not the saving: it skips the sample loop and still reads
+ * and writes the whole frame. Fed by Game each frame from Sky.moonDirection.
  */
 import {
   Camera,
@@ -105,7 +107,18 @@ export class GodRays {
   private readonly viewport = new Viewport(0, 0, 1, 1);
   private readonly identity = Matrix.Identity();
 
-  constructor(scene: Scene, camera: Camera) {
+  /**
+   * The pass is built UNATTACHED, and `Game` puts it on the camera.
+   *
+   * That is not tidiness: the pass comes off the camera whenever the moon is
+   * out of frame and goes back on when it returns, and Babylon's
+   * `detachPostProcess` leaves a null hole in the camera's list while
+   * `attachPostProcess` APPENDS — so a pass that attached itself here would
+   * have no way to say which slot it came out of, and every cycle would add a
+   * hole to an array walked every frame. Game holds that slot index, which it
+   * can only have if Game did the first attach.
+   */
+  constructor(scene: Scene) {
     const g = CONFIG.godRays;
     this.post = new PostProcess(
       "godRays",
@@ -122,7 +135,7 @@ export class GodRays {
       ],
       null,
       1.0,
-      camera,
+      null,
       undefined,
       scene.getEngine(),
     );
@@ -136,6 +149,31 @@ export class GodRays {
       effect.setFloat("intensity", g.intensity);
       effect.setFloat("threshold", g.threshold);
     };
+  }
+
+  /**
+   * The pass, for `Game` to attach and detach — exposed rather than given an
+   * attach/detach pair of its own for the same reason MotionBlur's is: the
+   * ORDER is the caller's business, and only what assembled the chain knows
+   * the shafts go between FXAA and the blur.
+   */
+  get pass(): PostProcess {
+    return this.post;
+  }
+
+  /**
+   * Whether the shafts are doing anything this frame — the moon in front of
+   * the camera and inside the fade.
+   *
+   * `Game` detaches the pass whenever this is false, and that is not the same
+   * as the shader's `presence <= 0` early-out. The early-out saves the sample
+   * loop; the pass is still a full-screen read and write of the frame either
+   * way, and this one is off screen for most of a round. MotionBlur documents
+   * the same rule from the other side: turning an effect off is a detach, not
+   * a zeroed uniform.
+   */
+  get isLive(): boolean {
+    return this.presence > 0;
   }
 
   /** The shafts take the moon's own colour; called when the sky is applied. */

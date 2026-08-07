@@ -1157,6 +1157,24 @@ re-registered every round via `shadows.setCasters(map.visuals)` (skip anything
 flat with `metadata.noShadowCaster`), and characters get blob-shadow discs
 instead of casting — the rigs are far too many meshes for the depth pass.
 
+**The depth pass draws only the casters standing in the window, and it has to
+do that culling itself.** Babylon culls nothing off an explicit `renderList`:
+`ObjectRenderer._prepareRenderingManager` dispatches every mesh in it that is
+enabled and visible, so the pass was submitting the whole village on every
+re-render — measured at 314 casters and 79k triangles against the ~150 that can
+reach a 110 m window. `ShadowSystem.cullToWindow`, hung off the shadow map's
+`getCustomRenderList`, is the fix, and it is **lossless rather than a quality
+trade**: the light is orthographic, so a caster's shadow lands at its own
+position in the light's plane and a box test in that plane cannot drop anything
+that could have darkened a texel. What bounds it is `BlockMerge`'s granularity
+— a caster is one mesh per 48 m block per colour — not the arithmetic.
+
+**The blob shadows do not probe for the player's ground; they are handed
+`Player.floorY`.** `Player.probeGround` is a whole-scene ray pick (1,775 meshes
+walked, 758 solid colliders tested, ~2.5 ms) and `ShadowSystem` used to cast the
+identical ray for the identical body on the same frame. Anything else wanting
+the floor under the player reads that field rather than probing again.
+
 Lights come in three flavors: static fixtures (`lighting.add()`, registered by
 `MapBuilder` from a builder's `LocalLight` list or a scatter prop's entry in
 `SCATTER_LIGHTS`), transient pulses (`lighting.pulse()` — muzzle flash), and
@@ -2026,8 +2044,18 @@ material trick Babylon's `VolumetricLightScatteringPostProcess` uses does not
 fit the cel materials — so **the luminance threshold IS the occlusion test**,
 and it has to sit above the brightest non-sky thing in the frame. That is the
 wet cobbled street (~0.67 looking along the moon); below it the road smears
-upward and the frame fills with ground haze. The pass early-outs to a copy
-whenever the moon is behind the camera or off screen, which is most of a round.
+upward and the frame fills with ground haze.
+
+**The pass is DETACHED whenever the moon is behind the camera or off the side
+of the screen**, which is most of a round — measured at 22 of 24 bearings on a
+level sweep. Its shader early-outs in that case too, but an early-out only
+skips the sample loop: an attached pass still reads and writes the whole frame,
+which is the same thing `MotionBlur` says about being switched off. `Game`
+owns the attachment (`syncGodRays`), and owns the pass's FIRST attach as well,
+because Babylon's `detachPostProcess` nulls the slot rather than removing it
+while `attachPostProcess` appends — so a pass that attached itself would have
+no way to name the hole it came out of, and every cycle would leave another
+one in a list walked every frame.
 
 ### The installable app
 

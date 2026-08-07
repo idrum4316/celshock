@@ -223,6 +223,14 @@ export class Game {
   private post: HorrorPost;
   /** Moon shafts. Driven from the sky's own moon direction every frame. */
   private godRays: GodRays;
+  /**
+   * Whether the shaft pass is on the camera, and which slot of the camera's
+   * post-process list it occupies. True to begin with — the constructor
+   * attaches it — and the first `syncGodRays` takes it off if the moon is not
+   * in frame.
+   */
+  private godRaysAttached = true;
+  private godRaysSlot = 0;
   private motionBlur: MotionBlur;
   /** The environment the sky is currently painted for — see applySky(). */
   private skyEnv: EnvironmentSpec | null = null;
@@ -333,7 +341,13 @@ export class Game {
     // Moon shafts read the finished frame and add light back into it, so they
     // come after FXAA and before the grade — the vignette and grain have to
     // land on top of the beams, not under them.
-    this.godRays = new GodRays(this.scene, this.cameraSys.camera);
+    this.godRays = new GodRays(this.scene);
+    // Attached here rather than by the pass itself, so the slot it lands in is
+    // known: `syncGodRays` takes it off and puts it back in the same hole all
+    // round, and Babylon has no way to ask where a pass used to be.
+    this.godRaysSlot = this.cameraSys.camera.attachPostProcess(
+      this.godRays.pass,
+    );
     // Then the look smears, with the shafts already in the frame — they belong
     // to the same instant as the geometry, so they have to blur with it.
     this.motionBlur = new MotionBlur(this.scene, this.cameraSys.camera);
@@ -677,6 +691,39 @@ export class Game {
    *
    * Nothing throws if this is wrong. The symptom is smeared grain.
    */
+  /**
+   * Adds or removes the moon-shaft pass as the moon comes into frame and goes
+   * out of it, for a reason the shafts state on themselves: a detached pass
+   * costs nothing, while an attached one reads and writes the whole frame
+   * however early its shader gives up. `GodRays.update` has already decided;
+   * this is only the attachment.
+   *
+   * It goes back into the SLOT IT CAME OUT OF, and that is the whole reason
+   * Game does the first attach. `detachPostProcess` nulls the entry rather
+   * than removing it, and `attachPostProcess` with no index APPENDS — so the
+   * detach-the-tail-and-put-it-back dance `setMotionBlurEnabled` does would
+   * leave one more hole in the camera's list on every cycle here, in an array
+   * that is walked every frame. Re-attaching into the hole leaves the list the
+   * same length and the order exact, and never touches the other passes.
+   *
+   * This toggles as the moon crosses the edge of the fade, which is why it
+   * has to be the cheap version rather than the rare one.
+   */
+  private syncGodRays(): void {
+    const on = this.godRays.isLive;
+    if (on === this.godRaysAttached) return;
+    const camera = this.cameraSys.camera;
+    if (on) {
+      this.godRaysSlot = camera.attachPostProcess(
+        this.godRays.pass,
+        this.godRaysSlot,
+      );
+    } else {
+      camera.detachPostProcess(this.godRays.pass);
+    }
+    this.godRaysAttached = on;
+  }
+
   private setMotionBlurEnabled(on: boolean): void {
     if (on === this.motionBlur.isEnabled) return;
     const camera = this.cameraSys.camera;
@@ -992,6 +1039,9 @@ export class Game {
       this.cameraSys.camera,
       this.sky.moonDirection,
     );
+    // …and then off the camera entirely when it has nothing to add. Straight
+    // after the update that decided it, and before the render it applies to.
+    this.syncGodRays();
     // Every frame in every state, so the basis it reprojects against can never
     // go stale while the player sits in a menu. In the editor the free-fly cam
     // drives the Babylon camera directly and never touches these angles, so
@@ -1592,6 +1642,7 @@ export class Game {
         player,
         this.battle.bots,
         this.cameraSys.camera.position,
+        player.floorY,
       );
     }
     updateOutlineScales(this.cameraSys.camera.position);

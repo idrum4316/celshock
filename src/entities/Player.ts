@@ -220,6 +220,19 @@ export class Player implements Combatant {
   mods: PlayerMods = { damageMult: 1, speedMult: 1, maxHpBonus: 0, magBonus: 0 };
 
   private readonly groundY = CONFIG.player.height / 2;
+  /**
+   * The surface height `probeGround` found under the feet this frame — the
+   * floor the body is standing on, or falling toward.
+   *
+   * Public because it is the answer to a question more than one thing asks,
+   * and the asking is expensive: the probe is a whole-scene ray pick, so a
+   * second caller casting its own identical ray doubles the most expensive
+   * piece of per-frame CPU in the game. `ShadowSystem.updateBlobs` is that
+   * caller and now reads this instead. Written every `update`, so anything
+   * reading it must run after Player in the frame — everything in
+   * `updateGameplay`'s tail does.
+   */
+  floorY = 0;
   /** Reused so the per-frame ground probe allocates nothing. */
   private readonly probeRay = new Ray(new Vector3(), new Vector3(0, -1, 0), 1);
   private scene: Scene;
@@ -413,6 +426,10 @@ export class Player implements Combatant {
     this.root.position.y = spawn.y + this.groundY;
     this.velY = 0;
     this.grounded = true;
+    // The spawn IS a standable surface, so it is the right answer until the
+    // first probe runs — without this the blob shadow spends the frame the
+    // player appears on at whatever floor the last life ended over.
+    this.floorY = spawn.y;
     this.syncCombatant();
   }
 
@@ -530,6 +547,7 @@ export class Player implements Combatant {
     // Airborne, the landing is where the feet actually meet the floor, and the
     // only thing the snap resolves is one frame's worth of overlap.
     const floorY = this.probeGround();
+    this.floorY = floorY;
     const foot = this.root.position.y - this.groundY;
     const stick = this.grounded ? p.stepHeight : 0;
     if (foot <= floorY + stick) {
