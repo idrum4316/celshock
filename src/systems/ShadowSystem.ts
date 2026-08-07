@@ -55,6 +55,13 @@ export class ShadowSystem {
    * strong (0..1). 0 means "nothing to shade", which is every corpse nobody
    * has claimed — so the default below is exactly the old behaviour.
    *
+   * `out.y` is the FLOOR the body came to rest on, not the body's own height:
+   * a corpse moves after it dies, so neither its height nor the one it was
+   * standing at when it was shot is the answer. `Game` resolves it the same
+   * way `CaptureZoneSystem` lays a ring — the nav surface nearest the body,
+   * falling back to the drawn terrain — because a body on a deck and a body
+   * in a basin both have to be shaded.
+   *
    * A callback rather than an import, because a system reaching into another
    * system is the thing `Game`'s wiring exists to prevent.
    */
@@ -335,7 +342,12 @@ export class ShadowSystem {
     }
     blob.setEnabled(true);
     if (corpse > 0) {
-      blob.position.set(this.corpseAt.x, groundY + 0.04, this.corpseAt.z);
+      // All three axes from the corpse, `groundY` included — it is the height
+      // the body DIED at, and a corpse is the one thing here that moves after
+      // that. A body thrown down a bank or off a deck otherwise leaves its
+      // shadow hanging at the height it was shot at. Whoever answers the
+      // callback owes the floor under the body, not the body's own height.
+      blob.position.set(this.corpseAt.x, this.corpseAt.y + 0.04, this.corpseAt.z);
     } else {
       blob.position.set(cbt.position.x, groundY + 0.04, cbt.position.z);
     }

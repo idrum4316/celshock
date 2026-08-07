@@ -426,9 +426,15 @@ export class Game {
     // through itself, for the same reason and with the same result: `Player`
     // has no rig to have fallen anywhere, and the corpse does.
     this.shadows.corpseShadow = (cbt, out) => {
-      if (cbt instanceof Bot) return this.ragdolls.shadowFor(cbt, out);
-      const corpse = cbt === this.player ? this.deathCam.subject : null;
-      return corpse ? this.ragdolls.shadowFor(corpse, out) : 0;
+      const subject =
+        cbt instanceof Bot
+          ? cbt
+          : cbt === this.player
+            ? this.deathCam.subject
+            : null;
+      const strength = subject ? this.ragdolls.shadowFor(subject, out) : 0;
+      if (strength > 0) out.y = this.standableAt(out.x, out.z, out.y);
+      return strength;
     };
     // The death cam offers and retires its body through the same pool every
     // bot goes through — a callback rather than an import, because a system
@@ -2173,6 +2179,24 @@ export class Game {
     this.cameraSys.addPunch();
     const haptic = CONFIG.rumble;
     this.input.rumble(haptic.hurtStrong, haptic.hurtWeak, haptic.hurtMs);
+  }
+
+  /**
+   * The surface something at (x, z) would be STANDING on, resolved nearest the
+   * height `near` — the drawn terrain, or a deck or slab above it.
+   *
+   * The same pair of questions `CaptureZoneSystem` asks to lay a ring on the
+   * ground, and asked here for the same reason: the terrain alone buries
+   * anything on a boathouse deck or a paved square, and the nav graph alone
+   * has nothing to say about the stretches nothing walks on. `surfaceAt(...,
+   * true)` is the upper envelope, because the floor is flat triangles across a
+   * bilinear field and the smooth value sits under the mesh on a twisted cell.
+   */
+  private standableAt(x: number, z: number, near: number): number {
+    if (!this.map) return near;
+    const floor = this.map.terrain.surfaceAt(x, z, true);
+    const surface = this.map.nav.surfaceAt(x, near, z);
+    return surface < 0 ? floor : Math.max(floor, this.map.nav.heightOf(surface));
   }
 
   /**

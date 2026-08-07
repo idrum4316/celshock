@@ -412,11 +412,19 @@ export const CONFIG = {
       impulse: { base: 6, perDamage: 0.06, max: 22, lift: 0.25, spin: 1.2 },
       /**
        * Hard stop on simulating, and the early-out for a body that stopped
-       * moving on its own. Once every bone is under `sleepSpeed` for
-       * `sleepTime` the corpse is frozen into its pose and costs nothing.
+       * moving on its own. Once every bone is under `sleepSpeed` AND
+       * `sleepSpin` for `sleepTime` the corpse is frozen into its pose and
+       * costs nothing.
+       *
+       * Both thresholds, because freezing commits to a POSE: a body settled on
+       * its back and still turning has almost no linear velocity, and the
+       * speed test alone would bake whichever angle it was passing through.
+       * `angularDamping` (0.6) is what makes the spin term cheap — it is
+       * usually the first of the two to go quiet.
        */
       settleTime: 2.5,
       sleepSpeed: 0.12,
+      sleepSpin: 0.5,
       sleepTime: 0.4,
       /**
        * Seconds after death that the body starts to go, how long that takes,

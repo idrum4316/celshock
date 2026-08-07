@@ -169,10 +169,28 @@ export class RagdollSystem {
     return this.slots.reduce((n, s) => n + (s.subject ? 1 : 0), 0);
   }
 
+  /**
+   * The player's toggle. Off drops every body still falling — the honest
+   * response to "stop doing this" — and gives back the static world, which is
+   * the only part of this that costs anything per round.
+   *
+   * The WASM load is deliberately NOT gated with it. The binary is precached
+   * with the rest of the build whether or not it is ever used, so refusing to
+   * instantiate the engine would save a one-off rather than the download, and
+   * it would put a first-death-after-enabling on the tween while the module
+   * resolved.
+   */
   setEnabled(on: boolean): void {
     if (this.enabled === on) return;
     this.enabled = on;
-    if (!on) this.reset();
+    if (!on) {
+      this.reset();
+      this.clearWorld();
+      return;
+    }
+    if (this.state === "ready" && this.pendingMap) {
+      this.buildWorld(this.pendingMap);
+    }
   }
 
   /**
@@ -221,7 +239,7 @@ export class RagdollSystem {
         this.buildShapes();
         this.buildPool();
         this.state = "ready";
-        if (this.pendingMap) this.buildWorld(this.pendingMap);
+        if (this.enabled && this.pendingMap) this.buildWorld(this.pendingMap);
       })
       .catch((err) => {
         this.state = "failed";
@@ -240,13 +258,16 @@ export class RagdollSystem {
    * silent failure `installMap`'s own note is about.
    *
    * Editor builds are skipped outright: there are no corpses in the editor and
-   * a tier-3 rebuild is already ~570 ms.
+   * a tier-3 rebuild is already ~570 ms. So is a map installed while the
+   * setting is off — the build is 33–50 ms of shape work EVERY round, and
+   * nothing will ever fall on it; `setEnabled` puts it up if the player
+   * changes their mind, which is what `pendingMap` is held for.
    */
   setMap(map: GameMap | null, editor: boolean): void {
     this.reset();
     this.clearWorld();
     this.pendingMap = editor ? null : map;
-    if (this.state === "ready" && this.pendingMap) {
+    if (this.enabled && this.state === "ready" && this.pendingMap) {
       this.buildWorld(this.pendingMap);
     }
   }
@@ -569,7 +590,7 @@ export class RagdollSystem {
 
   /**
    * Registers the whole map as ONE static body carrying a container of every
-   * collider — the ~758 boxes plus the floor's own blocks.
+   * collider — Hollowmere's ~733 boxes plus the floor's own 25 blocks.
    *
    * One body rather than 758: the plugin's per-step sync walks every body in
    * the engine, and while a static one bails out immediately, a list of 25
@@ -697,15 +718,27 @@ export class RagdollSystem {
     chest.body.applyAngularImpulse(this.v2);
   }
 
-  /** True once every bone has been under `sleepSpeed` for `sleepTime`. */
+  /**
+   * True once every bone has been under `sleepSpeed` AND `sleepSpin` for
+   * `sleepTime`.
+   *
+   * The spin is not redundant with the speed: a body that has come to rest on
+   * its back and is turning on the spot has almost no linear velocity, and
+   * freezing it bakes the pose it happened to be passing through. It is the
+   * pose that is being committed to here, so the test has to cover every way
+   * one can still be changing.
+   */
   private hasSettled(slot: Slot, dt: number): boolean {
     const d = CONFIG.bots.death;
     let fastest = 0;
+    let spinniest = 0;
     for (const bone of slot.bones) {
       bone.body.getLinearVelocityToRef(this.v1);
       fastest = Math.max(fastest, this.v1.length());
+      bone.body.getAngularVelocityToRef(this.v1);
+      spinniest = Math.max(spinniest, this.v1.length());
     }
-    if (fastest > d.sleepSpeed) {
+    if (fastest > d.sleepSpeed || spinniest > d.sleepSpin) {
       slot.stillT = 0;
       return false;
     }
@@ -786,11 +819,19 @@ export class RagdollSystem {
       return;
     }
     for (const bone of slot.bones) this.park(bone);
-    // Undo the sink before handing the rig back: `root.position` is the bot's
-    // own, and a respawn writes it through `syncTransform` — but a rig retired
-    // by `reset()` mid-sink would otherwise keep the offset.
-    if (slot.sinking) rig.root.position.y = slot.sinkFromY;
-    subject.setEnabled(false);
+    // Both of these belong to a CORPSE, and `update`'s guard can hand this a
+    // body that came back to life while the pool was holding it. Hiding a live
+    // bot costs a frame of invisibility (`BattleSystem` re-enables it on the
+    // next one) and writing its root would drop it at the dead one's sink
+    // height for that frame. The joints still have to go back, which is the
+    // whole reason that guard releases rather than just forgetting the slot.
+    if (!subject.alive) {
+      // Undo the sink before handing the rig back: `root.position` is the
+      // bot's own, and a respawn writes it through `syncTransform` — but a rig
+      // retired by `reset()` mid-sink would otherwise keep the offset.
+      if (slot.sinking) rig.root.position.y = slot.sinkFromY;
+      subject.setEnabled(false);
+    }
     // The authoritative restore: parents, positions, rotations, quaternions
     // and scalings, on every posed node. See its own note for why
     // `animateSoldier(..., 0)` is not a substitute.

@@ -150,18 +150,13 @@ export const RAGDOLL_BONES: readonly BoneSpec[] = [
 ];
 
 /**
- * Where each bone is pinned to the chest, in the CHEST's frame, and how far it
- * may swing there. `null` means no constraint at all — the rifle falls free.
- *
- * The hips are the trap. `hipL`/`hipR` are children of `body`, NOT of `torso`
- * (see the leg section below), so their pivot in chest space is their own
- * local y of -0.02 MINUS the torso's +0.1 — the -0.12 here. Reading the hip's
- * local position straight off the node instead puts both legs 0.1 m up inside
- * the chest, which reads as a body folded in half.
+ * One bone's pin to the chest: where it hangs, in the CHEST's frame, and how
+ * far it may swing there.
  *
  * Limits are radians, per axis, symmetric about the carried pose. They are
  * loose enough to look boneless in flight and tight enough that a settled body
- * does not end up with its head on backwards.
+ * does not end up with its head on backwards. The table below is where the
+ * numbers and the reasoning for them live.
  */
 export interface BoneLink {
   /** Pivot in the chest's frame. */
