@@ -286,8 +286,6 @@ export interface RagdollSubject {
   ragdolling: boolean;
   /** A live body is released immediately — the pool's self-defence guard. */
   readonly alive: boolean;
-  /** A SEEDED stream, so two identical deaths still fall differently. */
-  rand(): number;
   setEnabled(on: boolean): void;
 }
 

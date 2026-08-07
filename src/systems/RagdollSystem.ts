@@ -30,8 +30,10 @@
  *   loaded, WASM failed, setting off, pool full, too far away) falls back to
  *   `Bot`'s collapse tween, which is why that tween is load-bearing rather
  *   than legacy.
- * - The sim is a FIXED step, so a tumble is identical at 30, 60 and 144 fps and
- *   reproducible headless, where `dt` is clamped to 0.05.
+ * - The sim is a FIXED step with a CARRIED remainder, so a tumble is identical
+ *   at 30, 60 and 144 fps and reproducible headless, where `dt` is clamped to
+ *   0.05. Both halves of that are load-bearing and both have already been
+ *   wrong — see `update` and `init`.
  */
 import {
   HavokPlugin,
@@ -59,6 +61,7 @@ import {
   type SoldierRig,
 } from "../entities/SoldierModel";
 import type { GameMap } from "../world/MapBuilder";
+import { mulberry32 } from "../world/rng";
 
 /** Where the WASM has got to. `spawn` only accepts in `ready`. */
 type InitState = "idle" | "loading" | "ready" | "failed";
@@ -102,13 +105,38 @@ interface Slot {
 
 const UP = new Vector3(0, 1, 0);
 
+/** Where a body waits between corpses — see `park`. */
+const PARKED_Y = -1000;
+
+/**
+ * The pool's own stream, re-seeded per round. It is deliberately NOT the
+ * subject's: `Bot.rand` also drives grenade chance, throw scatter and strafe
+ * direction, so drawing the tumble's jitter from it made a bot's BEHAVIOUR
+ * depend on whether a corpse near it was accepted — which turns on the camera
+ * distance, the pool's occupancy, the settings toggle and whether the WASM
+ * loaded. A seeded round has to play out the same way twice, and that is the
+ * one thing the seed is for.
+ */
+const SPIN_SEED = 0x5eed;
+
 export class RagdollSystem {
   private state: InitState = "idle";
   // `IPhysicsEngine` is not on the barrel export and this file keeps to barrel
   // imports like every other, so the type comes from the getter that produces
   // it. CONFIG is `as const`, hence the annotation on a field meant to change.
   private engine: ReturnType<Scene["getPhysicsEngine"]> = null;
+  /**
+   * Held as the concrete plugin rather than reached through
+   * `engine.getPhysicsPlugin()`, whose type is the union of the v1 and v2
+   * interfaces and carries neither of the two things this file needs of it:
+   * the world's real step length, and an immediate transform write (`park`).
+   */
+  private plugin: HavokPlugin | null = null;
   private enabled: boolean = CONFIG.bots.death.ragdoll;
+  /** Sim time owed but not yet stepped — see `update`. */
+  private accum = 0;
+  /** The tumble's jitter. See `SPIN_SEED`. */
+  private rand: () => number = mulberry32(SPIN_SEED);
 
   /** One shape per bone KIND, shared by every slot and both teams. */
   private shapes = new Map<BoneJoint, PhysicsShape>();
@@ -172,6 +200,16 @@ export class RagdollSystem {
         // then ignores whatever it is handed and advances a fixed amount,
         // which is what makes a tumble frame-rate independent.
         const plugin = new HavokPlugin(false, havok);
+        // ...and THIS is the amount. The argument to `_step` is discarded in
+        // this mode (`executeStep`: `_useDeltaForWorldStep ? delta :
+        // _fixedTimeStep`), so without this line `death.substep` is not the
+        // step length at all — it only divides the frame, and the world
+        // advances by the plugin's own default of 1/60 however many times
+        // that comes to. The two agreed by coincidence, so the knob was inert:
+        // lowering it to 1/120 for a finer tumble would have run the sim at
+        // double speed instead. Verified before this line existed by stepping
+        // with 1/600 and 1/10 and measuring the same 2.5 m fall in 30 steps.
+        plugin.setTimeStep(CONFIG.bots.death.substep);
         this.scene.enablePhysics(
           new Vector3(0, CONFIG.bots.death.gravity, 0),
           plugin,
@@ -179,6 +217,7 @@ export class RagdollSystem {
         // enablePhysics sets this true. It must not stay true — see the header.
         this.scene.physicsEnabled = false;
         this.engine = this.scene.getPhysicsEngine();
+        this.plugin = plugin;
         this.buildShapes();
         this.buildPool();
         this.state = "ready";
@@ -297,18 +336,43 @@ export class RagdollSystem {
     // Step only while something is still moving. Once every corpse has frozen
     // the engine is not touched at all.
     const simulating = this.slots.some((s) => s.subject && !s.frozen);
-    if (simulating) {
-      // Fixed steps, bounded so a long frame cannot spiral.
-      let left = Math.min(dt, d.substep * d.maxSteps);
-      while (left > 0) {
+    if (!simulating) {
+      // Nothing owes any time, and a remainder carried across a lull would
+      // give the next corpse a free part-step on the frame it died.
+      this.accum = 0;
+    } else {
+      // Fixed steps with the REMAINDER CARRIED, bounded so a long frame cannot
+      // spiral. Carrying it is what makes the step fixed at all: spending the
+      // frame instead — `left = dt`, step until it runs out — rounds every
+      // frame UP to a whole substep, so the sim advances `ceil(dt / substep)`
+      // steps, which is one at any rate above 60 fps and two at anything just
+      // under it. Measured over a second of wall clock before this: 60 steps
+      // at 30 fps and at a clean 60, but 118 at 59 and one per frame at 144 —
+      // a tumble at 2x and 2.4x speed, jittering between the two on a real
+      // 60 Hz display as `dt` crosses 1/60. `maxSteps` still bounds the
+      // catch-up, which is what makes a headless run at 2 fps play in slow
+      // motion rather than teleporting bodies across the map.
+      this.accum = Math.min(this.accum + dt, d.substep * d.maxSteps);
+      let first = true;
+      while (this.accum >= d.substep) {
         this.engine._step(d.substep);
-        left -= d.substep;
-      }
-      // The teleport is read in on the first step only; from here the sim owns
-      // the bodies and must not be overwritten by their nodes.
-      for (const slot of this.slots) {
-        if (!slot.subject || slot.frozen) continue;
-        for (const bone of slot.bones) bone.body.disablePreStep = true;
+        this.accum -= d.substep;
+        // The teleport is read in on the FIRST step and no other; from here
+        // the sim owns the bodies and must not be overwritten by their nodes.
+        // Inside the loop rather than after it: a frame running two steps
+        // would otherwise re-teleport a fresh corpse onto the transform step
+        // one had just synced back, which Havok does not come out of in the
+        // state it went in — 0.13 m of divergence between 30 and 60 fps over
+        // half a second, on an identical body with an identical impulse. It
+        // cannot be hoisted to "the first step ever" either: a corpse taken on
+        // a later frame has its own teleport to read in.
+        if (first) {
+          first = false;
+          for (const slot of this.slots) {
+            if (!slot.subject || slot.frozen) continue;
+            for (const bone of slot.bones) bone.body.disablePreStep = true;
+          }
+        }
       }
     }
 
@@ -372,9 +436,17 @@ export class RagdollSystem {
     if (slot) this.release(slot);
   }
 
-  /** Drops every corpse and restores every rig. Round start and map rebuild. */
+  /**
+   * Drops every corpse and restores every rig. Round start and map rebuild.
+   *
+   * Re-seeds the jitter with it, so the same round twice throws its bodies the
+   * same way — the stream is the pool's, so the only thing it could otherwise
+   * carry across is how many people died last round.
+   */
   reset(): void {
     for (const slot of this.slots) if (slot.subject) this.release(slot);
+    this.rand = mulberry32(SPIN_SEED);
+    this.accum = 0;
   }
 
   dispose(): void {
@@ -417,7 +489,7 @@ export class RagdollSystem {
         // Pre-created so Havok's sync only ever copies into it — the one place
         // a quaternion is allowed to exist anywhere near this rig.
         proxy.rotationQuaternion = Quaternion.Identity();
-        proxy.position.y = -1000;
+        proxy.position.y = PARKED_Y;
         const body = new PhysicsBody(
           proxy,
           PhysicsMotionType.STATIC,
@@ -613,13 +685,14 @@ export class RagdollSystem {
     );
     chest.body.applyImpulse(this.v1, this.v2);
 
-    // A seeded kick so two identical deaths do not fall identically. The
-    // BODY'S OWN stream — never Math.random, which would make a death
-    // impossible to reproduce.
+    // A seeded kick so two identical deaths do not fall identically. THIS
+    // POOL'S stream — never Math.random, which would make a death impossible
+    // to reproduce, and never the subject's own, which is what `SPIN_SEED`
+    // is about.
     this.v2.set(
-      (subject.rand() * 2 - 1) * imp.spin,
-      (subject.rand() * 2 - 1) * imp.spin,
-      (subject.rand() * 2 - 1) * imp.spin,
+      (this.rand() * 2 - 1) * imp.spin,
+      (this.rand() * 2 - 1) * imp.spin,
+      (this.rand() * 2 - 1) * imp.spin,
     );
     chest.body.applyAngularImpulse(this.v2);
   }
@@ -647,18 +720,53 @@ export class RagdollSystem {
    * `setParent` preserves the world transform, so the corpse keeps the shape it
    * landed in — as an ordinary Euler-posed hierarchy under `rig.root`, which is
    * what makes the sink one property write for the whole body.
+   *
+   * A settled corpse therefore stops being collidable, and that is the right
+   * end of the trade rather than an omission: the bodies do not follow the
+   * sink (that is the point of baking the pose in), so a corpse left standing
+   * in the world would be a ledge that outlives the body a player can see, and
+   * anything resting on it would hang in mid-air at `sinkStart`. Two bodies
+   * falling at the same time still collide — both are live in the sim.
    */
   private freeze(slot: Slot): void {
     if (slot.frozen || !slot.rig) return;
     const rig = slot.rig;
     for (const bone of slot.bones) {
+      // Before the park, and it has to be: `setParent` derives the local
+      // transform from the joint's world matrix, which hangs off the proxy.
       rig[bone.joint].setParent(slot.restParent.get(bone.joint)!);
-      bone.body.setMotionType(PhysicsMotionType.STATIC);
-      bone.body.setLinearVelocity(Vector3.ZeroReadOnly);
-      bone.body.setAngularVelocity(Vector3.ZeroReadOnly);
-      bone.proxy.position.set(0, -1000, 0);
+      this.park(bone);
     }
     slot.frozen = true;
+  }
+
+  /**
+   * Takes a bone's body out of the world and holds it at `PARKED_Y`.
+   *
+   * Moving the proxy node is NOT enough, and that is the whole reason this
+   * exists. The plugin copies a node's transform into its body during the
+   * pre-step and only while prestep is enabled, so a body parked with
+   * `disablePreStep` still true stays exactly where the corpse settled — an
+   * invisible static box lying on the street. Measured before this: a downward
+   * physics ray over open ground read 0.000 m before a death and **0.303 m
+   * after the body had been retired and its slot freed**, which the next corpse
+   * to fall there would have landed on.
+   *
+   * Writing the transform through the plugin by hand is what makes the park
+   * immediate. Waiting for the next step will not do: the step is skipped
+   * exactly when nothing is simulating, which is the state a release usually
+   * leaves behind.
+   */
+  private park(bone: Bone): void {
+    bone.body.setLinearVelocity(Vector3.ZeroReadOnly);
+    bone.body.setAngularVelocity(Vector3.ZeroReadOnly);
+    bone.proxy.position.set(0, PARKED_Y, 0);
+    bone.proxy.rotationQuaternion!.copyFrom(Quaternion.Identity());
+    // TELEPORT for the length of the write, then back to the pooled state.
+    bone.body.disablePreStep = false;
+    this.plugin?.setPhysicsBodyTransformation(bone.body, bone.proxy);
+    bone.body.disablePreStep = true;
+    bone.body.setMotionType(PhysicsMotionType.STATIC);
   }
 
   /**
@@ -677,14 +785,7 @@ export class RagdollSystem {
       slot.rig = null;
       return;
     }
-    for (const bone of slot.bones) {
-      bone.body.setMotionType(PhysicsMotionType.STATIC);
-      bone.body.setLinearVelocity(Vector3.ZeroReadOnly);
-      bone.body.setAngularVelocity(Vector3.ZeroReadOnly);
-      bone.body.disablePreStep = true;
-      bone.proxy.position.set(0, -1000, 0);
-      bone.proxy.rotationQuaternion!.copyFrom(Quaternion.Identity());
-    }
+    for (const bone of slot.bones) this.park(bone);
     // Undo the sink before handing the rig back: `root.position` is the bot's
     // own, and a respawn writes it through `syncTransform` — but a rig retired
     // by `reset()` mid-sink would otherwise keep the offset.

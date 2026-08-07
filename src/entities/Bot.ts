@@ -227,11 +227,15 @@ export class Bot implements Combatant {
    * plays out the same way twice — with seven stages of new movement to tune,
    * behaviour that cannot be reproduced cannot be judged.
    *
-   * Public because `RagdollSystem` draws the tumble's jitter from it: a death
-   * has to vary and still be reproducible, and a second generator would be a
-   * second thing to seed. Read it, never reassign it.
+   * PRIVATE, and it went public once: `RagdollSystem` drew the tumble's jitter
+   * from it, which cost three draws on any death the pool accepted — so
+   * whether this bot's next weave, strafe or grenade matched a previous run
+   * turned on the camera's distance from a corpse, the pool's occupancy, the
+   * ragdoll setting and whether the WASM had loaded. The pool has its own
+   * stream now; a death is still varied and still reproducible, and nothing
+   * about a body falling reaches the fight.
    */
-  rand: () => number = mulberry32(1);
+  private rand: () => number = mulberry32(1);
 
   /**
    * Gives this bot its own deterministic stream. Called once by BattleSystem

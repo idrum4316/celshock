@@ -404,8 +404,10 @@ export const CONFIG = {
        * off-centre application rather than needing an authored spin.
        *
        * `spin` is a seeded angular kick that breaks the symmetry of two
-       * identical deaths. It is drawn from the bot's OWN generator — never
-       * Math.random, which would make a death impossible to reproduce.
+       * identical deaths. It is drawn from the ragdoll pool's own generator —
+       * never Math.random, which would make a death impossible to reproduce,
+       * and deliberately not the dying body's, which would put a bot's own
+       * behaviour stream downstream of whether its corpse was accepted.
        */
       impulse: { base: 6, perDamage: 0.06, max: 22, lift: 0.25, spin: 1.2 },
       /**

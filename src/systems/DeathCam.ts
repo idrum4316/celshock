@@ -48,7 +48,6 @@ import {
   type SoldierRig,
 } from "../entities/SoldierModel";
 import type { CelMaterialFactory } from "../shaders/CelShader";
-import { mulberry32 } from "../world/rng";
 
 /**
  * The player's stand-in, as the ragdoll pool wants it.
@@ -65,12 +64,6 @@ class Corpse implements RagdollSubject {
   deathDamage = 0;
   ragdolling = false;
   readonly alive = false;
-  /**
-   * Seeded, like a bot's. Two deaths in the same place from the same direction
-   * should still fall differently, and a death should be reproducible in a
-   * headless test — which `Math.random()` would take away for no gain.
-   */
-  readonly rand = mulberry32(0xdead);
 
   constructor(readonly rig: SoldierRig) {}
 
