@@ -696,11 +696,30 @@ export const CONFIG = {
        */
       hipZ: 0,
       /**
+       * And across it (m, before `viewmodel.scale`). The pose is authored
+       * around the reference weapon's BORE, and every long gun here carries
+       * most of its bulk above that line — a receiver, an optic, a stock — so
+       * the frame is filled by what is over the axis. A pistol is the other
+       * way up: almost all of it, and both hands with it, hang below the bore,
+       * and at the shared height it falls off the bottom edge and reads as a
+       * dark sliver in the corner rather than as something being held.
+       */
+      hipY: 0,
+      /**
        * Scales `camera.aimSway` — how steady this weapon is to hold. Mass and
        * where the hands sit, nothing else: a heavier weapon wanders less and
        * a light one carried high wanders more. The rifle is the reference.
        */
       swayMult: 1,
+      /**
+       * Seconds from the swap button to this weapon being usable — the whole
+       * gesture, since the one being put away is gone by then (see
+       * `viewmodel.swap.switchFrac`). It is the INCOMING weapon's number
+       * because what the wait is actually about is getting this thing up and
+       * on target: the sidearm's whole case is that its figure is the
+       * smallest here.
+       */
+      drawTime: 0.55,
       /** Report pitch, as a multiplier on the shot's own frequencies. */
       sfxPitch: 1,
     },
@@ -733,8 +752,10 @@ export const CONFIG = {
       bloomMult: 1.3,
       adsSpeedMult: 1.3,
       hipZ: -0.07,
+      hipY: 0,
       /** Light, short, and held high — the liveliest thing in the kit. */
       swayMult: 1.2,
+      drawTime: 0.48,
       sfxPitch: 1.35,
     },
     /**
@@ -789,6 +810,7 @@ export const CONFIG = {
       /** Longer than the rifle, so it sits further out or the muzzle fills the
        *  frame — the SMG's offset, in the other direction. */
       hipZ: 0.06,
+      hipY: 0,
       /**
        * The steadiest weapon here, and it has to be. Sway is angular, so the
        * scope this weapon exists to carry magnifies it 3.5x; at the rifle's
@@ -798,9 +820,57 @@ export const CONFIG = {
        * reason. Crouched with a scope this is ~0.13 deg.
        */
       swayMult: 0.7,
+      /** The heaviest thing here, and the slowest into the shoulder. */
+      drawTime: 0.72,
       /** A heavier charge in a longer barrel: lower, and (see `Sfx.shoot`,
        *  where level tracks 1/pitch) louder, because it fires far less often. */
       sfxPitch: 0.82,
+    },
+    /**
+     * The sidearm. Not a kit choice — every loadout carries it, and `Q` (pad Y)
+     * swaps to it — which is why it is last in this table and why
+     * `PRIMARY_WEAPON_IDS` exists to keep it off the loadout screen.
+     *
+     * It is deliberately the worst weapon here at everything except getting
+     * into your hands. Four rounds to kill at 5.5/s semi is a 0.545 s ideal
+     * time to kill, half again the rifle's, and it runs out of range inside the
+     * width of the village. What it buys is `drawTime` 0.34 against the rifle's
+     * 0.55 and an `adsSpeedMult` of 1.6: a magazine that runs dry mid-fight is
+     * a third of a second from a loaded weapon instead of the 1.4 s a reload
+     * costs, and that trade — not damage — is the entire reason to pull it.
+     *
+     * `semiAuto` is what stops it competing with the SMG: eight rounds at the
+     * trigger finger's pace is a weapon you finish a fight with, not one you
+     * start one with.
+     */
+    pistol: {
+      name: "Sidearm",
+      short: "Pistol",
+      /** 25 against 100 HP = 4 shots to kill. */
+      damage: 25,
+      /** A ceiling on the trigger finger, as on the DMR. */
+      fireRate: 5.5,
+      semiAuto: true,
+      /** Seven in the magazine and one up the spout. */
+      magSize: 8,
+      reloadTime: 1.05,
+      spreadHip: 0.055,
+      spreadAds: 0.014,
+      /** A pistol's honest reach: across a street, not down the valley. */
+      range: 45,
+      recoilMult: 1.15,
+      bloomMult: 1.7,
+      /** Nothing else here comes up this fast. */
+      adsSpeedMult: 1.6,
+      /** The shortest weapon in the game, so it sits closest to the eye. */
+      hipZ: -0.12,
+      /** Held up into the frame — see the field's note on the rifle. */
+      hipY: 0.09,
+      /** Light, and held out on the arms rather than braced on a shoulder. */
+      swayMult: 1.45,
+      /** The number the whole weapon exists for. */
+      drawTime: 0.34,
+      sfxPitch: 1.12,
     },
   },
 
@@ -1404,6 +1474,33 @@ export const CONFIG = {
     reloadPos: { x: 0.02, y: -0.1, z: -0.05 },
     reloadRot: { x: 0.3, y: -0.2, z: 0.42 },
     /**
+     * The weapon swap: one gun goes away below the frame and the other comes
+     * up in its place, on a triangle that peaks halfway through
+     * `weapons[id].drawTime`.
+     *
+     * The drop has to be enough to take the weapon fully OFF the screen, not
+     * merely low, and that is what sizes it: at the hip stand-off of ~0.66 m a
+     * 54° vertical FOV puts the bottom edge 0.336 m below the axis, and
+     * `hipPos.y` has already spent 0.185 of that. The switch is hidden behind
+     * the frame's edge or it is a model popping into another one — which is
+     * exactly what a swap with a shallow dip looks like.
+     *
+     * The rotation is the half that sells it as a hand rather than a lift:
+     * positive `rotX` is nose-down (see `recoil.kickPitch`, which is the same
+     * axis in the other direction) and positive `rotY` is outboard, so the
+     * weapon rolls off the shoulder rather than sinking straight down.
+     */
+    swap: {
+      pos: { x: -0.02, y: -0.32, z: -0.08 },
+      rot: { x: 0.62, y: 0.3, z: -0.28 },
+      /**
+       * Share of the draw spent putting the old weapon away — where the models
+       * are exchanged. Under a half, because the up-stroke is what the player
+       * is waiting on and the down-stroke is only the cover for it.
+       */
+      switchFrac: 0.42,
+    },
+    /**
      * The throw. A grenade goes with the OFF hand, so the weapon is not put
      * away for it: the support hand leaves the handguard, the weapon tips out
      * of the aim under the firing hand alone, and the other arm does the work
@@ -1736,6 +1833,19 @@ export const CONFIG = {
   input: {
     deadzone: 0.18,
     triggerThreshold: 0.35,
+    /**
+     * How much accumulated wheel travel counts as one notch, in the pixels a
+     * `WheelEvent` reports (`InputManager` normalises the line and page delta
+     * modes into the same unit first).
+     *
+     * A deadzone, not a scale: a mouse wheel arrives as one ~100 px event per
+     * detent and would clear any threshold, but a trackpad's two-finger
+     * scroll arrives as a stream of single-digit deltas and its inertial
+     * fling goes on producing them for a second after the fingers lift. Left
+     * ungated, that reads as the weapon swapping over and over on its own.
+     * Well under one detent so a real notch is never missed.
+     */
+    wheelStep: 20,
   },
 
   /**

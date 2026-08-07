@@ -78,7 +78,8 @@ have already cost time:
   `scene.getTransformNodeByName("view_<weapon>_<sight>_sightCenter")
   .getAbsolutePosition()` (`weapon` is `rifle`/`smg`/`dmr`, `sight` is
   `iron`/`holo`/`scope` — all nine combinations, since a weapon change moves the
-  optic too), subtract `camera.position`, and project onto `cameraSys.forward`
+  optic too, plus `view_pistol_iron_sightCenter`, which is the sidearm's only
+  one), subtract `camera.position`, and project onto `cameraSys.forward`
   and a right vector built from `aimYaw` — `(cos(aimYaw), 0, -sin(aimYaw))`.
   **Not `flatRight`**, which is deliberately the un-recoiled *and un-swayed*
   yaw (see `camera.aimSway`) and is therefore not perpendicular to `forward`
@@ -126,6 +127,16 @@ have already cost time:
   reload by writing `g.player.view.throwKeys[i].pos/rot` — they are resolved
   from `CONFIG` once at construction, so the poses are editable in place while
   the timing and the give are not.
+- **The weapon SWAP is a still-frame job too, and its transient will fool the
+  sight check.** Freeze it the way the throw is frozen — `swapPending = false`
+  first (or `completeSwap` fires on every frame), then
+  `Object.defineProperty(g.player, "swapT", { get: () => 0.34 * 0.42 })` — and
+  the pose holds at the peak, which is where the frame has to be clear of the
+  weapon entirely. The trap is the other way round: a swap taken just before an
+  alignment reading leaves the weapon halfway back up, which measures as a
+  sight ~0.22 m low and reads exactly like a misaligned optic. Watch
+  `player.swapT` reach -1 AND the sway decay before believing a number; at
+  headless frame rates that is several seconds after the button.
 - **The ash field is frozen for a pixel diff with `stop()` + `reset()`**, on
   `g.atmosphere.system` — it empties the field and, crucially, keeps it empty.
   That still holds now the field runs on `GPUParticleSystem`, but only because
@@ -190,15 +201,20 @@ src/
     weaponKit.ts            # The build accumulator every weapon model is
                             #   written in (colours, box/tube/pin/shell, the
                             #   per-colour merge) + the WeaponParts contract
+                            #   and WeaponSights (a rail, or one fixed sight)
     RifleModel.ts           # Low-poly SCAR-pattern battle rifle
     SmgModel.ts             # Low-poly compact SMG — same contract, so the
                             #   viewmodel carries any of them
     DmrModel.ts             # Low-poly semi-auto marksman rifle — heavy barrel,
                             #   folded bipod, adjustable comb
+    PistolModel.ts          # Low-poly 1911 sidearm. The one weapon that does
+                            #   not call optics.ts: no rail, so its notch and
+                            #   blade are its own and are all it ever wears
     optics.ts               # The three optic assemblies, built onto whichever
                             #   weapon's OpticMount asked for them
     weapons.ts              # WeaponId + the resolved WeaponSetup the player
-                            #   and the camera run on
+                            #   and the camera run on, + the SIDEARM /
+                            #   PRIMARY_WEAPON_IDS split (the kit's three)
     sights.ts               # SightId + the derivation from a sight's
                             #   magnification to FOV, sensitivity and the
                             #   viewmodel's zoom compensation
@@ -569,14 +585,15 @@ you to make.
 the viewmodel, which matters in the editor: it flies the same camera the weapon
 is parented to, so a visible rifle would ride along in front of it.
 
-### The loadout: three weapons, three optics
+### The loadout: three weapons, three optics, and a sidearm
 
 Two tables, two slots, and neither knows about the other. `CONFIG.weapons`
 declares what can be carried and `CONFIG.sights` what can be bolted to it;
 `entities/weapons.ts` and `entities/sights.ts` derive `WeaponId`/`SightId`
 **from those tables**, so each is declared in exactly one place. Every weapon
-takes all three optics, which is not a shortcut — an optic is a thing on a rail,
-and every weapon here has one.
+*with a rail* takes all three optics, which is not a shortcut — an optic is a
+thing on a rail, and every weapon the kit offers has one. The sidearm does not,
+and "The sidearm" below is that whole exception.
 
 **A weapon owns the round; an optic owns the picture.** Damage, rate, magazine,
 spread, range and the recoil multipliers are the weapon's and reach nothing but
@@ -690,8 +707,9 @@ and its two back-up iron stations — and measures everything from those four
 numbers. So the SMG's lower receiver and the DMR's deeper one carry the same
 three sights with nothing re-tuned, and the derived `adsPos` puts each one on
 the axis wherever it lands. Adding a weapon is a config entry, a model builder
-returning `WeaponParts`, and an `OpticMount`; adding an optic is a config entry
-and a builder in `optics.ts`.
+returning `WeaponParts`, and an `OpticMount` — or, for a weapon with no rail, a
+`fixed` sight assembly of its own instead of that mount; adding an optic is a
+config entry and a builder in `optics.ts`.
 
 **The mount is not free, though, and the DMR is where that shows.** Two of the
 four numbers are bounded by the optics rather than by the receiver: the view
@@ -717,6 +735,90 @@ glass want the cheek at different heights; this is it at the bottom of its
 travel. Forward of the rear station the same cone runs onto the rail and the
 front sight's base, and that is correct — what you see under the post through
 an aperture is meant to be the weapon.
+
+#### The sidearm
+
+**Every loadout carries a pistol, and there are two ways to reach it.** The
+mouse WHEEL swaps to the other weapon and so does pad **Y**; the `1` and `2`
+keys name a slot outright (primary, sidearm). The split is the point — the
+wheel is what a keyboard-and-mouse player already reaches for and costs nothing
+here (a weapon is the only thing a wheel could mean in this game, and there is
+no page under the canvas to scroll), while the numbers are what you press when
+you have lost track of what is in your hands. `drawSlot` refuses a request for
+the weapon already up, so a second press of `1` costs nothing rather than
+replaying the animation. `InputManager` normalises `deltaMode` and gates on
+`input.wheelStep` before calling a wheel event a notch: a trackpad's inertial
+fling would otherwise swap the weapon over and over for a second after the
+fingers lift. Note the number keys sit in the trap `BOUND_CODES` documents —
+crouch is Ctrl, and Ctrl+1/Ctrl+2 are browser tab switches no page handler ever
+sees — which is the other reason the wheel is named first.
+
+The pistol is an ordinary `CONFIG.weapons` entry — it fires, reloads, blooms
+and kicks through the same numbers as everything else — and the only thing
+that makes it a sidearm is `entities/weapons.ts` keeping it out of
+`PRIMARY_WEAPON_IDS`. That split is the one place the distinction is stated:
+the kit screen offers the primaries, `SIDEARM` names the other one, and the
+stat chart ranks against the primaries alone, because a bar scaled by a weapon
+nobody can decline says nothing the player can act on.
+
+What it buys is not damage — 25 a round at 5.5/s semi is the worst time to kill
+here — it is `drawTime` 0.34 against the rifle's 0.55. **There is no reserve
+ammunition in this game**, so a magazine that runs dry is the problem the second
+slot solves: a swap is a third of a second to a loaded weapon where a reload is
+one and a half. Take that away (by refilling a slung magazine, or by making the
+draw as slow as a reload) and the whole feature has no reason to exist.
+
+Seven things are load-bearing:
+
+- **The two slots are an ARRAY, indexed by exactly the number on the key.**
+  `PRIMARY_SLOT` is 0 and `SIDEARM_SLOT` is 1, so what `1` and `2` name and
+  what `Player.slot` holds are one fact with no table in between. `drawSlot`
+  is the single entry point and `swapWeapon` is "the other index".
+- **Each slot keeps its own magazine, in a `Holster`.** A weapon put away
+  half-empty comes back half-empty. `Player.ammo` is an accessor onto the
+  carried holster rather than a field, so there is no mirrored count for a swap
+  to keep in step. Both are refilled by `fullReset` and by nothing else — the
+  slung one has to be refilled explicitly there, since only the carried weapon
+  is reachable through `startReload`.
+- **The swap is a gesture with the exchange buried inside it**, the same shape
+  as the grenade throw: `Player.swapT` counts up, the pose is a TRIANGLE that
+  takes the weapon fully out of frame, and `completeSwap` fires at
+  `viewmodel.swap.switchFrac` — at the peak, where nothing is on screen to see
+  the models change. The drop has to clear the bottom edge (see the note on
+  `viewmodel.swap`, which sizes it against the FOV) or the swap is one model
+  popping into another.
+- **Nothing fires or reloads while it is in flight**, and a reload in progress
+  is cancelled rather than remembered — the magazine being worked on is going
+  away with the weapon. The trigger latch deliberately survives, because it
+  belongs to the finger rather than to the weapon.
+- **Its glass is not a choice, and that is a SHAPE rather than a convention.**
+  `WeaponParts.sights` is a `WeaponSights` union: `fitted` (a rail — one
+  assembly per optic, the kit picks) or `fixed` (the notch and blade machined
+  into the slide). `wornSight` resolves the fitted request into the worn answer
+  and `ViewModel.applyFit` is its only caller, which is what keeps the aimed
+  pose, the zoom compensation and — through `carriedSight` — the camera's own
+  FOV all derived from one sight. A pistol aimed down a 3.5x scope's FOV is
+  exactly the mismatch the union makes impossible to spell.
+- **`Player.onCarryChanged` is how the rest of the game hears about it.**
+  `Game.applyCarry` pushes the camera's fit and the HUD's caption, and all
+  three things that change the hands — a kit pick, a swap completing, a fresh
+  body coming up with the primary — reach it without any of them remembering
+  to. `applyLoadout` is still the kit's own path; the deploy screen and the kit
+  screen keep naming the PRIMARY, because that is what they are for.
+- **`hipY` is the sibling of `hipZ`, and the pistol is why it exists.** The hip
+  pose is authored around the reference weapon's bore, and every long gun here
+  carries its bulk *above* that line. A pistol hangs below it, hands and all, so
+  at the shared height it falls off the bottom edge and reads as a dark sliver
+  in the corner. Measured on a 1280x720 frame: without it the grip and both
+  fists are outside the frustum.
+
+`PistolModel.ts` is the one weapon builder that does not call `optics.ts`, and
+that is the union's whole point rather than a shortcut: a 1911 has no rail, and
+what stands on the back of its slide is a square notch, not the rear aperture
+every optic here is built around. The rule that matters is still obeyed — it
+reports a `sightCenter` and `applyFit` derives the aimed pose from it exactly
+as it does for a holo — so the eye reference is not duplicated; only the
+geometry in front of it is the weapon's own.
 
 The screen itself (`src/ui/LoadoutScreen.ts`) owns its own DOM under `#hud` and
 is a `loadout` game state — a lid over `menu` or `deploy` that remembers which

@@ -262,6 +262,22 @@ export class Sfx {
   }
 
   /**
+   * Swapping weapons: one goes onto the sling, the other comes off it.
+   *
+   * Two events rather than a rummage, and they are placed where the hands
+   * actually are — the first on the button, the second at the point the
+   * viewmodel exchanges the models — so the sound tells you how far through
+   * the wait you are, which on a swap is the only thing you want to know. The
+   * second is the brighter of the two: a weapon coming up is what the player
+   * is waiting for, and the sound that says "you can shoot" should be the one
+   * that carries.
+   */
+  swap(duration: number): void {
+    this.clack(900, 0.55, 0);
+    this.clack(2200, 0.7, duration * 0.45);
+  }
+
+  /**
    * A grenade leaving the hand: the pin and lever going, then the cloth of the
    * throw. Player-local — bots' throws are deliberately silent, because the
    * one cue that matters for an incoming grenade is the blinking pip on the

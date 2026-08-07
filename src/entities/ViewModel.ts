@@ -19,6 +19,12 @@
  *   scaling take the same factor, so no ray direction moves and the sight
  *   stays exactly on the axis. Scaling one without the other is what would
  *   break it.
+ * - The FITTED optic is a request and the WORN one is the answer. A weapon
+ *   with a rail wears what the kit chose; the sidearm wears the notch and
+ *   blade on its own slide whatever the kit says, because it has no rail to
+ *   bolt anything to. `wornSight` resolves the two and `applyFit` is the only
+ *   caller, which is what keeps the aimed pose, the zoom compensation and (via
+ *   `carriedSight`) the camera's own FOV all derived from one sight.
  * - Every weapon is built once and all but the carried one is disabled, the
  *   same trick the optics use: a loadout change is a handful of boolean
  *   writes and a re-derivation, never a rebuild. That is also why the muzzle
@@ -58,10 +64,11 @@ import {
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import { buildDmr } from "./DmrModel";
+import { buildPistol } from "./PistolModel";
 import { buildRifle } from "./RifleModel";
 import { buildSmg } from "./SmgModel";
 import { DEFAULT_SIGHT, sightSetup, type SightId, type SightSetup } from "./sights";
-import type { GripSpec, WeaponBuilder, WeaponParts } from "./weaponKit";
+import { wornSight, type GripSpec, type WeaponBuilder, type WeaponParts } from "./weaponKit";
 import {
   DEFAULT_WEAPON,
   WEAPON_IDS,
@@ -87,6 +94,7 @@ const WEAPON_BUILDERS: Record<WeaponId, WeaponBuilder> = {
   rifle: buildRifle,
   smg: buildSmg,
   dmr: buildDmr,
+  pistol: buildPistol,
 };
 
 /** What the weapon needs to know about the player, per frame. */
@@ -99,6 +107,14 @@ export interface ViewModelParams {
   reloadBlend: number;
   /** 0..1 through the reload, for the support hand's trip to the magwell. */
   reloadPhase: number;
+  /**
+   * 0 = the weapon is in the hands, 1 = it is fully out of frame. A TRIANGLE
+   * over the swap rather than a blend toward a state, because a swap is a
+   * round trip: the same curve carries one weapon away and brings the next one
+   * up, and the models are exchanged at the peak where nothing is on screen to
+   * see it happen. Player owns the clock; this only reads it.
+   */
+  swapBlend: number;
   /**
    * Seconds since the throw was asked for, or negative when there is no throw
    * in flight. Seconds rather than a blend because the gesture is a TIMELINE
@@ -240,9 +256,25 @@ export class ViewModel {
 
   /** Aimed position, derived from the fit (see the header). */
   private readonly adsPos = new Vector3();
-  /** The carried weapon and the fitted optic. Written only by `applyFit`. */
+  /** The carried weapon. Written only by `applyFit`. */
   private weaponFit: WeaponSetup = weaponSetup(DEFAULT_WEAPON);
+  /**
+   * The optic the KIT has fitted — a request, not the answer. A weapon with a
+   * rail wears it; the sidearm wears the sights on its own slide whatever this
+   * says, which is what `wornSight` resolves and `sight` below records.
+   */
+  private fittedSight: SightId = DEFAULT_SIGHT;
+  /**
+   * The optic actually in front of the eye, resolved by `applyFit` from the
+   * carried weapon's own sights. Everything downstream of the fit — the aimed
+   * pose, the zoom compensation, and (through `carriedSight`) the camera's FOV
+   * and look rates — reads this rather than `fittedSight`, or the pose and the
+   * zoom would be derived from a sight that is not on the weapon.
+   */
   private sight: SightSetup = sightSetup(DEFAULT_SIGHT);
+  /** Where the support hand goes for a magazine — this weapon's, or the shared
+   *  offset when it has no opinion. Resolved by `applyFit`, never per frame. */
+  private readonly magHand = new Vector3();
   /** The authored hip pose, plus the carried weapon's own length offset. */
   private readonly hipPos: Vector3;
   private readonly hipRot: Vector3;
@@ -429,10 +461,25 @@ export class ViewModel {
     this.applyFit();
   }
 
-  /** Fits an optic to the carried weapon. */
+  /**
+   * Fits an optic. What the kit asked for — whether the carried weapon can
+   * actually take it is the weapon's business, and `applyFit` is where that is
+   * settled.
+   */
   setSight(id: SightId): void {
-    this.sight = sightSetup(id);
+    this.fittedSight = id;
     this.applyFit();
+  }
+
+  /**
+   * The optic actually in front of the eye. Read by Player, and through it by
+   * the camera, which has to agree with the aimed pose derived here about
+   * which sight is being looked through — a camera zooming to a scope's FOV
+   * over a pistol's notch is exactly the mismatch this getter exists to
+   * prevent.
+   */
+  get carriedSight(): SightId {
+    return this.sight.id;
   }
 
   /**
@@ -457,15 +504,36 @@ export class ViewModel {
     for (const id of WEAPON_IDS) {
       const rig = this.rigs[id];
       rig.root.setEnabled(id === fitted);
-      for (const [key, assembly] of Object.entries(rig.parts.sights)) {
-        assembly.root.setEnabled(key === this.sight.id);
+      // A rail switches one of three on; a fixed sight is part of the weapon
+      // and there is nothing to switch — it goes wherever its weapon goes.
+      const sights = rig.parts.sights;
+      if (sights.kind === "fitted") {
+        for (const [key, assembly] of Object.entries(sights.assemblies)) {
+          assembly.root.setEnabled(key === this.fittedSight);
+        }
       }
     }
     const parts = this.rigs[fitted].parts;
+    const worn = wornSight(parts.sights, this.fittedSight);
+    this.sight = sightSetup(worn.id);
     this.muzzle.position.copyFrom(parts.muzzle);
     this.ejectPort.position.copyFrom(parts.ejectPort);
-    // A shorter weapon sits closer, or it reads as being held at arm's length.
-    this.hipPos.set(v.hipPos.x, v.hipPos.y, v.hipPos.z + this.weaponFit.hipZ);
+    // A pistol keeps its magazine in the grip, so the shared trip to a magwell
+    // under the receiver is wrong for it and it says so itself. The fallback is
+    // set componentwise, never `copyFrom`: the CONFIG entry is a plain triple
+    // and `copyFrom` reads `_x`/`_y`/`_z`, which would silently give NaN.
+    const mh = parts.magHand;
+    if (mh) this.magHand.copyFrom(mh);
+    else this.magHand.set(v.magHandOffset.x, v.magHandOffset.y, v.magHandOffset.z);
+    // A shorter weapon sits closer, or it reads as being held at arm's length;
+    // one that hangs below its own bore is carried higher, or it falls off the
+    // bottom of the frame. Both offsets are the weapon's, and both are applied
+    // to the HIP pose alone — the aimed one is derived and has no say in it.
+    this.hipPos.set(
+      v.hipPos.x,
+      v.hipPos.y + this.weaponFit.hipY,
+      v.hipPos.z + this.weaponFit.hipZ,
+    );
 
     // Where the turntable spins: along this weapon's own axis, so a swap on
     // the kit screen re-centres the model instead of hanging the SMG off the
@@ -473,7 +541,7 @@ export class ViewModel {
     this.pivot.set(0, 0, parts.muzzle.z * v.inspect.pivotFrac);
 
     const s = v.scale * this.sight.zoomComp;
-    const centre = parts.sights[this.sight.id].sightCenter.position;
+    const centre = worn.assembly.sightCenter.position;
     this.adsPos.set(
       -centre.x * s,
       -centre.y * s,
@@ -633,6 +701,16 @@ export class ViewModel {
       addScaled(this.off, v.reloadPos, reloadW);
       addScaled(this.rot, v.reloadRot, reloadW);
     }
+    // The swap, on the same additive footing as the two above — which is what
+    // lets a swap taken out of a sprint bend out of the carry rather than
+    // snapping to the drop. Eased here rather than in Player: the clock is a
+    // straight triangle, and the ease is how the weapon moves, which is this
+    // file's business.
+    const swapW = smoothstep01(clamp(p.swapBlend, 0, 1));
+    if (swapW > 0.001) {
+      addScaled(this.off, v.swap.pos, swapW);
+      addScaled(this.rot, v.swap.rot, swapW);
+    }
     // The throw's give is NOT a symmetric arc like the blends above: it is the
     // support hand being somewhere else, so it comes on as fast as the hand
     // leaves the handguard, holds for as long as the hand is away, and eases
@@ -717,7 +795,7 @@ export class ViewModel {
     const magW = this.magWindow(p);
     const supportArm = this.rigs[this.weaponFit.id].supportArm;
     if (magW > 0.0001 || supportArm.position.lengthSquared() > 0) {
-      const o = v.magHandOffset;
+      const o = this.magHand;
       supportArm.position.set(o.x * magW, o.y * magW, o.z * magW);
     }
     // ...and off the weapon entirely for a throw. The hand that throws IS the

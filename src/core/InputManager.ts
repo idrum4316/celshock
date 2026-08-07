@@ -49,6 +49,35 @@ export class InputManager {
    */
   grenadePressed = false;
   /**
+   * Edge-triggered "swap to the other weapon" (mouse wheel / gamepad Y).
+   *
+   * The wheel is where a keyboard-and-mouse player already reaches for this,
+   * and it costs nothing: the weapon is the only thing in this game a wheel
+   * could mean, and there is no page under the canvas to scroll. It is a
+   * TOGGLE rather than a cycle because there are exactly two slots — a notch
+   * either way is "the other one", so there is nothing for a direction to
+   * select. The numbers below are the way to name a slot outright.
+   *
+   * Gameplay only, which is what makes Y available for it on the pad: the
+   * fourth face button already opens the loadout (`loadoutPressed`), and that
+   * flag is read in the menu and deploy states only. The two never come up in
+   * the same state, so one button carries both — exactly the arrangement B
+   * already has as crouch and back, and for the same reason.
+   */
+  swapPressed = false;
+  /**
+   * Edge-triggered "draw THIS weapon": 0 for the primary (`1`), 1 for the
+   * sidearm (`2`), and -1 for no request this frame.
+   *
+   * A slot index rather than a swap, because that is the whole difference: the
+   * wheel asks for the other weapon and these ask for a particular one, so a
+   * player who has lost track of what is in their hands can press `1` and know
+   * what they get. Pressing the one already carried does nothing at all —
+   * re-drawing the weapon you are holding is half a second of animation in
+   * exchange for no change.
+   */
+  slotPressed = -1;
+  /**
    * Keyboard: held Shift. Gamepad: L3 toggles — holding a stick click for a
    * 240 m crossing is miserable, so the pad latches instead.
    *
@@ -182,6 +211,14 @@ export class InputManager {
   private prevJump = false;
   private prevReload = false;
   private prevGrenade = false;
+  private prevSwap = false;
+  private prevSlot = -1;
+  /**
+   * Wheel travel since the last `update()`, normalised to pixels and consumed
+   * on read — the same shape as the mouse-look accumulator above, and for the
+   * same reason: a frame that never ran must not be able to spend two notches.
+   */
+  private wheelAccum = 0;
   private prevConfirm = false;
   private prevMenuConfirm = false;
   private prevMenuLeft = false;
@@ -216,6 +253,7 @@ export class InputManager {
       this.mouseMask = 0;
       this.padSprintOn = false;
       this.crouchLatched = false;
+      this.wheelAccum = 0;
     });
 
     // Button state is read from `buttons` bitmasks (not individual
@@ -252,6 +290,26 @@ export class InputManager {
         this.accumY += e.movementY;
       }
     });
+    // The wheel. Passive, and deliberately not prevented: nothing on this page
+    // scrolls (the canvas fills the viewport and `#hud` is fixed), so the
+    // browser default is already a no-op where it matters — while the map
+    // editor's inspector is a panel full of number inputs that a wheel is
+    // supposed to be able to scroll past. Accumulated rather than read as an
+    // event, because a trackpad delivers a dozen of these per frame.
+    //
+    // `deltaMode` is normalised here rather than at the read: the same gesture
+    // reports pixels in Chrome, LINES in Firefox and pages on some setups, and
+    // a threshold compared against three different units is a threshold that
+    // works on one browser.
+    window.addEventListener(
+      "wheel",
+      (e) => {
+        const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
+        this.wheelAccum += e.deltaY * scale;
+      },
+      { passive: true },
+    );
+
     document.addEventListener("pointerlockchange", () => {
       this.pointerLocked = document.pointerLockElement === canvas;
       // Escape is the browser's own gesture for dropping the lock, and the
@@ -301,6 +359,10 @@ export class InputManager {
     const padJump = pad ? buttonHeld(pad, 0, trig) : false;
     const padCrouch = pad ? buttonHeld(pad, 1, trig) : false;
     const padReload = pad ? buttonHeld(pad, 2, trig) : false;
+    // Y/Triangle. Two jobs on two disjoint sets of states — the kit screen out
+    // of a menu, the weapon swap inside a round — read once here so they cannot
+    // disagree about the button.
+    const padLoadout = pad ? buttonHeld(pad, 3, trig) : false;
     const padStart = pad ? buttonHeld(pad, 9, trig) : false;
     const padSprint = pad ? buttonHeld(pad, 10, trig) : false;
 
@@ -374,6 +436,25 @@ export class InputManager {
     this.grenadePressed = grenadeNow && !this.prevGrenade;
     this.prevGrenade = grenadeNow;
 
+    // The weapon swap. `padLoadout` is Y, which this shares with the loadout
+    // screen — see `swapPressed`. The pad half is edge-triggered because a held
+    // button must not queue a second gesture behind the first; the wheel needs
+    // no edge, since a notch IS one.
+    //
+    // The accumulator is spent whole rather than by the notch: three notches
+    // inside one frame are still one request, because with two slots the
+    // second notch would only undo the first.
+    const wheeled = Math.abs(this.wheelAccum) >= CONFIG.input.wheelStep;
+    this.wheelAccum = 0;
+    this.swapPressed = wheeled || (padLoadout && !this.prevSwap);
+    this.prevSwap = padLoadout;
+
+    // …and naming a slot outright. Nothing on the pad: there is no button left
+    // for it, and Y already reaches both weapons in the two presses this saves.
+    const slotNow = this.keys.has("Digit1") ? 0 : this.keys.has("Digit2") ? 1 : -1;
+    this.slotPressed = slotNow !== this.prevSlot ? slotNow : -1;
+    this.prevSlot = slotNow;
+
     // The tap is a one-frame pulse rather than held state, so it is consumed
     // here: read once, cleared once, and the edge below does the rest.
     const tapped = this.touchTapped;
@@ -427,10 +508,11 @@ export class InputManager {
     this.prevPause = pauseNow;
 
     // The loadout screen's own key. On the pad it is Y/Triangle — button 3 is
-    // the one face button nothing else claims (A jumps and confirms, B
-    // crouches, X reloads), and the loadout is only ever reachable from a
-    // screen where the face buttons mean menu things anyway.
-    const loadoutNow = this.keys.has("KeyL") || (pad ? buttonHeld(pad, 3, trig) : false);
+    // the one face button nothing else claims in a menu (A jumps and confirms,
+    // B crouches, X reloads), and the loadout is only ever reachable from a
+    // screen where the face buttons mean menu things anyway. In a round the
+    // same button swaps weapons; see `swapPressed`.
+    const loadoutNow = this.keys.has("KeyL") || padLoadout;
     this.loadoutPressed = loadoutNow && !this.prevLoadout;
     this.prevLoadout = loadoutNow;
 
@@ -540,7 +622,11 @@ export class InputManager {
  *
  * What it CANNOT save you from is the shortcuts the browser reserves —
  * Ctrl+W, Ctrl+T, Ctrl+N, Cmd+Q — which no page-level handler ever sees.
- * Those need `navigator.keyboard.lock()`, which requires fullscreen.
+ * Those need `navigator.keyboard.lock()`, which requires fullscreen. The
+ * weapon keys are in that trap and cannot be got out of it: crouch is Ctrl and
+ * Ctrl+1/Ctrl+2 switch browser TAB, so drawing the sidearm out of a crouch
+ * with the number keys leaves the game. The wheel is immune, which is the
+ * other reason it is the one this game names first.
  */
 const BOUND_CODES = new Set([
   "KeyW",
@@ -551,6 +637,8 @@ const BOUND_CODES = new Set([
   "KeyC",
   "KeyG",
   "KeyL",
+  "Digit1",
+  "Digit2",
   // Ctrl+O is the file-open dialog, and crouch is Ctrl — exactly the accident
   // the note above describes, so the settings key has to be suppressed too.
   "KeyO",

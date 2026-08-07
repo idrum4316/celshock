@@ -300,7 +300,7 @@ export function buildDmr(
     ejectPort: new Vector3(0.05, 0.044, 0.08),
     grip: { hand: GRIP_HAND, elbow: GRIP_ELBOW },
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
-    sights: optics.sights,
+    sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };
 }

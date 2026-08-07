@@ -173,7 +173,7 @@ export function buildSmg(
     ejectPort: new Vector3(0.046, 0.036, 0.03),
     grip: { hand: GRIP_HAND, elbow: GRIP_ELBOW },
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
-    sights: optics.sights,
+    sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };
 }

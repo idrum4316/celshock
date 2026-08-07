@@ -33,13 +33,22 @@
  * one is that weapon's number against the best number any weapon has, so a
  * third weapon added to CONFIG re-scales the chart instead of dating it.
  *
+ * "Any weapon" means `PRIMARY_WEAPON_IDS` throughout — the sidearm is in the
+ * same table and is not a choice, so it appears on neither the buttons nor the
+ * scale. Ranking against a weapon nobody can decline would shrink every bar on
+ * the screen to say something the player cannot act on.
+ *
  * CSS contract: `#hud` is `pointer-events: none`, so this overlay opts back in
  * — the same carve-out `#deploy` takes.
  */
 import "./loadout.css";
 import { CONFIG } from "../config";
 import { SIGHT_IDS, type SightId } from "../entities/sights";
-import { WEAPON_IDS, type WeaponId } from "../entities/weapons";
+import {
+  PRIMARY_WEAPON_IDS,
+  type PrimaryWeaponId,
+  type WeaponId,
+} from "../entities/weapons";
 
 /** Which half of the kit the keyboard/pad is currently stepping through. */
 type Slot = "weapon" | "sight";
@@ -50,7 +59,7 @@ const SLOTS: readonly Slot[] = ["weapon", "sight"];
  * every number these describe lives in `CONFIG.weapons` and is read from there
  * for the buttons and the bars rather than written twice.
  */
-const WEAPON_BLURBS: Record<WeaponId, string> = {
+const WEAPON_BLURBS: Record<PrimaryWeaponId, string> = {
   rifle:
     "A full-power battle rifle. Four rounds kill at any distance you can see a target at, and it holds its group across the valley — but the magazine is short and every round has to be worth its recoil.",
   smg: "Pistol-calibre, and it empties a long magazine in under three seconds. Quickest to the shoulder, cheapest to miss with, and past the width of a street it will not group whatever optic is on top of it.",
@@ -82,12 +91,12 @@ function magLabel(id: SightId): string {
 
 /** The largest value of one field across every weapon — the bars' full scale. */
 function best(pick: (w: (typeof CONFIG.weapons)[WeaponId]) => number): number {
-  return Math.max(...WEAPON_IDS.map((id) => pick(CONFIG.weapons[id])));
+  return Math.max(...PRIMARY_WEAPON_IDS.map((id) => pick(CONFIG.weapons[id])));
 }
 
 /** The smallest, for the fields where less is better (spread). */
 function least(pick: (w: (typeof CONFIG.weapons)[WeaponId]) => number): number {
-  return Math.min(...WEAPON_IDS.map((id) => pick(CONFIG.weapons[id])));
+  return Math.min(...PRIMARY_WEAPON_IDS.map((id) => pick(CONFIG.weapons[id])));
 }
 
 /**
@@ -100,7 +109,7 @@ function least(pick: (w: (typeof CONFIG.weapons)[WeaponId]) => number): number {
  * column is 52px and "3/s semi" does not fit in it. The fire mode is on the
  * weapon's own button instead, next to the number it qualifies.
  */
-function weaponStats(id: WeaponId): StatRow[] {
+function weaponStats(id: PrimaryWeaponId): StatRow[] {
   const w = CONFIG.weapons[id];
   const deg = (rad: number) => ((rad * 180) / Math.PI).toFixed(2);
   return [
@@ -146,13 +155,13 @@ export class LoadoutScreen {
    */
   private dragX = 0;
   private dragY = 0;
-  private weapon: WeaponId = WEAPON_IDS[0];
+  private weapon: PrimaryWeaponId = PRIMARY_WEAPON_IDS[0];
   private sight: SightId = SIGHT_IDS[0];
   /** Which row the d-pad is on. Left/right steps inside it; up/down swaps it. */
   private slot: Slot = "weapon";
 
   /** Wired by Game. Each reports a choice; none of them redraws. */
-  onWeapon: (id: WeaponId) => void = () => {};
+  onWeapon: (id: PrimaryWeaponId) => void = () => {};
   onSight: (id: SightId) => void = () => {};
   onClose: () => void = () => {};
 
@@ -233,7 +242,7 @@ export class LoadoutScreen {
   }
 
   /** Shows the kit that is actually fitted. Called by Game, never by a click. */
-  setFit(weapon: WeaponId, sight: SightId): void {
+  setFit(weapon: PrimaryWeaponId, sight: SightId): void {
     if (weapon === this.weapon && sight === this.sight) return;
     this.weapon = weapon;
     this.sight = sight;
@@ -279,8 +288,9 @@ export class LoadoutScreen {
    */
   cycle(delta: number): void {
     if (this.slot === "weapon") {
-      const i = WEAPON_IDS.indexOf(this.weapon);
-      this.onWeapon(WEAPON_IDS[(i + delta + WEAPON_IDS.length) % WEAPON_IDS.length]);
+      const n = PRIMARY_WEAPON_IDS.length;
+      const i = PRIMARY_WEAPON_IDS.indexOf(this.weapon);
+      this.onWeapon(PRIMARY_WEAPON_IDS[(i + delta + n) % n]);
     } else {
       const i = SIGHT_IDS.indexOf(this.sight);
       this.onSight(SIGHT_IDS[(i + delta + SIGHT_IDS.length) % SIGHT_IDS.length]);
@@ -294,7 +304,7 @@ export class LoadoutScreen {
    * highlight.
    */
   private draw(): void {
-    const weapons = WEAPON_IDS.map((id) => {
+    const weapons = PRIMARY_WEAPON_IDS.map((id) => {
       const w = CONFIG.weapons[id];
       return `
         <button class="lo-opt${id === this.weapon ? " on" : ""}" data-weapon="${id}">
@@ -345,7 +355,7 @@ export class LoadoutScreen {
     this.body.querySelectorAll<HTMLElement>("button.lo-opt").forEach((btn) => {
       btn.onclick = () => {
         const w = btn.dataset.weapon;
-        if (w) this.onWeapon(w as WeaponId);
+        if (w) this.onWeapon(w as PrimaryWeaponId);
         else this.onSight(btn.dataset.sight as SightId);
       };
     });

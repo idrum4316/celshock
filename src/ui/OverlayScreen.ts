@@ -33,6 +33,11 @@ const CONTROLS: readonly [string, string, string][] = [
   ["Fire", "RT", "LMB"],
   ["Jump", "A", "Space"],
   ["Reload", "X", "R"],
+  // Three keys, because they are two different asks: the wheel swaps to the
+  // other weapon and the numbers name one outright. Y is the kit screen's
+  // button in a menu and this one in a round; the two states never overlap, so
+  // the table can name it here without qualification.
+  ["Weapon", "Y", "Wheel 1 2"],
   ["Grenade", "RB", "G"],
   ["Sprint", "L3", "Shift"],
   // Two keys because they behave differently — Ctrl is held, C latches, and

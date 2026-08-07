@@ -44,8 +44,8 @@ import {
 } from "../entities/sights";
 import {
   DEFAULT_WEAPON,
-  isWeaponId,
-  type WeaponId,
+  isPrimaryWeaponId,
+  type PrimaryWeaponId,
 } from "../entities/weapons";
 import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
@@ -164,19 +164,24 @@ function writeSight(id: SightId): void {
   }
 }
 
-/** The remembered weapon. Validated exactly as the optic is, and for the
- *  same reason: it indexes a table of built models. */
-function readWeapon(): WeaponId {
+/**
+ * The remembered weapon. Validated exactly as the optic is, and for the same
+ * reason: it indexes a table of built models. The test is the PRIMARY one, so
+ * a store holding "pistol" — which is a real weapon id, just not one the kit
+ * offers — falls back to the default rather than putting the sidearm in both
+ * hands with nothing to swap to.
+ */
+function readWeapon(): PrimaryWeaponId {
   try {
     const raw = window.localStorage.getItem(WEAPON_KEY);
-    if (raw !== null && isWeaponId(raw)) return raw;
+    if (raw !== null && isPrimaryWeaponId(raw)) return raw;
   } catch {
     // As above.
   }
   return DEFAULT_WEAPON;
 }
 
-function writeWeapon(id: WeaponId): void {
+function writeWeapon(id: PrimaryWeaponId): void {
   try {
     window.localStorage.setItem(WEAPON_KEY, id);
   } catch {
@@ -277,7 +282,7 @@ export class Game {
    * be opened from, so there is nothing to defer to the next round.
    */
   private sight: SightId = readSight();
-  private weapon: WeaponId = readWeapon();
+  private weapon: PrimaryWeaponId = readWeapon();
   /** Which state the loadout screen is a lid over; where closing it returns. */
   private loadoutFrom: "menu" | "deploy" = "menu";
   /**
@@ -520,6 +525,7 @@ export class Game {
     this.loadoutScreen.onWeapon = (id) => this.setWeapon(id);
     this.loadoutScreen.onSight = (id) => this.setSight(id);
     this.loadoutScreen.onClose = () => this.closeLoadout();
+    this.player.onCarryChanged = () => this.applyCarry();
     this.overlayScreen.onOpenSettings = () => this.openSettings();
     this.settingsScreen.onToggle = (key, value) => this.setSetting(key, value);
     this.settingsScreen.onClose = () => this.closeSettings();
@@ -807,7 +813,7 @@ export class Game {
    * and the deploy screen, where the gun is already put away, so there is no
    * round in flight for a swap to interrupt.
    */
-  private setWeapon(id: WeaponId): void {
+  private setWeapon(id: PrimaryWeaponId): void {
     if (id === this.weapon) return;
     this.weapon = id;
     writeWeapon(id);
@@ -833,14 +839,36 @@ export class Game {
   private applyLoadout(): void {
     this.player.setWeapon(this.weapon);
     this.player.setSight(this.sight);
-    this.cameraSys.setLoadout(this.weapon, this.sight);
+    this.applyCarry();
     const label = kitLabel(this.weapon, this.sight);
-    this.hud.setKit(label);
     this.deployScreen.setKit(label);
     this.loadoutScreen.setFit(this.weapon, this.sight);
     // The menu draws the kit into its own markup, so it has to be rebuilt;
     // the other two were just patched above.
     if (this.state === "menu") this.showMenu();
+  }
+
+  /**
+   * Pushes what is actually IN THE PLAYER'S HANDS, which the kit alone cannot
+   * say: the sidearm is swapped to mid-round, and both of the things below
+   * follow the weapon rather than the loadout.
+   *
+   * The camera is the load-bearing one. How far it zooms and how much it slows
+   * are the fitted optic's, how fast it gets there and how much the aim wanders
+   * are the weapon's, and the sidearm looks through its own sights whatever the
+   * kit chose — so a swap that left the camera on the last weapon's fit would
+   * aim a pistol down a scope's FOV. `player.carriedSight` is the one answer
+   * both this and the aimed pose are derived from.
+   *
+   * Wired to `player.onCarryChanged`, so the three things that change the hands
+   * — a kit pick, a swap completing, and a fresh body coming up with the
+   * primary — all reach it without any of them having to remember to.
+   */
+  private applyCarry(): void {
+    const weapon = this.player.carriedWeapon;
+    const sight = this.player.carriedSight;
+    this.cameraSys.setLoadout(weapon, sight);
+    this.hud.setKit(kitLabel(weapon, sight));
   }
 
   /**
@@ -1414,6 +1442,21 @@ export class Game {
     if (this.input.reloadPressed && this.player.startReload()) {
       this.sfx.reload(this.player.reloadTime);
     }
+    // The weapon swap, asked for either way round: the wheel and pad Y want
+    // "the other one", the number keys name a slot. Both land on the same
+    // gesture, and `drawSlot` is what refuses a request for the weapon already
+    // up — so a second press of `1` costs nothing rather than replaying half a
+    // second of animation.
+    //
+    // Nothing else is owed here: the hands, the camera's fit and the HUD's
+    // caption are all pushed from `player.onCarryChanged` when the weapons
+    // actually change places, which is partway through the gesture rather
+    // than now.
+    const swapped = this.input.swapPressed
+      ? this.player.swapWeapon()
+      : this.input.slotPressed >= 0 &&
+        this.player.drawSlot(this.input.slotPressed);
+    if (swapped) this.sfx.swap(this.player.swapTotal);
     // A throw is a gesture with a release inside it, so it is two checks a
     // frame apart rather than one call: the button starts the arm, and the
     // grenade leaves when the arm gets there. The release is tested here,

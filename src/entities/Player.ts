@@ -6,6 +6,13 @@
  * The carried weapon is a resolved `WeaponSetup`, never CONFIG read at the
  * use site: damage, rate, magazine, spread, range and the recoil multipliers
  * all come off it, so swapping guns is one assignment in `setWeapon`.
+ * TWO weapons are carried — the kit's primary and the sidearm everyone has —
+ * and each keeps its own magazine in a `Holster` while it is slung, which is
+ * the whole point of the second slot: there is no reserve ammunition in this
+ * game, so a swap buys you a loaded weapon in a third of a second where a
+ * reload costs one and a half. `swapWeapon` starts the gesture and
+ * `completeSwap` is the one place the hands change, partway through it and
+ * behind the bottom of the frame. Nothing fires while it is in flight.
  * Invariants: probeGround and step-up ray tests filter metadata.solid === true.
  * Crouch moves `eyePos` AND `center` on one blend — the eye is the camera, the
  * LOS target and the bots' aim point at once, so lowering it without lowering
@@ -43,10 +50,49 @@ import { CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
 import type { SightId } from "./sights";
-import { DEFAULT_WEAPON, weaponSetup, type WeaponId, type WeaponSetup } from "./weapons";
+import {
+  DEFAULT_WEAPON,
+  SIDEARM,
+  weaponSetup,
+  type PrimaryWeaponId,
+  type WeaponId,
+  type WeaponSetup,
+} from "./weapons";
 import { ViewModel, VIEWMODEL_GROUP } from "./ViewModel";
 import { TerrainField } from "../world/TerrainField";
 import type { Combatant, Team } from "./Combatant";
+
+/**
+ * One weapon the player is carrying: what it is, and the magazine that stays
+ * with it while it is slung.
+ *
+ * A holster rather than a bare id because the ammunition is the whole reason
+ * the second slot is worth having: a weapon put away half-empty comes back
+ * half-empty, so swapping is a way to keep shooting rather than a way to
+ * refill. There is no reserve pool in this game — a reload always fills the
+ * magazine — so if a swap handed back a full one the sidearm would be a free
+ * reload and nothing else would ever be reloaded at all.
+ */
+interface Holster {
+  setup: WeaponSetup;
+  /** Rounds left in this weapon's magazine, carried across a swap. */
+  ammo: number;
+}
+
+/** A weapon picked up with a full magazine. */
+function holster(id: WeaponId): Holster {
+  const setup = weaponSetup(id);
+  return { setup, ammo: setup.magSize };
+}
+
+/**
+ * The two slots, by index — which is not an implementation detail: it is
+ * exactly what the `1` and `2` keys name, so the number on the key and the
+ * number here are the same fact and there is no table in between them to
+ * disagree.
+ */
+export const PRIMARY_SLOT = 0;
+export const SIDEARM_SLOT = 1;
 
 /** Run-scoped stat modifiers granted by loot. */
 export interface PlayerMods {
@@ -165,12 +211,35 @@ export class Player implements Combatant {
   grenades: number = CONFIG.grenade.carried;
 
   /**
-   * The carried weapon, resolved once per loadout change. Everything about
-   * how the gun behaves is read from here rather than from CONFIG directly,
-   * which is what makes "the player carries an SMG" a single assignment.
+   * The two things the player carries: the kit's primary, and the sidearm
+   * everybody has. Both are resolved `WeaponSetup`s, so everything about how a
+   * gun behaves is read off the carried one rather than from CONFIG at the use
+   * site — which is what makes "the player is holding the pistol now" a single
+   * reassignment of `carried`.
    */
-  private weapon: WeaponSetup = weaponSetup(DEFAULT_WEAPON);
-  ammo: number = this.weapon.magSize;
+  private readonly slots: Holster[] = [holster(DEFAULT_WEAPON), holster(SIDEARM)];
+  /** Which of `slots` is in the hands. The index IS what `1`/`2` name. */
+  private slot = PRIMARY_SLOT;
+  /**
+   * Wired by Game: the weapon in the player's hands changed. The camera zooms,
+   * slows and blends by whatever is being carried, and the HUD names it, so
+   * both have to be told — and a swap happens mid-round where `applyLoadout`
+   * cannot reach.
+   */
+  onCarryChanged: () => void = () => {};
+  /**
+   * Seconds into the swap gesture, or -1 when neither hand is busy. Counts UP
+   * like the throw's clock and for the same reason: there is an event in the
+   * middle of it (the weapons changing places) and "how long ago" is the only
+   * thing that says which side of it we are on.
+   */
+  private swapT = -1;
+  /** How long this particular swap takes — the INCOMING weapon's draw time. */
+  private swapTime = 0;
+  /** Whether the weapons have yet to change places in this gesture. */
+  private swapPending = false;
+  /** The slot this swap ends on. Read once, by `completeSwap`. */
+  private swapTo = PRIMARY_SLOT;
   reloading = false;
   /** True while the sprint key is held and the player is actually running. */
   sprinting = false;
@@ -308,6 +377,48 @@ export class Player implements Combatant {
     return this.root.position;
   }
 
+  /** Whatever is in the hands right now. Everything weapon-shaped reads this. */
+  private get weapon(): WeaponSetup {
+    return this.carried.setup;
+  }
+
+  private get carried(): Holster {
+    return this.slots[this.slot];
+  }
+
+  /**
+   * Rounds in the magazine of the weapon being held. An accessor onto the
+   * holster rather than a field of its own: two slots each keep their own
+   * count, and a mirrored copy here is a second source of truth that a swap
+   * would have to remember to keep in step.
+   */
+  get ammo(): number {
+    return this.carried.ammo;
+  }
+
+  set ammo(rounds: number) {
+    this.carried.ammo = rounds;
+  }
+
+  /** Which weapon is in the hands — for the camera's fit and the HUD's caption. */
+  get carriedWeapon(): WeaponId {
+    return this.weapon.id;
+  }
+
+  /**
+   * The optic actually being looked through, which is not always the one the
+   * kit fitted — the sidearm carries its own. Read by Game and pushed at the
+   * camera, which must agree with the viewmodel's aimed pose about it.
+   */
+  get carriedSight(): SightId {
+    return this.view.carriedSight;
+  }
+
+  /** True while a swap is in flight: the weapon is down and nothing can fire. */
+  get swapping(): boolean {
+    return this.swapT >= 0;
+  }
+
   get maxHealth(): number {
     return CONFIG.player.maxHealth + this.mods.maxHpBonus;
   }
@@ -345,19 +456,90 @@ export class Player implements Combatant {
   }
 
   /**
-   * Picks up a weapon. The magazine comes with it — this is only reachable
+   * Picks up a primary. The magazine comes with it — this is only reachable
    * from the menu and the deploy screen, where the gun is already put away,
    * so there is no half-spent magazine to carry across and no reload to
    * interrupt.
+   *
+   * It puts the primary back IN THE HANDS as well, for the same reason: the
+   * kit screen shows the weapon that was just chosen, and closing it holding
+   * the pistol instead would be a screen that lied about what it did.
    */
-  setWeapon(id: WeaponId): void {
-    this.weapon = weaponSetup(id);
-    this.view.setWeapon(id);
+  setWeapon(id: PrimaryWeaponId): void {
+    this.slots[PRIMARY_SLOT] = holster(id);
+    this.slot = PRIMARY_SLOT;
+    this.swapT = -1;
+    this.swapPending = false;
     this.reloading = false;
     this.reloadT = 0;
     this.fireCooldown = 0;
     this.spreadBloom = 0;
     this.ammo = this.magSize;
+    this.view.setWeapon(id);
+    this.onCarryChanged();
+  }
+
+  /**
+   * Puts a named slot in the hands — what the `1` and `2` keys ask for.
+   *
+   * The gesture takes the INCOMING weapon's `drawTime` and nothing can be
+   * fired for the whole of it — that wait is the cost the sidearm's whole case
+   * is measured against, and the reason its own figure is the smallest here.
+   * The weapons change places partway through (`viewmodel.swap.switchFrac`),
+   * behind the bottom of the frame, so the model never pops.
+   *
+   * Asking for the weapon already carried is refused rather than replayed: the
+   * animation would cost half a second and change nothing, and a key pressed
+   * twice in a firefight must not be the reason a shot was late. So is a swap
+   * while a grenade is in the air, because that is the same off hand.
+   *
+   * A reload in progress is CANCELLED rather than remembered: the magazine
+   * being worked on is going away with the weapon, and a reload that resumed
+   * on a gun the player has since put down would finish invisibly.
+   */
+  drawSlot(slot: number): boolean {
+    if (slot < 0 || slot >= this.slots.length) return false;
+    if (!this.alive || this.swapping || this.throwT >= 0) return false;
+    // `slot` is where the gesture ENDS, so a request for the weapon already up
+    // is a no-op — including one arriving while the last swap is still landing,
+    // which is why this tests the destination rather than the current hands.
+    if (slot === this.slot) return false;
+    this.swapT = 0;
+    this.swapTime = this.slots[slot].setup.drawTime;
+    this.swapPending = true;
+    this.swapTo = slot;
+    this.reloading = false;
+    this.reloadT = 0;
+    return true;
+  }
+
+  /** The other weapon, whichever it is — what the wheel and pad Y ask for. */
+  swapWeapon(): boolean {
+    return this.drawSlot(this.slot === PRIMARY_SLOT ? SIDEARM_SLOT : PRIMARY_SLOT);
+  }
+
+  /** How long the swap now in flight takes, for the sound that has to fit it. */
+  get swapTotal(): number {
+    return this.swapTime;
+  }
+
+  /**
+   * The weapons changing places, at the point in the gesture where neither is
+   * on screen. The fire cooldown and the spread bloom are dropped with the
+   * weapon that earned them — they are facts about a gun now on a sling, and
+   * the swap has already cost more time than either.
+   *
+   * The trigger latch deliberately is NOT: it belongs to the finger rather
+   * than to the weapon, so a trigger held down across a swap still has to be
+   * released before the new weapon fires, exactly as it does across a reload.
+   */
+  private completeSwap(): void {
+    this.slot = this.swapTo;
+    this.swapPending = false;
+    this.fireCooldown = 0;
+    this.spreadBloom = 0;
+    this.view.setWeapon(this.weapon.id);
+    this.onCarryChanged();
   }
 
   /**
@@ -393,6 +575,15 @@ export class Player implements Combatant {
     this.mods = { damageMult: 1, speedMult: 1, maxHpBonus: 0, magBonus: 0 };
     this.health = this.maxHealth;
     this.alive = true;
+    // A fresh body comes up with the primary in its hands and both magazines
+    // full. The slung weapon has to be refilled explicitly: only the carried
+    // one is reachable through `startReload`, so a sidearm left empty last
+    // life would otherwise be drawn empty in this one.
+    this.swapT = -1;
+    this.swapPending = false;
+    this.slot = PRIMARY_SLOT;
+    this.view.setWeapon(this.weapon.id);
+    for (const h of this.slots) h.ammo = h.setup.magSize;
     this.ammo = this.magSize;
     this.grenades = CONFIG.grenade.carried;
     this.throwCooldown = 0;
@@ -419,6 +610,10 @@ export class Player implements Combatant {
     this.pitchRate = 0;
     this.prevBobPhase = 0;
     this.view.reset();
+    // The hands changed — a life that ended holding the pistol starts the next
+    // one holding the primary — so the camera's fit and the HUD's caption both
+    // owe a repush.
+    this.onCarryChanged();
   }
 
   placeAt(spawn: Vector3): void {
@@ -597,6 +792,18 @@ export class Player implements Combatant {
       this.throwT += dt;
       if (this.throwT > th.windup + th.recover) this.throwT = -1;
     }
+    // The swap runs on the same shape of clock, and the weapons change places
+    // partway through it rather than at either end — see `completeSwap`.
+    if (this.swapT >= 0) {
+      this.swapT += dt;
+      if (
+        this.swapPending &&
+        this.swapT >= this.swapTime * CONFIG.viewmodel.swap.switchFrac
+      ) {
+        this.completeSwap();
+      }
+      if (this.swapT >= this.swapTime) this.swapT = -1;
+    }
     this.spreadBloom = Math.max(
       0,
       this.spreadBloom - CONFIG.recoil.bloomRecovery * dt,
@@ -695,6 +902,7 @@ export class Player implements Combatant {
       sprintBlend: this.sprintBlend,
       reloadBlend: this.reloadBlend,
       reloadPhase: this.reloadProgress,
+      swapBlend: this.swapWeight(),
       throwTime: this.throwT,
       kick: this.weaponKickT * this.weaponKickT,
       turnRate: this.turnRate,
@@ -703,6 +911,23 @@ export class Player implements Combatant {
       velY: this.velY,
       landDip: cam.landDip,
     });
+  }
+
+  /**
+   * How far the weapon is out of frame for the swap: 0 in the hands, 1 fully
+   * away, peaking where the two change places.
+   *
+   * A triangle rather than a blend toward a state, and it is the same curve
+   * either way round — one weapon rides it down and the next rides it back up,
+   * which is why the peak has to be exactly where `completeSwap` fires. The
+   * easing is the viewmodel's; this is only the clock read as a weight.
+   */
+  private swapWeight(): number {
+    if (this.swapT < 0) return 0;
+    const switchT = this.swapTime * CONFIG.viewmodel.swap.switchFrac;
+    return this.swapT <= switchT
+      ? this.swapT / switchT
+      : Math.max(0, 1 - (this.swapT - switchT) / (this.swapTime - switchT));
   }
 
   /**
@@ -731,6 +956,7 @@ export class Player implements Combatant {
       !this.alive ||
       this.reloading ||
       this.sprinting ||
+      this.swapping ||
       this.fireCooldown > 0 ||
       this.ammo <= 0
     ) {
@@ -883,7 +1109,9 @@ export class Player implements Combatant {
   }
 
   startReload(): boolean {
-    if (this.reloading || this.ammo >= this.magSize) return false;
+    // Not during a swap: the magazine being worked would be on a weapon that
+    // is halfway into a holster.
+    if (this.reloading || this.swapping || this.ammo >= this.magSize) return false;
     this.reloading = true;
     this.reloadT = this.weapon.reloadTime;
     return true;

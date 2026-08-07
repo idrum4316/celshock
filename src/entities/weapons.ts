@@ -20,15 +20,41 @@ import { CONFIG } from "../config";
  */
 export type WeaponId = keyof typeof CONFIG.weapons;
 
-/** In screen order — the loadout row, and what the cycle keys step through. */
+/** Every weapon there is a model for — what `ViewModel` builds. */
 export const WEAPON_IDS = Object.keys(CONFIG.weapons) as WeaponId[];
 
 export function isWeaponId(value: string): value is WeaponId {
   return Object.prototype.hasOwnProperty.call(CONFIG.weapons, value);
 }
 
+/**
+ * The sidearm every loadout carries, whatever else is in it.
+ *
+ * It is an ordinary entry in `CONFIG.weapons` — it fires, reloads, blooms and
+ * kicks through exactly the same numbers as the rest, and there is nothing
+ * about a pistol the weapon table needed teaching. What makes it a sidearm is
+ * only that it is not one of the things the kit screen offers, which is what
+ * the split below says and the only place it is said.
+ *
+ * Declared `as const` rather than as a `WeaponId`, because `PrimaryWeaponId`
+ * subtracts it from the union and a widened type would subtract everything.
+ */
+export const SIDEARM = "pistol" as const;
+
+/** A weapon the loadout screen can actually offer — anything but the sidearm. */
+export type PrimaryWeaponId = Exclude<WeaponId, typeof SIDEARM>;
+
+/** In screen order — the loadout row, and what the cycle keys step through. */
+export const PRIMARY_WEAPON_IDS = WEAPON_IDS.filter(
+  (id) => id !== SIDEARM,
+) as PrimaryWeaponId[];
+
+export function isPrimaryWeaponId(value: string): value is PrimaryWeaponId {
+  return isWeaponId(value) && value !== SIDEARM;
+}
+
 /** The default carry: the weapon the game shipped with. */
-export const DEFAULT_WEAPON: WeaponId = "rifle";
+export const DEFAULT_WEAPON: PrimaryWeaponId = "rifle";
 
 /**
  * Everything a carried weapon decides, resolved once when it is picked up.
@@ -63,6 +89,10 @@ export interface WeaponSetup {
   swayMult: number;
   /** Hip-pose shift along the camera axis, for a weapon of a different length. */
   hipZ: number;
+  /** …and across it, for a weapon that hangs below its bore rather than above. */
+  hipY: number;
+  /** Seconds this weapon takes to come up when swapped to. */
+  drawTime: number;
   sfxPitch: number;
   /** Seconds between rounds — `1 / fireRate`, resolved once. */
   shotInterval: number;
@@ -91,6 +121,8 @@ export function weaponSetup(id: WeaponId): WeaponSetup {
     adsSpeedMult: w.adsSpeedMult,
     swayMult: w.swayMult,
     hipZ: w.hipZ,
+    hipY: w.hipY,
+    drawTime: w.drawTime,
     sfxPitch: w.sfxPitch,
     shotInterval: 1 / w.fireRate,
   };

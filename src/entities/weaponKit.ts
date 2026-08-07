@@ -3,8 +3,8 @@
  * colour groups, the primitive helpers, the merge, and the shape of what a
  * builder returns.
  * Owns: the build accumulator (`weaponBuild`) and the `WeaponParts` contract.
- * Owns no geometry of its own — `RifleModel` and `SmgModel` are the builders,
- * and `optics.ts` is the third.
+ * Owns no geometry of its own — `RifleModel`, `SmgModel`, `DmrModel` and
+ * `PistolModel` are the builders, and `optics.ts` is the fifth.
  *
  * Invariants:
  * - A builder assembles at the ORIGIN with its root at identity and merges
@@ -73,6 +73,43 @@ export interface SightAssembly {
   meshes: Mesh[];
 }
 
+/**
+ * What sights a weapon carries, and it is a SHAPE rather than a convention.
+ *
+ * `fitted` is a rail: one assembly per optic, exactly one of them enabled, and
+ * which one is the kit screen's choice. `fixed` is a weapon whose glass is not
+ * a choice at all — the sidearm wears the notch and blade machined into its own
+ * slide and there is no rail to bolt anything else to.
+ *
+ * A union rather than a `Record` with two of the keys left dark, because the
+ * second shape is what makes asking a pistol for a 3.5x scope impossible to
+ * spell. The eye reference is still one number per sight and still lives on the
+ * assembly, so `ViewModel.applyFit` derives the aimed pose the same way for
+ * both — see `wornSight`, which is the only place the two are told apart.
+ */
+export type WeaponSights =
+  | { kind: "fitted"; assemblies: Record<SightId, SightAssembly> }
+  | { kind: "fixed"; sight: SightId; assembly: SightAssembly };
+
+/**
+ * The optic actually in front of the eye on this weapon, given what the kit has
+ * fitted — the fitted one on a rail, and the weapon's own on a fixed sight,
+ * whatever the kit says.
+ *
+ * The returned `id` is not decoration: it is what the aimed FOV, the look
+ * rates and the zoom compensation are all resolved from, so the camera and the
+ * viewmodel have to agree on it. `ViewModel.carriedSight` is how the rest of
+ * the game reads the answer.
+ */
+export function wornSight(
+  sights: WeaponSights,
+  fitted: SightId,
+): { id: SightId; assembly: SightAssembly } {
+  return sights.kind === "fixed"
+    ? { id: sights.sight, assembly: sights.assembly }
+    : { id: fitted, assembly: sights.assemblies[fitted] };
+}
+
 /** Where one hand grips, and where its elbow trails, in weapon-local units. */
 export interface GripSpec {
   hand: Vector3;
@@ -90,8 +127,16 @@ export interface WeaponParts {
   /** The trigger hand, and the support hand on the handguard. */
   grip: GripSpec;
   support: GripSpec;
-  /** One per optic. Exactly one is enabled; see `ViewModel.setSight`. */
-  sights: Record<SightId, SightAssembly>;
+  /**
+   * Where the support hand travels to for the magazine swap, weapon-local,
+   * when `CONFIG.viewmodel.magHandOffset` is wrong for this weapon. The shared
+   * offset takes the hand back and down to a magwell under the receiver, which
+   * is where every long gun here keeps one; a pistol's magazine is up inside
+   * the grip, so the same move throws the hand out behind the weapon.
+   */
+  magHand?: Vector3;
+  /** A rail's worth of optics, or the one sight this weapon was born with. */
+  sights: WeaponSights;
   /** Every visible mesh, every optic's included. */
   meshes: Mesh[];
 }
