@@ -141,9 +141,19 @@ export class DeathCam {
    * built up front: `buildSoldier` allocates nine merged meshes and their GL
    * buffers, and the frame the player is killed on is the worst one in the
    * round to spend that on.
+   *
+   * A change of team is the one thing that rebuilds, and the rebuild has to go
+   * through `stop()` first. The standing rig may be held by `RagdollSystem` at
+   * that moment, whose proxy nodes are the PARENTS of the joints about to be
+   * disposed — a slot left pointing at freed nodes would go on writing them for
+   * the rest of the corpse's life and hand back a hierarchy that no longer
+   * exists. Nothing reaches this today (`Game` deals the player team 0 every
+   * round, so every call after the first is the early return above), which is
+   * exactly why it would be found the hard way if it ever did.
    */
   prepare(team: Team): void {
     if (this.builtFor === team && this.corpse) return;
+    this.stop();
     this.corpse?.rig.root.dispose(false, true);
     const spec = CONFIG.teams[team];
     const rig = buildSoldier(this.scene, this.mats, spec.color, spec.eyeColor);

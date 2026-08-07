@@ -1234,6 +1234,11 @@ export class Game {
    *
    * The map is deliberately left standing. `startRound` rebuilds it anyway,
    * and disposing it here would only trade a live backdrop for an empty one.
+   * That is exactly why the death cam has to be told: the body is standing in
+   * the backdrop this leaves up, so a round abandoned from a pause taken over
+   * `dying` would put the main menu over the player's own frozen corpse, with
+   * `.dying` still on the HUD and a ragdoll slot still held until the next
+   * round's `enterDeploy` happened to clear both.
    */
   private enterMenu(): void {
     this.state = "menu";
@@ -1241,6 +1246,8 @@ export class Game {
     this.deployScreen.hide();
     this.stowKit();
     this.settingsScreen.hide();
+    this.deathCam.stop();
+    this.hud.setDeathCam(false);
     this.minimap.setVisible(false);
     this.player.setBodyHidden(true);
     this.hud.setScoreboard(false);
@@ -1722,8 +1729,15 @@ export class Game {
       this.cameraSys.camera.position,
     );
     this.updateHud(dt, true);
+    // A cam that is no longer up ends this state as surely as one that ran its
+    // course. The clock alone would not: `stop()` zeroes it, so a cam dropped
+    // by anything that did not also move the state on would leave `elapsed` at
+    // 0 for the rest of the round — a state whose exit condition is a clock
+    // that has stopped ticking, which is a player who never respawns. Every
+    // stop site does move the state today, and this is what keeps the exit from
+    // depending on all of them continuing to.
     const dc = CONFIG.player.deathCam;
-    if (this.deathCam.elapsed >= dc.time) {
+    if (!this.deathCam.active || this.deathCam.elapsed >= dc.time) {
       this.enterDeploy(Math.max(0, CONFIG.conquest.respawnDelay - dc.time));
     }
   }
@@ -1880,8 +1894,9 @@ export class Game {
     this.sfx.setListener(this.cameraSys.camera.position, this.cameraSys.forward);
   }
 
-  /** Pushes this frame's state to the DOM HUD and the minimap. */
   /**
+   * Pushes this frame's state to the DOM HUD and the minimap.
+   *
    * `dying` is the death cam's frame: the gauges are still true and still
    * wanted (the round is live, and watching the tickets while you wait is half
    * the point of showing it at all), but everything about AIMING has stopped
