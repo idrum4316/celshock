@@ -99,10 +99,10 @@ const placements: Placement[] = [
   { kind: "road", x: -60, z: 44, params: { length: 15, width: 8 } },
   { kind: "road", x: -51, z: 40, rotY: Math.PI / 2, params: { length: 100, width: 7 } },
   // East to the farmstead — ends at the barn's west wall, under the loft ramp.
-  { kind: "road", x: 46, z: 30, rotY: Math.PI / 2, params: { length: 54, width: 8 } },
+  { kind: "road", x: 31.5, z: 30, rotY: Math.PI / 2, params: { length: 54, width: 8 } },
   // South to the bog docks — ends at the boathouse ramp foot.
   { kind: "road", x: 40, z: -48.5, params: { length: 41, width: 8 } },
-  { kind: "road", x: 20, z: -30, rotY: Math.PI / 2, params: { length: 44, width: 7 } },
+  { kind: "road", x: 22, z: -30, rotY: Math.PI / 2, params: { length: 44, width: 7 } },
   { kind: "road", x: -30, z: -20, rotY: Math.PI / 2, params: { length: 64, width: 7 } },
   { kind: "road", x: 95, z: -104, rotY: Math.PI / 2, params: { length: 25, width: 8, surface: "dirt" } },
   // Short stubs through the gatehouse arches — the barricades flank these.
@@ -113,7 +113,7 @@ const placements: Placement[] = [
   { kind: "well", x: 0, z: 0 },
   // Market stalls in a tidy ring off the crossroads, counters square to the
   // well. Waist-high cover is all the flag gets.
-  { kind: "stall", x: -8.5, z: 7.5 },
+  { kind: "stall", x: 13.5, z: 7.5 },
   { kind: "stall", x: 8.5, z: 7.5 },
   { kind: "stall", x: -8.5, z: -7.5, rotY: Math.PI },
   { kind: "stall", x: 8.5, z: -7.5, rotY: Math.PI },
@@ -123,16 +123,16 @@ const placements: Placement[] = [
   { kind: "lamp", x: -6, z: -6 },
   { kind: "lamp", x: 6, z: -6, rotY: Math.PI },
   // The ring of houses that makes the square a square — all square to the roads.
-  { kind: "cottage", x: -19, z: 15, params: { litWindows: true } },
+  { kind: "cottage", x: -29, z: 28.5, rotY: Math.PI, params: { litWindows: true } },
   { kind: "cottage", x: 17, z: 17, params: { width: 8, litWindows: true } },
   { kind: "cottage", x: 21, z: -8.5, rotY: Math.PI / 2, params: { depth: 8 } },
   { kind: "cottage", x: -21, z: -9, rotY: -Math.PI / 2, params: { enterable: true } },
   { kind: "cottage", x: 9, z: -21, rotY: Math.PI, params: { ruined: true } },
-  { kind: "cottage", x: -9, z: 23, params: { width: 9, enterable: true, litWindows: true } },
+  { kind: "cottage", x: -9, z: 19.5, rotY: -Math.PI / 2, params: { width: 9, enterable: true, litWindows: true } },
   // The two trades that make the square a town rather than a crossroads. The
   // tavern's porch and the smithy's open front both face the road, so each is
   // a piece of cover you fight *through*.
-  { kind: "tavern", x: -30, z: 14, rotY: -Math.PI / 2 },
+  { kind: "tavern", x: -30, z: 11 },
   { kind: "smithy", x: -10.5, z: -29, rotY: Math.PI },
   // Townhouses: taller than they are wide, jettied over the lane. A row of
   // them is what gives the square a skyline instead of a ring of sheds.
@@ -140,10 +140,10 @@ const placements: Placement[] = [
   { kind: "townhouse", x: 13, z: -14, params: { litWindows: true } },
   // Market clutter — chest-high, so C keeps its "no cover taller than a
   // stall" character while no longer being a car park.
-  { kind: "cart", x: -13, z: 3 },
+  { kind: "cart", x: -22.5, z: 3 },
   { kind: "cart", x: 5, z: 11, rotY: Math.PI / 2, params: { ruined: true } },
   { kind: "crates", x: 12, z: -3 },
-  { kind: "trough", x: -3, z: -11 },
+  { kind: "trough", x: -8.5, z: -11 },
 
   // ===== A — the chapel ========================================================
   // Terrace first: the chapel and its graveyard stand on top of it.
@@ -186,36 +186,36 @@ const placements: Placement[] = [
   { kind: "haystack", x: 30, z: 24 },
   // Roadside fence lines flanking the east road out of the square.
   { kind: "fence", x: 34, z: 7, params: { length: 16 } },
-  { kind: "fence", x: 34, z: -7, params: { length: 16 } },
+  { kind: "fence", x: 33.5, z: -5, params: { length: 16 } },
   { kind: "cottage", x: 16, z: -40, params: { width: 8 } },
-  { kind: "cottage", x: 31, z: -45, params: { ruined: true } },
+  { kind: "cottage", x: 31, z: -45, rotY: Math.PI / 2, params: { ruined: true } },
   { kind: "fence", x: 26, z: -50, rotY: Math.PI / 2, params: { length: 26 } },
-  { kind: "cottage", x: -36, z: -12, rotY: Math.PI, params: { enterable: true } },
+  { kind: "cottage", x: -38.5, z: -10, rotY: Math.PI, params: { enterable: true } },
   { kind: "cottage", x: -44, z: 20, params: { width: 8, ruined: true } },
   { kind: "cottage", x: -30, z: 47.52, params: { litWindows: true } },
-  { kind: "lamp", x: -46, z: -14 },
+  { kind: "lamp", x: -46, z: -7, rotY: -Math.PI / 2 },
   { kind: "lamp", x: 40, z: 20 },
   { kind: "haystack", x: -40, z: 46 },
 
   // ===== the west street: C -> B =============================================
   // The old road out to the mill, built up on both sides so the crossing is a
   // street fight rather than sixty metres of nothing.
-  { kind: "townhouse", x: -40, z: 7, params: { litWindows: true } },
-  { kind: "townhouse", x: -52, z: -6 },
-  { kind: "shed", x: -46, z: 2 },
-  { kind: "woodpile", x: -31, z: 5.5, params: { length: 6 } },
-  { kind: "cart", x: -25, z: -8 },
-  { kind: "stoneWall", x: -50, z: 12, params: { length: 14 } },
+  { kind: "townhouse", x: -44, z: 9, params: { litWindows: true } },
+  { kind: "townhouse", x: -52, z: -10.5, rotY: -Math.PI, params: { litWindows: true } },
+  { kind: "shed", x: -49.5, z: 9, rotY: Math.PI / 2 },
+  { kind: "woodpile", x: -22, z: 10.5, rotY: Math.PI / 2, params: { length: 6 } },
+  { kind: "cart", x: -26, z: -8.5, rotY: Math.PI / 2 },
+  { kind: "stoneWall", x: -52.5, z: 14.5, rotY: Math.PI, params: { length: 22 } },
   { kind: "ruin", x: -53, z: 28, params: { width: 9, depth: 7 } },
-  { kind: "trough", x: -32, z: -6 },
+  { kind: "trough", x: -32, z: -8.5 },
 
   // ===== the north crofts: C -> A ============================================
   // Smallholdings on the road north, walled into paddocks. The stone walls
   // matter more than the buildings: they break the sightline from the square
   // to the chapel terrace, which used to be one unbroken lane.
   { kind: "shrine", x: 4, z: 40 },
-  { kind: "townhouse", x: 9, z: 30, params: { width: 7 } },
-  { kind: "townhouse", x: -10, z: 31, params: { litWindows: true } },
+  { kind: "townhouse", x: 24, z: 41.5, rotY: Math.PI / 2, params: { width: 7 } },
+  { kind: "townhouse", x: -10, z: 31, rotY: -Math.PI / 2, params: { litWindows: true } },
   { kind: "townhouse", x: 10, z: 44 },
   { kind: "cottage", x: 9, z: 52, params: { width: 8, litWindows: true } },
   { kind: "ruin", x: 2, z: 74 },
@@ -229,7 +229,7 @@ const placements: Placement[] = [
   // ===== ASHWOOD — the logging camp (north-east) =============================
   // Dirt lanes off the farmstead road into the felled woods: charcoal kilns,
   // stacked cordwood, and the Wardens' watchtower looking north.
-  { kind: "road", x: 34, z: 60, params: { length: 60, width: 7, surface: "dirt" } },
+  { kind: "road", x: 34, z: 61.5, params: { length: 55, width: 7, surface: "dirt" } },
   { kind: "road", x: 28, z: 90, rotY: Math.PI / 2, params: { length: 30, width: 7, surface: "dirt" } },
   { kind: "watchtower", x: 20, z: 82 },
   { kind: "kiln", x: 44, z: 68 },
@@ -264,9 +264,9 @@ const placements: Placement[] = [
   // A dirt lane from the Blight gatehouse up the map's east side, with the
   // outbuildings that give their approach cover it never had.
   { kind: "road", x: 86, z: -50, params: { length: 100, width: 7, surface: "dirt" } },
-  { kind: "watchtower", x: 104, z: -30 },
-  { kind: "silo", x: 96, z: -8 },
-  { kind: "cottage", x: 100, z: 0, params: { width: 8, ruined: true } },
+  { kind: "watchtower", x: 106, z: -29.991, rotY: 1.566 },
+  { kind: "silo", x: 69.5, z: -17.5 },
+  { kind: "cottage", x: 94.5, z: 0, rotY: Math.PI / 2, params: { width: 8, ruined: true } },
   { kind: "shed", x: 92, z: -20 },
   { kind: "shed", x: 96, z: -25, rotY: Math.PI / 2 },
   { kind: "shed", x: 74, z: -50 },
@@ -275,9 +275,9 @@ const placements: Placement[] = [
   { kind: "kiln", x: 66, z: -44 },
   { kind: "stoneWall", x: 76, z: -12, rotY: Math.PI / 2, params: { length: 22 } },
   { kind: "stoneWall", x: 98, z: -46, params: { length: 14 } },
-  { kind: "woodpile", x: 70, z: -6, rotY: Math.PI / 2 },
+  { kind: "woodpile", x: 69.5, z: -10, rotY: 0.53 },
   { kind: "cart", x: 79, z: -18 },
-  { kind: "cart", x: 92, z: -70 },
+  { kind: "cart", x: 92.893, z: -81.949, rotY: 0.466 },
   { kind: "crates", x: 92, z: -44 },
   { kind: "crates", x: 78, z: -84 },
   { kind: "trough", x: 92, z: -12 },
@@ -287,8 +287,8 @@ const placements: Placement[] = [
   // A walled churchyard on the moor road. Walls are split at the corners and
   // the gate is 7 m wide: enclosed ground has to stay reachable or the flood
   // fill writes the whole plot off.
-  { kind: "road", x: -45, z: -70, rotY: Math.PI / 2, params: { length: 80, width: 7, surface: "dirt" } },
-  { kind: "road", x: 0, z: -76, params: { length: 24, width: 7, surface: "dirt" } },
+  { kind: "road", x: -43.5, z: -70, rotY: Math.PI / 2, params: { length: 90, width: 7, surface: "dirt" } },
+  { kind: "road", x: 0, z: -77, params: { length: 24, width: 7, surface: "dirt" } },
   { kind: "stoneWall", x: -24, z: -42, params: { length: 22 } },
   { kind: "stoneWall", x: -35, z: -52, rotY: Math.PI / 2, params: { length: 18 } },
   { kind: "stoneWall", x: -13, z: -52, rotY: Math.PI / 2, params: { length: 18 } },
@@ -299,7 +299,7 @@ const placements: Placement[] = [
   { kind: "lamp", x: -20, z: -44 },
 
   // ===== the moor road (C -> E, C -> the mire) ==============================
-  { kind: "cottage", x: 9, z: -48, params: { width: 8, ruined: true } },
+  { kind: "cottage", x: 9, z: -50.5, rotY: -Math.PI / 2, params: { width: 8, ruined: true } },
   { kind: "townhouse", x: -11, z: -58 },
   { kind: "ruin", x: 10, z: -66, params: { width: 9, depth: 7 } },
   { kind: "ruin", x: -20, z: -80, params: { width: 9, depth: 7 } },
@@ -318,9 +318,9 @@ const placements: Placement[] = [
   { kind: "road", x: -85, z: -61, params: { length: 24, width: 7, surface: "dirt" } },
   { kind: "cottage", x: -52, z: -60, params: { ruined: true } },
   { kind: "ruin", x: -64, z: -78, params: { width: 10, depth: 8 } },
-  { kind: "ruin", x: -90, z: -100, params: { width: 10, depth: 8 } },
-  { kind: "jetty", x: -56, z: -92, params: { length: 14 } },
-  { kind: "watchtower", x: -96, z: -70 },
+  { kind: "ruin", x: -112.5, z: -102, rotY: -Math.PI / 2, params: { width: 10, depth: 8 } },
+  { kind: "jetty", x: -56, z: -90, params: { length: 14 } },
+  { kind: "watchtower", x: -101.236, z: -80.288, rotY: -2.363 },
   { kind: "kiln", x: -70, z: -62 },
   { kind: "shed", x: -44, z: -80 },
   { kind: "shed", x: -78, z: -104 },
@@ -364,6 +364,10 @@ const placements: Placement[] = [
   // ===== home spawns ==========================================================
   { kind: "gatehouse", x: -100, z: 110, params: { teamColor: WARDEN } },
   { kind: "gatehouse", x: 105, z: -110, rotY: Math.PI, params: { teamColor: BLIGHT } },
+  { kind: "barn", x: 104, z: -70.746, y: 0.33, rotY: -Math.PI / 2 },
+  { kind: "fence", x: 25.285, z: -19.321, rotY: Math.PI / 2, params: { length: 14 } },
+  { kind: "woodpile", x: 20.478, z: -47.91, y: 0.05, rotY: 0.495 },
+  { kind: "trough", x: 19.011, z: -51.848, y: 0.083 },
 ];
 
 const scatter: ScatterSpec[] = [
@@ -378,7 +382,7 @@ const scatter: ScatterSpec[] = [
   { prop: "deadTree", x: -14, z: 102, radius: 13, count: 12, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
   { prop: "deadTree", x: -46, z: 108, radius: 8, count: 6, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
   { prop: "deadTree", x: 98, z: 88, radius: 18, count: 16, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
-  { prop: "deadTree", x: -102, z: -76, radius: 14, count: 12, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
+  { prop: "deadTree", x: -102, z: -83, width: 34, depth: 60, count: 25, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
   // Creek bed: fallen logs in the lane, clear of the ramps and the B spawn.
   { prop: "log", x: -85, z: 12, radius: 12, count: 5, scale: [0.8, 1.2], blocking: true, clearance: 1.4 },
   { prop: "log", x: -85, z: -14, radius: 12, count: 5, scale: [0.8, 1.2], blocking: true, clearance: 1.4 },
@@ -445,6 +449,8 @@ const scatter: ScatterSpec[] = [
   // woods on purpose: one seeded stream serves the whole build, so inserting a
   // region rerolls the dressing of every region after it.
   { prop: "pine", x: -109.5, z: 61, width: 14, depth: 50, count: 12, scale: [0.9, 1.3], blocking: true, clearance: 1.2 },
+  { prop: "deadTree", x: 111, z: -50.19, radius: 11, count: 10, y: -0.365, scale: [0.8, 1.4], blocking: true, clearance: 0.55 },
+  { prop: "barrel", x: 98.794, z: -84.998, radius: 6, count: 3, blocking: true, clearance: 0.55 },
 ];
 
 const controlPoints: ControlPointDef[] = [
@@ -546,6 +552,8 @@ const grass: GrassRect[] = [
   { x: -56, z: -94, width: 30, depth: 20, density: 0.8 },
   // The east holdings' rough grazing, east of the Blight lane.
   { x: 98, z: -20, width: 16, depth: 26, density: 0.5 },
+  { x: 53.884, z: -15.486, width: 57, depth: 22, density: 2 },
+  { x: 63.027, z: -48.428, width: 39, depth: 44, density: 2 },
 ];
 
 export const HollowmereLayout: MapLayout = {
