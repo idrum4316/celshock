@@ -929,9 +929,10 @@ Two details there are not decoration:
   Buttons *inside* the screen can use `click` safely, because by then the button
   is already back up.
 
-On the keyboard and the d-pad the screen splits the axes: up/down chooses which
-slot is being edited, left/right steps through it. The menu behind it keeps
-left/right for difficulty. Enter, pad **A**, pad **B** and `L`/pad X all close
+On the keyboard, the d-pad and the left stick the screen splits the axes:
+up/down chooses which slot is being edited, left/right steps through it. The
+menu behind it keeps left/right for difficulty, on the row its cursor is
+resting on. Enter, pad **A**, pad **B** and `L`/pad Y all close
 it — every pick is already applied, so there is nothing for a confirm and a
 cancel to disagree about, and B is what a pad player reaches for.
 
@@ -1182,6 +1183,48 @@ Three rules keep it that way:
 Three screens stand between the title and the world, and each is driven by a
 pointer *and* by a pad, with no path that needs the other.
 
+**Every screen here is a LIST: move the cursor, A picks, B backs out.** That is
+the console idiom and it is now the only rule a pad player has to know. What it
+replaced was a screen per verb — left/right for the difficulty, `L`/Y for the
+kit, `O` for the settings, a confirm from anywhere for the round — which is a
+keyboard's idea of a menu: every action needs its own button, and an action
+nobody found a button for is one a pad simply cannot reach. The settings screen
+was exactly that, openable only with `O`. The dedicated keys all survive as
+accelerators; none of them is the only way in any more. Three things follow:
+
+- **The cursor is `OverlayScreen`'s, and it is a class on rows that already
+  exist.** `MENU_ITEMS` is the list, `activateMenu` is what A fires, and the
+  mark is a caret on the label plus a ring on the control — never a fill, since
+  the tier buttons and the Deploy button are *already* filled hot to say what is
+  chosen. **The ring has to be INSET on anything chamfered**: every button here
+  is cut by a `clip-path`, and a clip-path clips its own element's outline and
+  box-shadow along with the corner, so an offset outline draws on the tier group
+  (a plain div) and silently on nothing else.
+- **A / Enter fire the cursor's row and BREAK; the mouse, a tap and Start still
+  start the round from anywhere.** Both flags come up on the same frame for A,
+  so the order is the whole mechanism — without the break, A on the settings row
+  opens the screen and then deploys the player out from under it. Same shape as
+  the paused branch handling pause ahead of the confirm behind it.
+- **The cursor survives a redraw and resets when the card is RAISED**
+  (`OverlayScreen.card`). `showMenu` is called again on every difficulty change
+  and on the way back from the kit and settings screens, and a cursor that
+  jumped home each time would make the row you just left the one place you
+  cannot stay.
+
+**The LEFT STICK drives all of it, and holding a direction repeats.** The stick
+was answered nowhere before — menus took the d-pad and the arrow keys only,
+which reads as a screen that has not noticed the pad in your hands. It is the
+left stick alone (the right one turns the kit screen's turntable), read raw
+against `input.menuStickThreshold` rather than through the movement deadzone,
+because a menu step is discrete and a stick resting a third of the way over must
+not scroll a list on its own. `InputManager` folds the keys, the d-pad and the
+stick into two DIRECTIONS rather than four buttons, so opposing presses cancel
+and a diagonal resolves into one step per axis; `stepNav` then turns a held
+direction into the edge-and-repeat the menus read. The repeat is what makes a
+stick usable at all — it has no detent to tap — and it deliberately does not
+extend to confirm or back, where a held button firing twice is a menu item
+chosen twice.
+
 **Each screen has ONE content width and everything hangs off it.** Every block
 used to size itself to its own contents and centre on that, so five stacked
 blocks had five widths and no two shared an edge — which is what reads as
@@ -1217,7 +1260,9 @@ Three things there are worth keeping:
 either screen already starts the round — and that is why it has to exist: an
 instruction in prose is not a target, and "click, press Enter, or press Start"
 made a pad player work out which of the three was theirs. The glyph line on the
-button says all of it at once.
+button says all of it at once. It is also where the menu's cursor starts, which
+is what keeps Enter and A meaning "start the round" the moment the title appears
+— exactly as they did before there was a cursor at all.
 
 **That button is why the deploy screen's confirm is `menuConfirmPressed`.** It
 changes the state on the down edge, which puts the `deploy` branch in front of
@@ -1228,11 +1273,12 @@ skipping the screen entirely. Enter and pad A only; the map takes its own
 clicks and the two buttons take their own.
 
 **The spawn is steppable** (`DeployScreen.moveSelection`, wired to the menu
-arrows in `Game`'s `deploy` branch). Before it there was no way to change
+directions in `Game`'s `deploy` branch — so the stick steps it too, like
+everything else driven by those flags). Before it there was no way to change
 position without a mouse, so a pad's confirm deployed at whatever the list
 happened to start on. Both axes step the same list: the spawns are points
 scattered over a map rather than a row or a column, so no direction *means*
-anything, and a d-pad direction that does nothing reads as a screen ignoring
+anything, and a direction that does nothing reads as a screen ignoring
 the pad. The selection is stepped *before* `update()` redraws, so the marker
 and the status line — which names the selection, because a highlight 300 px
 away is not a label — move on the frame the key was pressed.

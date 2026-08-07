@@ -964,10 +964,24 @@ export class Game {
         // Menu only: `roundover` shares the overlay element but shows the
         // victory text, and redrawing the picker over it would wipe the result.
         if (this.state === "menu") {
-          // Left/right is the difficulty row — the only picker left on this
-          // screen now that the kit has one of its own. `L` (pad X) opens it.
-          if (this.input.menuLeftPressed) this.setDifficulty(this.difficulty - 1);
-          if (this.input.menuRightPressed) this.setDifficulty(this.difficulty + 1);
+          // The menu is a LIST: up/down move the cursor, left/right step
+          // whatever it is resting on, and A fires it. The dedicated keys below
+          // are accelerators now rather than the only way to reach a row —
+          // which is what they were, and is why a pad could not open the
+          // settings screen from here at all.
+          if (this.input.menuUpPressed) this.overlayScreen.moveMenuSelection(-1);
+          if (this.input.menuDownPressed) this.overlayScreen.moveMenuSelection(1);
+          if (this.input.menuLeftPressed) this.overlayScreen.stepMenuItem(-1);
+          if (this.input.menuRightPressed) this.overlayScreen.stepMenuItem(1);
+          // Enter and pad A fire the cursor's row, and BREAK — they raise
+          // `confirmPressed` on the same frame, and the fall-through below
+          // would otherwise start the round out from under whichever screen
+          // the row just opened. The same shape the paused branch uses to keep
+          // Start from confirming behind its own resume.
+          if (this.input.menuConfirmPressed && this.overlayT > 0.5) {
+            this.overlayScreen.activateMenu();
+            break;
+          }
           if (this.input.loadoutPressed) {
             this.openLoadout();
             break;
@@ -977,6 +991,9 @@ export class Game {
             break;
           }
         }
+        // What is left of the confirm is the mouse, a tap and Start: a click
+        // anywhere on either card deploys, and Start is "start the game"
+        // wherever the cursor happens to be resting.
         if (this.input.confirmPressed && this.overlayT > 0.5) {
           this.startRound();
         }

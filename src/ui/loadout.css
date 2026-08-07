@@ -330,6 +330,12 @@
    eye is already looking for the way out. */
 #loadout .lo-foot {
   display: flex;
+  /* Wraps for the reason the deploy screen's action row does: this line
+     carries four blocks now (the two axes, the pad chip and the Done
+     button) and the panel column is a fraction of a viewport that can be
+     a landscape phone. A row that breaks is two short lines; one that
+     cannot puts the button over the stage's edge. */
+  flex-wrap: wrap;
   align-items: center;
   gap: 20px;
   width: 100%;

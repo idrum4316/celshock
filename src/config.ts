@@ -2027,6 +2027,31 @@ export const CONFIG = {
      * Well under one detent so a real notch is never missed.
      */
     wheelStep: 20,
+    /**
+     * How far the LEFT stick has to be pushed before a menu counts it as a
+     * direction. Well above `deadzone`, and deliberately so: movement wants a
+     * small deadzone because a half push is a real speed, while a menu step is
+     * discrete and a stick resting a third of the way over must not scroll a
+     * list on its own. It is also what makes a diagonal push resolve — past
+     * this on both axes is two steps, which on a list of rows is what the
+     * player asked for.
+     */
+    menuStickThreshold: 0.55,
+    /**
+     * Seconds a menu direction must be HELD before it starts repeating, and
+     * the interval between repeats after that.
+     *
+     * A menu direction was a pure edge before this: one press, one step,
+     * however long the key or the stick was held. That is fine on a four-item
+     * list and wrong everywhere a player expects to scroll — and it is the
+     * thing that makes a stick unusable for menus at all, since a stick has no
+     * detent to tap and holding it is the natural gesture. The delay is long
+     * enough that a deliberate single step never repeats by accident; the
+     * interval is a shade over seven steps a second, which crosses any list
+     * here without overshooting it.
+     */
+    menuRepeatDelay: 0.42,
+    menuRepeatInterval: 0.14,
   },
 
   /**

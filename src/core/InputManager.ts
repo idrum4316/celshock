@@ -121,8 +121,24 @@ export class InputManager {
    */
   menuConfirmPressed = false;
   /**
-   * Edge-triggered menu navigation (arrow keys / gamepad D-pad). Menus only —
-   * nothing in gameplay reads these.
+   * Edge-triggered menu navigation (arrow keys / gamepad D-pad / LEFT STICK).
+   * Menus only — nothing in gameplay reads these.
+   *
+   * The stick is here because a pad player reaches for it first and a menu
+   * that only answers the d-pad reads as a menu that does not know a pad is
+   * connected. It is the left stick alone: the right one turns the weapon on
+   * the kit screen's turntable, and the left one means nothing in any state
+   * that reads these flags.
+   *
+   * "Edge-triggered" is now an edge OR a REPEAT — held past
+   * `input.menuRepeatDelay` these fire again every `menuRepeatInterval`. A
+   * stick has no detent to tap, so a pure edge would make it a worse d-pad
+   * rather than an alternative to one; the same repeat on the keys and the
+   * d-pad is what everything else with a list does. Confirm and back are
+   * deliberately NOT repeated — a held A must not fire a menu item twice.
+   *
+   * Opposing directions cancel: pressing both arrows is no step rather than
+   * two that fight, which is also what resolves a stick sitting on a diagonal.
    */
   menuLeftPressed = false;
   menuRightPressed = false;
@@ -161,10 +177,13 @@ export class InputManager {
   /**
    * Edge-triggered "open the settings" (O). Keyboard only, deliberately: the
    * face buttons are all spoken for (A confirms, B backs out and crouches, X
-   * reloads, Y opens the kit), and a pad reaches the screen through the menu
-   * button and the pause list instead. Read in the menu, deploy and paused
-   * states — settings are reachable from a held round where the kit is not,
-   * because turning the blur off is a thing you judge against a live scene.
+   * reloads, Y opens the kit), and a pad reaches the screen by putting the
+   * menu's cursor on its row and pressing A, or through the pause list. That
+   * cursor is why this being keyboard-only is now a shortcut rather than a
+   * hole — before it, the settings screen was the one thing on the menu no
+   * pad could open at all. Read in the menu, deploy and paused states —
+   * settings are reachable from a held round where the kit is not, because
+   * turning the blur off is a thing you judge against a live scene.
    */
   settingsPressed = false;
   pointerLocked = false;
@@ -221,10 +240,9 @@ export class InputManager {
   private wheelAccum = 0;
   private prevConfirm = false;
   private prevMenuConfirm = false;
-  private prevMenuLeft = false;
-  private prevMenuRight = false;
-  private prevMenuUp = false;
-  private prevMenuDown = false;
+  /** The two menu axes' held direction and repeat clock. See `menuLeftPressed`. */
+  private navX: NavAxis = { dir: 0, next: 0 };
+  private navY: NavAxis = { dir: 0, next: 0 };
   private prevMenuBack = false;
   private prevPause = false;
   private prevLoadout = false;
@@ -254,6 +272,11 @@ export class InputManager {
       this.padSprintOn = false;
       this.crouchLatched = false;
       this.wheelAccum = 0;
+      // A direction held when focus was lost must not repeat on the way back:
+      // the keys are gone above, but the axis still believes it is held down
+      // and would fire the moment its repeat clock came round.
+      this.navX.dir = 0;
+      this.navY.dir = 0;
     });
 
     // Button state is read from `buttons` bitmasks (not individual
@@ -475,25 +498,39 @@ export class InputManager {
     this.menuConfirmPressed = menuConfirmNow && !this.prevMenuConfirm;
     this.prevMenuConfirm = menuConfirmNow;
 
-    // Menu navigation. D-pad up/down/left/right are buttons 12/13/14/15 on the
-    // standard mapping. Edge-triggered like everything else here, so holding
-    // the key steps one item rather than scrolling through the whole list.
-    const leftNow =
-      this.keys.has("ArrowLeft") || (pad ? buttonHeld(pad, 14, trig) : false);
-    const rightNow =
-      this.keys.has("ArrowRight") || (pad ? buttonHeld(pad, 15, trig) : false);
-    const upNow =
-      this.keys.has("ArrowUp") || (pad ? buttonHeld(pad, 12, trig) : false);
-    const downNow =
-      this.keys.has("ArrowDown") || (pad ? buttonHeld(pad, 13, trig) : false);
-    this.menuLeftPressed = leftNow && !this.prevMenuLeft;
-    this.menuRightPressed = rightNow && !this.prevMenuRight;
-    this.menuUpPressed = upNow && !this.prevMenuUp;
-    this.menuDownPressed = downNow && !this.prevMenuDown;
-    this.prevMenuLeft = leftNow;
-    this.prevMenuRight = rightNow;
-    this.prevMenuUp = upNow;
-    this.prevMenuDown = downNow;
+    // Menu navigation, from three sources folded into two axes: the arrow keys,
+    // the d-pad (buttons 12/13/14/15 on the standard mapping) and the left
+    // stick. Each axis is a direction rather than four independent buttons, so
+    // opposing presses cancel and a diagonal stick resolves into one step per
+    // axis. `stepNav` turns the held direction into the edge-and-repeat the
+    // menus actually read — see `menuLeftPressed`.
+    //
+    // The stick is read RAW against its own threshold rather than through
+    // `applyDeadzone`: a menu step is discrete, so what matters is whether the
+    // stick is committed to a direction, not how far past the movement
+    // deadzone it has travelled.
+    const nt = CONFIG.input.menuStickThreshold;
+    const stickX = pad ? (pad.axes[0] ?? 0) : 0;
+    const stickY = pad ? (pad.axes[1] ?? 0) : 0;
+    const held = (key: string, button: number, axis: number, sign: number) =>
+      this.keys.has(key) ||
+      (pad ? buttonHeld(pad, button, trig) : false) ||
+      axis * sign > nt;
+    const rawX =
+      (held("ArrowRight", 15, stickX, 1) ? 1 : 0) -
+      (held("ArrowLeft", 14, stickX, -1) ? 1 : 0);
+    // Axis 1 is negative upward on the standard mapping, so "up" is the
+    // negative half of the stick and of the resulting direction alike.
+    const rawY =
+      (held("ArrowDown", 13, stickY, 1) ? 1 : 0) -
+      (held("ArrowUp", 12, stickY, -1) ? 1 : 0);
+    const now = performance.now() / 1000;
+    const navX = stepNav(this.navX, rawX, now);
+    const navY = stepNav(this.navY, rawY, now);
+    this.menuLeftPressed = navX < 0;
+    this.menuRightPressed = navX > 0;
+    this.menuUpPressed = navY < 0;
+    this.menuDownPressed = navY > 0;
 
     // Back. `padCrouch` is B, and reading it here rather than a fourth face
     // button is the whole point: B is the back button everywhere else on a
@@ -668,6 +705,40 @@ const BOUND_CODES = new Set([
 function isTyping(target: EventTarget | null): boolean {
   const tag = (target as HTMLElement | null)?.tagName;
   return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
+}
+
+/** One axis of menu navigation: the direction held, and when it repeats next. */
+interface NavAxis {
+  /** -1, 0 or 1 — what the axis was holding on the previous frame. */
+  dir: number;
+  /** Wall-clock seconds at which a held direction fires again. */
+  next: number;
+}
+
+/**
+ * Turns a held direction into the edge-and-repeat a menu reads: the frame it
+ * changes fires immediately, and holding it fires again every
+ * `menuRepeatInterval` once `menuRepeatDelay` has passed. Returns the
+ * direction on a firing frame and 0 otherwise.
+ *
+ * The clock is the wall clock rather than an accumulated `dt`, deliberately:
+ * the states that read this are the ones where the game's own clock is a lid
+ * (a pause) or a countdown (the deploy wait), and how long a thumb has been
+ * pushing a stick is a fact about the thumb.
+ */
+function stepNav(axis: NavAxis, dir: number, now: number): number {
+  if (dir === 0) {
+    axis.dir = 0;
+    return 0;
+  }
+  if (dir !== axis.dir) {
+    axis.dir = dir;
+    axis.next = now + CONFIG.input.menuRepeatDelay;
+    return dir;
+  }
+  if (now < axis.next) return 0;
+  axis.next = now + CONFIG.input.menuRepeatInterval;
+  return dir;
 }
 
 function applyDeadzone(v: number, dz: number): number {

@@ -181,6 +181,72 @@
   transform: translateY(-1px);
 }
 
+/* --- the menu cursor ---
+   The menu is a list a pad steps through, so exactly one row is "where
+   you are" and it has to read as that from across the screen. Two marks
+   do it: the label lights and grows a caret, and the row's CONTROL takes
+   an outline set off from it.
+
+   The mark on the control cannot be a FILL: the tier buttons already use
+   the hot fill for the selected difficulty and the Deploy button is
+   filled hot outright, so a cursor painted that way would be
+   indistinguishable from the state underneath it.
+
+   Which leaves a ring — and where the ring can be drawn is decided by
+   the chamfers. A clip-path clips its element's own outline and
+   box-shadow along with the corner it is cutting, so an OFFSET outline
+   works only on the tier group (a plain div wrapping the buttons) and
+   vanishes on every button on this screen. Those take an INSET ring
+   instead, which is inside the clip and survives it. */
+#overlay .ov-settings > div.sel .label {
+  color: var(--hot);
+}
+#overlay .ov-settings > div.sel .label::before {
+  content: "\25B8";
+  /* Absolute, so the caret cannot shift the label's right edge and pull
+     the whole grid column with it as the cursor moves down the list. */
+  position: absolute;
+  margin-left: -14px;
+}
+#overlay .ov-settings .label { position: relative; }
+#overlay .difficulty.sel .tiers {
+  outline: 1px solid rgba(255, 230, 128, 0.55);
+  outline-offset: 5px;
+}
+#overlay .ov-settings > div.sel button.kit-open,
+#overlay .ov-settings > div.sel button.settings-open {
+  color: var(--hot);
+  background: rgba(255, 230, 128, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.55);
+}
+/* Dark on the filled button, for the reason its own caption is. */
+#overlay button.ov-start.sel {
+  box-shadow: inset 0 0 0 2px rgba(18, 20, 26, 0.45);
+}
+
+/* The one line that says how the list is driven, under the action and
+   above the controls table. It names the stick first: the d-pad was
+   always answered here and the stick was not, which is the half a pad
+   player reaches for. */
+#overlay .ov-nav {
+  display: flex;
+  gap: 22px;
+  align-items: center;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+  /* It rides under the Deploy button rather than standing as a block of
+     its own, and its caps are a size down from the controls table's.
+     Both are about HEIGHT: the menu had 36 px of slack in a 720p window
+     and this line at full size with a full gap above it spent every
+     pixel of it, which clips the bottom of the controls table — there is
+     no scrolling anywhere in this HUD to absorb it. */
+  margin-top: -8px;
+}
+#overlay .ov-nav span { display: flex; gap: 5px; align-items: center; }
+#overlay .ov-nav kbd { font-size: 9px; padding: 3px 6px; min-width: 22px; }
+
 /* The pause menu's action list. Same carve-out as the difficulty row —
    the buttons take pointer events, the overlay around them does not. */
 #overlay .pause-actions {

@@ -75,8 +75,8 @@ export class SettingsScreen {
         <h2>SETTINGS</h2>
         <div class="se-body"></div>
         <p class="se-foot">
-          <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> row</span>
-          <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>Enter</kbd> toggle</span>
+          <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick</kbd> row</span>
+          <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>Enter</kbd><kbd class="pad">A</kbd> toggle</span>
           <button class="se-back"><kbd>Esc</kbd><kbd class="pad">B</kbd> Back</button>
         </p>
       </div>

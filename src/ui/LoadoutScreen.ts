@@ -175,8 +175,8 @@ export class LoadoutScreen {
         <h2>LOADOUT</h2>
         <div class="lo-body"></div>
         <p class="lo-foot">
-          <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> choose</span>
-          <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> slot</span>
+          <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd class="pad">Stick</kbd> choose</span>
+          <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick</kbd> slot</span>
           <button class="lo-back"><kbd>Enter</kbd><kbd class="pad">B</kbd> Done</button>
         </p>
       </div>

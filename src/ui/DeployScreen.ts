@@ -72,7 +72,7 @@ export class DeployScreen {
 
       <div id="deploy-status"></div>
       <div id="deploy-nav">
-        <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd class="pad">D-pad</kbd> choose position</span>
+        <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd class="pad">Stick / D-pad</kbd> choose position</span>
         <span><kbd>L</kbd><kbd class="pad">Y</kbd> loadout</span>
       </div>
       <div id="deploy-actions">

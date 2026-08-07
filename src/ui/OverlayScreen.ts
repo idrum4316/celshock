@@ -63,11 +63,51 @@ const PAUSE_ITEMS: readonly [PauseAction, string][] = [
   ["quit", "Quit to menu"],
 ];
 
+/**
+ * What the main menu's cursor can rest on, in screen order.
+ *
+ * The menu used to be four things reached by four different buttons — left and
+ * right for the difficulty, `L`/Y for the kit, `O` for the settings, and a
+ * confirm from anywhere for the round — which is a keyboard's idea of a menu
+ * and leaves a pad player with no way at all to reach a row nobody thought to
+ * give a face button. It is a LIST now: up and down move the cursor, A picks
+ * what it is on, and the dedicated keys survive as accelerators rather than as
+ * the only way in.
+ */
+type MenuItem = "difficulty" | "loadout" | "settings" | "start";
+const MENU_ITEMS: readonly MenuItem[] = [
+  "difficulty",
+  "loadout",
+  "settings",
+  "start",
+];
+/**
+ * Where the cursor sits when the menu is raised. Deploy rather than the top
+ * row, because it is the thing all but one visitor to this screen came for —
+ * and because it keeps Enter/A meaning "start the round" the moment the title
+ * appears, exactly as it did before there was a cursor at all.
+ */
+const MENU_DEFAULT = MENU_ITEMS.indexOf("start");
+
 export class OverlayScreen {
   private root: HTMLElement;
   /** Live only while the pause card is up — the buttons die with its markup. */
   private pauseButtons: HTMLElement[] = [];
   private pauseIndex = 0;
+  /** Live only while the menu card is up, for the same reason. */
+  private menuEls = new Map<MenuItem, HTMLElement>();
+  private menuIndex = MENU_DEFAULT;
+  /** The difficulty row's state, so `activateMenu` can step it. */
+  private tierCount = 0;
+  private tier = 0;
+  /**
+   * Which card is up. The cursor is reset when the menu is RAISED and kept
+   * across a redraw: `showMenu` is called again on every difficulty change and
+   * on the way back from the kit and settings screens, and a cursor that
+   * jumped back to Deploy each time would make the row you just left the one
+   * place you cannot stay.
+   */
+  private card: "none" | "menu" | "roundover" | "pause" = "none";
 
   /** Wired by Game: the player picked a difficulty tier from the menu. */
   onDifficulty: (tier: number) => void = () => {};
@@ -149,6 +189,11 @@ export class OverlayScreen {
   ): void {
     this.root.classList.remove("hidden");
     this.setOverlaid(true);
+    // Raised anew, not redrawn — see `card`.
+    if (this.card !== "menu") this.menuIndex = MENU_DEFAULT;
+    this.card = "menu";
+    this.tierCount = difficulties.length;
+    this.tier = selected;
     const tiers = difficulties
       .map(
         (name, i) =>
@@ -161,23 +206,27 @@ export class OverlayScreen {
         <p class="tagline">Conquest &mdash; take and hold five points against the Blight</p>
       </div>
       <div class="ov-settings">
-        <div class="difficulty">
+        <div class="difficulty" data-menu="difficulty">
           <span class="label">Enemy skill</span>
           <div class="tiers">${tiers}</div>
-          <span class="hint">&larr; &rarr; / D-pad</span>
+          <span class="hint">&larr; &rarr;</span>
         </div>
-        <div class="kit">
+        <div class="kit" data-menu="loadout">
           <span class="label">Loadout</span>
           <button class="kit-open"><b>${kit}</b><i>Change kit</i></button>
           <span class="hint">L / Y</span>
         </div>
-        <div class="kit">
+        <div class="kit" data-menu="settings">
           <span class="label">Display</span>
           <button class="settings-open"><b>Settings</b><i>Counter &middot; effects</i></button>
           <span class="hint">O</span>
         </div>
       </div>
-      <button class="ov-start"><b>Deploy</b><i>Enter &middot; A &middot; Start</i></button>
+      <button class="ov-start" data-menu="start"><b>Deploy</b><i>Enter &middot; A &middot; Start</i></button>
+      <p class="ov-nav">
+        <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick / D-pad</kbd> move</span>
+        <span><kbd>Enter</kbd><kbd class="pad">A</kbd> select</span>
+      </p>
       ${this.controlsTable()}
     `;
     this.root
@@ -185,6 +234,18 @@ export class OverlayScreen {
       .forEach((btn) => {
         btn.onclick = () => this.onDifficulty(Number(btn.dataset.tier));
       });
+    // The cursor's row is collected from the markup rather than kept in step
+    // by hand, so a row added above only has to name itself in `MENU_ITEMS`.
+    this.menuEls.clear();
+    this.root.querySelectorAll<HTMLElement>("[data-menu]").forEach((el) => {
+      const item = el.dataset.menu as MenuItem;
+      this.menuEls.set(item, el);
+      // Hovering moves the cursor with it, so the highlighted row and the one
+      // Enter is about to fire can never disagree — the rule the pause list,
+      // the kit screen's slots and the settings rows all follow.
+      el.onmouseenter = () => this.setMenuSelection(MENU_ITEMS.indexOf(item));
+    });
+    this.applyMenuSelection();
     // POINTERDOWN, not click. The menu's own confirm is "a mouse button went
     // down anywhere", read from the button mask on the next tick — which
     // happens before a `click` (that lands on mouse UP) ever fires. Opening
@@ -220,6 +281,74 @@ export class OverlayScreen {
     if (btn) btn.onpointerdown = () => this.onStart();
   }
 
+  /** Steps the menu cursor, wrapping at both ends. No-op off the menu card. */
+  moveMenuSelection(delta: number): void {
+    if (this.menuEls.size === 0) return;
+    const n = MENU_ITEMS.length;
+    this.setMenuSelection((this.menuIndex + delta + n) % n);
+  }
+
+  /**
+   * Left/right on the cursor's row. Only the difficulty row has anything to
+   * step; on a row that is a button this is deliberately nothing, because a
+   * horizontal nudge that fired a screen would make the cursor's own left and
+   * right edges feel like traps.
+   *
+   * It CLAMPS where `activateMenu` wraps: left and right are a slider along a
+   * row of four tiers, and a slider that jumps from Ace back to Green at the
+   * end is one you have to watch rather than feel.
+   */
+  stepMenuItem(delta: number): void {
+    if (this.menuEls.size === 0) return;
+    if (MENU_ITEMS[this.menuIndex] === "difficulty") {
+      this.onDifficulty(this.tier + delta);
+    }
+  }
+
+  /**
+   * Fires the cursor's row — Enter / gamepad A.
+   *
+   * The difficulty row cycles rather than doing nothing: a confirm that
+   * answers nothing is the thing this screen was rebuilt to remove, and with
+   * four tiers on screen and the current one lit, a press that advances to the
+   * next says what it did. It WRAPS, unlike left/right, so the button always
+   * changes something wherever the row happens to be resting.
+   */
+  activateMenu(): void {
+    if (this.menuEls.size === 0) return;
+    switch (MENU_ITEMS[this.menuIndex]) {
+      case "difficulty":
+        if (this.tierCount > 0) this.onDifficulty((this.tier + 1) % this.tierCount);
+        break;
+      case "loadout":
+        this.onOpenLoadout();
+        break;
+      case "settings":
+        this.onOpenSettings();
+        break;
+      case "start":
+        this.onStart();
+        break;
+    }
+  }
+
+  private setMenuSelection(i: number): void {
+    if (i === this.menuIndex) return;
+    this.menuIndex = i;
+    this.applyMenuSelection();
+  }
+
+  /**
+   * Paints the cursor. A class on rows that already exist rather than a
+   * redraw, so moving down the menu does not restart the title's animation or
+   * drop the hover state under the mouse — the same rule the pause list keeps.
+   */
+  private applyMenuSelection(): void {
+    MENU_ITEMS.forEach((item, i) => {
+      this.menuEls.get(item)?.classList.toggle("sel", i === this.menuIndex);
+    });
+  }
+
   showRoundOver(
     winnerName: string,
     playerWon: boolean,
@@ -229,6 +358,8 @@ export class OverlayScreen {
   ): void {
     this.root.classList.remove("hidden");
     this.setOverlaid(true);
+    this.card = "roundover";
+    this.menuEls.clear();
     this.root.innerHTML = `
       <div class="ov-title">
         <h1 class="${playerWon ? "win" : "dead"}">${playerWon ? "VICTORY" : "DEFEAT"}</h1>
@@ -260,6 +391,8 @@ export class OverlayScreen {
    */
   showPause(): void {
     this.root.classList.remove("hidden");
+    this.card = "pause";
+    this.menuEls.clear();
     const items = PAUSE_ITEMS.map(
       ([action, label]) =>
         `<button class="pact" data-action="${action}">${label}</button>`,
@@ -311,6 +444,8 @@ export class OverlayScreen {
     // The buttons live in the card's markup, so they die with it.
     this.pauseButtons = [];
     this.pauseIndex = 0;
+    this.menuEls.clear();
+    this.card = "none";
   }
 
   /**
