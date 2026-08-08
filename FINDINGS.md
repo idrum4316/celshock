@@ -341,10 +341,31 @@ floor rather than an estimate.
 
 ## 8. A tumbling ragdoll is the most expensive thing in the frame while it lasts
 
-**Status:** measured headless, so the absolute milliseconds are inflated the
-same way finding 6's are and only the RANKING is trustworthy. Recorded because
-the ratio is larger than it looks like it should be, and because this landed
-next to finding 1's unexplained frame-time tail.
+**Status: the table below DOES NOT REPRODUCE, and the headline is withdrawn.**
+Re-measured while raising `maxConcurrent`, and a falling corpse is roughly
+0.015 ms rather than 0.34: eight of them cost 0.121 ms/frame against
+`battle.update`'s 0.392 ms for all 16 bots in the same run, i.e. under a third
+of the roster's AI where this claimed 5-6x. Both runs are headless and inflated,
+but the yardstick is the same one, so the ratio is the part that moved.
+
+The two do not reconcile and the difference is not just method. The re-measure
+timed `ragdolls.update(1/60)` — exactly one substep — over 1,600 frames inside
+the fall, with the spawn outside the timed region; a live 2 fps headless frame
+clamps `dt` to 0.05 and so takes `maxSteps` (2) substeps, which is 2x, not 22x.
+The rest is unexplained. The most likely candidate is that the original figure
+was taken inside the render loop, where a `performance.now()` pair around one
+call at 2 fps is measuring whatever else the frame was doing.
+
+**Re-measure on real hardware before trusting either number.** What is safe to
+carry forward: the shape (linear in corpse count, ~0 when settled) and the
+substep sensitivity, not the absolutes.
+
+The open question below is settled: **86% of the time is inside Havok's
+`_step`**, not the JS around it, so the lever is substeps and not the velocity
+poll. Measured over the same 1,600 frames with eight corpses live: 0.128 ms
+total, 0.111 ms of it inside `_step`.
+
+What the original run recorded, kept for the comparison:
 
 With `CONFIG.bots.death.maxConcurrent` (4) corpses live, per frame:
 
@@ -354,14 +375,17 @@ With `CONFIG.bots.death.maxConcurrent` (4) corpses live, per frame:
 | `battle.update` | 0.24 | all 16 bots, same run, as the yardstick |
 | `ragdolls.update` — everything settled | 0.002 | the engine is not touched at all |
 
-So a tumble costs roughly **5–6× the whole roster's AI** while it is happening.
-Two things bound it and are why this is a finding rather than a bug:
+Two things bound it either way, and they are what still hold:
 
 - **It is short.** A body settles in ~1.1 s (measured: ground contact at frame
   20, velocity under `sleepSpeed` by frame 30, frozen by ~frame 65), and from
-  then to the sink at 6 s it costs 0.002 ms. The expensive window is the fall.
-- **It is capped and gated.** Four at once, none past 35 m, and every refusal
-  takes the collapse tween instead.
+  then to the sink at 6 s it costs ~0 (re-measured: 0.0004 ms/frame with eight
+  settled corpses — `update` does not touch the engine). The window is the fall.
+- **It is capped and gated.** Eight at once now, none past the fog wall, and
+  every refusal takes the collapse tween instead. The cap is what makes the cost
+  bounded rather than a function of how many people are dying; the unused slots
+  are free (four corpses cost 0.061 ms in a pool of four and 0.062 ms in a pool
+  of eight).
 
 The static world build is separate and one-off: **33–50 ms** inside
 `installMap` for 733 boxes plus 25 terrain mesh blocks, against a map build
@@ -370,16 +394,18 @@ is flat at 25 across three rounds, so the teardown does not leak.
 
 ### What is not yet known
 
-Whether the 1.37 ms is Havok's step or the JS around it. The plugin's per-step
-sync walks every body in the engine, which is why the map is ONE static body
-rather than 758 — but that was reasoned, not measured against the alternative.
-The `hasSettled` velocity read is 24 WASM calls a frame and is the other
-candidate; it could be sampled every other frame for nothing lost.
+Why the two runs disagree by more than an order of magnitude. Until that is
+resolved on real hardware, neither absolute is worth quoting; the re-measure is
+the more careful of the two (spawn outside the timed region, 1,600 timed frames,
+a zero-corpse control that reads exactly 0.000 ms) but it is still SwiftShader.
+
+The plugin's per-step sync walking every body in the engine is why the map is
+ONE static body rather than 758 — still reasoned, still never measured against
+the alternative. The 86% step share above makes it the more interesting half.
 
 ### How to settle it
 
-Time `engine._step` alone against the rest of `ragdolls.update` inside the same
-loop the table above used. If the step dominates, the lever is fewer substeps
-while several corpses are live; if the JS dominates, it is the velocity poll.
-Do it on real hardware, not headless — at 2 fps the WASM boundary cost is not
-in the same proportion it will be at 60.
+Repeat the re-measure with the page's own frame loop rather than a synchronous
+`update` loop, on real hardware, and see which number it lands on. If the
+original stands, the lever is fewer substeps while several corpses are live —
+`hasSettled`'s velocity poll is now known not to be it.

@@ -448,11 +448,16 @@ export class Bot implements Combatant {
       //
       // The collapse tween ignores the pose-freeze LOD: it is five property
       // writes, and a corpse that holds its mid-stride pose past
-      // lodFreezeDistance and then vanishes reads as a pop, not a death. A
-      // ragdoll is six rigid bodies and five constraints and cannot inherit
-      // that exemption — which is why it is gated by distance at the moment of
-      // death (`death.maxDistance`) and the tween still runs, still exempt,
-      // everywhere it declines.
+      // lodFreezeDistance and then vanishes reads as a pop, not a death.
+      //
+      // A ragdoll needs no such exemption and never did — it poses through the
+      // proxy nodes its joints are parented to, which the solver writes
+      // whatever `animate` says, and this branch stands aside for it anyway.
+      // `death.maxDistance` is a separate gate about what is worth simulating,
+      // NOT about this LOD; reading the two as one is what pinned it to
+      // `lodFreezeDistance` and stopped anything dying across the square from
+      // falling over. The tween still runs, still exempt, wherever the pool
+      // declines.
       if (!this.ragdolling) {
         const d = CONFIG.bots.death;
         animateSoldier(this.rig, 0, 0, 0, 0, Math.min(1, this.deadT / d.collapseTime));

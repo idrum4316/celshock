@@ -29,7 +29,9 @@
  * - It is strictly cosmetic and always optional. Every refusal (WASM not
  *   loaded, WASM failed, setting off, pool full, too far away) falls back to
  *   `Bot`'s collapse tween, which is why that tween is load-bearing rather
- *   than legacy.
+ *   than legacy. The death cam's body is the ONE thing that may not be refused
+ *   for a full pool — it is the sole subject of a four-second shot — and
+ *   `takeSlot` is where that exception lives and where it stops.
  * - The sim is a FIXED step with a CARRIED remainder, so a tumble is identical
  *   at 30, 60 and 144 fps and reproducible headless, where `dt` is clamped to
  *   0.05. Both halves of that are load-bearing and both have already been
@@ -280,8 +282,13 @@ export class RagdollSystem {
    * Distance is sampled ONCE, here: a corpse does not move, and re-testing per
    * frame would switch a tumble off halfway through because the player backed
    * away from it.
+   *
+   * `priority` is the death cam's, and nothing else may pass it — see
+   * `takeSlot`. It buys a slot when the pool is full and buys nothing else:
+   * the distance gate and the already-held test are ahead of it, because a
+   * body offered twice is broken however important it is.
    */
-  spawn(subject: RagdollSubject, camPos: Vector3): boolean {
+  spawn(subject: RagdollSubject, camPos: Vector3, priority = false): boolean {
     const d = CONFIG.bots.death;
     if (!this.enabled || this.state !== "ready" || !this.worldBody) return false;
     if (Vector3.Distance(subject.position, camPos) > d.maxDistance) return false;
@@ -291,7 +298,7 @@ export class RagdollSystem {
     if (subject.ragdolling || this.slots.some((s) => s.subject === subject)) {
       return false;
     }
-    const slot = this.takeSlot();
+    const slot = this.takeSlot(priority);
     if (!slot) return false;
 
     const rig = subject.rig;
@@ -667,8 +674,25 @@ export class RagdollSystem {
    * `GrenadeSystem`'s pool follows and for the same reason: a corpse yanked
    * out of the air mid-fall is worse than one that never fell. A slot already
    * sinking is committed to vanishing, so it is fair game.
+   *
+   * **`priority` is the one exception, and it belongs to the death cam alone.**
+   * A bot's corpse is one of sixteen bodies somewhere on screen; the player's
+   * is the sole subject of a four-second shot the camera is about to point at,
+   * and a body standing to attention through that is the exact failure
+   * `DeathCam`'s header says the state exists to remove. Being refused was not
+   * rare either: a slot is held for the whole `sinkStart` (5 s) and only then
+   * becomes reclaimable, so four nearby deaths inside five seconds lock the
+   * pool — and a player who has just fought hard enough to be killed is
+   * usually standing in exactly that. Measured before this: a corpse 0.65 m
+   * from the camera refused outright, and accepted on the same offer once the
+   * four bot corpses had aged past `sinkStart`.
+   *
+   * It takes the OLDEST corpse, which is the one nearest its own sink and so
+   * the one with least left to lose. Nothing else may pass it: every priority
+   * offer costs a body that was already falling, so a second caller would be
+   * two claims on one exception and the pool would be back to arbitrary.
    */
-  private takeSlot(): Slot | null {
+  private takeSlot(priority: boolean): Slot | null {
     const free = this.slots.find((s) => !s.subject);
     if (free) return free;
     // Only one already going, never one merely lying still: a corpse that has
@@ -679,7 +703,11 @@ export class RagdollSystem {
       this.release(sinking);
       return sinking;
     }
-    return null;
+    if (!priority || this.slots.length === 0) return null;
+    let oldest = this.slots[0];
+    for (const s of this.slots) if (s.t > oldest.t) oldest = s;
+    this.release(oldest);
+    return oldest;
   }
 
   private applyImpulse(slot: Slot, subject: RagdollSubject): void {

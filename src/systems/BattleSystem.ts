@@ -296,7 +296,10 @@ export class BattleSystem {
     }
 
     // --- per-frame movement, with LOD ---
-    const fogEnd = 78;
+    // The fog wall, from CONFIG rather than written out here: the ragdoll gate
+    // is the same distance for the same reason (nothing to see past it), and
+    // two copies is how that one came to be pinned to `lodFreezeDistance`.
+    const fogEnd = b.lodDisableDistance;
     for (const bot of this.bots) {
       if (bot.state === "dead" && bot.respawnT <= 0 && !bot.rig.root.isEnabled()) {
         continue;

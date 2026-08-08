@@ -1403,11 +1403,39 @@ bodies and rounds pass through them. Do not "fix" that by feeding corpses into
 **The collapse tween in `Bot.update`'s dead branch is not legacy — it is the floor
 under all of this**, and it runs on five separate refusals: the WASM has not loaded,
 the WASM failed, the setting is off, the pool is full, or the death was past
-`death.maxDistance`. Deleting it is the single worst change available here. It also
-keeps `Bot.ts`'s own note true: the tween is exempt from the pose-freeze LOD
-*because it is five property writes*; a ragdoll cannot inherit that exemption, so the
-ragdoll is gated by distance at the moment of death and the tween still runs, still
-exempt, everywhere it declines.
+`death.maxDistance`. Deleting it is the single worst change available here. The tween
+is exempt from the pose-freeze LOD *because it is five property writes*; **a ragdoll
+needs no such exemption**, because it poses through the proxy nodes its joints are
+parented to and the solver writes those whatever the LOD says. Reading those two as
+one fact is what pinned `maxDistance` to `lodFreezeDistance` (35) and stopped anything
+dying across the square from falling over at all — a marksman rifle's whole range.
+
+**The gate is the FOG WALL, and it is one number for everything that stops at it.**
+`FOG_WALL` in `config.ts` is a module constant because two unrelated tunables are the
+same distance and must move together: `bots.lodDisableDistance`, where `BattleSystem`
+stops drawing a rig, and `death.maxDistance`, one metre past which the solver would be
+tumbling something nobody can see. `BattleSystem` wrote its own `78` out by hand
+before this, which is how the ragdoll gate came to be keyed off an unrelated LOD. It
+must agree with the MAP's `EnvironmentSpec.fogEnd` — the one that actually paints the
+fog — and `installMap` warns in dev builds if a map disagrees, because on a second map
+those two would otherwise drift in silence.
+
+**The pool refuses rather than stealing a live slot, with exactly one exception: the
+death cam's body.** A bot's corpse is one of sixteen; the player's is the sole subject
+of a four-second shot, and a slot is held for the whole `sinkStart` (5 s), so a handful
+of nearby deaths inside five seconds — which is what a firefight the player lost looks
+like — locked the pool and spent that shot on a body standing to attention.
+`RagdollSystem.spawn` takes a `priority` flag for it, `takeSlot` takes the OLDEST
+corpse to honour it, and `Game`'s `onSpawnRagdoll` wiring is the only place that may
+pass it: every priority offer costs a body that was already falling, so a second
+caller would be two claims on one exception.
+
+**`maxConcurrent` is what bounds the cost, and it is measured, not reasoned.** Eight
+falling corpses are 0.121 ms/frame against the whole roster's AI at 0.39–0.42 ms in
+the same run; a settled one is 0.0004 ms because the engine is not stepped at all, and
+unused slots are free (four corpses cost the same in a pool of four and a pool of
+eight). Raising the DISTANCE is what makes the pool busier — raise the two together.
+FINDINGS #8's older 1.37 ms for four does not reproduce; see the note there.
 
 - **`scene.physicsEnabled` is FALSE and must stay false.** Babylon steps physics
   from `scene.animate()` on every RENDERED frame, and this game renders in every state
@@ -1505,7 +1533,8 @@ without that subtract turns feedback into a punishment.
 - **Physics is optional here exactly as for a bot**, and the fallback is `Bot`'s
   collapse tween with one difference: it is NOT followed by the hide at `hideTime`. A
   body that vanishes two thirds of a second into a four-second shot of it is the thing
-  this state exists to remove.
+  this state exists to remove. **A full pool is the one refusal it does not take** —
+  it offers with `priority`, which evicts the oldest corpse; see the ragdoll section.
 - **The pointer lock is deliberately KEPT.** There is nothing to click, and dropping
   it would trip the lock-loss pause on the very frame the shot begins. `enterDeploy`
   releases it one state later — and it is also the single funnel for retiring the body,

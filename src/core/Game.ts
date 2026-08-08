@@ -28,7 +28,7 @@ import {
   Scene,
   Vector3,
 } from "@babylonjs/core";
-import { CONFIG } from "../config";
+import { CONFIG, FOG_WALL } from "../config";
 import { CelMaterialFactory, updateOutlineScales } from "../shaders/CelShader";
 import { GodRays } from "../shaders/GodRays";
 import { HorrorPost } from "../shaders/HorrorPost";
@@ -440,8 +440,14 @@ export class Game {
     // bot goes through — a callback rather than an import, because a system
     // may not reach into another one. Its default is the refusal, so the
     // collapse tween is what an unwired cam falls back to.
+    //
+    // The `true` is the priority offer, and this is the only place it may be
+    // passed: the cam is four seconds of one body, and a pool held by four
+    // bot corpses less than `sinkStart` old — which is what a firefight the
+    // player lost looks like — would otherwise spend that shot on a corpse
+    // standing to attention. See `RagdollSystem.takeSlot`.
     this.deathCam.onSpawnRagdoll = (corpse) =>
-      this.ragdolls.spawn(corpse, this.cameraSys.camera.position);
+      this.ragdolls.spawn(corpse, this.cameraSys.camera.position, true);
     this.deathCam.onRetireRagdoll = (corpse) => this.ragdolls.retire(corpse);
     // Grenades resolve their blast against the thrower's own target list, the
     // same way a bullet does — so friendly fire is excluded by construction
@@ -1389,6 +1395,17 @@ export class Game {
    */
   private installMap(opts?: BuildOptions): GameMap {
     const { layout, environment } = this.mapDef;
+    // The fog wall is stated twice — here, where it is painted, and in CONFIG,
+    // where the bot LOD and the ragdoll gate read it. They are the same
+    // distance by definition, and a map that disagreed would silently pose,
+    // draw or tumble bodies in solid fog. Dev only: it is an authoring
+    // mistake, not a runtime condition.
+    if (import.meta.env.DEV && environment.fogEnd !== FOG_WALL) {
+      console.warn(
+        `Map fogEnd ${environment.fogEnd} != CONFIG FOG_WALL ${FOG_WALL}; ` +
+          "the bot LOD and the ragdoll distance gate are keyed off the latter.",
+      );
+    }
     this.map?.dispose();
     this.combat.clearTransient();
     // A grenade whose fuse outlived the map it was thrown across would go off

@@ -6,6 +6,24 @@
  * reassigning fails to compile. Annotate `let x: number` instead.
  * Keep the per-value comments: they record why a number is what it is.
  */
+
+/**
+ * The fog wall: the distance past which the world is solid `fogColor` and
+ * nothing is worth drawing, posing or simulating.
+ *
+ * It is a module constant rather than a field because two unrelated tunables
+ * are the SAME distance and have to move together — `bots.lodDisableDistance`,
+ * where a rig stops being drawn at all, and `bots.death.maxDistance`, past
+ * which a corpse would be tumbling somewhere nobody can see. It was written
+ * out by hand in `BattleSystem` before this, which is how the ragdoll gate came
+ * to be pinned to an unrelated number instead.
+ *
+ * It must agree with the MAP's `EnvironmentSpec.fogEnd`, which is the one that
+ * actually paints the fog; `Game.installMap` warns in dev builds if a map
+ * disagrees, since the two would otherwise drift silently on a second map.
+ */
+export const FOG_WALL = 78;
+
 export const CONFIG = {
   /** Conquest round rules. */
   conquest: {
@@ -117,6 +135,12 @@ export const CONFIG = {
     lodFreezeDistance: 35,
     /** Distance past which outlines are dropped. */
     lodOutlineDistance: 20,
+    /**
+     * Distance past which the rig is not drawn at all — the fog wall, where
+     * there is nothing to see. The bot keeps integrating, so the battle line
+     * still moves out there; only the drawing and posing stop.
+     */
+    lodDisableDistance: FOG_WALL,
 
     /**
      * Fire discipline. Everything here is the same for every bot; anything that
@@ -359,25 +383,55 @@ export const CONFIG = {
        * stealing a live slot — the same refusal `GrenadeSystem`'s pool makes,
        * and for the same reason: a corpse yanked out of a tumble is worse than
        * one that never tumbled. A slot already sinking is committed to
-       * vanishing and may be reclaimed.
+       * vanishing and may be reclaimed. The death cam's own body is the one
+       * exception and takes the oldest corpse; see `RagdollSystem.takeSlot`.
        *
-       * Four is a squad. It is not a guess about solver cost — Havok would take
-       * far more — it is about the frame budget this game actually has:
-       * FINDINGS.md #6 puts all 16 bots' AI and animation at 0.55 ms, and
-       * finding #1 records an unexplained 28 fps 1% low that nothing should be
-       * adding an unbounded cost next to.
+       * Eight is two squads, and it is now MEASURED rather than reasoned about.
+       * Four was a guess made against FINDINGS.md #8's 1.37 ms for four falling
+       * bodies — 5-6x the whole roster's AI — which does not reproduce. Timing
+       * `ragdolls.update(1/60)` over 1,600 frames inside the fall, headless,
+       * against `battle.update` for all 16 bots in the same run:
+       *
+       *   0 corpses 0.000 ms | 1: 0.033 | 2: 0.033 | 4: 0.062 | 6: 0.095
+       *   8: 0.121 ms, against the roster's 0.39-0.42 ms
+       *
+       * So a falling corpse is ~0.015 ms and eight of them is under a third of
+       * the AI, not several times it. Three things bound it: the fall is ~1.1 s
+       * and a settled corpse costs 0.0004 ms/frame (the engine is not stepped at
+       * all), the count is capped here, and the unused slots are free — four
+       * corpses cost 0.061 ms in a pool of four and 0.062 ms in a pool of eight,
+       * so raising this only ever costs when the bodies are actually falling.
+       *
+       * Headless absolutes are inflated the same way FINDINGS #6's are, and
+       * `update(1/60)` is exactly one substep — a 30 fps frame takes two. Treat
+       * the RATIO to the roster as the trustworthy part.
        */
-      maxConcurrent: 4,
+      maxConcurrent: 8,
       /**
        * No ragdoll past this, measured ONCE at the moment of death — a corpse
        * does not move, and re-testing per frame would switch a tumble off
        * halfway through because the player backed away.
        *
-       * Must not exceed `lodFreezeDistance` (35): past that a bot's pose is
-       * frozen anyway, so physics would be driving a rig the LOD has already
-       * switched off. The tween keeps its own exemption there.
+       * It is the FOG WALL, and it is the same number as `lodDisableDistance`
+       * BY CONSTRUCTION rather than by coincidence: that is where the rig stops
+       * being drawn, so one metre further is a solver tumbling something the
+       * player cannot see. Every death inside the fog is now eligible, which is
+       * what a marksman rifle needs — its own range is bounded by the same wall.
+       *
+       * It is deliberately NOT `lodFreezeDistance` (35), which is what this was
+       * pinned to and why nothing dying across the square ever fell over. That
+       * LOD only skips `animateSoldier`, and `Bot.update`'s dead branch already
+       * skips it while `ragdolling` — a ragdoll poses through the proxy nodes
+       * its joints are parented to, which the solver writes whatever the LOD
+       * says. Verified: a corpse at 50 m driven through the real
+       * `BattleSystem.update` tumbles from a 0.64 m standing joint spread to
+       * 0.002 m face-down on the floor, rig still enabled.
+       *
+       * This costs nothing per frame on its own — `maxConcurrent` is what
+       * bounds the solver — but it does keep the pool busier, which is the
+       * other half of why that went up with it.
        */
-      maxDistance: 35,
+      maxDistance: FOG_WALL,
       /** Matches the grenade's exaggerated fall, not the player's. */
       gravity: -18,
       /**
