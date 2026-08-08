@@ -14,6 +14,7 @@ import {
   DARK_STONE,
   EMBER,
   FLAME,
+  GUARD_THICKNESS,
   IRON,
   MOSS_STONE,
   PLANK,
@@ -307,13 +308,30 @@ export function buildRuin(
 }
 
 /**
- * Timber watchtower: a railed platform 4.6 m up, reached by an external ramp.
+ * Timber watchtower: a railed platform 4.75 m up, reached by an external ramp.
  * The only piece of verticality outside the barn loft and the chapel tower,
  * and deliberately exposed on the way up.
  *
- * The ramp collider carries `rotX` and its top meets the platform within a
- * step — get either wrong and the nav flood fill treats the whole thing as a
- * wall.
+ * **The ramp follows `buildBarn`'s worked example**, because it previously
+ * made both of the mistakes that comment exists to name, and each one showed
+ * up as the climb needing a jump:
+ *
+ * - **The pitch is derived from the RUN and the slab is cut to the SLOPE.**
+ *   `atan2(rise, slabLength)` conflates the two, which left the walked surface
+ *   ending 0.40 m short of the deck at 0.14 m below it — a hole with the
+ *   platform's own south face standing in it, so arriving at the top of the
+ *   climb dropped you off the end or stopped you against a wall.
+ * - **The foot runs on PAST the ground** (`rampDrop`) rather than stopping
+ *   level with the tower's own floor, where it left 0.31 m of end grain. The
+ *   ground probe would have stepped up that happily; `moveWithCollisions` is
+ *   what refuses, because the collision capsule's ellipsoid bottoms out 0.05 m
+ *   above the feet and a 0.31 m face is a wall to it. Hence "I have to jump".
+ *
+ * The rails are `Build.guard`s, which is what makes them solid and stands them
+ * off the deck and the ramp; that method owns why both halves of that matter.
+ * The one thing local to here is the SOUTH side, which is two stubs cut to the
+ * deck's overhang either side of the ramp — so the opening is the ramp's own
+ * width and always holds two nav-cell centres however the tower is turned.
  */
 export function buildWatchtower(
   scene: Scene,
@@ -321,8 +339,11 @@ export function buildWatchtower(
 ): Structure {
   const b = new Build(scene, mats, "watchtower");
   const legs = 1.9;
-  const deckY = 4.6;
   const deck = 5.0;
+  const deckT = 0.3;
+  /** Walkable height of the platform — the surface, not the slab's centre. */
+  const deckTop = 4.75;
+  const deckY = deckTop - deckT / 2;
 
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
@@ -336,42 +357,117 @@ export function buildWatchtower(
     b.box(legs * 2.6, 0.2, 0.2, 0, deckY * 0.55, sz * legs, TIMBER, { z: 0.6 });
   }
 
-  b.box(deck, 0.3, deck, 0, deckY, 0, PLANK);
-  b.block({ w: deck, h: 0.3, d: deck, x: 0, y: deckY, z: 0 });
-  // Railings on three sides; the -Z side is where the ramp arrives.
-  for (const sx of [-1, 1]) {
-    b.box(0.16, 1.1, deck, (sx * deck) / 2, deckY + 0.7, 0, TIMBER);
+  b.box(deck, deckT, deck, 0, deckY, 0, PLANK);
+  b.block({ w: deck, h: deckT, d: deck, x: 0, y: deckY, z: 0 });
+
+  // Access ramp, running up from -Z to the deck's south edge. Everything about
+  // the platform's rails is cut against its width, so it is derived first.
+  const rampW = 3;
+  const rampT = 0.3;
+  /** Rise over run. 0.35 sits inside the nav graph's 0.4 slope limit. */
+  const rampGrade = 0.35;
+  /** How far below the tower's own floor the ramp keeps going; see the header. */
+  const rampDrop = 0.6;
+  const rampRise = deckTop + rampDrop;
+  const rampRun = rampRise / rampGrade;
+  const rampPitch = Math.atan2(rampRise, rampRun);
+  /** The slab's own length: it spans the run only once it is tilted. */
+  const rampLen = Math.hypot(rampRun, rampRise);
+  /** Where the walked surface meets the deck: its south edge, at deck height. */
+  const rampTopZ = -deck / 2;
+  /** The walked surface at a world Z — one plane, through the deck's edge. */
+  const rampSurfaceAt = (z: number): number =>
+    deckTop - (rampTopZ - z) * rampGrade;
+  const rampZ = rampTopZ - rampRun / 2;
+  // Placed by its TOP face: that surface has to meet the deck at one end and
+  // pass through the ground at the other. A pitched slab's half-thickness is
+  // measured VERTICALLY, so the term is h/2/cos, not h/2*cos.
+  const rampY = rampSurfaceAt(rampZ) - rampT / 2 / Math.cos(rampPitch);
+  b.box(rampW, rampT, rampLen, 0, rampY, rampZ, PLANK, { x: -rampPitch });
+  b.block({
+    w: rampW,
+    h: rampT,
+    d: rampLen,
+    x: 0,
+    y: rampY,
+    z: rampZ,
+    rotX: -rampPitch,
+  });
+  // Cleats across it. 15 m of bare plank at this pitch reads as a chute; these
+  // are what say it is climbed. Nothing below the ground line — the last 1.7 m
+  // of slab is buried, which is the whole point of `rampDrop`.
+  for (let i = -5; i <= 5; i++) {
+    const z = rampZ + (i * rampRun) / 12;
+    const surface = rampSurfaceAt(z);
+    if (surface < 0.12) continue;
+    b.box(
+      rampW - 0.3,
+      0.08,
+      0.14,
+      0,
+      surface + 0.04 / Math.cos(rampPitch),
+      z,
+      TIMBER,
+      { x: -rampPitch },
+    );
   }
-  b.box(deck, 1.1, 0.16, 0, deckY + 0.7, deck / 2, TIMBER);
+  // Trestle bents under the span: 15 m of plank standing on nothing was the
+  // other half of what read as wrong here. Colliders, because the upper one is
+  // in ground a body can cross — above the ramp's midpoint the slab clears the
+  // floor by more than HEADROOM, so the nav graph leaves that ground open and a
+  // bot will route straight under it.
+  for (const i of [1, 2]) {
+    const z = rampTopZ - (i * rampRun) / 3;
+    const bentH = rampSurfaceAt(z) - rampT / Math.cos(rampPitch);
+    if (bentH < 0.4) continue;
+    for (const sx of [-1, 1]) {
+      const px = sx * (rampW / 2 - 0.2);
+      b.box(0.24, bentH, 0.24, px, bentH / 2, z, TIMBER);
+      b.block({ w: 0.34, h: bentH, d: 0.34, x: px, y: bentH / 2, z });
+    }
+    b.box(rampW, 0.18, 0.18, 0, bentH - 0.09, z, TIMBER);
+  }
+  // Handrails up both sides of the ramp, starting where it comes out of the
+  // ground rather than at its buried foot. `guard` takes the horizontal RUN
+  // and cuts the slab to it.
+  const railFootZ = rampTopZ - deckTop / rampGrade;
+  const rampRailZ = (rampTopZ + railFootZ) / 2;
+  for (const side of ["-x", "+x"] as const) {
+    const sx = side === "+x" ? 1 : -1;
+    b.guard(
+      side,
+      (sx * rampW) / 2,
+      rampRailZ,
+      rampTopZ - railFootZ,
+      rampSurfaceAt(rampRailZ),
+      { pitch: rampPitch },
+    );
+  }
+
+  // Railings round the platform. The -Z side is where the ramp arrives, so it
+  // is two stubs and an opening the ramp's own width.
+  const sideRun = deck + GUARD_THICKNESS * 2; // closes the corners
+  b.guard("-x", -deck / 2, 0, sideRun, deckTop);
+  b.guard("+x", deck / 2, 0, sideRun, deckTop);
+  b.guard("+z", deck / 2, 0, deck, deckTop);
+  const stub = (deck - rampW) / 2;
   for (const sx of [-1, 1]) {
-    b.box(1.4, 1.1, 0.16, sx * (deck / 2 - 0.7), deckY + 0.7, -deck / 2, TIMBER);
+    b.guard("-z", -deck / 2, (sx * (deck - stub)) / 2, stub, deckTop);
   }
 
   // Canopy on four short posts — the silhouette that says "someone watched".
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
-      b.box(0.22, 2.4, 0.22, sx * 2.1, deckY + 1.35, sz * 2.1, TIMBER);
+      b.box(0.22, 2.4, 0.22, sx * 2.1, deckTop + 1.2, sz * 2.1, TIMBER);
     }
   }
-  b.gableRoof(deck + 0.6, deck + 0.6, 1.1, 0, deckY + 2.55, 0, PLANK, 0.4);
+  b.gableRoof(deck + 0.6, deck + 0.6, 1.1, 0, deckTop + 2.4, 0, PLANK, 0.4);
 
   // Signal brazier, still lit.
-  b.cyl(0.9, 0.85, 0.7, 8, 1.4, deckY + 0.6, 1.4, IRON);
-  b.glow(0.55, 0.5, 0.55, 1.4, deckY + 1.05, 1.4, EMBER);
-  b.light(EMBER, 22, 2.0, 0.4, 1.4, deckY + 1.1, 1.4);
+  b.cyl(0.9, 0.85, 0.7, 8, 1.4, deckTop + 0.45, 1.4, IRON);
+  b.glow(0.55, 0.5, 0.55, 1.4, deckTop + 0.9, 1.4, EMBER);
+  b.light(EMBER, 22, 2.0, 0.4, 1.4, deckTop + 0.95, 1.4);
 
-  // Access ramp, running up from -Z to the deck's south edge.
-  const rampLen = 12;
-  const rampW = 3;
-  const pitch = Math.atan2(deckY, rampLen);
-  const rz = -(deck / 2 + rampLen / 2);
-  b.box(rampW, 0.3, rampLen, 0, deckY / 2, rz, PLANK, { x: -pitch });
-  b.block({ w: rampW, h: 0.3, d: rampLen, x: 0, y: deckY / 2, z: rz, rotX: -pitch });
-  for (const sx of [-1, 1]) {
-    b.box(0.16, 1.0, rampLen, (sx * rampW) / 2, deckY / 2 + 0.6, rz, TIMBER, {
-      x: -pitch,
-    });
-  }
   return b;
 }
 
@@ -615,27 +711,24 @@ export function buildBarn(scene: Scene, mats: CelMaterialFactory): Structure {
     );
   }
 
-  // Handrail up the ramp's outer edge and round the deck. Visual only, the
-  // same call `buildRamp` makes for its kerb stones: a 0.16 m collider is
-  // thinner than a nav cell, so all it reliably does is drop a standable
-  // surface a rail's height above the ramp into whichever cells happen to
-  // sample it — an island nothing can reach, for a rail that reads perfectly
-  // well as the edge of the route without one.
-  const railH = 1.1;
-  const railX = deckX + deckW / 2 - 0.08;
-  const railOff = (rampT + railH) / 2;
-  b.box(
-    0.16,
-    railH,
-    rampLen,
-    railX,
-    rampY + railOff * Math.cos(rampPitch),
-    rampZ - railOff * Math.sin(rampPitch),
-    TIMBER,
-    { x: -rampPitch },
-  );
-  b.box(0.16, railH, deckD, railX, loftTop + railH / 2, loftZ, TIMBER);
-  b.box(deckW, railH, 0.16, deckX, loftTop + railH / 2, loftZ + deckD / 2 - 0.08, TIMBER);
+  // Handrail up the ramp's outer edge and round the deck. These were VISUAL
+  // ONLY, and the ramp's was the worse half of that: 4.2 m of climb with an
+  // open side you could walk straight off. `guard` is what makes them solid
+  // without costing the route a nav cell — it owns that whole argument.
+  //
+  // The rail starts where the ramp leaves the ground rather than at its buried
+  // foot, and only the OUTER side carries one: the ramp runs up the barn's east
+  // wall, which is the other edge.
+  const railFootZ = deckS - loftTop / rampGrade;
+  const railZ = (deckS + railFootZ) / 2;
+  const railX = deckX + deckW / 2;
+  b.guard("+x", railX, railZ, deckS - railFootZ, rampTopAt(railZ - rampZ), {
+    pitch: rampPitch,
+  });
+  // Round the deck: the outer edge runs long at both ends, closing the corner
+  // against the north rail and meeting the ramp's rail in one line.
+  b.guard("+x", railX, loftZ, deckD + GUARD_THICKNESS * 2, loftTop);
+  b.guard("+z", loftZ + deckD / 2, deckX, deckW, loftTop);
 
   // A lantern over the loft door, hung off the wall on a bracket: the same
   // iron arm / tapered housing / capped flame `lamp` is built from, because a

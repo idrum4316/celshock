@@ -20,6 +20,7 @@ import {
   DARK_STONE,
   EMBER,
   FLAME,
+  GUARD_THICKNESS,
   IRON,
   MOSS_STONE,
   PLANK,
@@ -128,6 +129,11 @@ export function buildStoneWall(
 /**
  * Plank footbridge over the creek, running along Z. The deck is a walkable
  * collider, so the ground probe finds it.
+ *
+ * **The handrails are `guard`s**, which they were not — they were bare `box`es,
+ * so a bridge whose whole reason to exist is that the creek runs 1.5 m below
+ * the banks either side had two sides you could simply walk out of.
+ * `Build.guard` is what makes them solid without costing the deck a nav cell.
  */
 export function buildBridge(
   scene: Scene,
@@ -137,13 +143,19 @@ export function buildBridge(
   const b = new Build(scene, mats, "bridge");
   const len = p.length ?? 12;
   const w = p.width ?? 3.2;
-  b.box(w, 0.28, len, 0, 0, 0, PLANK);
-  b.block({ w, h: 0.28, d: len, x: 0, y: 0, z: 0 });
-  for (const sx of [-1, 1]) {
-    b.box(0.16, 1.1, len, (sx * w) / 2, 0.55, 0, TIMBER);
+  const deckT = 0.28;
+  /** Walkable height of the deck: the surface, not the slab's centre. */
+  const top = deckT / 2;
+  b.box(w, deckT, len, 0, 0, 0, PLANK);
+  b.block({ w, h: deckT, d: len, x: 0, y: 0, z: 0 });
+  for (const side of ["-x", "+x"] as const) {
+    const sx = side === "+x" ? 1 : -1;
+    b.guard(side, (sx * w) / 2, 0, len, top);
+    // Posts on the rail's own centreline, which is half a thickness outboard.
+    const postX = (sx * (w + GUARD_THICKNESS)) / 2;
     const posts = Math.round(len / 3);
     for (let i = 0; i <= posts; i++) {
-      b.box(0.2, 1.2, 0.2, (sx * w) / 2, 0.6, -len / 2 + (i / posts) * len, TIMBER);
+      b.box(0.2, 1.2, 0.2, postX, top + 0.6, -len / 2 + (i / posts) * len, TIMBER);
     }
   }
   return b;

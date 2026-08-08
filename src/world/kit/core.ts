@@ -19,6 +19,11 @@
  * - Collider top faces must stay within CONFIG.nav.stepHeight of adjacent
  *   ground or the nav flood fill never reaches them. Ramp colliders need
  *   rotX, not just the visual.
+ * - A rail at the edge of a walkable surface is `guard()`, never a bare `box()`
+ *   and never a `wall()` on the edge itself. It has to be solid (a rail you
+ *   walk through is a fall) AND it has to stand off the surface (a rail on it
+ *   costs the nav grid a cell). That method owns the argument; the watchtower,
+ *   the bridge and the barn were each written the wrong way first.
  * - No Hollowmere special-casing; register new builders in
  *   BuildingKit.ts's BUILDERS.
  */
@@ -123,6 +128,19 @@ export const MOSS_STONE = "#4f574c";
 export const FLAME = "#ffbe63";
 /** Forge/kiln mouth — hotter and redder than a lantern's FLAME. */
 export const EMBER = "#ff7a2a";
+
+// --- guard rails -----------------------------------------------------------
+
+/**
+ * The standard guard-rail section. One pair of numbers for the whole kit, so a
+ * rail running off a ramp onto a deck is one continuous line rather than two
+ * that nearly agree.
+ */
+export const GUARD_HEIGHT = 1.1;
+export const GUARD_THICKNESS = 0.16;
+
+/** Which face of a walkable surface a guard stands off. */
+export type GuardSide = "+x" | "-x" | "+z" | "-z";
 
 /**
  * Accumulator handed to each builder. Keeps the builders declarative — they
@@ -322,6 +340,80 @@ export class Build implements Structure {
 
   /** A collider with no geometry — invisible blocking, or a walkable surface. */
   block(spec: BoxSpec): void {
+    this.colliders.push(spec);
+  }
+
+  /**
+   * A guard rail along the edge of a walkable surface: solid, and standing
+   * OUTBOARD of the surface it guards.
+   *
+   * This exists because a rail is a third thing the kit had no word for, and
+   * every builder that wanted one had to rederive it. `box` is a visual and
+   * `wall` is a visual plus a collider — but a rail is thin, and thinness is
+   * what `NavGrid` cannot represent. It samples ONE point per 1.5 m cell, so a
+   * 0.16 m rail is invisible to it about nine times in ten and, the tenth time,
+   * catches a cell centre and does two things: invents a standable surface a
+   * rail's height in the air that the flood fill can never reach, and blanks
+   * the real floor underneath. Only the first is fixable in the grid — stop
+   * `clearBlocked` blanking the cell and `severLinks` isolates it instead, and
+   * `severLinks` cannot be relaxed by width because a fence is 0.4 m deep and a
+   * dry-stone wall 0.5 m and both must go on severing.
+   *
+   * So the cell is lost whenever a sample lands in a rail, and the only fix is
+   * to not put the rail where the walked surface is sampled. Standing it off
+   * the edge is that fix, and having it here rather than in each builder is
+   * what stops the next one forgetting: the barn's rails were left visual-only
+   * for exactly this reason and you could walk straight off its ramp.
+   *
+   * `edge` is the guarded surface's OUTER face on `side`'s axis, `along` and
+   * `length` describe the run on the other horizontal axis, and `surface` is
+   * the walked height at the run's centre. A pitched run (`pitch`, positive
+   * rising toward +Z) must run along Z, so its `side` is ±x; its section is cut
+   * by `cos` so the top face sits `height` above the walked surface at every
+   * point rather than `height / cos`, which is what lets a ramp's rail meet a
+   * deck's in one line.
+   */
+  guard(
+    side: GuardSide,
+    edge: number,
+    along: number,
+    length: number,
+    surface: number,
+    opts: { pitch?: number; height?: number; color?: string } = {},
+  ): void {
+    const t = GUARD_THICKNESS;
+    const height = opts.height ?? GUARD_HEIGHT;
+    const pitch = opts.pitch ?? 0;
+    const color = opts.color ?? TIMBER;
+    const alongZ = side === "+x" || side === "-x";
+    if (import.meta.env.DEV && pitch !== 0 && !alongZ) {
+      throw new Error(
+        `guard: a pitched run turns about X, so it must run along Z (side ±x), not ${side}`,
+      );
+    }
+    // Outboard: half a thickness past the face, so the rail never overlaps the
+    // footprint the nav grid samples.
+    const off = edge + ((side === "+x" || side === "+z" ? 1 : -1) * t) / 2;
+    // Cut perpendicular to the run. A pitched box of section `h` presents
+    // `h / cos` vertically, so `height * cos` is what stands `height` up.
+    const section = height * Math.cos(pitch);
+    // Bottom face on the surface: `surface + section / 2 / cos` — which is
+    // `surface + height / 2` however the run is pitched.
+    const y = surface + height / 2;
+    const spec: BoxSpec = alongZ
+      ? {
+          w: t,
+          h: section,
+          d: length / Math.cos(pitch),
+          x: off,
+          y,
+          z: along,
+          rotX: -pitch,
+        }
+      : { w: length, h: section, d: t, x: along, y, z: off };
+    this.box(spec.w, spec.h, spec.d, spec.x, spec.y, spec.z, color, {
+      x: spec.rotX,
+    });
     this.colliders.push(spec);
   }
 
