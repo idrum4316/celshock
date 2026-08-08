@@ -1640,7 +1640,7 @@ rookies.
 -1..+1 and ownership flips only by crossing 0, so a flag must be neutralised before
 it changes hands. Occupancy is counted from the combatant list `Game` assembles each
 frame (player + all bots). The player's health regenerates after
-`CONFIG.player.regenDelay`: with sixteen hostile bots and no medics, a pool that
+`CONFIG.player.regenDelay`: with eight hostile bots and no medics, a pool that
 never refills turns the round into a respawn queue.
 
 **A capture zone is drawn, not just counted** (`CaptureZoneSystem`, plus

@@ -3,9 +3,9 @@
 A browser-based, single-player **Conquest** shooter built with **Babylon.js** and
 **TypeScript**. Eight-a-side against bots over five control points in a
 fog-drowned horror village, in **first person** (aiming down sights brings the
-the fitted sight onto the centre of the screen and zooms the view) with a
-low-poly cel-shaded look: a near-black valley lit by guttering
-lanterns, burning braziers, muzzle flashes, and your own shoulder lamp.
+fitted sight onto the centre of the screen and zooms the view) with a low-poly
+cel-shaded look: a near-black valley lit by guttering lanterns, burning
+braziers, muzzle flashes, and your own shoulder lamp.
 
 ## Setup
 
@@ -82,7 +82,7 @@ is untouched, so mixed setups never penalize keyboard/mouse aim.
 
 ### How a round works
 
-- Two teams of sixteen — the **Wardens** (warm amber) and **the Blight** (cold
+- Two teams of eight — the **Wardens** (warm amber) and **the Blight** (cold
   crimson) — fight over **five control points** across a 240 × 240 m village.
 - Stand inside a zone to capture it. More bodies capture faster, with
   diminishing returns; if both teams are inside, the meter freezes. A flag has
@@ -119,7 +119,8 @@ Everything you see and hear is generated at runtime: every mesh is built from
 Babylon primitives and merged per colour, all audio is synthesized WebAudio,
 the cel look is a custom `ShaderMaterial` with 16 dynamic point-light slots,
 and the 16 bots steer on a precomputed nav grid with one flow field per
-objective — no pathfinding and no physics engine.
+objective — no pathfinding at all. The one engine in the tree is Havok, which
+does nothing but drop the dead.
 
 **Contributor/agent documentation lives in [`CLAUDE.md`](CLAUDE.md)** —
 architecture, load-bearing invariants, and conventions. Every source file also
@@ -129,15 +130,22 @@ has a contract header at the top.
 
 - Characters (bots) are primitive assemblies, not modeled/rigged meshes; all
   "animation" is procedural (posed joint hierarchies, walk cycles driven by
-  travel speed).
-- Point lights are per-pixel but cast **no shadows** — the darkness is fog,
-  ambient, and falloff, not occlusion.
-- Single weapon; no kits, classes, or vehicles.
+  travel speed). The rig has seven joints and no knees, so a bot can neither
+  crouch nor lean — its cover is corners, not waist-high walls.
+- Only the moon casts shadows. Its key light has a real shadow map, but the
+  **point lights cast none** — lanterns, braziers and muzzle flashes light
+  without occluding — and characters get blob-shadow discs rather than casting.
+  Most of the darkness is fog, ambient and falloff.
+- **Ragdolls are cosmetic.** Havok runs the fall and nothing else: a corpse is
+  absent from navigation, cover and hit detection, so bots walk through bodies
+  and rounds pass through them.
+- Three primaries, a fixed sidearm and three optics — but **no classes and no
+  vehicles**, and the sidearm is not a choice.
 - Nav cells hold up to three surfaces, so unusually deep stacks of walkable
   geometry would need `MAX_SURFACES` raised.
-- Bots use cover incidentally (the flow field routes them past buildings) rather
-  than deliberately picking firing positions.
 - One map. The system supports more, but only Hollowmere is authored.
+- **Single-player only.** There is no netcode; every other combatant on the map
+  is a bot and always will be without one.
 - **No touch controls.** The game installs and runs on a phone, but every input
   is keyboard, mouse or gamepad — a touch is only good for the menus' "tap to
   continue", so playing on a phone means pairing a controller.
@@ -145,10 +153,11 @@ has a contract header at the top.
 ## Next steps for expansion
 
 - A second map: one new `layout.ts` plus an `EnvironmentSpec`.
-- Kits and weapon variety — extract a `WeaponType` the way themes were data.
-- Squad orders, so friendly bots can be told which flag to take.
-- Deliberate cover selection and suppression in the bot FSM.
-- Vehicles, which would need new physics, camera modes, and AI.
+- Player-issued squad orders. Bots already plan their objectives as squads;
+  what is missing is a way for you to tell one which flag to take.
+- A fourth weapon or a fourth optic — both are a config entry plus a builder.
+- Vehicles, which would need physics driving something other than corpses, new
+  camera modes, and AI.
 
 ## License
 
