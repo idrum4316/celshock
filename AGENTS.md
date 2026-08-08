@@ -1,8 +1,10 @@
 # AGENTS.md
 
 **All agent guidance lives in [`CLAUDE.md`](CLAUDE.md).** Read it before any
-change — it is the single source of truth for commands, architecture,
-load-bearing invariants, conventions, and verification quirks.
+change — it is the source of truth for commands, architecture, load-bearing
+invariants and conventions. Three companions carry the lookup material it points
+to: [`FILES.md`](FILES.md) (the module map), [`VERIFYING.md`](VERIFYING.md)
+(headless-browser quirks) and [`FINDINGS.md`](FINDINGS.md) (open threads).
 
 Quick facts:
 
