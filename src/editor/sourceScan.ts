@@ -23,6 +23,14 @@
  * Anything that does not fit the shape is kept as a `raw` line and re-emitted
  * untouched; an entry line that fails to tokenize becomes `opaque` and is
  * likewise never rewritten. The failure mode is always "leave it alone".
+ *
+ * **Line endings are stripped on the way in and restored on the way out.** A
+ * Windows checkout with `core.autocrlf=true` holds the file as CRLF, so a split
+ * on "\n" alone leaves every line carrying a trailing "\r" — the array's closing
+ * `];` then matches nothing and every region is silently missed, which surfaces
+ * as "could not find the placements array" on the first Ctrl+S. So the scan
+ * normalises, records the file's own `eol`, and `serializeLayout` joins with it,
+ * which is also what keeps a no-op save byte-identical on either platform.
  */
 
 /** One `key: value` pair, with the value's ORIGINAL source text. */
@@ -64,8 +72,10 @@ export interface Region {
 }
 
 export interface Scan {
-  /** The file split on newlines. */
+  /** The file split on newlines, with no line terminator left on any line. */
   lines: string[];
+  /** The terminator the file was written with, put back on serialization. */
+  eol: string;
   regions: Region[];
 }
 
@@ -170,7 +180,8 @@ function classify(line: string): Line {
  * modelled at all and therefore cannot be touched by a save.
  */
 export function scanLayout(source: string): Scan {
-  const lines = source.split("\n");
+  const lines = source.split(/\r?\n/);
+  const eol = source.includes("\r\n") ? "\r\n" : "\n";
   const regions: Region[] = [];
 
   for (let i = 0; i < lines.length; i++) {
@@ -191,7 +202,7 @@ export function scanLayout(source: string): Scan {
     i = end;
   }
 
-  return { lines, regions };
+  return { lines, eol, regions };
 }
 
 /** The entries of a region, in order, ignoring comments and blank lines. */

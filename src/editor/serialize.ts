@@ -379,7 +379,9 @@ export function serializeLayout(
   }
 
   for (; cursor < scan.lines.length; cursor++) out.push(scan.lines[cursor]);
-  return { source: out.join("\n"), skipped };
+  // The scan's own terminator, not "\n": a CRLF checkout must come back CRLF or
+  // a no-op save rewrites every line in the file.
+  return { source: out.join(scan.eol), skipped };
 }
 
 /** Regions the scanner must have found for a save to be considered safe. */
