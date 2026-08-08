@@ -149,3 +149,15 @@ has a contract header at the top.
 - Squad orders, so friendly bots can be told which flag to take.
 - Deliberate cover selection and suppression in the bot FSM.
 - Vehicles, which would need new physics, camera modes, and AI.
+
+## License
+
+[MIT](LICENSE) — do what you like with it, including commercially, as long as
+the copyright notice travels with the copy.
+
+One license covers the whole repository, which is only possible because there
+are no authored assets to license separately: every mesh is built from Babylon
+primitives at runtime and all audio is synthesized. The dependencies are
+permissive and compatible — Babylon.js is Apache-2.0, and the Havok physics
+build pulled in by `@babylonjs/havok` (the one binary that ships, for the
+ragdolls) carries its own MIT terms from Babylon.js.
