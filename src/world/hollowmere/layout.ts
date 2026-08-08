@@ -364,7 +364,7 @@ const placements: Placement[] = [
   // ===== home spawns ==========================================================
   { kind: "gatehouse", x: -100, z: 110, params: { teamColor: WARDEN } },
   { kind: "gatehouse", x: 105, z: -110, rotY: Math.PI, params: { teamColor: BLIGHT } },
-  { kind: "barn", x: 104, z: -70.746, y: 0.33, rotY: -Math.PI / 2 },
+  { kind: "barn", x: 104, z: -70.746, y: -0.17, rotY: -Math.PI / 2 },
   { kind: "fence", x: 25.285, z: -19.321, rotY: Math.PI / 2, params: { length: 14 } },
   { kind: "woodpile", x: 20.478, z: -47.91, y: 0.05, rotY: 0.495 },
   { kind: "trough", x: 19.011, z: -51.848, y: 0.083 },
