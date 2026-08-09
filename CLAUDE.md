@@ -823,13 +823,15 @@ Effect meshes (tracers, sparks, neon, reticles) use unlit emissive
 
 **Nothing drawn outside the cel shader gets fog for free, and everything that
 draws outside it owes the same fade.** The fog is a uniform on the cel materials
-and a per-pixel `mix` in their fragment shader; two passes never run it.
+and a per-pixel `mix` in their fragment shader; **three** passes never run it.
 Babylon's outline renderer writes `outlineColor` flat (its whole fragment shader
-is `gl_FragColor = color`), and the `GlowLayer` builds its bloom from a
-material's emissive colour, which says nothing about where the mesh stands.
-Neither offers a hook for a uniform. Both take their fog from the one published
-by `CelMaterialFactory.setEnvironment`, so nothing can describe different
-weather from the wall it hangs in front of — but they take it at **different
+is `gl_FragColor = color`), the `GlowLayer` builds its bloom from a material's
+emissive colour, which says nothing about where the mesh stands, and
+`getEmissive()`'s unlit `StandardMaterial` — every lit window, flame, ember,
+tracer, spark and team-colour bar — draws a flat colour with lighting disabled.
+All three take their fog from the one published by
+`CelMaterialFactory.setEnvironment`, so nothing can describe different weather
+from the wall it hangs in front of — but they take it at **different
 granularities, and the difference is forced**:
 
 - **The outline fades per PIXEL**, baked into its shader by `src/shaders/OutlineFog.ts`.
@@ -844,14 +846,35 @@ granularities, and the difference is forced**:
   emissive colour with no per-pixel hook at all, and it is affordable here where
   it was not for the ink: a bloom is a soft blob with no edge to misplace, and
   only 4 of 290 emissive meshes span more than half the fog band.
+- **The emissive material fades per PIXEL**, through a `MaterialPluginBase` in
+  `src/shaders/EmissiveFog.ts` that injects the same curve at
+  `CUSTOM_FRAGMENT_MAIN_END`. A plugin *can* declare real uniforms, so unlike the
+  ink this one is a buffer write rather than a re-bake — `setEmissiveFog` needs no
+  cache invalidation at all. Distance is `vPositionW` against `vEyePosition`, both
+  unconditional in `default.fragment`.
 
 That this was invisible for a whole map is the point: on Hollowmere unfogged ink
 is near-black against near-black fog and an unfogged glow reads as a lamp doing
 its job. **A bright fog is what makes an un-attenuated pass obvious**, and
-Greyfen showed both at once — a stand of dead trees whose trunks fogged to pale
-grey while every branch stayed a black scratch (a branch is 0.04 m of geometry
-inside a 0.05 m ink shell, so it is almost entirely outline), and six chapel
-windows that were three saturated cyan bars on a wall faded almost to white.
+Greyfen showed all three — a stand of dead trees whose trunks fogged to pale grey
+while every branch stayed a black scratch (a branch is 0.04 m of geometry inside
+a 0.05 m ink shell, so it is almost entirely outline), six chapel windows that
+were three saturated cyan bars on a wall faded almost to white, and a cottage
+window measured at 77.6 m — inside a `fogEnd` of 78 — coming back rgb(249,177,92)
+against its own `#ffb257` over a fog of rgb(194,204,212). **Fading the bloom is
+not fading the thing**: the selector dimmed the halo around that bar and left the
+bar. With the plugin the same pixel reads rgb(196,204,210).
+
+**The three obvious cheaper fixes for the emissive pass are all wrong, and the
+first one is the trap.** `scene.fogMode` would have been one line —
+`StandardMaterial` has fog built in — but Babylon's is linear/exp over VIEW-SPACE
+z where the cel shader's is `t*t` over the RADIAL distance, so a window over-fogs
+against its own wall through the whole middle of the band and disagrees by up to
+1.4x at the corners; it is also scene-wide, so the sky dome would need opting out
+by hand. A `ShaderMaterial` of our own loses `material.emissiveColor`, which is
+what the GlowLayer's selector reads — every lantern, tracer, visor and reticle in
+the game stops glowing. And baking literals the way `OutlineFog` must is pure
+cost here, where uniforms are available.
 
 **`OutlineFog` is the only place this tree touches Babylon's compiled-effect
 cache, and its header is the argument for why.** `OutlineRenderer` hardcodes its

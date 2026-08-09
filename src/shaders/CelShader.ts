@@ -14,10 +14,10 @@
  * registers the mesh for updateOutlineScales() (distance thinning, prunes
  * disposed meshes). Effect meshes use getEmissive() (unlit StandardMaterial).
  * Also owns the fog as a published fact: setEnvironment writes it once, the cel
- * materials get it as uniforms, OutlineFog bakes it into the outline pass, and
- * fogAmountAt() hands the same curve to the GlowLayer. Anything else drawn
- * unshaded owes that fade, or it hangs in front of the fog wall at full
- * strength.
+ * materials get it as uniforms, OutlineFog bakes it into the outline pass,
+ * EmissiveFog uploads it to the unlit emissive materials, and fogAmountAt()
+ * hands the same curve to the GlowLayer. Anything else drawn unshaded owes that
+ * fade, or it hangs in front of the fog wall at full strength.
  */
 import {
   type BaseTexture,
@@ -32,6 +32,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
+import { attachEmissiveFog, setEmissiveFog } from "./EmissiveFog";
 import { refreshOutlineFog, setOutlineFog } from "./OutlineFog";
 // The bone includes self-register in the IncludesShadersStore; import them
 // explicitly so the cel vertex shader's #include<bones...> can never be
@@ -685,6 +686,10 @@ export class CelMaterialFactory {
       mat.diffuseColor = Color3.Black();
       mat.specularColor = Color3.Black();
       mat.disableLighting = true;
+      // Unlit means unfogged, which at village scale means a lit window burning
+      // through the fog wall at full saturation. The plugin has to go on before
+      // anything draws with the material — hence here, not in setEnvironment.
+      attachEmissiveFog(mat);
       this.emissiveCache.set(hex, mat);
     }
     return mat;
@@ -718,6 +723,9 @@ export class CelMaterialFactory {
     // notably it must NOT be given `outlineEntries`, which leaves out every
     // viewmodel mesh.
     setOutlineFog(this.scene, fogState.color, fogState.start, fogState.end);
+    // And the third pass that never runs the cel shader: the unlit emissive
+    // materials behind every window, flame and tracer.
+    setEmissiveFog(fogState.color, fogState.start, fogState.end);
     this.mistColor = env.mistColor;
     this.mistParams.set(env.mistHeight, env.mistStrength);
     this.cache.forEach((mat) => this.applyEnvironment(mat));
