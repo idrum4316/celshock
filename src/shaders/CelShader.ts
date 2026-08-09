@@ -13,6 +13,11 @@
  * metadata.noOutline, tints the ink from the mesh's own cel colour, and
  * registers the mesh for updateOutlineScales() (distance thinning, prunes
  * disposed meshes). Effect meshes use getEmissive() (unlit StandardMaterial).
+ * Also owns the fog as a published fact: setEnvironment writes it once, the cel
+ * materials get it as uniforms, OutlineFog bakes it into the outline pass, and
+ * fogAmountAt() hands the same curve to the GlowLayer. Anything else drawn
+ * unshaded owes that fade, or it hangs in front of the fog wall at full
+ * strength.
  */
 import {
   type BaseTexture,
@@ -27,6 +32,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
+import { refreshOutlineFog, setOutlineFog } from "./OutlineFog";
 // The bone includes self-register in the IncludesShadersStore; import them
 // explicitly so the cel vertex shader's #include<bones...> can never be
 // tree-shaken away. Their contents are guarded internally by
@@ -447,9 +453,6 @@ export class CelMaterialFactory {
   private ambientColor = new Color3(0.16, 0.18, 0.24);
   private skyLightColor = new Color3(0.08, 0.11, 0.18);
   private rimColor = new Color3(0.18, 0.2, 0.26);
-  private fogColor = new Color3(0.05, 0.06, 0.08);
-  private fogStart = 24;
-  private fogEnd = 78;
   private mistColor = new Color3(0.1, 0.12, 0.15);
   private mistParams = new Vector2(2.2, 0.45);
 
@@ -706,9 +709,15 @@ export class CelMaterialFactory {
     this.ambientColor = env.ambientColor;
     this.skyLightColor = env.skyLightColor;
     this.rimColor = env.rimColor;
-    this.fogColor = env.fogColor;
-    this.fogStart = env.fogStart;
-    this.fogEnd = env.fogEnd;
+    fogState.color.copyFrom(env.fogColor);
+    fogState.start = env.fogStart;
+    fogState.end = env.fogEnd;
+    // The outline pass takes the same fog baked into its shader; doing it here
+    // is what keeps it from ever describing different weather to the cel
+    // materials this call is about to write. It owns its own invalidation —
+    // notably it must NOT be given `outlineEntries`, which leaves out every
+    // viewmodel mesh.
+    setOutlineFog(this.scene, fogState.color, fogState.start, fogState.end);
     this.mistColor = env.mistColor;
     this.mistParams.set(env.mistHeight, env.mistStrength);
     this.cache.forEach((mat) => this.applyEnvironment(mat));
@@ -737,6 +746,9 @@ export class CelMaterialFactory {
   /** Call once per frame so shader fog/rim track the active camera. */
   updateCamera(camPos: Vector3): void {
     this.cache.forEach((mat) => mat.setVector3("camPos", camPos));
+    // A bake that arrived before Babylon had dynamically imported the outline
+    // shaders is still outstanding; this is where it lands. No-op otherwise.
+    refreshOutlineFog(this.scene);
   }
 
   /**
@@ -766,8 +778,8 @@ export class CelMaterialFactory {
     mat.setColor3("ambientColor", this.ambientColor);
     mat.setColor3("skyLightColor", this.skyLightColor);
     mat.setColor3("rimColor", this.rimColor);
-    mat.setColor3("fogColor", this.fogColor);
-    mat.setVector2("fogParams", new Vector2(this.fogStart, this.fogEnd));
+    mat.setColor3("fogColor", fogState.color);
+    mat.setVector2("fogParams", new Vector2(fogState.start, fogState.end));
     mat.setColor3("mistColor", this.mistColor);
     mat.setVector2("mistParams", this.mistParams);
   }
@@ -856,9 +868,50 @@ export class CelMaterialFactory {
 }
 
 /**
+ * The installed map's fog, as the passes that are NOT the cel shader see it.
+ * Written by `CelMaterialFactory.setEnvironment`, which is also what pushes it
+ * onto the cel materials as uniforms — one fact, one writer, so the ink and
+ * the wall it hangs in front of cannot disagree.
+ *
+ * It is module state rather than a factory field because the passes that need
+ * it reach it from outside any material. They take it two different ways, and
+ * the difference is what each pass can be told:
+ *
+ * - The OUTLINE pass gets it baked into its shader by `OutlineFog`, and fades
+ *   per PIXEL. It has to: `BlockMerge` gives one mesh per 48 m block, so a
+ *   per-mesh ink fade left the far half of a block in clear ink over a wall
+ *   that had already gone to fog (measured: 50 of 687 outlined meshes span the
+ *   entire fog band).
+ * - The GLOW layer gets it through `fogAmountAt`, and fades per MESH, because
+ *   its bloom is generated from a material's emissive colour and there is no
+ *   per-pixel hook at all. That is affordable where the outline's was not: a
+ *   bloom is a soft blob with no edge to misplace.
+ */
+const fogState = { color: new Color3(0.05, 0.06, 0.08), start: 24, end: 78 };
+
+/**
+ * How much of the fog colour a surface `dist` from the eye is buried under, on
+ * the cel shader's own curve — the `t * t` in CEL_FRAGMENT's atmosphere block,
+ * repeated here for the passes that cannot run that shader.
+ *
+ * **Anything drawn unshaded owes this curve**, through here or baked as
+ * `OutlineFog` bakes it, or it hangs in front of the fog wall at full strength
+ * while the world behind it dissolves. That was two separate bugs on Greyfen,
+ * and neither showed on Hollowmere: with a near-black fog, unfogged ink is
+ * invisible against the wall and a glow reads as a lamp. A bright fog is what
+ * makes an un-attenuated pass obvious.
+ */
+export function fogAmountAt(dist: number): number {
+  const span = Math.max(0.001, fogState.end - fogState.start);
+  const t = Math.min(1, Math.max(0, (dist - fogState.start) / span));
+  return t * t;
+}
+
+/**
  * Outlined meshes and the width they were authored at, so
  * updateOutlineScales() can thin the ink with distance. Entries for disposed
  * meshes (the map is rebuilt every round) are pruned lazily on the next pass.
+ * The ink's own fade is NOT here — it is per pixel, in `OutlineFog`.
  */
 const outlineEntries: { mesh: Mesh; width: number }[] = [];
 
@@ -905,6 +958,15 @@ export function addOutline(mesh: Mesh, width = 0.045): void {
  * LOD-dropped (bots past `lodOutlineDistance` — `renderOutline` false) are
  * left alone; their authored width returns when the LOD flips them back on.
  * Called once per frame from Game.
+ *
+ * **Width only — the ink's colour is not this function's to fade.** Distance
+ * here is per mesh (the bounding sphere's near point), which a width can live
+ * with and a colour cannot: `BlockMerge` gives one mesh per 48 m block, so a
+ * per-mesh ink fade leaves the far half of a block in clear ink over a wall
+ * that has already gone to fog. That fade is per pixel, baked into the outline
+ * shader by `OutlineFog`. Thinning is not a substitute for it either —
+ * `minScale` still leaves a line, and a line of un-fogged ink is exactly as
+ * visible as a thick one.
  */
 export function updateOutlineScales(camPos: Vector3): void {
   const o = CONFIG.graphics.outlines;

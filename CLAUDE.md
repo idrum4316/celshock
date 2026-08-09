@@ -47,6 +47,24 @@ this.** Deployed nginx needs nothing (`application/wasm` is in its bundled
 `mime.types`; the web app manifest is not, which is why only that has a block in
 `docker/nginx.conf`).
 
+**The same optimizer bites from the other side: never add a deep static import
+into `@babylonjs/core`.** A new subpath entry (`@babylonjs/core/Shaders/...`)
+makes Vite re-optimize the dependency *mid-session*, which rewrites the chunk
+files Babylon's OWN dynamic `import()`s resolve against — and the ones a running
+page already holds then 404. It cost a debugging session: the casualties were
+`glowMapGeneration.vertex` and `default.vertex`, so the glow layer and every
+`StandardMaterial` in the game silently lost their shaders and **everything that
+glows stopped glowing, with nothing wrong in the renderer at all**. The dev
+server console names the missing chunks; the browser only shows the symptom.
+Confirmed by control: re-adding two such imports to a running server 404s a dozen
+Babylon chunks, removing them is clean. A fresh start (or `rm -rf
+node_modules/.vite`) re-optimizes cleanly and hides it, which is why this
+survives a restart for whoever pulled the change but never reproduces for whoever
+wrote it. Anything needing a Babylon shader's source must **wait for Babylon to
+import it** (`OutlineFog.applyWanted` is the worked example) rather than reach
+for it directly. The two `ShadersInclude/bones*` imports in `CelShader.ts`
+predate this and are load-bearing; do not take them as licence for more.
+
 **There is no rigged character asset in the tree.** `GlbSoldier.ts`,
 `entities/soldier/`, its `models/*.glb` and `@babylonjs/loaders` were deleted when
 first person retired them — the camera is inside the head, so there is no own-body
@@ -803,6 +821,66 @@ winning slots via `CelMaterialFactory.setPointLights()` once per frame. Adding a
 Effect meshes (tracers, sparks, neon, reticles) use unlit emissive
 `StandardMaterial`s from `mats.getEmissive()` and are unaffected by lighting.
 
+**Nothing drawn outside the cel shader gets fog for free, and everything that
+draws outside it owes the same fade.** The fog is a uniform on the cel materials
+and a per-pixel `mix` in their fragment shader; two passes never run it.
+Babylon's outline renderer writes `outlineColor` flat (its whole fragment shader
+is `gl_FragColor = color`), and the `GlowLayer` builds its bloom from a
+material's emissive colour, which says nothing about where the mesh stands.
+Neither offers a hook for a uniform. Both take their fog from the one published
+by `CelMaterialFactory.setEnvironment`, so nothing can describe different
+weather from the wall it hangs in front of — but they take it at **different
+granularities, and the difference is forced**:
+
+- **The outline fades per PIXEL**, baked into its shader by `src/shaders/OutlineFog.ts`.
+  It has to. `BlockMerge` gives one mesh per 48 m block, so a per-mesh ink fade
+  leaves the far half of a block in clear ink over a wall that has already gone
+  to fog — measured on Greyfen, **50 of 687 outlined meshes span the entire fog
+  band** (fog 0.0 at the near edge, 1.0 at the far), and those 50 are the
+  village. Thinning is not a substitute: `outlines.minScale` still leaves a line,
+  and a line of un-fogged ink is as visible thin as thick.
+- **The bloom fades per MESH**, through `fogAmountAt` in
+  `glow.customEmissiveColorSelector`. The glow map is generated from a material's
+  emissive colour with no per-pixel hook at all, and it is affordable here where
+  it was not for the ink: a bloom is a soft blob with no edge to misplace, and
+  only 4 of 290 emissive meshes span more than half the fog band.
+
+That this was invisible for a whole map is the point: on Hollowmere unfogged ink
+is near-black against near-black fog and an unfogged glow reads as a lamp doing
+its job. **A bright fog is what makes an un-attenuated pass obvious**, and
+Greyfen showed both at once — a stand of dead trees whose trunks fogged to pale
+grey while every branch stayed a black scratch (a branch is 0.04 m of geometry
+inside a 0.05 m ink shell, so it is almost entirely outline), and six chapel
+windows that were three saturated cyan bars on a wall faded almost to white.
+
+**`OutlineFog` is the only place this tree touches Babylon's compiled-effect
+cache, and its header is the argument for why.** `OutlineRenderer` hardcodes its
+`uniformsNames`, so the fade cannot be given a uniform at all: the distance is
+recovered from `viewProjection` in the vertex shader (rows 0/1/3 are `P00*right`,
+`P11*up` and `forward`, and the eye is the point whose clip x, y and w all
+vanish — verified exact to 1e-6, and it must be that radial distance rather than
+the free `gl_Position.w`, which disagrees by up to 1.4x at the corners), and the
+fog colour and range are baked in as literals. Re-baking therefore has to make
+Babylon forget the compiled programs, since it rebuilds a submesh's effect only
+when its *defines* change, which a re-bake does not.
+
+Two rules about that invalidation, both learned the hard way:
+
+- **Forget the cache entry; never RELEASE the program.** Releasing deletes the GL
+  program while draw wrappers still point at the `Effect` — undefined behaviour,
+  and the kind that surfaces as damage to whatever renders *next* rather than to
+  the outline. Forgetting is enough to force a fresh compile and leaves anything
+  still holding the old effect drawing correctly with the old fog. It leaks a
+  program per fog change per define variant: a handful a session, against a class
+  of bug that cannot be reasoned about.
+- **Reset draw caches off `scene.meshes` filtered on `renderOutline`, never off
+  the outline registry.** They are not the same set: `ViewModel` turns
+  `renderOutline` on by hand for all ~40 of its meshes and deliberately never
+  calls `addOutline` (distance thinning is meaningless 0.5 m from the lens), so
+  resetting the registry misses the entire weapon, the sight reticle included.
+  `setOutlineFog` owns its own invalidation for exactly this reason — the first
+  cut split it across the caller and got that list wrong.
+
 **Four light terms, not three.** Beside the key light, the flat ambient and the
 point lights there is a *hemispheric* term, `skyLightColor`, applied by `n.y` and
 never gated by the shadow map: full strength on up-facing surfaces, nothing
@@ -1335,9 +1413,13 @@ Four flags, all read elsewhere; new geometry that omits them misbehaves silently
   through, and walked through.
 - `noOutline: true` — skipped by `addOutline()`. Every emissive part (eyes, flames,
   signs, reticle) needs it. Outlines are coloured ink (a darkened take on the mesh's
-  own cel colour) thinned with distance by `updateOutlineScales()`.
+  own cel colour), thinned with distance per mesh by `updateOutlineScales()` and
+  faded into the fog per pixel by `OutlineFog`.
 - `noGlow: true` — excluded from the `GlowLayer` in the `Game` constructor. Only
-  meshes existing at construction time are scanned.
+  meshes existing at construction time are scanned. A mesh that stays in bloom
+  is faded with distance instead (`customEmissiveColorSelector`), and
+  `infiniteDistance` is that fade's one exemption — it is what every sky mesh
+  sets, and the moon is not in the valley to be fogged out of.
 - `noShadowCaster: true` — excluded from `ShadowSystem.setCasters()`. Flat receivers
   (ground, roads) need it: casting from them is pure shadow acne.
 

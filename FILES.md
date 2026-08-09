@@ -139,6 +139,8 @@ src/
                         #   never imported; vite.config.ts emits dist/sw.js
   shaders/
     CelShader.ts        # Custom cel ShaderMaterial + outline helper
+    OutlineFog.ts       # Bakes the map's fog into Babylon's outline pass, so
+                        #   ink fades per PIXEL instead of per merged mesh
     WaterShader.ts      # Animated water ShaderMaterial
     GodRays.ts          # Moon shafts: screen-space radial blur
     HorrorPost.ts       # Vignette / grain / aberration / damage flash

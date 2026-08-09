@@ -15,7 +15,11 @@
  * The map is a `MapDef` held in one field (`mapDef`) and built in one method
  * (`installMap`), which both a round start and an editor rebuild go through —
  * no map's layout or environment may be named anywhere else in here.
- * Also owns: GlowLayer scan (construction-time only; metadata.noGlow contract),
+ * Also owns: GlowLayer scan (construction-time only; metadata.noGlow contract)
+ * and its distance fade (customEmissiveColorSelector — the bloom is the one
+ * pass that reads a material and never asks where the mesh stands, so without
+ * it a glow is the last thing left when the world around it has gone to fog;
+ * infiniteDistance exempts the moon),
  * ShadowSystem wiring (casters re-registered per round from map.visuals),
  * pipeline.imageProcessingEnabled === false, window.__celshock debug handle.
  */
@@ -26,10 +30,15 @@ import {
   GlowLayer,
   Mesh,
   Scene,
+  StandardMaterial,
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG, FOG_WALL } from "../config";
-import { CelMaterialFactory, updateOutlineScales } from "../shaders/CelShader";
+import {
+  CelMaterialFactory,
+  fogAmountAt,
+  updateOutlineScales,
+} from "../shaders/CelShader";
 import { GodRays } from "../shaders/GodRays";
 import { HorrorPost } from "../shaders/HorrorPost";
 import { MotionBlur } from "../shaders/MotionBlur";
@@ -389,6 +398,57 @@ export class Game {
       blurKernelSize: g.glowKernel,
     });
     glow.intensity = g.glowIntensity;
+    // The bloom is the ONE pass that reads a material and never asks where the
+    // mesh carrying it stands, so without this a glow is the last thing left
+    // when everything around it has gone to fog: Greyfen's chapel windows are
+    // 0.08 m slivers whose whole read at 60 m is bloom, and they sat on a wall
+    // faded almost to white as three saturated cyan bars. Fogging the emissive
+    // MATERIAL cannot fix it — the glow map is generated from the emissive
+    // colour directly, so the base pass and the bloom have to be attenuated
+    // separately, and the bloom is by far the larger term.
+    //
+    // This replaces Babylon's own selector wholesale, so it owes the default's
+    // two other behaviours: `emissiveIntensity`, and the neutral colour for a
+    // material with no emissive at all (every cel ShaderMaterial in the scene
+    // reaches here, since the layer holds everything not explicitly excluded).
+    // It does NOT reproduce an emissive texture's `level`, which is sound only
+    // while nothing in this game pairs a texture with a glow — the moon is the
+    // one textured emissive and it is exempt below.
+    //
+    // `infiniteDistance` is the exemption and it is exactly the right test:
+    // every sky mesh sets it (see Sky.prepare), it means "this rides with the
+    // camera", and the moon is the one glowing thing that must never fog — it
+    // is not in the valley, and its bounding sphere is a dome radius away, so
+    // any distance fade would delete it outright.
+    glow.customEmissiveColorSelector = (mesh, _subMesh, material, result) => {
+      const emissive = (material as StandardMaterial).emissiveColor;
+      if (!emissive) {
+        const n = glow.neutralColor;
+        result.set(n.r, n.g, n.b, n.a);
+        return;
+      }
+      // Read off the base Material: only PBR declares it, and this selector
+      // runs for whatever the layer holds.
+      const level =
+        (material as { emissiveIntensity?: number }).emissiveIntensity ?? 1;
+      let k = level;
+      if (!mesh.infiniteDistance) {
+        // The sphere's CENTRE, deliberately — not the near point
+        // `updateOutlineScales` thins width by. A bloom is a soft blob with no
+        // edge to speak of, so its middle is where it reads from; the near
+        // point of a block-merged mesh (the chapel's six windows are one, 8.5 m
+        // of radius) sits a whole radius early and fogged them by 16% where the
+        // wall behind was at 35%. Every glowing mesh here is a fitting or a
+        // window, so a centre is never far from the light it stands for.
+        const sphere = mesh.getBoundingInfo().boundingSphere;
+        const d = Vector3.Distance(
+          sphere.centerWorld,
+          this.cameraSys.camera.globalPosition,
+        );
+        k *= 1 - fogAmountAt(d);
+      }
+      result.set(emissive.r * k, emissive.g * k, emissive.b * k, material.alpha);
+    };
     this.glow = glow;
     // Moon shafts read the finished frame and add light back into it, so they
     // come after FXAA and before the grade — the vignette and grain have to
