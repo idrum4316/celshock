@@ -896,11 +896,23 @@ Two rules about that invalidation, both learned the hard way:
   still holding the old effect drawing correctly with the old fog. It leaks a
   program per fog change per define variant: a handful a session, against a class
   of bug that cannot be reasoned about.
-- **Reset draw caches off `scene.meshes` filtered on `renderOutline`, never off
-  the outline registry.** They are not the same set: `ViewModel` turns
-  `renderOutline` on by hand for all ~40 of its meshes and deliberately never
-  calls `addOutline` (distance thinning is meaningless 0.5 m from the lens), so
-  resetting the registry misses the entire weapon, the sight reticle included.
+- **Reset the draw cache of EVERY mesh in the scene, and never filter that walk.**
+  The reset is the whole mechanism, not a belt-and-braces beside the cache delete:
+  `OutlineRenderer.isReady` asks the engine for an effect only when its *defines*
+  string changes, and the outline pass's defines never change, so a draw wrapper
+  that already holds an effect never consults the cache again however many entries
+  are forgotten. Two narrower sets have both been tried and both were wrong. The
+  outline REGISTRY misses `ViewModel`'s ~40 meshes, which set `renderOutline` by
+  hand and never call `addOutline`. `scene.meshes` filtered on `renderOutline`
+  looks exactly right and is the same mistake one layer along: the flag is a
+  runtime toggle — `Bot.setOutlines` clears it past `lodOutlineDistance` (20 m),
+  so most bot rigs have it off at any instant — and rigs are POOLED, alive across
+  every map change, so one LOD'd out during a re-bake keeps last map's fog for the
+  rest of the session. Greyfen → Hollowmere left 148 wrappers mixing ink to
+  `#c2ccd4`, which at the fog wall IS the ink: each rig's nine merged meshes read
+  as white slivers scattered over the village, and it survived a whole session
+  because a fresh boot has only one bake and nothing stale to keep. Unfiltered
+  costs 7.1 ms for 1,910 meshes once per fog change, beside a ~570 ms map build.
   `setOutlineFog` owns its own invalidation for exactly this reason — the first
   cut split it across the caller and got that list wrong.
 

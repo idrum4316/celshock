@@ -41,8 +41,10 @@
  *
  * WHAT THE INVALIDATION COSTS. `Engine.createEffect` caches on shader NAME plus
  * defines, never on source, so a re-bake is invisible to it and the stale
- * program would be handed back forever. `dropCompiled` is what forces the
- * recompile, and both of its rules were paid for in bugs — see it.
+ * program would be handed back forever — and `OutlineRenderer` compounds it by
+ * asking the cache for an effect only when its DEFINES change, which is never.
+ * `dropCompiled` is what forces the recompile, and every one of its rules was
+ * paid for in a bug — see it.
  *
  * THE ONE THING THIS FILE MUST NEVER DO is statically import a Babylon shader
  * module to get at its source. See `applyWanted`. It cost a whole debugging
@@ -140,12 +142,32 @@ gl_FragColor = vec4(mix(gl_FragColor.rgb, vec3(${glsl(color.r)}, ${glsl(color.g)
  * fog. The cost is a leaked program per fog change per define variant: a
  * handful over a session, against a class of bug that cannot be reasoned about.
  *
- * **The reset walks `scene.meshes` on `renderOutline`, not any registry.** That
- * is the actual set the outline pass draws, and it is not the set `addOutline`
- * knows about: `ViewModel` turns `renderOutline` on by hand for all ~40 of its
- * meshes and deliberately never registers them (distance thinning is meaningless
- * 0.5 m from the lens). Resetting the registry instead missed every one of them,
- * including the sight reticle.
+ * **The reset is what actually re-bakes anything; the cache delete alone does
+ * nothing.** `OutlineRenderer.isReady` asks the engine for an effect only when
+ * its DEFINES string changes — `if (cachedDefines !== join)` — and the outline
+ * pass's defines never change for a given mesh. So a draw wrapper that already
+ * holds an effect will never consult the cache again however many entries are
+ * forgotten. Clearing the wrapper is the only way to make it ask, and the delete
+ * exists so that what it then asks for is compiled from the re-baked source.
+ *
+ * **It walks EVERY mesh, and must not be filtered on `renderOutline`.** That
+ * looks like the right set — it is the set the outline pass draws — but the flag
+ * is a RUNTIME TOGGLE: `Bot.setOutlines` clears it past `lodOutlineDistance`
+ * (20 m), so at any instant most bot rigs have it off, and bot rigs are POOLED —
+ * built once, never disposed, alive across every map change. A rig that drew
+ * under the old bake and was LOD'd out at the moment of the new one kept its
+ * wrapper and went on drawing the previous map's fog for the rest of the
+ * session. Measured on greyfen -> hollowmere: 148 wrappers still mixing ink to
+ * Greyfen's `#c2ccd4`, which at the fog wall IS the ink — a bot's nine merged
+ * meshes read as a scatter of white slivers over the village. Filtering on the
+ * outline REGISTRY was the same mistake one layer along: it misses `ViewModel`'s
+ * ~40 meshes, which set `renderOutline` by hand and never register (distance
+ * thinning is meaningless 0.5 m from the lens). There is no cheap set that is
+ * right, because anything may have the flag flipped on later; the whole scene is
+ * the honest answer, and it is affordable: 7.1 ms for Hollowmere's 1,910 meshes,
+ * once per fog change, against the ~570 ms the map build beside it costs. Only
+ * the outline keys are dropped, so everything else re-fetches its effect from the
+ * cache on the next frame rather than recompiling.
  *
  * This is the only place the game touches Babylon's effect cache. There is no
  * public equivalent: `createEffect` never consults the source it caches.
@@ -159,9 +181,7 @@ function dropCompiled(scene: Scene): void {
       if (key.startsWith("outline+outline@")) delete cache[key];
     }
   }
-  for (const mesh of scene.meshes) {
-    if (mesh.renderOutline) mesh.resetDrawCache();
-  }
+  for (const mesh of scene.meshes) mesh.resetDrawCache();
 }
 
 let bakedKey = "";
