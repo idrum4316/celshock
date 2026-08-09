@@ -11,6 +11,7 @@
  */
 import { Camera, Effect, PostProcess, Scene } from "@babylonjs/core";
 import { CONFIG } from "../config";
+import type { EnvironmentSpec } from "../world/environment";
 
 /**
  * Full-screen horror grade applied after FXAA: a heavy vignette, corner
@@ -78,8 +79,16 @@ export class HorrorPost {
    *  there, so the two start in agreement and only this file moves them. */
   private attached = true;
 
+  /**
+   * How hard the grade is pushed, as the map asked for it. Defaults to
+   * `CONFIG.graphics`, which is Hollowmere's — so a map that says nothing
+   * gets exactly the shipped look.
+   */
+  private vignette: number = CONFIG.graphics.vignette;
+  private grain: number = CONFIG.graphics.grain;
+  private aberration: number = CONFIG.graphics.aberration;
+
   constructor(scene: Scene, camera: Camera) {
-    const g = CONFIG.graphics;
     this.camera = camera;
     this.post = new PostProcess(
       "horror",
@@ -93,11 +102,26 @@ export class HorrorPost {
     );
     this.post.onApply = (effect) => {
       effect.setFloat("time", this.time);
-      effect.setFloat("vignette", g.vignette);
-      effect.setFloat("grain", g.grain);
-      effect.setFloat("aberration", g.aberration);
+      effect.setFloat("vignette", this.vignette);
+      effect.setFloat("grain", this.grain);
+      effect.setFloat("aberration", this.aberration);
       effect.setFloat("damage", this.damage);
     };
+  }
+
+  /**
+   * Sets the grade's strength for the installed map. Each field falls back to
+   * its `CONFIG.graphics` default, so clearing a map's override restores the
+   * shipped grade rather than zeroing it.
+   *
+   * Deliberately separate from `setEnabled`: this is the MAP saying how much,
+   * and that is the PLAYER saying whether at all.
+   */
+  setGrade(grade: EnvironmentSpec["grade"]): void {
+    const g = CONFIG.graphics;
+    this.vignette = grade?.vignette ?? g.vignette;
+    this.grain = grade?.grain ?? g.grain;
+    this.aberration = grade?.aberration ?? g.aberration;
   }
 
   /**

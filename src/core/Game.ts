@@ -63,7 +63,7 @@ import { Sky } from "../systems/Sky";
 import { WaterSystem } from "../systems/WaterSystem";
 import { applyEnvironment, type EnvironmentSpec } from "../world/environment";
 import type { EditorSession } from "../editor";
-import { DEFAULT_MAP, type MapDef } from "../world/maps";
+import { DEFAULT_MAP, MAPS, type MapDef } from "../world/maps";
 import { MapBuilder, type BuildOptions, type GameMap } from "../world/MapBuilder";
 import { DeployScreen } from "../ui/DeployScreen";
 import { HUD, type CaptureStatus } from "../ui/HUD";
@@ -128,6 +128,8 @@ const kitLampId = (n: number) => `kit-lamp-${n}`;
 
 /** Where the chosen enemy-skill tier is remembered between sessions. */
 const DIFFICULTY_KEY = "hollowmere.difficulty";
+/** …and the chosen map, by `MapDef.id`. */
+const MAP_KEY = "hollowmere.map";
 /** …and the loadout. Same store, same tolerance for it not working. */
 const SIGHT_KEY = "hollowmere.sight";
 const WEAPON_KEY = "hollowmere.weapon";
@@ -148,6 +150,35 @@ function writeDifficulty(tier: number): void {
     window.localStorage.setItem(DIFFICULTY_KEY, String(tier));
   } catch {
     // Not being able to remember the setting is not worth failing over.
+  }
+}
+
+/**
+ * The remembered map, resolved by id against `MAPS`.
+ *
+ * It MUST return an entry out of that array rather than anything built here.
+ * `applySky` skips repainting an 8-megapixel dome — two thousand stars, a
+ * galactic band, a stretched halo and two fBm cloud masks — by comparing the
+ * environment by OBJECT IDENTITY, so a `MapDef` assembled on the way past
+ * fails that test open and repaints the whole sky on every round start. The
+ * symptom is a hitch with nothing in the profile to point at it.
+ */
+function readMap(): MapDef {
+  try {
+    const raw = window.localStorage.getItem(MAP_KEY);
+    const found = MAPS.find((m) => m.id === raw);
+    if (found) return found;
+  } catch {
+    // As above. An unknown id also lands here, which is the same answer.
+  }
+  return DEFAULT_MAP;
+}
+
+function writeMap(id: string): void {
+  try {
+    window.localStorage.setItem(MAP_KEY, id);
+  } catch {
+    // As above.
   }
 }
 
@@ -270,7 +301,7 @@ export class Game {
    * `MapDef` in that registry and a write to this field, not a hunt through the
    * orchestrator for the fourteen places the old constants were spelled out.
    */
-  private mapDef: MapDef = DEFAULT_MAP;
+  private mapDef: MapDef = readMap();
 
   private state: GameState = "menu";
   /** Which state the pause menu is a lid over; where `resume()` puts it back. */
@@ -574,6 +605,7 @@ export class Game {
     }
 
     this.overlayScreen.onDifficulty = (tier) => this.setDifficulty(tier);
+    this.overlayScreen.onMap = (index) => this.setMap(index);
     this.overlayScreen.onOpenLoadout = () => this.openLoadout();
     // The menu's and the round-over card's Deploy button. Guarded on the state
     // rather than trusted, because the overlay's markup outlives neither: the
@@ -643,11 +675,17 @@ export class Game {
    * -over screen shares that overlay, so there is nothing to keep in sync.
    */
   private showMenu(): void {
-    this.overlayScreen.showMenu(
-      difficultyNames(),
-      this.difficulty,
-      kitLabel(this.weapon, this.sight),
-    );
+    this.overlayScreen.showMenu({
+      maps: MAPS.map((m) => m.name),
+      selectedMap: MAPS.indexOf(this.mapDef),
+      difficulties: difficultyNames(),
+      selected: this.difficulty,
+      kit: kitLabel(this.weapon, this.sight),
+      // Stated rather than written into the markup: the number of flags is the
+      // chosen map's, and a tagline that says "five" on a map with four is the
+      // kind of wrong nobody reports.
+      flagCount: this.mapDef.layout.controlPoints.length,
+    });
   }
 
   /**
@@ -951,6 +989,28 @@ export class Game {
     this.difficulty = next;
     writeDifficulty(next);
     if (this.state === "menu") this.showMenu();
+  }
+
+  /**
+   * Picks the map the next round is played on.
+   *
+   * **Only from the menu, and that guard is the whole safety argument.**
+   * `startRound` reads `mapDef` to apply the environment, paint the sky and
+   * build the map, and hands the result to battle, conquest, the flag markers
+   * and the minimap. Writing this field at any other time leaves all four
+   * pointing into a `GameMap` that `installMap` has already disposed — which
+   * throws nothing and renders last round's world over this one's.
+   *
+   * The value assigned is an entry OUT OF `MAPS`; see `readMap`.
+   */
+  private setMap(index: number): void {
+    if (this.state !== "menu") return;
+    const n = MAPS.length;
+    const next = index < 0 ? 0 : index >= n ? n - 1 : index;
+    if (MAPS[next] === this.mapDef) return;
+    this.mapDef = MAPS[next];
+    writeMap(this.mapDef.id);
+    this.showMenu();
   }
 
   private tick(): void {
@@ -1349,6 +1409,7 @@ export class Game {
       glow: this.glow,
       map,
       rebuildMap: () => this.buildEditorMap(),
+      mapId: this.mapDef.id,
       layout: this.mapDef.layout,
       environment: this.mapDef.environment,
       fixtures: this.lighting.fixtures,
@@ -1422,6 +1483,10 @@ export class Game {
     // are the fresh map's visuals — last build's meshes are now disposed.
     this.shadows.setLightDirection(environment.lighting.direction);
     this.shadows.setFogRange(environment.fogStart, environment.fogEnd);
+    // How hard the grade is pushed is the map's; whether it runs at all stays
+    // the player's (`applySettings`). A vignette that reads as dread over a
+    // night village reads as a lens fault over a bright one.
+    this.post.setGrade(environment.grade);
     this.shadows.setCasters(map.visuals);
     this.atmosphere.apply(environment.particles, map.size, map.size);
     this.water.build(map.water, environment, map.terrain);
@@ -1910,13 +1975,22 @@ export class Game {
     updateOutlineScales(this.cameraSys.camera.position);
     if (player) {
       const lc = CONFIG.lighting;
-      this.lighting.setCarried(
-        "player-lamp",
-        player.position.add(new Vector3(0, lc.lampHeight, 0)),
-        lc.lampColor,
-        lc.lampRange,
-        lc.lampIntensity,
-      );
+      // The map decides whether the player carries a lamp at all. A carried
+      // light always wins one of the sixteen slots, so a daylight map leaving
+      // it on does not merely add nothing — it costs a lantern somewhere.
+      const lampIntensity =
+        this.mapDef.environment.lighting.lampIntensity ?? lc.lampIntensity;
+      if (lampIntensity > 0) {
+        this.lighting.setCarried(
+          "player-lamp",
+          player.position.add(new Vector3(0, lc.lampHeight, 0)),
+          lc.lampColor,
+          lc.lampRange,
+          lampIntensity,
+        );
+      } else {
+        this.lighting.removeCarried("player-lamp");
+      }
     }
     this.lighting.update(dt, this.cameraSys.camera.position, this.mats);
     // Water reads the same camera and the same winning light set, so it

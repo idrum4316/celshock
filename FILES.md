@@ -108,11 +108,14 @@ src/
                         #   boulders, brambles, barrels
     textures.ts         # Generated canvas textures (cobblestone etc.)
     environment.ts      # EnvironmentSpec + applyEnvironment
-    maps.ts             # MapDef + the MAPS registry. The ONLY file a second
-                        #   map touches
-    hollowmere/layout.ts      # THE MAP — every placement, flag and spawn
+    maps.ts             # MapDef + the MAPS registry. The only EXISTING file a
+                        #   new map has to touch (plus vite.config's WRITABLE)
+    hollowmere/layout.ts      # A MAP — every placement, flag and spawn
     hollowmere/heights.ts     # GENERATED floor heights (editor terrain mode)
-    hollowmere/environment.ts # Palette, fog, mist, particles
+    hollowmere/environment.ts # Palette, fog, mist, particles — night
+    greyfen/layout.ts         # The second map. Forked from Hollowmere's and
+    greyfen/heights.ts        #   diverging; the two share no module
+    greyfen/environment.ts    # Palette, fog, sun, sky — overcast dawn
   ui/                   # One .css beside each module that writes markup
     base.css            #   Reset, canvas, #hud root, and ONLY primitives two
                         #   or more screens share. Imported by main.ts

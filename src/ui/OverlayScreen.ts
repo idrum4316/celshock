@@ -74,8 +74,45 @@ const PAUSE_ITEMS: readonly [PauseAction, string][] = [
  * what it is on, and the dedicated keys survive as accelerators rather than as
  * the only way in.
  */
-type MenuItem = "difficulty" | "loadout" | "settings" | "start";
+type MenuItem = "map" | "difficulty" | "loadout" | "settings" | "start";
+
+/**
+ * Everything the menu card draws itself from.
+ *
+ * An object rather than five positional arguments: two `readonly string[]` and
+ * two `number` in a row is a signature where swapping the map's index with the
+ * difficulty tier still typechecks and silently picks the wrong thing.
+ */
+export interface MenuState {
+  maps: readonly string[];
+  selectedMap: number;
+  difficulties: readonly string[];
+  selected: number;
+  kit: string;
+  /** The chosen map's control-point count — the tagline states it. */
+  flagCount: number;
+}
+
+/**
+ * Small counts as words, because the tagline is prose: "take and hold five
+ * points" is a sentence and "take and hold 5 points" is a stat line. Anything
+ * past the ones a Conquest map plausibly carries falls back to the digits.
+ */
+const COUNT_WORDS = [
+  "no",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+];
+const spellCount = (n: number) => COUNT_WORDS[n] ?? String(n);
 const MENU_ITEMS: readonly MenuItem[] = [
+  "map",
   "difficulty",
   "loadout",
   "settings",
@@ -100,6 +137,9 @@ export class OverlayScreen {
   /** The difficulty row's state, so `activateMenu` can step it. */
   private tierCount = 0;
   private tier = 0;
+  /** The map row's state, same reason. */
+  private mapCount = 0;
+  private mapIndex = 0;
   /**
    * Which card is up. The cursor is reset when the menu is RAISED and kept
    * across a redraw: `showMenu` is called again on every difficulty change and
@@ -111,6 +151,8 @@ export class OverlayScreen {
 
   /** Wired by Game: the player picked a difficulty tier from the menu. */
   onDifficulty: (tier: number) => void = () => {};
+  /** Wired by Game: the player picked a map from the menu. */
+  onMap: (index: number) => void = () => {};
   /** Wired by Game: the player asked for the loadout screen. */
   onOpenLoadout: () => void = () => {};
   /** Wired by Game: the player asked for the settings screen. */
@@ -182,11 +224,8 @@ export class OverlayScreen {
    * labels, the hints and the grid's own gaps stay inert, so a click that
    * lands between two buttons is still the confirm that starts the round.
    */
-  showMenu(
-    difficulties: readonly string[],
-    selected: number,
-    kit: string,
-  ): void {
+  showMenu(opts: MenuState): void {
+    const { maps, selectedMap, difficulties, selected, kit, flagCount } = opts;
     this.root.classList.remove("hidden");
     this.setOverlaid(true);
     // Raised anew, not redrawn — see `card`.
@@ -194,19 +233,32 @@ export class OverlayScreen {
     this.card = "menu";
     this.tierCount = difficulties.length;
     this.tier = selected;
+    this.mapCount = maps.length;
+    this.mapIndex = selectedMap;
     const tiers = difficulties
       .map(
         (name, i) =>
           `<button class="tier${i === selected ? " on" : ""}" data-tier="${i}">${name}</button>`,
       )
       .join("");
+    const mapButtons = maps
+      .map(
+        (name, i) =>
+          `<button class="tier${i === selectedMap ? " on" : ""}" data-map="${i}">${name}</button>`,
+      )
+      .join("");
     this.root.innerHTML = `
       <div class="ov-title">
         <h1>HOLLOWMERE</h1>
-        <p class="tagline">Conquest &mdash; take and hold five points against the Blight</p>
+        <p class="tagline">Conquest &mdash; take and hold ${spellCount(flagCount)} points against the Blight</p>
       </div>
       <div class="ov-settings">
-        <div class="difficulty" data-menu="difficulty">
+        <div class="segmented" data-menu="map">
+          <span class="label">Map</span>
+          <div class="tiers">${mapButtons}</div>
+          <span class="hint">&larr; &rarr;</span>
+        </div>
+        <div class="segmented" data-menu="difficulty">
           <span class="label">Enemy skill</span>
           <div class="tiers">${tiers}</div>
           <span class="hint">&larr; &rarr;</span>
@@ -230,10 +282,13 @@ export class OverlayScreen {
       ${this.controlsTable()}
     `;
     this.root
-      .querySelectorAll<HTMLElement>("button.tier")
+      .querySelectorAll<HTMLElement>("button[data-tier]")
       .forEach((btn) => {
         btn.onclick = () => this.onDifficulty(Number(btn.dataset.tier));
       });
+    this.root.querySelectorAll<HTMLElement>("button[data-map]").forEach((btn) => {
+      btn.onclick = () => this.onMap(Number(btn.dataset.map));
+    });
     // The cursor's row is collected from the markup rather than kept in step
     // by hand, so a row added above only has to name itself in `MENU_ITEMS`.
     this.menuEls.clear();
@@ -289,10 +344,10 @@ export class OverlayScreen {
   }
 
   /**
-   * Left/right on the cursor's row. Only the difficulty row has anything to
-   * step; on a row that is a button this is deliberately nothing, because a
-   * horizontal nudge that fired a screen would make the cursor's own left and
-   * right edges feel like traps.
+   * Left/right on the cursor's row. Only the two segmented rows — the map and
+   * the difficulty — have anything to step; on a row that is a button this is
+   * deliberately nothing, because a horizontal nudge that fired a screen would
+   * make the cursor's own left and right edges feel like traps.
    *
    * It CLAMPS where `activateMenu` wraps: left and right are a slider along a
    * row of four tiers, and a slider that jumps from Ace back to Green at the
@@ -302,6 +357,8 @@ export class OverlayScreen {
     if (this.menuEls.size === 0) return;
     if (MENU_ITEMS[this.menuIndex] === "difficulty") {
       this.onDifficulty(this.tier + delta);
+    } else if (MENU_ITEMS[this.menuIndex] === "map") {
+      this.onMap(this.mapIndex + delta);
     }
   }
 
@@ -317,6 +374,9 @@ export class OverlayScreen {
   activateMenu(): void {
     if (this.menuEls.size === 0) return;
     switch (MENU_ITEMS[this.menuIndex]) {
+      case "map":
+        if (this.mapCount > 0) this.onMap((this.mapIndex + 1) % this.mapCount);
+        break;
       case "difficulty":
         if (this.tierCount > 0) this.onDifficulty((this.tier + 1) % this.tierCount);
         break;

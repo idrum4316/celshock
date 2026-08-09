@@ -112,7 +112,13 @@ export class Sky {
     const moonDir = Vector3.FromArray(env.lighting.direction)
       .normalize()
       .negate();
-    this.moonDir.copyFrom(moonDir);
+    const discRadius = spec.discRadius ?? cfg.moonRadius;
+    // A sky with no disc hands out no direction, which is exactly what
+    // `clear()` already means by leaving this zero: GodRays reads it as
+    // "nothing to converge on" and takes its pass off the camera. The halo
+    // below is still painted at `moonDir`, which is a local — the sky is lit
+    // from somewhere whether or not the source is drawn.
+    if (discRadius > 0) this.moonDir.copyFrom(moonDir);
 
     // --- dome: gradient + galactic band + stars + baked halo, one draw ---
     const domeMat = new StandardMaterial("sky-dome-mat", this.scene);
@@ -135,32 +141,37 @@ export class Sky {
     this.disposables.push(domeMat, domeMat.emissiveTexture!);
 
     // --- moon: emissive disc, deliberately left inside the GlowLayer ---
-    const moonTex = this.paintMoonTexture(rand);
-    const moonMat = new StandardMaterial("sky-moon-mat", this.scene);
-    moonMat.emissiveTexture = moonTex;
-    // The limb fades out through the same texture's alpha, so the disc has no
-    // polygon edge — a hard circle in the sky reads as a decal.
-    moonMat.opacityTexture = moonTex;
-    moonMat.emissiveColor = Color3.FromHexString(spec.moonColor).scale(
-      cfg.moonEmissiveBoost,
-    );
-    moonMat.disableLighting = true;
-    moonMat.diffuseColor = Color3.Black();
-    moonMat.specularColor = Color3.Black();
-    moonMat.disableDepthWrite = true;
-    const moon = MeshBuilder.CreateDisc(
-      "sky-moon",
-      { radius: cfg.moonRadius, tessellation: 48 },
-      this.scene,
-    );
-    moon.position.copyFrom(moonDir.scale(cfg.moonDistance));
-    // Billboard, not lookAt: the disc must face the camera dead-on from
-    // everywhere on the map, and with infiniteDistance it rides with it.
-    moon.billboardMode = Mesh.BILLBOARDMODE_ALL;
-    moon.material = moonMat;
-    moon.renderingGroupId = 1; // after the dome, so depth can't drop it
-    this.prepare(moon, false);
-    this.disposables.push(moonMat, moonTex);
+    // Omitted entirely at radius 0 — an overcast sky has a source but no
+    // visible disc, and drawing a small one instead reads as a hole rather
+    // than as a sun behind cloud.
+    if (discRadius > 0) {
+      const moonTex = this.paintMoonTexture(rand);
+      const moonMat = new StandardMaterial("sky-moon-mat", this.scene);
+      moonMat.emissiveTexture = moonTex;
+      // The limb fades out through the same texture's alpha, so the disc has
+      // no polygon edge — a hard circle in the sky reads as a decal.
+      moonMat.opacityTexture = moonTex;
+      moonMat.emissiveColor = Color3.FromHexString(spec.moonColor).scale(
+        cfg.moonEmissiveBoost,
+      );
+      moonMat.disableLighting = true;
+      moonMat.diffuseColor = Color3.Black();
+      moonMat.specularColor = Color3.Black();
+      moonMat.disableDepthWrite = true;
+      const moon = MeshBuilder.CreateDisc(
+        "sky-moon",
+        { radius: discRadius, tessellation: 48 },
+        this.scene,
+      );
+      moon.position.copyFrom(moonDir.scale(cfg.moonDistance));
+      // Billboard, not lookAt: the disc must face the camera dead-on from
+      // everywhere on the map, and with infiniteDistance it rides with it.
+      moon.billboardMode = Mesh.BILLBOARDMODE_ALL;
+      moon.material = moonMat;
+      moon.renderingGroupId = 1; // after the dome, so depth can't drop it
+      this.prepare(moon, false);
+      this.disposables.push(moonMat, moonTex);
+    }
 
     // --- cloud decks: sphere shells just inside the dome, so there are no
     // edges anywhere. Transparent, so they veil the moon on their own. ---
@@ -357,9 +368,10 @@ export class Sky {
       // Additive, so the halo lifts the gradient it sits on instead of
       // replacing it — the band behind the moon has to keep its colour.
       ctx.globalCompositeOperation = "lighter";
+      const haloPeak = spec.haloStrength ?? cfg.haloStrength;
       for (const [radius, peak] of [
-        [haloR, cfg.haloStrength * 0.55],
-        [cfg.haloCore * h, cfg.haloStrength],
+        [haloR, haloPeak * 0.55],
+        [cfg.haloCore * h, haloPeak],
       ] as const) {
         const g = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
         g.addColorStop(0, rgba(glow, peak));

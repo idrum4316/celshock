@@ -93,6 +93,13 @@ export interface EditorDeps {
    * per-item editor index wholesale.
    */
   rebuildMap: () => GameMap;
+  /**
+   * Which map this is, by `MapDef.id`. The editor is otherwise map-agnostic —
+   * it works on whatever `layout` it is handed — but saving is not: the id
+   * picks the source text to patch and the two files to write. It must be the
+   * id of the map `layout` came from; `LayoutSaver` refuses if it is not.
+   */
+  mapId: string;
   /** The layout that map was built from. Edited in place by the editor. */
   layout: MapLayout;
   /** The map's own environment, so the work light can be derived from it. */
@@ -169,7 +176,7 @@ export class EditorSession {
     this.navOverlay = new NavOverlay(deps.scene, deps.glow);
     this.brush = new TerrainBrush(deps.scene, deps.glow, this.map);
     this.revalidate();
-    this.saver = new LayoutSaver(deps.layout);
+    this.saver = new LayoutSaver(deps.mapId, deps.layout);
     if (this.saver.blocked) {
       this.panel.setStatus(`cannot save: ${this.saver.blocked}`, "error");
     } else {

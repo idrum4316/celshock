@@ -16,6 +16,8 @@
  */
 import type { EnvironmentSpec } from "./environment";
 import type { MapLayout } from "./layout";
+import { GreyfenEnvironment } from "./greyfen/environment";
+import { GreyfenLayout } from "./greyfen/layout";
 import { HollowmereEnvironment } from "./hollowmere/environment";
 import { HollowmereLayout } from "./hollowmere/layout";
 
@@ -44,8 +46,19 @@ export const HOLLOWMERE: MapDef = {
   environment: HollowmereEnvironment,
 };
 
+/**
+ * Greyfen: the same valley at first light. Its layout was forked from
+ * Hollowmere's and is diverging; the two share no module and must not.
+ */
+export const GREYFEN: MapDef = {
+  id: "greyfen",
+  name: "Greyfen",
+  layout: GreyfenLayout,
+  environment: GreyfenEnvironment,
+};
+
 /** Every map that can be played, in the order a picker would show them. */
-export const MAPS: readonly MapDef[] = [HOLLOWMERE];
+export const MAPS: readonly MapDef[] = [HOLLOWMERE, GREYFEN];
 
 /** What a round starts on with nothing chosen. */
 export const DEFAULT_MAP: MapDef = HOLLOWMERE;

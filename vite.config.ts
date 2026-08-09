@@ -15,9 +15,16 @@ import { join, relative, resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 
 /**
- * The only files the editor may write. Compared, never used to build a path.
- * `layout.ts` is patched line by line and must look like a layout; `heights.ts`
- * is regenerated wholesale by terrain mode and must look like a heightfield.
+ * The only files the editor may write, as a LITERAL table — one pair per map.
+ * Compared, never used to build a path. `layout.ts` is patched line by line and
+ * must look like a layout; `heights.ts` is regenerated wholesale by terrain mode
+ * and must look like a heightfield.
+ *
+ * Deliberately not derived from a directory listing or matched with a regex,
+ * however repetitive two entries per map becomes: path safety here comes from
+ * the client's path only ever being LOOKED UP in this object, and anything that
+ * computes the set of writable files trades that guarantee for convenience in
+ * the one tool here whose whole job is writing to disk. A new map adds two lines.
  */
 const WRITABLE = {
   "src/world/hollowmere/layout.ts": {
@@ -27,6 +34,14 @@ const WRITABLE = {
   "src/world/hollowmere/heights.ts": {
     min: 500,
     marker: "export const HollowmereHeights",
+  },
+  "src/world/greyfen/layout.ts": {
+    min: 4000,
+    marker: "export const GreyfenLayout",
+  },
+  "src/world/greyfen/heights.ts": {
+    min: 500,
+    marker: "export const GreyfenHeights",
   },
 };
 

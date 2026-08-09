@@ -5,7 +5,7 @@
  * Pure data in, uniforms out — a second map adds one new spec, no code here.
  */
 import { Color3, Color4, Scene, Vector3 } from "@babylonjs/core";
-import type { CelMaterialFactory } from "../shaders/CelShader";
+import type { CelMaterialFactory, SpecSpec } from "../shaders/CelShader";
 
 /** A dynamic point light carried by a prop, registered when the prop is placed. */
 export interface LightSpec {
@@ -59,6 +59,27 @@ export interface SkySpec {
   moonGlowColor: string;
   /** Faint galactic band. Omit for an empty sky. */
   milkyWayColor?: string;
+  /**
+   * The light's own disc, in world units at `CONFIG.sky.moonDistance`.
+   * Defaults to `CONFIG.sky.moonRadius`.
+   *
+   * **Zero means no disc at all, and it switches the light shafts off with
+   * it.** `Sky` hands `GodRays` the direction the light hangs in, and a zero
+   * vector there already means "nothing to converge on" — the contract
+   * `Sky.clear()` documents. So a sky with no disc is a sky with no shafts,
+   * through the path that already existed, which is what an overcast day
+   * wants on both counts: there is no sun to see, and `CONFIG.godRays`'
+   * luminance threshold IS the whole occlusion test and is set to sit above a
+   * night street. Under a bright sky it would fire on everything.
+   */
+  discRadius?: number;
+  /**
+   * Peak alpha of the scattering halo baked around the disc. Defaults to
+   * `CONFIG.sky.haloStrength`. This is the term that decides whether the sky
+   * reads as lit; on an overcast map it is also the only thing standing in
+   * for a disc that is not drawn.
+   */
+  haloStrength?: number;
   /** Drifting cloud decks: tint (the shadowed body) and 0..1 ceiling alpha. */
   cloudColor: string;
   cloudOpacity: number;
@@ -140,11 +161,45 @@ export interface EnvironmentSpec {
     skyLightIntensity: number;
     rimColor: string;
     rimIntensity: number;
+    /**
+     * The player's own shoulder lamp, overriding `CONFIG.lighting.lampIntensity`.
+     *
+     * **Zero removes it entirely, and that is the point of the field.** The
+     * lamp exists because a night village between fixtures is too dark to
+     * fight in; under a lit sky it is a torch at noon, and it is not merely
+     * redundant — carried lights always win one of the sixteen shader slots,
+     * so an unwanted one is a lantern somewhere that stops being drawn.
+     */
+    lampIntensity?: number;
   };
   particles?: ParticleSpec;
   water?: WaterEnvSpec;
   grass?: GrassEnvSpec;
   sky?: SkySpec;
+  /**
+   * How hard the horror grade is pushed on this map. Each field defaults to
+   * its `CONFIG.graphics` value, which is Hollowmere's.
+   *
+   * The map scales the effect; the PLAYER still decides whether it runs at
+   * all (`settings.horrorGrade`). Those are different questions: a heavy
+   * vignette is dread on a night village and a lens fault on a bright one,
+   * but wanting it off entirely is a preference no map should override.
+   */
+  grade?: {
+    vignette?: number;
+    grain?: number;
+    aberration?: number;
+  };
+  /**
+   * The wet sheen on cobbled ground, overriding `CONFIG.graphics.spec.cobble`.
+   *
+   * It lives here because it is not a graphics setting — it is a statement
+   * about this map's weather and the elevation of this map's key light. The
+   * shipped value is tuned against a 38-degree moon and its own comment says
+   * to re-check it whenever that moves; a map that moves it therefore owes a
+   * value here.
+   */
+  groundSpec?: SpecSpec;
 }
 
 /**
@@ -179,4 +234,9 @@ export function applyEnvironment(
     mistHeight: env.mistHeight,
     mistStrength: env.mistStrength,
   });
+  // The ground's wet sheen is the map's weather, and it is tuned against the
+  // key light's elevation — which this function has just changed. Pushed here
+  // rather than from `installMap` so it lands BEFORE the map's materials are
+  // built, and so the editor's work light re-derives it like everything else.
+  mats.setGroundSpec(env.groundSpec);
 }

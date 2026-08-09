@@ -103,7 +103,11 @@
 #overlay .ov-settings > div { display: contents; }
 #overlay .ov-settings .label { text-align: right; }
 #overlay .ov-settings .hint { text-align: right; }
-#overlay .difficulty .tiers { display: flex; gap: 6px; }
+/* A row of mutually-exclusive buttons with the chosen one filled hot: the map
+   picker and the difficulty tiers. Named for the SHAPE rather than for either
+   of them, because both wear it and a class called `.difficulty` on the map
+   row is a name that has stopped meaning one thing. */
+#overlay .segmented .tiers { display: flex; gap: 6px; }
 #overlay .ov-settings .label,
 #overlay .ov-settings .hint {
   font-size: 10px;
@@ -111,7 +115,7 @@
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.42);
 }
-#overlay .difficulty button.tier {
+#overlay .segmented button.tier {
   pointer-events: auto;
   /* Equal shares of the control column, so four tiers measure the same
      as the one kit button under them. The padding is what keeps four of
@@ -131,11 +135,11 @@
   clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
   transition: background 0.12s, color 0.12s;
 }
-#overlay .difficulty button.tier:hover {
+#overlay .segmented button.tier:hover {
   background: rgba(255, 230, 128, 0.18);
   color: var(--hot);
 }
-#overlay .difficulty button.tier.on {
+#overlay .segmented button.tier.on {
   color: #12141a;
   background: var(--hot);
 }
@@ -209,7 +213,7 @@
   margin-left: -14px;
 }
 #overlay .ov-settings .label { position: relative; }
-#overlay .difficulty.sel .tiers {
+#overlay .segmented.sel .tiers {
   outline: 1px solid rgba(255, 230, 128, 0.55);
   outline-offset: 5px;
 }

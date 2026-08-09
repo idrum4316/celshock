@@ -659,7 +659,14 @@ export class CelMaterialFactory {
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
-      this.applySpec(mat, spec ?? null);
+      // The CALLER decides whether this ground is glossy at all; the installed
+      // MAP decides how glossy — see `setGroundSpec`. That split matters here
+      // because materials are built during `installMap`, which runs after
+      // `applyEnvironment`: taking the caller's values would hand a freshly
+      // built material the shipped night sheen and never revisit it, since the
+      // override has already been applied to a cache this material was not yet
+      // in.
+      this.applySpec(mat, spec ? this.groundSpec : null);
       this.applyTranslucency(mat, null);
       this.cache.set(cacheKey, mat);
     }
@@ -779,6 +786,20 @@ export class CelMaterialFactory {
     mat.setVector3("shadowParams", this.shadowParams);
   }
 
+  /**
+   * The spec each glossy material was BUILT with, so a later override can
+   * find them again.
+   *
+   * This exists because the cache keys — `\0gloss-<hex>` and
+   * `\0ground-<key>-spec-bump` — deliberately do not include the spec's
+   * values, and the factory outlives a map: the second map to ask for the
+   * same colour gets the first map's material, uniforms and all. Re-applying
+   * over the cache is how `setEnvironment` already solves exactly this, and
+   * doing it that way rather than widening the key keeps one material per
+   * colour instead of one per colour per map ever loaded.
+   */
+  private readonly specs = new Map<ShaderMaterial, SpecSpec>();
+
   /** Specular is per-material, never theme-wide: null keeps a material matte. */
   private applySpec(mat: ShaderMaterial, spec: SpecSpec | null): void {
     if (!spec) {
@@ -787,11 +808,33 @@ export class CelMaterialFactory {
       mat.setFloat("specShininess", 1);
       return;
     }
+    this.specs.set(mat, spec);
     mat.setColor3(
       "specColor",
       Color3.FromHexString(spec.color).scale(spec.intensity),
     );
     mat.setFloat("specShininess", Math.max(1, spec.shininess));
+  }
+
+  /** What a ground material created from here on is built with. */
+  private groundSpec: SpecSpec = CONFIG.graphics.spec.cobble;
+
+  /**
+   * Replaces the sheen on the GROUND material — the map's weather and the
+   * elevation of its key light, which is what `CONFIG.graphics.spec.cobble`'s
+   * own note says to re-check whenever the light moves.
+   *
+   * Passing `undefined` restores the shipped value, so switching back to a map
+   * that states nothing genuinely undoes this rather than leaving the previous
+   * map's streets behind. Scoped to the ground on purpose: the rifle's spec is
+   * the player's weapon, which no map owns.
+   */
+  setGroundSpec(spec: SpecSpec | undefined): void {
+    const next = spec ?? CONFIG.graphics.spec.cobble;
+    this.groundSpec = next;
+    this.specs.forEach((_, mat) => {
+      if (mat.name.startsWith("cel-ground-")) this.applySpec(mat, next);
+    });
   }
 
   /**

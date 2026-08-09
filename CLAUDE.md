@@ -874,16 +874,54 @@ are written in (`Placement`, `ScatterSpec`, `TerrainRect`, `MapLayout`) lives in
 types from its predecessor, and `MapBuilder.build(layout, env)` takes both as
 arguments for the same reason.
 
-**The two halves are paired in `src/world/maps.ts`, the only file a second map
+**The two halves are paired in `src/world/maps.ts`, and it plus
+`vite.config.ts`'s `WRITABLE` table are the only existing files a new map
 touches.** A `MapDef` is `{ id, name, layout, environment }`; `MAPS` is the registry
-and `DEFAULT_MAP` is what a round starts on. `Game` holds one `mapDef` field (`Game.mapDef`) and
+and `DEFAULT_MAP` is the fallback. `Game` holds one `mapDef` field (`Game.mapDef`) and
 reads both halves off it. Nothing outside `maps.ts` may import a map's own modules.
-Two rules: a `MapDef` must be a **module constant**, never rebuilt per round
-(`applySky` skips repainting eight megapixels of dome by comparing the environment
-by *identity*), and a map's display name is **passed to the UI, never written
-there** — through `setScoreboard`'s `map` field and `showRoundOver`. The
-`<h1>HOLLOWMERE</h1>` on the title screen is the deliberate exception: that one is
-the game's name, which happens also to be the first map's.
+The shipped maps are **Hollowmere** (night) and **Greyfen** (overcast dawn); the
+second was forked from the first's layout and is diverging, and the two share no
+module in either direction.
+
+Three rules:
+
+- A `MapDef` must be a **module constant**, never rebuilt per round, and anything
+  resolving one — `readMap()` from `localStorage`, say — must return an entry **out
+  of `MAPS`** rather than a copy. `applySky` skips repainting eight megapixels of
+  dome by comparing the environment by *identity*, so a spread-together `MapDef`
+  fails that test open and repaints the sky, two fBm cloud masks included, on every
+  round start. Nothing throws; it is a hitch with nothing in the profile to blame.
+- **`Game.mapDef` may only be written from the `menu` state** (`Game.setMap`
+  enforces it). `startRound` reads it to apply the environment, paint the sky and
+  build the map, then hands the result to battle, conquest, the flag markers and the
+  minimap — a write at any other time leaves all four pointing into a `GameMap` that
+  `installMap` has already disposed.
+- A map's display name and its **flag count** are **passed to the UI, never written
+  there** — through `setScoreboard`'s `map` field, `showRoundOver`, and
+  `MenuState.flagCount`. The `<h1>HOLLOWMERE</h1>` on the title screen is the
+  deliberate exception: that one is the game's name, which happens also to be the
+  first map's. The tagline beside it is *not* — it states the flag count, and that
+  is the chosen map's.
+
+**Five globals are per-map overrides on `EnvironmentSpec`, each defaulting to its
+`CONFIG` value** — so a map that says nothing gets exactly the shipped look. They
+exist because each turned out to be a statement about Hollowmere rather than about
+the game: `sky.discRadius` (0 draws no disc **and** switches the god rays off, via
+the zero-`moonDir` contract `Sky.clear` already documents), `sky.haloStrength`,
+`grade` (the map scales the horror grade; the PLAYER still decides whether it runs
+at all), `groundSpec` (the wet cobble sheen, which `config.ts` warns is tuned to the
+key light's elevation), and `lighting.lampIntensity` (0 removes the player's
+shoulder lamp, which otherwise spends one of the sixteen light slots).
+
+**`groundSpec` is re-applied over the material cache, not folded into the cache
+key**, and that is the whole reason it works. `getGlossy` keys on `\0gloss-<hex>`
+and `getGroundTextured` on `\0ground-<key>-spec-bump`; neither includes the spec's
+*values*, and `CelMaterialFactory` outlives a map — so the second map to ask for the
+same colour silently gets the first map's material, uniforms and all. `setGroundSpec`
+walks the cache the way `setEnvironment` already does. `getGroundTextured` also takes
+the stored override rather than its caller's values, because materials are built
+during `installMap`, which runs *after* `applyEnvironment`: a fresh material would
+otherwise be born with the shipped night sheen and never revisited.
 
 **The floor is a height field, not a flat plane.** A `Heightfield` in the layout
 feeds a `TerrainField` (`src/world/TerrainField.ts`), the one place the ground's
@@ -1179,6 +1217,23 @@ how `TERRACE_H` and `Math.PI / 2` survive on a rewritten line (comparison is aga
 a deep snapshot taken when the editor opened, so nothing ever evaluates those
 expressions); a **deleted** entry's line goes with it and nothing around it moves;
 an **added** entry is written fresh at the end of its array.
+
+**A `LayoutSaver` is bound to ONE map, by id, and checks that it is.** The id picks
+the source text (out of an `import.meta.glob` of every `world/*/layout.ts` — a `?raw`
+specifier is static and cannot be chosen at runtime), both write paths, and the
+heights module's export name. Every map's `layout.ts` has the same *shape*, so a
+saver holding map A's text and handed map B's layout patches the wrong file and
+mostly **succeeds** at it — the one failure mode here that loses work with a clean
+"saved" in the status bar. The constructor refuses unless the source it found
+declares that map's own `export const <MapId>Layout`, failing into `blocked` rather
+than throwing. `serializeHeights` takes the id for the same reason: it writes the
+`export const <MapId>Heights` that map's `layout.ts` imports, and a wrong name there
+is a checkout that stops compiling after a terrain save.
+
+**`vite.config.ts`'s `WRITABLE` stays a literal table — two lines per map.** Path
+safety comes from the client's path only ever being *looked up* in it and never used
+to build a path, so a regex or a directory listing trades the guarantee for
+convenience in the one tool here that writes to disk.
 
 Add and delete work because entries are matched to source lines by **object
 identity**, not position — a `WeakMap` from the live layout entry to `{ line, values
