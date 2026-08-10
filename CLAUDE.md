@@ -887,15 +887,37 @@ fog colour and range are baked in as literals. Re-baking therefore has to make
 Babylon forget the compiled programs, since it rebuilds a submesh's effect only
 when its *defines* change, which a re-bake does not.
 
-Two rules about that invalidation, both learned the hard way:
+Three rules about that invalidation, all learned the hard way:
 
-- **Forget the cache entry; never RELEASE the program.** Releasing deletes the GL
-  program while draw wrappers still point at the `Effect` — undefined behaviour,
-  and the kind that surfaces as damage to whatever renders *next* rather than to
-  the outline. Forgetting is enough to force a fresh compile and leaves anything
-  still holding the old effect drawing correctly with the old fog. It leaks a
-  program per fog change per define variant: a handful a session, against a class
-  of bug that cannot be reasoned about.
+- **Clear the draw wrappers FIRST and IMMEDIATELY, then forget the cache entry.**
+  `mesh.resetDrawCache()` defaults to `immediate = false`, which does not merely
+  drop each wrapper — it queues that wrapper's `Effect.dispose()` on the engine's
+  `endFrame`, and a dispose is a REF RELEASE: Babylon ref-counts an effect by how
+  many wrappers asked `createEffect` for it, and the release that reaches zero
+  deletes the GL program and drops the cache entry itself. Deleting the entry by
+  hand *first* desynchronises that count. The bake runs inside `startRound`, so
+  the order was: forget the entry, clear ~500 wrappers with their releases still
+  pending, build and render the new map (which compiles a fresh effect, the entry
+  being gone, and hands it to every wrapper the frame rebuilds), and only then, at
+  `endFrame`, do the queued releases land and take a LIVE generation to zero — its
+  program deleted under the wrappers still pointing at it. **The map is rebuilt
+  after the bake, so its meshes are innocent and the damage lands only on what
+  SURVIVES a map change: the pooled bot rigs and the viewmodel.** Their outline
+  shells then draw from a deleted program as garbage that swallows the body it
+  belongs to — on Greyfen's pale fog a squad reads as flat yellow cut-outs of
+  itself, measured at 534 of 642 outline wrappers holding a freed effect one
+  switch in and compounding with every further switch, while on Hollowmere the
+  same garbage is near-black against near-black and invisible. Resetting
+  immediately puts the releases back inside the bake, where the last one frees the
+  effect with nothing holding it; the delete that follows is a backstop that can
+  now strand nobody. `_releaseEffect` is still not the way to do it — it deletes
+  the program on the spot, wrappers or no wrappers.
+- **Scope that reset to the outline PASSES, not the whole mesh.** An unscoped
+  `resetDrawCache` disposes every material's wrapper too, and disposing is a
+  release: with nothing else holding them the cel materials, the sky and the
+  post-process chain lose their programs and recompile. Measured on a map change:
+  15 recompiles unscoped against the 1 the outline itself owes.
+  `OutlineRenderer` keeps its four render-pass ids in `_passIdForDrawWrapper`.
 - **Reset the draw cache of EVERY mesh in the scene, and never filter that walk.**
   The reset is the whole mechanism, not a belt-and-braces beside the cache delete:
   `OutlineRenderer.isReady` asks the engine for an effect only when its *defines*
@@ -912,7 +934,8 @@ Two rules about that invalidation, both learned the hard way:
   `#c2ccd4`, which at the fog wall IS the ink: each rig's nine merged meshes read
   as white slivers scattered over the village, and it survived a whole session
   because a fresh boot has only one bake and nothing stale to keep. Unfiltered
-  costs 7.1 ms for 1,910 meshes once per fog change, beside a ~570 ms map build.
+  costs 4.9 ms for 1,910 meshes across the four passes, once per fog change,
+  beside a ~570 ms map build.
   `setOutlineFog` owns its own invalidation for exactly this reason — the first
   cut split it across the caller and got that list wrong.
 

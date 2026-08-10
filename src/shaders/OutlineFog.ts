@@ -125,6 +125,28 @@ gl_FragColor = vec4(mix(gl_FragColor.rgb, vec3(${glsl(color.r)}, ${glsl(color.g)
 }
 
 /**
+ * The four render passes `OutlineRenderer` keeps a draw wrapper per — outline
+ * and overlay, each in its before- and after-mesh half.
+ *
+ * Naming them is what keeps `dropCompiled` from resetting the draw cache of
+ * every PASS as well as every mesh. An unscoped reset also disposes each
+ * material's wrapper, and disposing is a ref release: with nothing else holding
+ * them, the cel materials, the sky and the post-process chain all lose their
+ * programs and recompile on the next frame. Measured on a map change: 15
+ * recompiles unscoped against the 1 these passes owe — the outline itself.
+ *
+ * Returns null rather than guessing if Babylon ever stops keeping them here;
+ * the caller falls back to the unscoped reset, which is slower and correct.
+ */
+function outlinePassIds(scene: Scene): number[] | null {
+  const ids = (
+    scene.getOutlineRenderer() as unknown as { _passIdForDrawWrapper?: unknown }
+  )._passIdForDrawWrapper;
+  if (!Array.isArray(ids) || ids.length === 0) return null;
+  return ids.every((id) => typeof id === "number") ? (ids as number[]) : null;
+}
+
+/**
  * Forgets every compiled outline program so the next draw compiles the re-baked
  * source, and drops the draw wrappers still pointing at the old one. The cache
  * is keyed `"<vertex>+<fragment>@<defines>"` and the outline pass names both
@@ -133,14 +155,13 @@ gl_FragColor = vec4(mix(gl_FragColor.rgb, vec3(${glsl(color.r)}, ${glsl(color.g)
  * recompile the cel materials, the post-process chain and the sky on every
  * round start.
  *
- * **The cache entry is deleted, NOT released, and that is deliberate.**
- * `_releaseEffect` would also delete the GL program, and a draw wrapper holding
- * that `Effect` then draws with a deleted program — undefined behaviour, and
- * the sort that shows up as damage to whatever renders next rather than to the
- * outline. Forgetting the entry alone is enough to force a fresh compile, and
- * leaves anything still holding the old effect drawing correctly with the old
- * fog. The cost is a leaked program per fog change per define variant: a
- * handful over a session, against a class of bug that cannot be reasoned about.
+ * **`_releaseEffect` is still not the way to do it.** It deletes the GL program
+ * on the spot, and a draw wrapper holding that `Effect` then draws with a
+ * deleted program — undefined behaviour, and the sort that shows up as damage to
+ * whatever renders next rather than to the outline. Clearing the wrappers first
+ * and letting the count fall is the same freeing done in the one order where
+ * nothing is left pointing at it; see the note on immediacy below, which is the
+ * bug that taught this file the difference.
  *
  * **The reset is what actually re-bakes anything; the cache delete alone does
  * nothing.** `OutlineRenderer.isReady` asks the engine for an effect only when
@@ -164,15 +185,52 @@ gl_FragColor = vec4(mix(gl_FragColor.rgb, vec3(${glsl(color.r)}, ${glsl(color.g)
  * ~40 meshes, which set `renderOutline` by hand and never register (distance
  * thinning is meaningless 0.5 m from the lens). There is no cheap set that is
  * right, because anything may have the flag flipped on later; the whole scene is
- * the honest answer, and it is affordable: 7.1 ms for Hollowmere's 1,910 meshes,
- * once per fog change, against the ~570 ms the map build beside it costs. Only
- * the outline keys are dropped, so everything else re-fetches its effect from the
- * cache on the next frame rather than recompiling.
+ * the honest answer, and it is affordable: 4.9 ms for Hollowmere's 1,910 meshes
+ * across the four outline passes, once per fog change, against the ~570 ms the
+ * map build beside it costs. Only the outline keys are dropped, so everything
+ * else re-fetches its effect from the cache on the next frame rather than
+ * recompiling.
+ *
+ * **The reset must be IMMEDIATE, and it must come BEFORE the cache delete.**
+ * `resetDrawCache()` defaults to `immediate = false`, which does not merely
+ * forget each discarded wrapper — it QUEUES that wrapper's `Effect.dispose()` on
+ * the engine's `endFrame` observable, and a dispose is a REF RELEASE: Babylon
+ * ref-counts an effect by how many wrappers asked `createEffect` for it, and the
+ * one that takes the count to zero deletes the GL program and removes the cache
+ * entry itself. Deleting the entry by hand first is what desynchronises that
+ * count. The bake happens inside `startRound`, so the order used to be: forget
+ * the entry, clear ~500 wrappers with their releases still pending, build and
+ * render the new map — which compiles a fresh effect (the entry is gone) and
+ * hands it to every wrapper the frame rebuilds — and only THEN, at `endFrame`,
+ * do the queued releases land and drive a live generation's count to zero. Its
+ * program is deleted under the wrappers still pointing at it, which is precisely
+ * the undefined behaviour this comment used to promise `delete` avoided.
+ *
+ * What it looks like is the whole point: the map is rebuilt after the bake, so
+ * its meshes are innocent, and the damage lands only on the geometry that
+ * SURVIVES a map change — the pooled bot rigs and the viewmodel. Their outline
+ * shells draw from a deleted program as garbage that swallows the body it
+ * belongs to, so on Greyfen's pale fog a squad reads as flat yellow cut-outs of
+ * itself (measured: 534 of 642 outline wrappers holding a freed effect one
+ * switch in, and it compounds with every further switch). On Hollowmere the same
+ * garbage is near-black against near-black and invisible, which is why this
+ * survived a whole map.
+ *
+ * Resetting immediately puts the releases back inside the bake, where the last
+ * one frees the effect while nothing holds it and Babylon drops its own cache
+ * entry. The delete that follows is a backstop for the case where some ref
+ * outlives the walk: by then no wrapper points at the effect, so forgetting it
+ * strands nobody and costs at worst a leaked program.
  *
  * This is the only place the game touches Babylon's effect cache. There is no
  * public equivalent: `createEffect` never consults the source it caches.
  */
 function dropCompiled(scene: Scene): void {
+  const passes = outlinePassIds(scene);
+  for (const mesh of scene.meshes) {
+    if (passes) for (const pass of passes) mesh.resetDrawCache(pass, true);
+    else mesh.resetDrawCache(undefined, true);
+  }
   const cache = (
     scene.getEngine() as unknown as { _compiledEffects?: Record<string, unknown> }
   )._compiledEffects;
@@ -181,7 +239,6 @@ function dropCompiled(scene: Scene): void {
       if (key.startsWith("outline+outline@")) delete cache[key];
     }
   }
-  for (const mesh of scene.meshes) mesh.resetDrawCache();
 }
 
 let bakedKey = "";
