@@ -4,7 +4,7 @@
  * owns nothing that applies them (that is `Game.applySettings`).
  * Invariants: every field is read INDEPENDENTLY, so a key added later cannot
  * invalidate what an older build stored; storage throwing is never fatal, the
- * same tolerance `readDifficulty` and friends already have in Game.ts.
+ * same tolerance `readDifficulty` and friends have in [`prefs.ts`](prefs.ts).
  */
 import { CONFIG } from "../config";
 

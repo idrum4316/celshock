@@ -38,11 +38,17 @@ src/
     sky.ts              # The painted sky and moon shafts (sky, godRays)
     teams.ts            # The two sides; index 0 is the player's
   core/
-    Game.ts             # Orchestrator + state machine + main loop
+    Game.ts             # Orchestrator + state machine + main loop. Constructor
+                        #   is construction only; wiring is wireSystems (+ four
+                        #   subject methods), installDomListeners, wireScreens;
+                        #   tick dispatches one method per screen
     InputManager.ts     # Keyboard/mouse + gamepad state + rumble
     CameraSystem.ts     # First-person cam at the eye; ADS zooms and slows by
                         #   the fitted optic, at the weapon's own rate
     Sfx.ts              # Procedural WebAudio, spatialised, voice-capped
+    prefs.ts            # Remembered difficulty, map and loadout: the
+                        #   localStorage round trip only. Ids that index a table
+                        #   are validated, never trusted
     settings.ts         # Settings shape, defaults, localStorage. Applies
                         #   nothing — that is Game.applySettings, the ONLY
                         #   place a setting reaches whatever owns it

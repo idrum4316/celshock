@@ -2,6 +2,18 @@
  * Game.ts — Orchestrator: engine/scene init, state machine, main loop, and ALL
  * cross-system wiring. The only place systems meet — systems never import each
  * other; new cross-system behavior is a callback wired here.
+ * WHERE THINGS ARE, because this is a long file and a change should not need a
+ * read of it: the constructor is CONSTRUCTION ONLY (a linear list of `new X`,
+ * which has to stay there — those fields are what strictPropertyInitialization
+ * checks) and ends in three calls. Cross-system callbacks are `wireSystems` and
+ * the four subject methods under it (`wireDeaths`, `wireGrenades`, `wireBattle`,
+ * `wireConquest`) — a new one goes in whichever names its subject. Browser
+ * listeners are `installDomListeners`. Screen callbacks are `wireScreens`.
+ * `tick` is a dispatch: the input handling for each screen is its own
+ * `update*Screen`/`updateMenuCard`/`updatePauseMenu` method, and only `playing`,
+ * `dying` and `editor` are inline, because they are two lines each.
+ * The remembered difficulty/map/loadout live in `prefs.ts`, the display
+ * settings in `settings.ts`; neither applies anything, that is this file's job.
  * State machine: menu -> deploy -> playing (deploy re-entered on each death)
  * -> roundover. The 3D scene renders live behind every state.
  * Load-bearing frame order at the end of updateGameplay: camera update ->
@@ -46,16 +58,8 @@ import { Bot } from "../entities/Bot";
 import { difficultyNames } from "../entities/BotSkill";
 import type { Combatant, Team } from "../entities/Combatant";
 import { Player } from "../entities/Player";
-import {
-  DEFAULT_SIGHT,
-  isSightId,
-  type SightId,
-} from "../entities/sights";
-import {
-  DEFAULT_WEAPON,
-  isPrimaryWeaponId,
-  type PrimaryWeaponId,
-} from "../entities/weapons";
+import { type SightId } from "../entities/sights";
+import { type PrimaryWeaponId } from "../entities/weapons";
 import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
@@ -72,7 +76,7 @@ import { Sky } from "../systems/Sky";
 import { WaterSystem } from "../systems/WaterSystem";
 import { applyEnvironment, type EnvironmentSpec } from "../world/environment";
 import type { EditorSession } from "../editor";
-import { DEFAULT_MAP, MAPS, type MapDef } from "../world/maps";
+import { MAPS, type MapDef } from "../world/maps";
 import { MapBuilder, type BuildOptions, type GameMap } from "../world/MapBuilder";
 import { DeployScreen } from "../ui/DeployScreen";
 import { HUD, type CaptureStatus } from "../ui/HUD";
@@ -83,6 +87,16 @@ import { Minimap } from "../ui/Minimap";
 import { enterFullscreenOnTouch } from "../pwa/register";
 import { CameraSystem } from "./CameraSystem";
 import { InputManager } from "./InputManager";
+import {
+  readDifficulty,
+  readMap,
+  readSight,
+  readWeapon,
+  writeDifficulty,
+  writeMap,
+  writeSight,
+  writeWeapon,
+} from "./prefs";
 import { readSettings, writeSettings, type Settings } from "./settings";
 import { Sfx } from "./Sfx";
 
@@ -134,110 +148,6 @@ const EMPTY_PUSHERS: readonly Combatant[] = [];
  * a carried light nobody removes never gives its shader slot back.
  */
 const kitLampId = (n: number) => `kit-lamp-${n}`;
-
-/** Where the chosen enemy-skill tier is remembered between sessions. */
-const DIFFICULTY_KEY = "hollowmere.difficulty";
-/** …and the chosen map, by `MapDef.id`. */
-const MAP_KEY = "hollowmere.map";
-/** …and the loadout. Same store, same tolerance for it not working. */
-const SIGHT_KEY = "hollowmere.sight";
-const WEAPON_KEY = "hollowmere.weapon";
-
-function readDifficulty(): number {
-  try {
-    const raw = window.localStorage.getItem(DIFFICULTY_KEY);
-    const n = raw === null ? NaN : Number(raw);
-    if (Number.isFinite(n)) return n;
-  } catch {
-    // Private browsing and file:// both throw here. A default is fine.
-  }
-  return CONFIG.bots.skill.defaultDifficulty;
-}
-
-function writeDifficulty(tier: number): void {
-  try {
-    window.localStorage.setItem(DIFFICULTY_KEY, String(tier));
-  } catch {
-    // Not being able to remember the setting is not worth failing over.
-  }
-}
-
-/**
- * The remembered map, resolved by id against `MAPS`.
- *
- * It MUST return an entry out of that array rather than anything built here.
- * `applySky` skips repainting an 8-megapixel dome — two thousand stars, a
- * galactic band, a stretched halo and two fBm cloud masks — by comparing the
- * environment by OBJECT IDENTITY, so a `MapDef` assembled on the way past
- * fails that test open and repaints the whole sky on every round start. The
- * symptom is a hitch with nothing in the profile to point at it.
- */
-function readMap(): MapDef {
-  try {
-    const raw = window.localStorage.getItem(MAP_KEY);
-    const found = MAPS.find((m) => m.id === raw);
-    if (found) return found;
-  } catch {
-    // As above. An unknown id also lands here, which is the same answer.
-  }
-  return DEFAULT_MAP;
-}
-
-function writeMap(id: string): void {
-  try {
-    window.localStorage.setItem(MAP_KEY, id);
-  } catch {
-    // As above.
-  }
-}
-
-/**
- * The remembered optic. Validated rather than trusted: the value is a string
- * out of a store the player can edit, and a sight that no longer exists would
- * otherwise index the assembly table with `undefined`.
- */
-function readSight(): SightId {
-  try {
-    const raw = window.localStorage.getItem(SIGHT_KEY);
-    if (raw !== null && isSightId(raw)) return raw;
-  } catch {
-    // As above.
-  }
-  return DEFAULT_SIGHT;
-}
-
-function writeSight(id: SightId): void {
-  try {
-    window.localStorage.setItem(SIGHT_KEY, id);
-  } catch {
-    // As above.
-  }
-}
-
-/**
- * The remembered weapon. Validated exactly as the optic is, and for the same
- * reason: it indexes a table of built models. The test is the PRIMARY one, so
- * a store holding "pistol" — which is a real weapon id, just not one the kit
- * offers — falls back to the default rather than putting the sidearm in both
- * hands with nothing to swap to.
- */
-function readWeapon(): PrimaryWeaponId {
-  try {
-    const raw = window.localStorage.getItem(WEAPON_KEY);
-    if (raw !== null && isPrimaryWeaponId(raw)) return raw;
-  } catch {
-    // As above.
-  }
-  return DEFAULT_WEAPON;
-}
-
-function writeWeapon(id: PrimaryWeaponId): void {
-  try {
-    window.localStorage.setItem(WEAPON_KEY, id);
-  } catch {
-    // As above.
-  }
-}
 
 /**
  * Top-level orchestrator: owns the engine/scene, all systems, the game state
@@ -502,13 +412,55 @@ export class Game {
     this.sky = new Sky(this.scene, glow);
     this.applySky();
 
-    // --- system wiring ---
+    // Everything above is CONSTRUCTION, and stays here because the fields it
+    // assigns are what `strictPropertyInitialization` checks. Everything below
+    // is wiring, and lives in a named method so a change has an obvious
+    // destination — see `wireSystems` for the rule they all serve.
+    this.wireSystems();
+    this.installDomListeners(canvas);
+    this.wireScreens();
+    // Apply the remembered kit before anything is drawn: the viewmodel is
+    // built with the defaults and the camera's zoom follows from the fit, so
+    // deploying straight off a reload must not start on the wrong weapon.
+    this.applyLoadout();
+    // …and the remembered display settings, for the same reason: the blur is
+    // attached by its own constructor, so a stored "off" has to be applied
+    // before the first frame rather than on the first visit to the screen.
+    this.applySettings();
+    this.showMenu();
+    // Debug/test handle (used by automated smoke tests).
+    (window as unknown as { __celshock: Game }).__celshock = this;
+    this.engine.runRenderLoop(() => this.tick());
+  }
+
+  /**
+   * Installs every cross-system callback. **This is the wiring rule's one
+   * home**: systems never import each other, so anything one has to tell
+   * another is a callback assigned here or in one of the four methods below.
+   *
+   * Split by SUBJECT rather than by system, because that is how a change
+   * arrives — a grenade behaviour is `wireGrenades`, a death is
+   * `wireDeaths`. Order is irrelevant: these are property assignments on
+   * objects the constructor has already built, and none reads another.
+   */
+  private wireSystems(): void {
     // Systems never import each other; every cross-system behaviour is a
     // callback installed here.
     this.player.onDamaged = (amount, died, from) =>
       this.onPlayerDamaged(amount, died, from);
     this.battle.setPlayer(this.player);
     this.battle.onBotKilled = (bot, killer) => this.registerBotKill(bot, killer, false);
+    this.wireDeaths();
+    this.wireGrenades();
+    this.wireBattle();
+    this.wireConquest();
+  }
+
+  /**
+   * Corpses: where a fallen body's shadow goes, and how the death cam borrows
+   * the same ragdoll pool every bot goes through.
+   */
+  private wireDeaths(): void {
     // A corpse under physics is metres from where its feet were when it died,
     // and `Bot.position` stops updating at that moment — so the body itself
     // has to say where its shadow goes. Only the ragdoll system knows; every
@@ -540,6 +492,12 @@ export class Game {
     this.deathCam.onSpawnRagdoll = (corpse) =>
       this.ragdolls.spawn(corpse, this.cameraSys.camera.position, true);
     this.deathCam.onRetireRagdoll = (corpse) => this.ragdolls.retire(corpse);
+  }
+
+  /**
+   * The one non-hitscan weapon: who a blast may hurt, and what a hit reports.
+   */
+  private wireGrenades(): void {
     // Grenades resolve their blast against the thrower's own target list, the
     // same way a bullet does — so friendly fire is excluded by construction
     // here too, and this system never learns what a team is.
@@ -557,6 +515,13 @@ export class Game {
     // solve it cannot make returns false and the bot spends nothing.
     this.battle.throwGrenadeFor = (from, at, team) =>
       this.grenades.throwAt(from, at, team, false);
+  }
+
+  /**
+   * What the bots need from the rest of the game: their sounds, their spawns,
+   * their squad orders, and what standing on a flag means to them.
+   */
+  private wireBattle(): void {
     // Bots fire constantly and all over the map, so their shots are
     // spatialised and voice-capped rather than played flat like the player's.
     this.battle.onBotFired = (bot, at) => {
@@ -594,6 +559,12 @@ export class Game {
       if (!p || p.def.id !== bot.objective) return "none";
       return bot.defending && p.owner === bot.team ? "hold" : "contest";
     };
+  }
+
+  /**
+   * Flags changing hands, and the two ways the player is told about it.
+   */
+  private wireConquest(): void {
     this.conquest.onCaptured = (point, by) => {
       if (by === this.player.team) this.sfx.capture();
       else this.sfx.flagLost();
@@ -603,8 +574,18 @@ export class Game {
     this.conquest.onNeutralised = (point) => {
       this.hud.toast(`${point.def.name} — neutralised`);
     };
-    this.deployScreen.onDeploy = (spawn) => this.spawnPlayer(spawn);
+  }
 
+  /**
+   * The browser-facing listeners: the user gesture that unlocks audio and takes
+   * the pointer, the pointer-lock transition that PAUSES the round (read the
+   * block below before changing it — Escape belongs to the UA, so the
+   * transition is the trigger rather than the key), resize/orientation, and the
+   * dev-only F2.
+   *
+   * Never removed: `Game` lives as long as the page does.
+   */
+  private installDomListeners(canvas: HTMLCanvasElement): void {
     // Pointer lock + audio unlock must happen inside a user gesture.
     // (pointerdown, not click: Babylon may preventDefault the pointer event,
     // which suppresses the compatibility click event entirely.)
@@ -663,7 +644,16 @@ export class Game {
         }
       });
     }
+  }
 
+  /**
+   * The interface talking back: every screen's callbacks into `Game`.
+   *
+   * These are the only route from a click to a state change, which is why the
+   * Deploy handlers are guarded on the state rather than trusted — the markup
+   * they are bound to is thrown away and rebuilt around them.
+   */
+  private wireScreens(): void {
     this.overlayScreen.onDifficulty = (tier) => this.setDifficulty(tier);
     this.overlayScreen.onMap = (index) => this.setMap(index);
     this.overlayScreen.onOpenLoadout = () => this.openLoadout();
@@ -690,19 +680,9 @@ export class Game {
       else if (action === "restart") this.startRound();
       else this.enterMenu();
     };
-    // Apply the remembered kit before anything is drawn: the viewmodel is
-    // built with the defaults and the camera's zoom follows from the fit, so
-    // deploying straight off a reload must not start on the wrong weapon.
-    this.applyLoadout();
-    // …and the remembered display settings, for the same reason: the blur is
-    // attached by its own constructor, so a stored "off" has to be applied
-    // before the first frame rather than on the first visit to the screen.
-    this.applySettings();
-    this.showMenu();
-    // Debug/test handle (used by automated smoke tests).
-    (window as unknown as { __celshock: Game }).__celshock = this;
-    this.engine.runRenderLoop(() => this.tick());
+    this.deployScreen.onDeploy = (spawn) => this.spawnPlayer(spawn);
   }
+
 
   /**
    * Dresses the sky and hands the moon shafts their colour. The two belong
@@ -1086,140 +1066,19 @@ export class Game {
     switch (this.state) {
       case "menu":
       case "roundover":
-        this.overlayT += dt;
-        // Menu only: `roundover` shares the overlay element but shows the
-        // victory text, and redrawing the picker over it would wipe the result.
-        if (this.state === "menu") {
-          // The menu is a LIST: up/down move the cursor, left/right step
-          // whatever it is resting on, and A fires it. The dedicated keys below
-          // are accelerators now rather than the only way to reach a row —
-          // which is what they were, and is why a pad could not open the
-          // settings screen from here at all.
-          if (this.input.menuUpPressed) this.overlayScreen.moveMenuSelection(-1);
-          if (this.input.menuDownPressed) this.overlayScreen.moveMenuSelection(1);
-          if (this.input.menuLeftPressed) this.overlayScreen.stepMenuItem(-1);
-          if (this.input.menuRightPressed) this.overlayScreen.stepMenuItem(1);
-          // Enter and pad A fire the cursor's row, and BREAK — they raise
-          // `confirmPressed` on the same frame, and the fall-through below
-          // would otherwise start the round out from under whichever screen
-          // the row just opened. The same shape the paused branch uses to keep
-          // Start from confirming behind its own resume.
-          if (this.input.menuConfirmPressed && this.overlayT > 0.5) {
-            this.overlayScreen.activateMenu();
-            break;
-          }
-          if (this.input.loadoutPressed) {
-            this.openLoadout();
-            break;
-          }
-          if (this.input.settingsPressed) {
-            this.openSettings();
-            break;
-          }
-        }
-        // What is left of the confirm is Enter, pad A and Start — no pointer
-        // at all. On the menu card the first two have already been spent on the
-        // cursor's row and broken out above, so this is Start, "start the game"
-        // wherever the cursor happens to be resting; on the round-over card,
-        // which has no cursor to fire, it is all three. The mouse and a tap
-        // deploy through the Deploy button and nowhere else, or a click on the
-        // map or difficulty row would start the round out from under the pick.
-        if (this.input.confirmPressed && this.overlayT > 0.5) {
-          this.startRound();
-        }
+        this.updateMenuCard(dt);
         break;
       case "deploy":
-        if (this.input.pausePressed) {
-          this.pause();
-          break;
-        }
-        // The same key, and the reason the deploy screen offers it at all:
-        // the wait for reinforcements is the one moment inside a round when
-        // the weapon is already put away.
-        if (this.input.loadoutPressed) {
-          this.openLoadout();
-          break;
-        }
-        if (this.input.settingsPressed) {
-          this.openSettings();
-          break;
-        }
-        this.respawnT -= dt;
-        // Stepped before the redraw, so the marker and the status line move on
-        // the frame the key was pressed. Both axes step the same list — the
-        // spawns are a handful of points scattered over a map rather than a
-        // row or a column, so there is no axis that "means" anything, and a
-        // d-pad direction that does nothing reads as a screen that ignores the
-        // pad.
-        if (this.input.menuRightPressed || this.input.menuDownPressed) {
-          this.deployScreen.moveSelection(1);
-        }
-        if (this.input.menuLeftPressed || this.input.menuUpPressed) {
-          this.deployScreen.moveSelection(-1);
-        }
-        this.deployScreen.update(this.respawnT);
-        // Enter / gamepad A deploys at the current selection; the map takes its
-        // own clicks and the kit button takes its own, so the MOUSE IS LEFT OUT
-        // (`menuConfirmPressed`) — the same rule the pause and kit screens
-        // follow, and here it is load-bearing rather than tidy. The menu's
-        // Deploy button changes the state on the down edge, which puts this
-        // case in front of the very click that asked for it; a confirm that
-        // counted the mouse would deploy the player through the screen they
-        // just opened, at whichever spawn the list happened to start on.
-        if (this.input.menuConfirmPressed) this.deployScreen.confirm();
+        this.updateDeployScreen(dt);
         break;
       case "loadout":
-        // Two axes, two slots: up/down chooses which half of the kit is being
-        // edited, left/right steps through it. Back, confirm and pause all
-        // close — there is nothing to confirm here, every pick has already been
-        // applied to the weapon behind the screen, so B and A do the same
-        // thing and B is the one a pad player will reach for. The mouse is left
-        // out of the confirm (`menuConfirmPressed`) because a click on the
-        // empty half of the screen is not a choice, the same rule the pause
-        // menu follows.
-        if (
-          this.input.menuBackPressed ||
-          this.input.pausePressed ||
-          this.input.menuConfirmPressed ||
-          this.input.loadoutPressed
-        ) {
-          this.closeLoadout();
-          break;
-        }
-        if (this.input.menuUpPressed) this.loadoutScreen.moveSlot(-1);
-        if (this.input.menuDownPressed) this.loadoutScreen.moveSlot(1);
-        if (this.input.menuLeftPressed) this.loadoutScreen.cycle(-1);
-        if (this.input.menuRightPressed) this.loadoutScreen.cycle(1);
-        this.updateKitStage(dt);
+        this.updateLoadoutScreen(dt);
         break;
       case "settings":
-        // Up/down picks the row, left/right and Enter flip it. The confirm is
-        // NOT an exit here, which is the one place this screen departs from the
-        // kit screen's shape: a boolean has nothing to step through, so A and
-        // Enter are the natural "toggle this" and spending them on closing
-        // would leave a pad with no way to change a setting at all. B, Escape
-        // and `O` are the ways out, and every pick is already applied.
-        if (
-          this.input.menuBackPressed ||
-          this.input.pausePressed ||
-          this.input.settingsPressed
-        ) {
-          // B is the pad's crouch toggle as well; the press that closed this
-          // screen has already flipped the latch behind it. Same correction the
-          // pause branch and `spawnPlayer` make, and for the same reason.
-          if (this.input.menuBackPressed) this.input.clearCrouchToggle();
-          this.closeSettings();
-          break;
-        }
-        if (this.input.menuUpPressed) this.settingsScreen.moveRow(-1);
-        if (this.input.menuDownPressed) this.settingsScreen.moveRow(1);
-        if (
-          this.input.menuLeftPressed ||
-          this.input.menuRightPressed ||
-          this.input.menuConfirmPressed
-        ) {
-          this.settingsScreen.toggleRow();
-        }
+        this.updateSettingsScreen();
+        break;
+      case "paused":
+        this.updatePauseMenu();
         break;
       case "playing":
         if (this.input.pausePressed) {
@@ -1237,35 +1096,6 @@ export class Game {
           break;
         }
         this.updateDeathCam(dt);
-        break;
-      case "paused":
-        // Pause is checked first and breaks: Start raises `pausePressed` and
-        // `confirmPressed` on the same frame, and resuming must not also fire
-        // whichever item the selection happens to be on.
-        // B backs out of a pause the same way it backs out of the kit screen:
-        // the lid comes off and the state under it comes back, which is what
-        // "Resume" does anyway.
-        if (this.input.pausePressed || this.input.menuBackPressed) {
-          // B is also the pad's crouch toggle, so the press that lifted the lid
-          // has already flipped the latch. Only a B resume owes the correction
-          // — clearing it on every resume would stand up a player who paused
-          // deliberately crouched behind cover.
-          if (this.input.menuBackPressed) this.input.clearCrouchToggle();
-          this.resume();
-          break;
-        }
-        // The one lid that can be raised over another. Checked after the
-        // resume, so a frame carrying both keys ends the pause rather than
-        // opening a screen over a round that is about to un-hold.
-        if (this.input.settingsPressed) {
-          this.openSettings();
-          break;
-        }
-        if (this.input.menuUpPressed) this.overlayScreen.movePauseSelection(-1);
-        if (this.input.menuDownPressed) this.overlayScreen.movePauseSelection(1);
-        // Keyboard/pad confirm only — the buttons handle their own clicks, and
-        // a click on the empty half of the screen is not a menu choice.
-        if (this.input.menuConfirmPressed) this.overlayScreen.activatePause();
         break;
       case "editor":
         this.updateEditor(dt);
@@ -1296,6 +1126,199 @@ export class Game {
     // authoring tool.
     this.motionBlur.update(this.cameraSys.aimYaw, this.cameraSys.aimPitch);
     this.scene.render();
+  }
+
+  /**
+   * The title card and the round-over card, which share one overlay element.
+   *
+   * The menu is a LIST — the cursor keys move and step it, and the dedicated
+   * keys are accelerators rather than the only way to reach a row. The
+   * round-over card has no cursor, so it only takes the confirm.
+   */
+  private updateMenuCard(dt: number): void {
+    this.overlayT += dt;
+    // Menu only: `roundover` shares the overlay element but shows the
+    // victory text, and redrawing the picker over it would wipe the result.
+    if (this.state === "menu") {
+      // The menu is a LIST: up/down move the cursor, left/right step
+      // whatever it is resting on, and A fires it. The dedicated keys below
+      // are accelerators now rather than the only way to reach a row —
+      // which is what they were, and is why a pad could not open the
+      // settings screen from here at all.
+      if (this.input.menuUpPressed) this.overlayScreen.moveMenuSelection(-1);
+      if (this.input.menuDownPressed) this.overlayScreen.moveMenuSelection(1);
+      if (this.input.menuLeftPressed) this.overlayScreen.stepMenuItem(-1);
+      if (this.input.menuRightPressed) this.overlayScreen.stepMenuItem(1);
+      // Enter and pad A fire the cursor's row, and BREAK — they raise
+      // `confirmPressed` on the same frame, and the fall-through below
+      // would otherwise start the round out from under whichever screen
+      // the row just opened. The same shape the paused branch uses to keep
+      // Start from confirming behind its own resume.
+      if (this.input.menuConfirmPressed && this.overlayT > 0.5) {
+        this.overlayScreen.activateMenu();
+        return;
+      }
+      if (this.input.loadoutPressed) {
+        this.openLoadout();
+        return;
+      }
+      if (this.input.settingsPressed) {
+        this.openSettings();
+        return;
+      }
+    }
+    // What is left of the confirm is Enter, pad A and Start — no pointer
+    // at all. On the menu card the first two have already been spent on the
+    // cursor's row and broken out above, so this is Start, "start the game"
+    // wherever the cursor happens to be resting; on the round-over card,
+    // which has no cursor to fire, it is all three. The mouse and a tap
+    // deploy through the Deploy button and nowhere else, or a click on the
+    // map or difficulty row would start the round out from under the pick.
+    if (this.input.confirmPressed && this.overlayT > 0.5) {
+      this.startRound();
+    }
+  }
+
+  /**
+   * Waiting out a respawn: step the reinforcement clock, drive the spawn
+   * picker, and take the confirm that deploys.
+   */
+  private updateDeployScreen(dt: number): void {
+    if (this.input.pausePressed) {
+      this.pause();
+      return;
+    }
+    // The same key, and the reason the deploy screen offers it at all:
+    // the wait for reinforcements is the one moment inside a round when
+    // the weapon is already put away.
+    if (this.input.loadoutPressed) {
+      this.openLoadout();
+      return;
+    }
+    if (this.input.settingsPressed) {
+      this.openSettings();
+      return;
+    }
+    this.respawnT -= dt;
+    // Stepped before the redraw, so the marker and the status line move on
+    // the frame the key was pressed. Both axes step the same list — the
+    // spawns are a handful of points scattered over a map rather than a
+    // row or a column, so there is no axis that "means" anything, and a
+    // d-pad direction that does nothing reads as a screen that ignores the
+    // pad.
+    if (this.input.menuRightPressed || this.input.menuDownPressed) {
+      this.deployScreen.moveSelection(1);
+    }
+    if (this.input.menuLeftPressed || this.input.menuUpPressed) {
+      this.deployScreen.moveSelection(-1);
+    }
+    this.deployScreen.update(this.respawnT);
+    // Enter / gamepad A deploys at the current selection; the map takes its
+    // own clicks and the kit button takes its own, so the MOUSE IS LEFT OUT
+    // (`menuConfirmPressed`) — the same rule the pause and kit screens
+    // follow, and here it is load-bearing rather than tidy. The menu's
+    // Deploy button changes the state on the down edge, which puts this
+    // case in front of the very click that asked for it; a confirm that
+    // counted the mouse would deploy the player through the screen they
+    // just opened, at whichever spawn the list happened to start on.
+    if (this.input.menuConfirmPressed) this.deployScreen.confirm();
+  }
+
+  /**
+   * The kit screen. Two axes for two slots, and every way out closes it —
+   * there is nothing to confirm, each pick is already on the weapon behind.
+   */
+  private updateLoadoutScreen(dt: number): void {
+    // Two axes, two slots: up/down chooses which half of the kit is being
+    // edited, left/right steps through it. Back, confirm and pause all
+    // close — there is nothing to confirm here, every pick has already been
+    // applied to the weapon behind the screen, so B and A do the same
+    // thing and B is the one a pad player will reach for. The mouse is left
+    // out of the confirm (`menuConfirmPressed`) because a click on the
+    // empty half of the screen is not a choice, the same rule the pause
+    // menu follows.
+    if (
+      this.input.menuBackPressed ||
+      this.input.pausePressed ||
+      this.input.menuConfirmPressed ||
+      this.input.loadoutPressed
+    ) {
+      this.closeLoadout();
+      return;
+    }
+    if (this.input.menuUpPressed) this.loadoutScreen.moveSlot(-1);
+    if (this.input.menuDownPressed) this.loadoutScreen.moveSlot(1);
+    if (this.input.menuLeftPressed) this.loadoutScreen.cycle(-1);
+    if (this.input.menuRightPressed) this.loadoutScreen.cycle(1);
+    this.updateKitStage(dt);
+  }
+
+  /**
+   * The settings list. The one screen where the confirm is NOT an exit: a
+   * boolean has nothing to step through, so A and Enter flip the row.
+   */
+  private updateSettingsScreen(): void {
+    // Up/down picks the row, left/right and Enter flip it. The confirm is
+    // NOT an exit here, which is the one place this screen departs from the
+    // kit screen's shape: a boolean has nothing to step through, so A and
+    // Enter are the natural "toggle this" and spending them on closing
+    // would leave a pad with no way to change a setting at all. B, Escape
+    // and `O` are the ways out, and every pick is already applied.
+    if (
+      this.input.menuBackPressed ||
+      this.input.pausePressed ||
+      this.input.settingsPressed
+    ) {
+      // B is the pad's crouch toggle as well; the press that closed this
+      // screen has already flipped the latch behind it. Same correction the
+      // pause branch and `spawnPlayer` make, and for the same reason.
+      if (this.input.menuBackPressed) this.input.clearCrouchToggle();
+      this.closeSettings();
+      return;
+    }
+    if (this.input.menuUpPressed) this.settingsScreen.moveRow(-1);
+    if (this.input.menuDownPressed) this.settingsScreen.moveRow(1);
+    if (
+      this.input.menuLeftPressed ||
+      this.input.menuRightPressed ||
+      this.input.menuConfirmPressed
+    ) {
+      this.settingsScreen.toggleRow();
+    }
+  }
+
+  /**
+   * The pause list. Nothing simulates while it is up; this only moves the
+   * cursor and takes the choice.
+   */
+  private updatePauseMenu(): void {
+    // Pause is checked first and breaks: Start raises `pausePressed` and
+    // `confirmPressed` on the same frame, and resuming must not also fire
+    // whichever item the selection happens to be on.
+    // B backs out of a pause the same way it backs out of the kit screen:
+    // the lid comes off and the state under it comes back, which is what
+    // "Resume" does anyway.
+    if (this.input.pausePressed || this.input.menuBackPressed) {
+      // B is also the pad's crouch toggle, so the press that lifted the lid
+      // has already flipped the latch. Only a B resume owes the correction
+      // — clearing it on every resume would stand up a player who paused
+      // deliberately crouched behind cover.
+      if (this.input.menuBackPressed) this.input.clearCrouchToggle();
+      this.resume();
+      return;
+    }
+    // The one lid that can be raised over another. Checked after the
+    // resume, so a frame carrying both keys ends the pause rather than
+    // opening a screen over a round that is about to un-hold.
+    if (this.input.settingsPressed) {
+      this.openSettings();
+      return;
+    }
+    if (this.input.menuUpPressed) this.overlayScreen.movePauseSelection(-1);
+    if (this.input.menuDownPressed) this.overlayScreen.movePauseSelection(1);
+    // Keyboard/pad confirm only — the buttons handle their own clicks, and
+    // a click on the empty half of the screen is not a menu choice.
+    if (this.input.menuConfirmPressed) this.overlayScreen.activatePause();
   }
 
   /**
