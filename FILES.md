@@ -101,7 +101,7 @@ src/
     Atmosphere.ts       # Ash field on the GPU. No CPU fallback — WebGL2 is a
                         #   hard requirement and guarantees it
     Sky.ts              # Generated dome, textured moon, fBm cloud decks
-    WaterSystem.ts      # Water surfaces from map WaterRects
+    WaterSystem.ts      # Water surfaces from map WaterRects; bakes their bed depth
   editor/               # Dev-only map editor (F2). Dynamically imported —
     index.ts            #   never statically imported from anywhere, or it
     EditorCamera.ts     #   lands in the production bundle
@@ -194,7 +194,7 @@ src/
                         #   ink fades per PIXEL instead of per merged mesh
     EmissiveFog.ts      # The same fog as a material plugin on every unlit
                         #   emissive material — windows, flames, tracers
-    WaterShader.ts      # Animated water ShaderMaterial
+    WaterShader.ts      # Animated water ShaderMaterial (rotated/warped wave layers)
     GodRays.ts          # Moon shafts: screen-space radial blur
     HorrorPost.ts       # Vignette / grain / aberration / damage flash
 ```

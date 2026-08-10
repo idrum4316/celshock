@@ -154,6 +154,10 @@ export const GreyfenEnvironment: EnvironmentSpec = {
     deepColor: "#3f5148",
     shallowColor: "#7d9b90",
     foamColor: "#dfe8e2",
+    // Overcast: the source is the whole sky, not a moon, and the water is the
+    // whole valley rather than a creek. At Hollowmere's strength the lobe
+    // covers a quarter of the frame in flat white.
+    glint: 0.3,
   },
   grass: {
     rootColor: "#5d6449",

@@ -18,23 +18,69 @@ export const map = {
 export const water = {
   /** Default surface height above the ground plane: ankle-deep. */
   surfaceY: 0.32,
-  /** Normal-map tiling (uv repeats per metre) for the two scrolled layers. */
-  waveScale1: 0.14,
-  waveScale2: 0.38,
-  /** Scroll speeds (uv per second); the layers cross at an angle. */
-  waveSpeed1: 0.045,
-  waveSpeed2: 0.08,
+  /**
+   * Normal-map tiling (uv repeats per metre) for the three scrolled layers:
+   * swell, chop, ripple — periods of 20 m, 7 m and 2.9 m.
+   *
+   * **These have a floor, and it is a sampling limit rather than a taste.**
+   * The tile is 512 px, so a layer at 0.38 uv/m puts a texel every 5 mm, which
+   * at any range a player actually stands from water is finer than a pixel:
+   * the layer stops being ripples and becomes a moire lattice that the shader
+   * cannot rotate or warp its way out of, because it is aliasing rather than
+   * repetition. Measured on Greyfen's flood — the checker is plainly there at
+   * 0.38 and gone at 0.14. Do not tighten these to get "more detail"; that is
+   * the trade that put the pattern on screen in the first place.
+   */
+  waveScale1: 0.05,
+  waveScale2: 0.14,
+  waveScale3: 0.34,
+  /**
+   * Scroll speeds (uv per second); the layers cross at an angle. These are uv,
+   * so they are tied to the scales above — a layer's world speed is
+   * `waveSpeedN / waveScaleN` m/s, and the three sit at 0.32, 0.21 and 0.15.
+   */
+  waveSpeed1: 0.016,
+  waveSpeed2: 0.029,
+  waveSpeed3: 0.05,
   /** 0 = mirror flat, 1 = the normal map's full relief. */
   waveStrength: 0.6,
+  /**
+   * How far each layer drags the one above it (uv). The whole point is that a
+   * warped lattice is no longer a lattice: without it three tiled layers just
+   * beat against each other and the beat is as regular as the tile.
+   */
+  warpStrength: 0.11,
+  /**
+   * Range (m) over which the fine layers fade out. Past it a normal-map texel
+   * is smaller than a pixel and the tiling aliases into a moire grid, which is
+   * the same complaint from the other end. The swell layer never fades — the
+   * surface must not flatten into a mirror, or the glint turns into a sheet.
+   */
+  detailFade: 34,
   /** Moon glint: Blinn exponent and brightness. */
   specPower: 90,
   specStrength: 0.9,
   /** How fast the view angle tips the body from deep to shallow colour. */
   fresnelPower: 2.2,
   /** Shoreline foam: band width (m), mask tiling, mask scroll speed. */
-  foamWidth: 1.1,
+  foamWidth: 0.7,
   foamScale: 0.3,
   foamSpeed: 0.04,
+  /**
+   * The baked bed-depth map (see `WaterSystem.bakeDepth`) and what reads it.
+   * `depthMax` is the depth the byte saturates at, so it only has to cover the
+   * deepest bed under any rect; `texels` is its resolution in texels per metre
+   * and `texelsMax` the cap a map-wide rect hits.
+   */
+  depthMax: 1.5,
+  depthTexels: 2,
+  depthTexelsMax: 512,
+  /** Depth (m) at which the shoreline foam has faded out. */
+  foamDepth: 0.12,
+  /** Depth (m) over which the body reaches its deep colour. */
+  depthFade: 0.55,
+  /** How far shallow water is pulled toward the shallow colour (0..1). */
+  depthTint: 0.35,
 } as const;
 
 /**

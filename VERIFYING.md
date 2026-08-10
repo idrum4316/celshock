@@ -118,6 +118,19 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   change that option. The field takes `maxLifeTime` to reach steady state, so let
   `getActiveCount()` settle first. Read `system` through the handle each time: a
   *different* `ParticleSpec` replaces the whole system.
+- **Water needs a vantage computed, not guessed, and the map picker is
+  `localStorage["hollowmere.map"]` set in an `addInitScript` before the load.** A
+  `WaterRect` is not where the water is (see [`docs/world.md`](docs/world.md)): on
+  Greyfen one rect covers the map and only 11% of it is wet, so scan for cells where
+  `surfaceAt(x, z) < surfaceY` and aim along the longest wet run from one. Three
+  things will otherwise fill the frame with something that is not water and does not
+  look like a mistake — the viewmodel (`player.view.weapon.setEnabled(false)`), the
+  capture skirt, which you are always inside of near a flag (`g.zones.dispose()`),
+  and the **fog**: Greyfen's `fogEnd` is 78 m, so a look down a long reach is a
+  uniform wall of fog colour that reads exactly like being stuck inside a mesh. Put
+  the camera within ~30 m of what you are judging. `g.water.bodies[i].mat` takes
+  `setVector4` with a plain `{x,y,z,w}`, so a whole sweep of wave/foam/depth tunings
+  is one page session without a rebuild.
 - The kit turntable needs no clicking: `g.openLoadout()` reaches it from `menu` or
   `deploy` (assign `g.state = "deploy"` first from a live round). The pose is
   readable (`player.view.inspectYaw`/`inspectPitch`), and

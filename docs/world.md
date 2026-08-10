@@ -116,6 +116,17 @@ per line so a diff shows which strips of the map moved.
   A `WaterRect` with no `y` floats `CONFIG.water.surfaceY` above **its own bed**,
   which makes a pool read as recessed: Hollowmere's bog bed is at -0.6 and its surface
   lands at -0.28, below the bank around it.
+- **A `WaterRect` is an extent, not a shore, and only the terrain under it knows
+  where the water actually ends.** Hollowmere's three rects are pools and their
+  edges are roughly their banks; Greyfen's single rect is 250 m of flood over the
+  whole valley, and its edges are out past the ridge — 11% of it is wet and the rest
+  is under the hills that occlude it. `WaterSystem.bakeDepth` therefore bakes
+  `surfaceY - terrain.surfaceAt(...)` across each rect into a one-byte-per-texel map
+  (`CONFIG.water.depthTexels` per metre, capped) and the shader reads the waterline
+  and the body colour out of that. Two consequences for an author: a rect may be
+  drawn as large as is convenient, since the bed decides what is water; and
+  **anything that reshapes the bed owes a water rebuild**, which `installMap` already
+  does — the map dies with the terrain it was baked against.
 - **`NavGrid.link` is the slope limit.** It links neighbouring surfaces only within
   `stepHeight`, so at `cellSize` 1.5 a bank is walkable up to a gradient of 0.4
   (~22 deg) and severs itself above that — `MAX_WALKABLE_GRADE`. On a 3 m terrain cell

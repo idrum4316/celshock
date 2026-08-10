@@ -4,15 +4,20 @@
  * Invariants: water meshes are unpickable, non-colliding, and never carry
  * metadata.solid — ray tests must not see them. update() runs after the camera
  * and LightingSystem updates (shares the same 16 light slots). Meshes are
- * frozen; textures loaded once and reused across rebuilds.
+ * frozen; the two tiling textures are loaded once and reused across rebuilds.
  * A rect without its own `y` floats ankle-deep above the TERRAIN under it, not
  * above absolute zero — that is what lets a pool sit recessed in a dug bed.
+ * The BED-DEPTH map is per body and per build — it is baked against the
+ * TerrainField this build was handed, so it is exactly as disposable as the
+ * mesh, and a stale one would draw last build's shoreline.
  */
 import {
   Color3,
+  Constants,
   type GlowLayer,
   Mesh,
   MeshBuilder,
+  RawTexture,
   Scene,
   type ShaderMaterial,
   Texture,
@@ -21,6 +26,7 @@ import {
   Vector4,
 } from "@babylonjs/core";
 
+import { CONFIG } from "../config";
 import { MAX_POINT_LIGHTS, type PointLightData } from "../shaders/CelShader";
 import { createWaterMaterial } from "../shaders/WaterShader";
 import type { EnvironmentSpec } from "../world/environment";
@@ -32,6 +38,8 @@ import normalUrl from "../../textures/water-normal.png?url";
 interface WaterBody {
   mesh: Mesh;
   mat: ShaderMaterial;
+  /** Baked against this build's terrain, so it dies with the body. */
+  depth: RawTexture;
 }
 
 /**
@@ -70,7 +78,12 @@ export class WaterSystem {
 
     if (!this.textures) {
       const normal = new Texture(normalUrl, this.scene);
+      // Water is the one surface in the game seen almost edge-on, over a
+      // hundred metres of it: without anisotropy the tiling turns to moire in
+      // the middle distance no matter what the shader does with it.
+      normal.anisotropicFilteringLevel = 8;
       const foam = new Texture(foamUrl, this.scene);
+      foam.anisotropicFilteringLevel = 8;
       this.textures = { normal, foam };
     }
 
@@ -85,7 +98,8 @@ export class WaterSystem {
       // pool and the surface drops with it, so the water reads as sitting IN
       // the ground with a bank around it rather than hovering over a flat
       // plane. On a flat map the bed is 0 and this is the old behaviour.
-      mesh.position.set(r.x, waterY(r, terrain), r.z);
+      const surfaceY = waterY(r, terrain);
+      mesh.position.set(r.x, surfaceY, r.z);
       mesh.isPickable = false;
       mesh.checkCollisions = false;
       mesh.metadata = { noGlow: true, noOutline: true };
@@ -95,10 +109,11 @@ export class WaterSystem {
 
       const hx = r.width / 2;
       const hz = r.depth / 2;
+      const depth = this.bakeDepth(r, surfaceY, terrain);
       const mat = createWaterMaterial(
         this.scene,
         "water",
-        this.textures,
+        { ...this.textures, depth },
         new Vector4(r.x - hx, r.z - hz, r.x + hx, r.z + hz),
       );
       const lit = env.lighting;
@@ -121,10 +136,77 @@ export class WaterSystem {
       mat.setColor3("deepColor", Color3.FromHexString(colors.deepColor));
       mat.setColor3("shallowColor", Color3.FromHexString(colors.shallowColor));
       mat.setColor3("foamColor", Color3.FromHexString(colors.foamColor));
+      // The one wave tunable a map gets a say in — see WaterEnvSpec.glint.
+      const w = CONFIG.water;
+      mat.setVector4(
+        "waveB",
+        new Vector4(
+          w.waveStrength,
+          w.specPower,
+          w.specStrength * (colors.glint ?? 1),
+          w.fresnelPower,
+        ),
+      );
 
       mesh.material = mat;
-      this.bodies.push({ mesh, mat });
+      this.bodies.push({ mesh, mat, depth });
     }
+  }
+
+  /**
+   * Bakes how deep the bed is under every point of a rect, as a single-channel
+   * texture the shader reads to find the waterline.
+   *
+   * **This is the only thing that knows where a body of water actually ends.**
+   * A rect's bounds are its extent, not its shore: Greyfen's flood is one
+   * 250 m rect over the whole valley and its edges are out past the ridge, so
+   * a shoreline drawn from the bounds is drawn nowhere the player can stand.
+   * Depth is also what gives a sheet that size any low-frequency variation at
+   * all — a shoal reads pale and a channel dark, which is most of what stops
+   * the eye finding the tiling underneath.
+   *
+   * Sampled with `surfaceAt` rather than `heightAt` for the same reason a road
+   * is: the shoreline is drawn against the floor's TRIANGLES, and on a twisted
+   * cell the smooth field is a quarter-twist away from them.
+   *
+   * Resolution is `depthTexels` per metre, capped: a map-wide rect would
+   * otherwise ask for a quarter-million samples per hundred metres of side.
+   * Clamped addressing — a wrapped edge would fold the far bank onto the near.
+   */
+  private bakeDepth(
+    r: WaterRect,
+    surfaceY: number,
+    terrain: TerrainField,
+  ): RawTexture {
+    const w = CONFIG.water;
+    const res = (extent: number) =>
+      Math.max(2, Math.min(w.depthTexelsMax, Math.round(extent * w.depthTexels)));
+    const nx = res(r.width);
+    const nz = res(r.depth);
+    const data = new Uint8Array(nx * nz);
+    for (let j = 0; j < nz; j++) {
+      const z = r.z - r.depth / 2 + (r.depth * (j + 0.5)) / nz;
+      for (let i = 0; i < nx; i++) {
+        const x = r.x - r.width / 2 + (r.width * (i + 0.5)) / nx;
+        const d = (surfaceY - terrain.surfaceAt(x, z, false)) / w.depthMax;
+        data[j * nx + i] = d <= 0 ? 0 : d >= 1 ? 255 : Math.round(d * 255);
+      }
+    }
+    // invertY false: row 0 is the min-Z edge, which is what the shader's
+    // `(posW.xz - bounds.xy) / size` puts at v = 0.
+    const tex = RawTexture.CreateRTexture(
+      data,
+      nx,
+      nz,
+      this.scene,
+      false,
+      false,
+      Texture.BILINEAR_SAMPLINGMODE,
+      Constants.TEXTURETYPE_UNSIGNED_BYTE,
+    );
+    tex.wrapU = Texture.CLAMP_ADDRESSMODE;
+    tex.wrapV = Texture.CLAMP_ADDRESSMODE;
+    return tex;
   }
 
   /**
@@ -158,9 +240,12 @@ export class WaterSystem {
   }
 
   dispose(): void {
-    for (const { mesh, mat } of this.bodies) {
+    for (const { mesh, mat, depth } of this.bodies) {
       mesh.dispose();
       mat.dispose();
+      // Baked against the terrain this body was built on; the next build's is
+      // a different shape, so this one goes with the mesh rather than caching.
+      depth.dispose();
     }
     this.bodies = [];
   }

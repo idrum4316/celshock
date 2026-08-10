@@ -101,6 +101,18 @@ export interface WaterEnvSpec {
   shallowColor: string;
   /** Shoreline foam and drifting flecks. */
   foamColor: string;
+  /**
+   * Scales `CONFIG.water.specStrength`, which is Hollowmere's. Defaults to 1.
+   *
+   * **The glint is a light source's reflection, so it belongs to the map's
+   * hour rather than to water in general.** A moon over a six-metre creek is a
+   * point: a hard, near-white sparkle is exactly right, and the creek is too
+   * narrow for the lobe to cover much of it. An overcast dawn over a flooded
+   * valley is neither — the sky is the source, the reflection is a sheen the
+   * width of the water, and the same number blows a white sheet across a
+   * quarter of the screen. Turn it DOWN for a bright map, not up.
+   */
+  glint?: number;
 }
 
 /** Grass-field palette. Omitting it leaves the map bald. */
