@@ -57,6 +57,23 @@ import { GreyfenHeights } from "./heights";
  */
 
 /**
+ * The treeline hamlet's deck level: the height its walks and hut platforms are
+ * authored at, rather than five copies of the same number. Named for
+ * Hollowmere's constant of the same name, which is a coincidence of value and
+ * not a shared thing — the two maps share no module in either direction.
+ *
+ * Raising a boardwalk is not free, and the two consequences are why this has a
+ * comment at all. The deck's underside lands at 1.86 m, which clears `NavGrid`'s
+ * 1.7 m `HEADROOM` — so the ground beneath the hamlet stays open and linked, and
+ * you fight under the walks as well as on them. But every link ONTO the deck is
+ * gone at this height (`buildBoardwalk`'s whole design is a deck inside
+ * `stepHeight`), so the walks are reachable only by what is built to reach
+ * them: the `stairs` at the south end. Delete that flight and the hamlet becomes
+ * three huts nothing can climb to.
+ */
+const TERRACE_H = 2;
+
+/**
  * The built valley, by district.
  *
  * **C — the manor.** Placed so flag C stands in the middle of its great hall:
@@ -69,7 +86,11 @@ import { GreyfenHeights } from "./heights";
  * **A — the treeline hamlet.** Three stilt huts and two walks, set NORTH of the
  * flag so A's own centre stays open ground and the huts are what you fight
  * through to reach it rather than what you fight from on top of it. Two of them
- * stand inside the 14 m ring on purpose.
+ * stand inside the 14 m ring on purpose. The whole hamlet stands at
+ * `TERRACE_H`, a storey up, which makes the walks a firing line over the flag
+ * and the ground beneath them a covered approach to it — and which is why one
+ * stair carries the only way up, on the flag's own side, so taking the height
+ * means crossing open ground under it first.
  *
  * **B — the west bank.** The most exposed flag on the map: flat, treeless, and
  * with the nearest cover 25 m away across the river. It gets a ruin for corners
@@ -106,6 +127,10 @@ const placements: Placement[] = [
   { kind: "stiltHut", x: -66, z: 96, y: TERRACE_H },
   { kind: "boardwalk", x: -63, z: 84.5, y: TERRACE_H, rotY: Math.PI / 2, params: { length: 11, railSide: "none" } },
   { kind: "boardwalk", x: -63, z: 88.758, y: TERRACE_H, params: { length: 6, railSide: "none" } },
+  // The hamlet's only way up, landing on the walk's south edge at z 83.3. Its
+  // run is derived (rise / 0.35 = 7.143 m), so the placement sits half of that
+  // south of the joint and nothing here may be nudged without re-deriving it.
+  { kind: "stairs", x: -63, z: 79.729, params: { height: 2.5 } },
   { kind: "jungleRuin", x: -50, z: 70, rotY: Math.PI, params: { width: 11, depth: 8 } },
   { kind: "jungleRuin", x: -105, z: -40, rotY: Math.PI / 2, params: { width: 13, depth: 9 } },
   { kind: "stiltHut", x: -87, z: -24, rotY: Math.PI / 2 },

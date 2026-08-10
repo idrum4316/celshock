@@ -132,7 +132,8 @@ src/
     rng.ts              # mulberry32 — the seeded PRNG world-building uses
     MapBuilder.ts       # Builds the map; merges visuals, emits colliders
     BuildingKit.ts      # Facade: shared types + BUILDERS registry
-    kit/core.ts         #   Build accumulator, palette, builder contract
+    kit/core.ts         #   Build accumulator (box/wall/guard/flight/...),
+                        #   palette, builder contract
     kit/buildings.ts    #   cottage, townhouse, tavern, smithy, ruin,
                         #   watchtower, chapel, barn, mill, boathouse,
                         #   gatehouse, stiltHut, jungleRuin
@@ -142,7 +143,7 @@ src/
     kit/structures.ts   #   silo, well, stall, fence, stoneWall, bridge,
                         #   trestleBridge, templeRuin, haystack, lamp, cart,
                         #   crates, woodpile, shed, trough, shrine, kiln
-    kit/terrain.ts      #   terrace, ramp, road, jetty, boardwalk
+    kit/terrain.ts      #   terrace, ramp, road, jetty, boardwalk, stairs
     NavGrid.ts          # Walkable-surface graph + precomputed flow fields
     CoverMap.ts         # Baked per-surface directional cover masks
     boxGeometry.ts      # Analytic WorldBox primitives, shared by NavGrid /

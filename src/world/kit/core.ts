@@ -448,6 +448,89 @@ export class Build implements Structure {
     this.colliders.push(spec);
   }
 
+  /**
+   * One flight of stairs running along Z: the pitched collider slab, and the
+   * treads drawn on it.
+   *
+   * The two mistakes this exists to stop being made a third time are
+   * `buildBarn`'s: the pitch is `atan(rise / run)` — the RUN, never the slab's
+   * own length, which is `hypot` of the two and gives a flight that lands short
+   * of the deck — and the slab is placed by its top face, whose half-thickness
+   * is measured VERTICALLY, so the term is `h / 2 / cos`.
+   *
+   * The treads are visual and sit ON the slab plane rather than replacing it: a
+   * real stepped collider would be `steps` boxes, each a wall to
+   * `moveWithCollisions`, and the walked surface has to be the smooth plane the
+   * nav graph rasterises anyway. `steps` is high enough that the plane never
+   * parts company with a tread by more than half a riser.
+   *
+   * It lives here rather than in the manor that first needed it for `guard`'s
+   * reason: `buildStairs` is the second caller, and a flight is exactly the
+   * shape whose second copy drifts. Everything below the local ground line is
+   * skipped, which is what lets a caller overrun its own foot and bury it.
+   */
+  flight(opts: {
+    x: number;
+    w: number;
+    /** Where the walked surface arrives, and at what height. */
+    topZ: number;
+    topY: number;
+    /** Horizontal run and total rise. Grade is their ratio, never derived. */
+    run: number;
+    rise: number;
+    /** +1 when the flight climbs toward +Z. */
+    dir: 1 | -1;
+    steps: number;
+    color: string;
+  }): void {
+    const { x, w, topZ, topY, run, rise, dir, steps, color } = opts;
+    const grade = rise / run;
+    const pitch = Math.atan(grade);
+    const footZ = topZ - dir * run;
+    const thick = 0.3;
+    const surfaceAt = (z: number): number => topY - dir * (topZ - z) * grade;
+
+    const midZ = (topZ + footZ) / 2;
+    this.box(
+      w,
+      thick,
+      Math.hypot(run, rise),
+      x,
+      surfaceAt(midZ) - thick / 2 / Math.cos(pitch),
+      midZ,
+      color,
+      { x: -dir * pitch },
+    );
+    this.block({
+      w,
+      h: thick,
+      d: Math.hypot(run, rise),
+      x,
+      y: surfaceAt(midZ) - thick / 2 / Math.cos(pitch),
+      z: midZ,
+      rotX: -dir * pitch,
+    });
+
+    const tread = run / steps;
+    const riser = rise / steps;
+    for (let i = 0; i < steps; i++) {
+      const zc = footZ + dir * (i + 0.5) * tread;
+      const y = surfaceAt(zc);
+      // Nothing below the ground line: the overrun at the foot is buried.
+      if (y < 0.12) continue;
+      this.box(w - 0.08, 0.1, tread + 0.05, x, y - 0.03, zc, color);
+      this.box(
+        w - 0.08,
+        riser + 0.1,
+        0.09,
+        x,
+        y - riser / 2 - 0.02,
+        zc - dir * tread * 0.5,
+        TEAK,
+      );
+    }
+  }
+
   light(
     color: string,
     range: number,

@@ -163,9 +163,20 @@ undoing any puts black holes in the cobbles:
 
 A road over level ground still collapses to the single box it always was
 (`terrainSlab` returns null), so this costs nothing on the shipped map. Only `road`
-does this (`CONFORMS_TO_TERRAIN` in `BuildingKit.ts`); `terrace`, `ramp`, `jetty`
-and `bridge` carry walkable box colliders, and bending only their visuals would put
-the surface you see out of agreement with the surface bullets spark off.
+does this (`CONFORMS_TO_TERRAIN` in `BuildingKit.ts`); `terrace`, `ramp`, `stairs`,
+`jetty` and `bridge` carry walkable box colliders, and bending only their visuals
+would put the surface you see out of agreement with the surface bullets spark off.
+The ones with a long run instead take an **overrun** — `stairs` and the manor's
+service flight run on past their own feet and let the buried treads go — because a
+placement height-samples once at its centre and a flight's foot is half a run away
+from it.
+
+**A walked surface more than `stepHeight` up needs something built to reach it, and
+`stairs` is that piece.** Its run is `height / 0.35` and is derived rather than
+authored, since a flight steeper than `MAX_WALKABLE_GRADE` severs its own links
+without a symptom — the same trap `buildBoardwalk` refuses a `height` spinner over.
+Butt the top of the run against the deck's edge: the joint is then two neighbouring
+cells within a step, and nothing has to line up more precisely than that.
 
 **Babylon defaults to a LEFT-handed system** (`scene.useRightHandedSystem` is
 false), so a front face is *clockwise* seen from the front. Hand-built `VertexData`

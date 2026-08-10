@@ -159,6 +159,21 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
       options: ["both", "none", "-x", "+x"],
     },
   ],
+  // NO length control, and that is the builder's design rather than an
+  // oversight: a stair's run is its rise over a fixed grade, because a flight
+  // steeper than MAX_WALKABLE_GRADE severs its own nav links and says nothing.
+  // See buildStairs. `height` is the deck it has to reach.
+  stairs: [
+    num("height", "rise", 2.5, 0.6, 8, 0.25),
+    num("width", "width", 2.4, 1.6, 6, 0.2),
+    {
+      key: "railSide",
+      type: "choice",
+      label: "rails",
+      def: "both",
+      options: ["both", "none", "-x", "+x"],
+    },
+  ],
 
   // Fixed-geometry kinds: placed, rotated, and otherwise not configurable.
   tavern: [],

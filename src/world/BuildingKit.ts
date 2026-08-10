@@ -61,6 +61,7 @@ import {
   buildRoad,
   buildJetty,
   buildBoardwalk,
+  buildStairs,
 } from "./kit/terrain";
 
 /** Every builder, keyed by the name the layout data uses. */
@@ -92,6 +93,7 @@ export const BUILDERS = {
   road: buildRoad,
   jetty: buildJetty,
   boardwalk: buildBoardwalk,
+  stairs: buildStairs,
   haystack: buildHaystack,
   lamp: buildLampPost,
   cart: buildCart,

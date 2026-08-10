@@ -22,7 +22,9 @@
  *   fast way up is the way everyone can see. One route would make the gallery
  *   a fortress with a single choke, which is what `buildBarn`'s "the perch's
  *   ramp is exposed" note is about from the other side.
- * - **Both flights are `flight()`**, which is `buildBarn`'s ramp math with the
+ * - **Both flights are `Build.flight()`** (kit/core.ts, where they moved when
+ *   `buildStairs` became the second caller), which is `buildBarn`'s ramp math
+ *   with the
  *   two mistakes that comment names already made and fixed: the pitch is
  *   derived from the RUN (never from the slab's own length), and the slab is
  *   placed by its TOP face, whose half-thickness is measured VERTICALLY
@@ -480,87 +482,6 @@ function boardDeck(b: Build, w: number, d: number, x: number, z: number): void {
 }
 
 /**
- * One flight of stairs running along Z: the pitched collider slab, and the
- * treads drawn on it.
- *
- * The two mistakes this exists to stop being made a third time are
- * `buildBarn`'s: the pitch is `atan(rise / run)` — the RUN, never the slab's
- * own length, which is `hypot` of the two and gives a flight that lands short
- * of the deck — and the slab is placed by its top face, whose half-thickness
- * is measured VERTICALLY, so the term is `h / 2 / cos`.
- *
- * The treads are visual and sit ON the slab plane rather than replacing it: a
- * real stepped collider would be `steps` boxes, each a wall to
- * `moveWithCollisions`, and the walked surface has to be the smooth plane the
- * nav graph rasterises anyway. `steps` is high enough that the plane never
- * parts company with a tread by more than half a riser.
- */
-function flight(
-  b: Build,
-  opts: {
-    x: number;
-    w: number;
-    /** Where the walked surface arrives, and at what height. */
-    topZ: number;
-    topY: number;
-    /** Horizontal run and total rise. Grade is their ratio, never derived. */
-    run: number;
-    rise: number;
-    /** +1 when the flight climbs toward +Z. */
-    dir: 1 | -1;
-    steps: number;
-    color: string;
-  },
-): void {
-  const { x, w, topZ, topY, run, rise, dir, steps, color } = opts;
-  const grade = rise / run;
-  const pitch = Math.atan(grade);
-  const footZ = topZ - dir * run;
-  const thick = 0.3;
-  const surfaceAt = (z: number): number => topY - dir * (topZ - z) * grade;
-
-  const midZ = (topZ + footZ) / 2;
-  b.box(
-    w,
-    thick,
-    Math.hypot(run, rise),
-    x,
-    surfaceAt(midZ) - thick / 2 / Math.cos(pitch),
-    midZ,
-    color,
-    { x: -dir * pitch },
-  );
-  b.block({
-    w,
-    h: thick,
-    d: Math.hypot(run, rise),
-    x,
-    y: surfaceAt(midZ) - thick / 2 / Math.cos(pitch),
-    z: midZ,
-    rotX: -dir * pitch,
-  });
-
-  const tread = run / steps;
-  const riser = rise / steps;
-  for (let i = 0; i < steps; i++) {
-    const zc = footZ + dir * (i + 0.5) * tread;
-    const y = surfaceAt(zc);
-    // Nothing below the ground line: the overrun at the foot is buried.
-    if (y < 0.12) continue;
-    b.box(w - 0.08, 0.1, tread + 0.05, x, y - 0.03, zc, color);
-    b.box(
-      w - 0.08,
-      riser + 0.1,
-      0.09,
-      x,
-      y - riser / 2 - 0.02,
-      zc - dir * tread * 0.5,
-      TEAK,
-    );
-  }
-}
-
-/**
  * The manor: stucco over a stone podium, a colonnaded veranda on both storeys,
  * a copper roof gone green, and as much of the forest growing over it as the
  * silhouette will take.
@@ -814,7 +735,7 @@ export function buildJungleManor(
   rail("+x", PORTICO_HW, -FD / 2 - PORTICO_OUT, -FD / 2);
 
   // --- the two stairs -------------------------------------------------------
-  flight(b, {
+  b.flight({
     x: GRAND_X,
     w: GRAND_W,
     topZ: GRAND_TOP_Z,
@@ -847,7 +768,7 @@ export function buildJungleManor(
     { x: -grandPitch },
   );
 
-  flight(b, {
+  b.flight({
     x: SERVICE_X,
     w: SERVICE_W,
     topZ: SERVICE_TOP_Z,

@@ -1,6 +1,6 @@
 /**
  * kit/terrain.ts — Ground-shaping builders: terrace, ramp, road, jetty,
- * boardwalk.
+ * boardwalk, stairs.
  * All follow the contract in kit/core.ts (origin-local geometry, no
  * solid/pickable/collisions metadata).
  * Extra care here: these are walkable surfaces, so their collider top faces
@@ -180,6 +180,17 @@ const WALK_BENT = 3.5;
  * is authoring: lay a run as two or three 9–16 m placements so each samples its
  * own ground. Adjacent decks whose heights differ by less than `HEIGHT_EPS`
  * merge into one nav surface, so the joints cost nothing.
+ *
+ * ## Raising one with a layout `y` is a different building
+ *
+ * Nothing stops a placement lifting a walk a storey — Greyfen's treeline hamlet
+ * does exactly that — but it spends the causeway contract above: past
+ * `stepHeight` the deck stops linking to the ground anywhere along its length,
+ * and past `HEADROOM` the ground underneath comes back as an approach you can
+ * fight along. That is a fine thing to build ON PURPOSE, and `buildStairs` is
+ * then not decoration but the only way up. There is nothing in between: a walk
+ * lifted into the dead band between the two is a deck nothing can reach and
+ * nothing can pass under.
  */
 export function buildBoardwalk(
   scene: Scene,
@@ -226,6 +237,135 @@ export function buildBoardwalk(
     for (let i = 0; i <= bents; i++) {
       const z = -len / 2 + (i / bents) * len;
       b.box(0.17, 1.1, 0.17, postX, WALK_DECK + 0.55, z, TIMBER);
+    }
+  }
+  return b;
+}
+
+// --- the stair -------------------------------------------------------------
+
+/**
+ * Rise per metre of run, for every stair the layout places.
+ *
+ * It is a CONSTANT and not a parameter, and that is the whole safety of this
+ * builder. `NavGrid.link` connects neighbouring surfaces only within
+ * `stepHeight`, so at `cellSize` 1.5 anything steeper than `MAX_WALKABLE_GRADE`
+ * (0.4) severs its own links — a flight over that line is a ladder nothing can
+ * climb, with nothing thrown and nothing to see. 0.35 is the manor's service
+ * stair: the steepest the kit runs, and a cell of margin under the limit for
+ * the ground the foot lands on to be a little off level. A `length` spinner
+ * beside a `height` one would be exactly the "crosses 0.6 somewhere in the
+ * middle of its range" trap `buildBoardwalk` refuses for the same reason.
+ */
+const STAIR_GRADE = 0.35;
+/** Riser aimed for. The count is rounded off it, so treads come out even. */
+const STAIR_RISER = 0.18;
+/**
+ * How far the flight runs on PAST its own foot, to be buried.
+ *
+ * `MapBuilder` samples the terrain once, at the placement's CENTRE, and the
+ * foot is half a run away from that — so on anything but level ground the
+ * bottom step lands in the air or in the soil. The overrun is the manor's
+ * `SERVICE_DROP`: `Build.flight` skips every tread below the local ground line,
+ * so what is buried costs nothing and what is exposed is a step more of stair.
+ */
+const STAIR_OVERRUN = 0.6;
+/** Metres between the trestles under the flight. */
+const STAIR_BENT = 2.2;
+
+/**
+ * A free-standing flight of stairs: the way up to anything the kit raises past
+ * a single step.
+ *
+ * ## What it is for
+ *
+ * `buildBoardwalk` puts its deck inside `stepHeight` so a causeway links to the
+ * ground along its whole length and needs no access at all. Author the same
+ * walk with a `y` in the layout — a village raised over marsh, a deck along a
+ * bank — and every one of those links is gone: the deck is a surface in the air
+ * with `HEADROOM` under it, walkable, reachable from nowhere, and silent about
+ * it. This is the piece that reconnects it, and it serves a terrace lip, a
+ * jetty over a cut bank or a hut platform on a rise just as well.
+ *
+ * ## How to place one
+ *
+ * It climbs toward **+Z**, like `buildRamp`, and the placement point is the
+ * MIDDLE of the run — so the treads arrive at `length / 2` ahead of it, where
+ * `length` is `height / STAIR_GRADE` and is derived rather than authored (see
+ * that constant). Butt that arrival against the deck's own edge and the joint
+ * costs nothing: the last stair cell and the first deck cell are neighbours
+ * within a step, and `NavGrid`'s `HEIGHT_EPS` merges them where they coincide.
+ *
+ * Two things to keep to. **Both ends want ground the placement's own centre
+ * sample is honest about** — a flight is 7 m long at a 2.5 m rise and one
+ * height sample serves all of it, which is the authoring rule the boardwalk's
+ * header states from the other side. And **do not run one narrower than about
+ * 1.6 m**: the nav grid samples one point per 1.5 m cell, so a narrow flight is
+ * a chain of surfaces the sampler misses between, and it stops linking to
+ * itself before it stops looking like a stair.
+ */
+export function buildStairs(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  p: BuildParams = {},
+): Structure {
+  const b = new Build(scene, mats, "stairs");
+  const w = p.width ?? 2.4;
+  const rise = p.height ?? 2.5;
+  const rails = p.railSide ?? "both";
+  const run = rise / STAIR_GRADE;
+  const pitch = Math.atan(STAIR_GRADE);
+  const topZ = run / 2;
+  /** The walked surface at any point on the run. Zero at the foot. */
+  const surfaceAt = (z: number): number => rise - (topZ - z) * STAIR_GRADE;
+
+  // The flight, overrunning its foot into the ground. One pitched collider
+  // slab: treads are visual, per Build.flight.
+  b.flight({
+    x: 0,
+    w,
+    topZ,
+    topY: rise,
+    run: run + STAIR_OVERRUN,
+    rise: rise + STAIR_OVERRUN * STAIR_GRADE,
+    dir: 1,
+    steps: Math.max(2, Math.round(rise / STAIR_RISER)),
+    color: PLANK,
+  });
+
+  // Trestles carrying the span, and a pair of stringer piles at the head where
+  // it meets the deck. Visual only — the same call `buildBoardwalk` and
+  // `buildJetty` make about their piles, and here it also keeps the space under
+  // a stair open, which is what stops the flight severing the links beside it.
+  const bents = Math.max(1, Math.round(run / STAIR_BENT));
+  for (let i = 1; i <= bents; i++) {
+    const z = -run / 2 + (i / bents) * run;
+    const head = surfaceAt(z) - 0.34;
+    if (head < 0.5) continue;
+    b.box(w + 0.2, 0.16, 0.2, 0, head, z, TEAK);
+    for (const sx of [-1, 1]) {
+      b.cyl(head + 0.5, 0.2, 0.26, 5, (sx * w) / 2.6, (head - 0.5) / 2, z, TEAK);
+    }
+    // Creeper up alternate legs. The jungle read the boardwalk already carries,
+    // so a flight up to one does not arrive as fresh carpentry.
+    if (i % 2 === 0) {
+      b.box(0.07, Math.min(1.1, head), 0.16, -w / 2.6 - 0.13, head / 2, z, CREEPER);
+    }
+  }
+
+  // Rails, standing OUTBOARD of the treads: `guard` owns that argument, and a
+  // pitched run is why it takes a pitch at all. The walked height at the run's
+  // centre is half the rise, since the flight passes through the ground line at
+  // its foot.
+  for (const side of ["-x", "+x"] as const) {
+    if (rails !== "both" && rails !== side) continue;
+    const sx = side === "+x" ? 1 : -1;
+    b.guard(side, (sx * w) / 2, 0, run, rise / 2, { pitch, color: TEAK });
+    // Newels at the foot and the head, on the rail's own centreline — drawn at
+    // the tread edge they would be inside the guard box and invisible.
+    const postX = (sx * (w + GUARD_THICKNESS)) / 2;
+    for (const z of [-run / 2, topZ]) {
+      b.box(0.17, 1.3, 0.17, postX, surfaceAt(z) + 0.65, z, TIMBER);
     }
   }
   return b;
