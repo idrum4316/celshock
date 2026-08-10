@@ -489,11 +489,13 @@ persists to `localStorage` like the difficulty tier, so confirm just closes.
   best any weapon has, so a third weapon re-scales the chart instead of dating it.
   Accuracy is the aimed spread *inverted* — a bar that grew with the number would rank
   the SMG as the accurate one.
-- **The buttons that OPEN the screen fire on `pointerdown`, not click.** The menu's
-  confirm is "a mouse button went down anywhere", read from the button mask on the
-  next tick, which happens before a `click` (mouse *up*) ever fires. Changing state on
-  the down edge stops the click that asked for the loadout from also deploying the
-  player out from under it. Buttons *inside* the screen can use `click` safely.
+- **The buttons that OPEN the screen fire on `pointerdown`, not click**, the same
+  edge every button that *leaves* a screen uses. It was once load-bearing — the
+  menu's confirm was "a mouse button went down anywhere", read from the button mask
+  on the next tick, which happens before a `click` (mouse *up*) ever fires, so a
+  click that asked for the loadout also deployed the player out from under it. The
+  pointer is no longer in that confirm, so this is now consistency rather than a
+  fix. Buttons *inside* the screen can use `click` safely.
 
 On the keyboard, d-pad and left stick the screen splits the axes: up/down chooses
 the slot, left/right steps through it (the menu behind keeps left/right for
@@ -701,10 +703,18 @@ only way in.
   `clip-path`, which clips its own element's outline and box-shadow along with the
   corner, so an offset outline draws on the tier group (a plain div) and silently on
   nothing else.
-- **A / Enter fire the cursor's row and BREAK; the mouse, a tap and Start still
-  start the round from anywhere.** Both flags come up on the same frame for A, so the
-  order is the whole mechanism — without the break, A on the settings row opens the
-  screen and then deploys the player out from under it.
+- **A / Enter fire the cursor's row and BREAK; Start still starts the round from
+  anywhere.** Both flags come up on the same frame for A, so the order is the whole
+  mechanism — without the break, A on the settings row opens the screen and then
+  deploys the player out from under it.
+- **THE POINTER DEPLOYS ONLY THROUGH THE DEPLOY BUTTON**, on this card and the
+  round-over one. `confirmPressed` was "a button went down anywhere", mouse and
+  finger alike, which is fine on a card that is only a title and wrong the moment
+  the menu grew controls: the map and difficulty rows fire on the click's mouse-UP
+  while the confirm reads the mouse-DOWN a tick earlier, so **choosing a map or a
+  difficulty started the round on the same press**. Neither flag carries a pointer
+  now; the button carries the mouse and the tap by itself. Restoring a
+  click-anywhere confirm to a screen that has controls on it restores that bug.
 - **The cursor survives a redraw and resets when the card is RAISED**
   (`OverlayScreen.card`). `showMenu` is called again on every difficulty change and on
   the way back from the kit and settings screens; a cursor that jumped home each time
@@ -742,11 +752,13 @@ the map's edges). The two big titles are the deliberate exception.
   input hint lives in the one hint row.
 
 **The menu and round-over card carry a `Deploy` button**
-(`OverlayScreen.bindStart` → `Game.onStart`). It is redundant with the confirm, and
-that is why it exists: an instruction in prose is not a target, and "click, press
-Enter, or press Start" made a pad player work out which was theirs. It is also where
-the menu's cursor starts, keeping Enter and A meaning "start the round" the moment
-the title appears.
+(`OverlayScreen.bindStart` → `Game.onStart`), and it is the **only** thing on either
+card a pointer can deploy with. It began as a redundant target beside a
+click-anywhere confirm, which is why it exists at all: an instruction in prose is not
+a target, and "click, press Enter, or press Start" made a pad player work out which
+was theirs. It now carries the mouse and the finger by itself. It is also where the
+menu's cursor starts, keeping Enter and A meaning "start the round" the moment the
+title appears.
 
 **That button is why the deploy screen's confirm is `menuConfirmPressed`.** It
 changes state on the down edge, which puts the `deploy` branch in front of the very
@@ -2112,9 +2124,13 @@ Details about the phone, each of which was a visible bug first:
   crosshair and no deploy map. It is gated on a coarse pointer: an installed app is
   already fullscreen from the manifest, and on the desktop the pointer lock does the
   immersing.
-- **A tap raises `confirmPressed` but not `menuConfirmPressed`.** The masks in
-  `InputManager` stay mouse-only — they are held state and a tap has no hold — so touch
-  is latched separately. Without it the title screen cannot be got past on a phone.
+- **A touch is felt nowhere in `InputManager`, and every screen a phone meets
+  carries its own button** — the menu's and the round-over card's Deploy, the deploy
+  screen's map and `#deploy-go`, the kit screen's — each listening for its own
+  `pointerdown`, which a finger raises like any other pointer. A tap used to be
+  latched into `confirmPressed` (the masks are held state and a tap has no hold) so
+  that the title screen could be got past at all; that latch deployed the player off
+  the menu's map and difficulty rows on the way, and went with the mouse.
 - **`--ov-scale` scales `#overlay` and `#deploy` on short viewports** by growing the
   box to `100%/s` and scaling by `s` about the top-left, so the backdrop stays
   full-bleed and the desktop (s = 1) is untouched. Nothing in this HUD scrolls, and a

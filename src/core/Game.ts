@@ -1117,9 +1117,13 @@ export class Game {
             break;
           }
         }
-        // What is left of the confirm is the mouse, a tap and Start: a click
-        // anywhere on either card deploys, and Start is "start the game"
-        // wherever the cursor happens to be resting.
+        // What is left of the confirm is Enter, pad A and Start — no pointer
+        // at all. On the menu card the first two have already been spent on the
+        // cursor's row and broken out above, so this is Start, "start the game"
+        // wherever the cursor happens to be resting; on the round-over card,
+        // which has no cursor to fire, it is all three. The mouse and a tap
+        // deploy through the Deploy button and nowhere else, or a click on the
+        // map or difficulty row would start the round out from under the pick.
         if (this.input.confirmPressed && this.overlayT > 0.5) {
           this.startRound();
         }

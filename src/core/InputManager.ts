@@ -108,16 +108,27 @@ export class InputManager {
   crouch = false;
   /** Held: show the scoreboard. */
   scoreboard = false;
-  /** Edge-triggered "confirm" (Enter / click / gamepad A / Start). */
+  /**
+   * Edge-triggered "confirm" (Enter / gamepad A / Start).
+   *
+   * The POINTER IS DELIBERATELY OUT OF IT, mouse and finger alike. This was
+   * once "a button went down anywhere", which is fine on a card that is only a
+   * title and wrong the moment the menu grew controls: the map and difficulty
+   * rows fire on the click's mouse-UP while this reads the mask on the next
+   * tick, so picking either one deployed the player out from under the pick.
+   * Both cards that read this carry a Deploy button, which is the pointer's way
+   * off them — and a finger's, since it takes a tap like any other pointerdown.
+   * Start stays: it is the pad's "start the game" wherever the cursor rests.
+   */
   confirmPressed = false;
   /**
-   * Edge-triggered confirm with the MOUSE LEFT OUT (Enter / gamepad A).
+   * Edge-triggered confirm with START LEFT OUT as well (Enter / gamepad A).
    *
-   * The menu and the deploy screen treat any click as a confirm, because there
-   * the click is the action — you click the map to deploy. A list of buttons
-   * is the opposite case: the mouse has its own targets there, and a click on
-   * the empty half of the screen must not fire whatever the keyboard selection
-   * happened to be resting on. Start is left out too; that is the pause key.
+   * Every screen with a cursor reads this one: Start is the pause key, and a
+   * screen that let it fire the selection would answer the button that was
+   * asking to leave. The pointer is out of both flags for the reason above —
+   * these screens are lists of buttons, and a press on the empty half of one
+   * is not a menu choice.
    */
   menuConfirmPressed = false;
   /**
@@ -211,20 +222,6 @@ export class InputManager {
    */
   private pointerMask = 0;
   private mouseMask = 0;
-  /**
-   * A touch tap, latched until the next `update()` reads it.
-   *
-   * A touch may not touch the masks above — those are held state, and a tap
-   * has no hold — but the menus' confirm IS "a button went down anywhere", and
-   * on a phone the only pointer there is is a finger. Without this the title
-   * screen of an installed app cannot be got past at all: the deploy map takes
-   * a tap (it listens for its own `pointerdown`) but nothing before it does.
-   *
-   * It feeds `confirmPressed` and deliberately NOT `menuConfirmPressed`, which
-   * is exactly the split the mouse already has — a tap on the empty half of a
-   * pause screen is not a menu choice.
-   */
-  private touchTapped = false;
   private accumX = 0;
   private accumY = 0;
   private prevJump = false;
@@ -289,10 +286,13 @@ export class InputManager {
     const readPointer = (e: PointerEvent) => {
       if (isMouse(e)) this.pointerMask = e.buttons;
     };
-    document.addEventListener("pointerdown", (e) => {
-      readPointer(e);
-      if (e.pointerType === "touch") this.touchTapped = true;
-    });
+    // A touch is felt nowhere in here, and does not need to be: every screen a
+    // phone meets carries its own button (the menu's and the round-over card's
+    // Deploy, the deploy screen's map and `#deploy-go`, the kit screen's), each
+    // listening for its own `pointerdown`. A tap latched into `confirmPressed`
+    // is what used to get past the title screen, and it deployed the player off
+    // the map and difficulty rows on the way — see `confirmPressed`.
+    document.addEventListener("pointerdown", readPointer);
     document.addEventListener("pointerup", readPointer);
     document.addEventListener("pointercancel", (e) => {
       if (isMouse(e)) this.pointerMask = 0;
@@ -478,16 +478,9 @@ export class InputManager {
     this.slotPressed = slotNow !== this.prevSlot ? slotNow : -1;
     this.prevSlot = slotNow;
 
-    // The tap is a one-frame pulse rather than held state, so it is consumed
-    // here: read once, cleared once, and the edge below does the rest.
-    const tapped = this.touchTapped;
-    this.touchTapped = false;
-
     const confirmNow =
       this.keys.has("Enter") ||
       this.keys.has("NumpadEnter") ||
-      (buttons & 1) !== 0 ||
-      tapped ||
       padJump ||
       padStart;
     this.confirmPressed = confirmNow && !this.prevConfirm;

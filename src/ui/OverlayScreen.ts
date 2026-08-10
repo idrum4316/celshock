@@ -220,9 +220,12 @@ export class OverlayScreen {
    *
    * `#overlay` is inside a `pointer-events: none` HUD and does not opt back in
    * (only `#deploy` does), so the individual CONTROLS ask for pointer events —
-   * the tier buttons and the kit button, never the rows around them. The
-   * labels, the hints and the grid's own gaps stay inert, so a click that
-   * lands between two buttons is still the confirm that starts the round.
+   * the tier buttons, the kit button and Deploy, never the rows around them.
+   * The labels, the hints and the grid's own gaps stay inert, and a click that
+   * lands on one of them now does NOTHING: the pointer's only way off this
+   * screen is the Deploy button. It used to be every pixel of it, which meant
+   * choosing a map or a difficulty deployed you the instant you chose one —
+   * those two fire on mouse-UP, and the confirm reads the mouse-DOWN before it.
    */
   showMenu(opts: MenuState): void {
     const { maps, selectedMap, difficulties, selected, kit, flagCount } = opts;
@@ -301,17 +304,13 @@ export class OverlayScreen {
       el.onmouseenter = () => this.setMenuSelection(MENU_ITEMS.indexOf(item));
     });
     this.applyMenuSelection();
-    // POINTERDOWN, not click. The menu's own confirm is "a mouse button went
-    // down anywhere", read from the button mask on the next tick — which
-    // happens before a `click` (that lands on mouse UP) ever fires. Opening
-    // the loadout on the down edge changes the state first, so the confirm
-    // arrives in a state that ignores the mouse instead of deploying the
-    // player out from under the screen they just asked for.
+    // POINTERDOWN, not click — kept now that the confirm no longer counts the
+    // mouse, because it is the edge these two have always changed state on and
+    // the deploy screen's twins still do it for a live reason. Every button on
+    // this card that leaves the screen it is on agrees on the down edge; the
+    // ones that only step a row (map, difficulty) are ordinary clicks.
     const kitBtn = this.root.querySelector<HTMLElement>("button.kit-open");
     if (kitBtn) kitBtn.onpointerdown = () => this.onOpenLoadout();
-    // Pointerdown for the same reason, and it is not optional here either: a
-    // `click` fires on mouse UP, by which time the overlay's own confirm has
-    // already read the mouse-down and started the round underneath.
     const setBtn = this.root.querySelector<HTMLElement>("button.settings-open");
     if (setBtn) setBtn.onpointerdown = () => this.onOpenSettings();
     this.bindStart();
@@ -319,17 +318,14 @@ export class OverlayScreen {
 
   /**
    * The one button that starts the round, shared by the menu and the round-over
-   * card. It is redundant with the confirm on the mouse — a click anywhere on
-   * either screen already deploys — and that is precisely why it needs to
-   * exist: an instruction in prose is not a target, and a pad player reading
-   * "click, press Enter, or press Start" has to work out which of those they
-   * own. A button with the glyphs on it says both at once.
+   * card, and the ONLY thing on either that a pointer can deploy with. It began
+   * as a redundant target beside a click-anywhere confirm — an instruction in
+   * prose is not a target, and a pad player reading "click, press Enter, or
+   * press Start" has to work out which of those they own — and is now carrying
+   * the mouse and the finger by itself, which is what lets the rows above it
+   * be picked from without also ending the screen they are on.
    *
-   * POINTERDOWN, for the reason the kit button documents: the overlay's own
-   * confirm is a mouse-down read on the next tick, before any `click` fires.
-   * Here the two agree on what should happen, so the button is only claiming
-   * the action it was already going to get — but on the down edge, so the
-   * ordering is the same as the kit button's and cannot drift.
+   * POINTERDOWN, the same edge every button here that leaves the screen uses.
    */
   private bindStart(): void {
     const btn = this.root.querySelector<HTMLElement>("button.ov-start");
