@@ -1,6 +1,7 @@
 /**
  * Props.ts — Scatter prop factories (trees, gravestones, lanterns, fungus,
- * logs, fire drums, rubble, boulders, brambles, barrels). Pure mesh builders:
+ * logs, fire drums, rubble, boulders, brambles, barrels, jungle trees). Pure
+ * mesh builders:
  * each assembles at the origin
  * and returns a hierarchy; placement/merging/colliders are the caller's job.
  * Invariants: emissive parts (lantern glow, fire, fungus) MUST set
@@ -33,6 +34,11 @@ const BARK = "#4a4238";
 const DEAD_BARK = "#3c3730";
 const NEEDLE = "#26402f";
 const NEEDLE_LIT = "#35563d";
+// Jungle hardwood: paler and greyer than the valley's dead bark — a wet trunk
+// under a bright sky, not a charred one under a moon.
+const JUNGLE_BARK = "#5b5443";
+const LEAF = "#2c5230";
+const LEAF_LIT = "#437a3e";
 const STONE = "#7a7f7c";
 const IRON = "#2f3338";
 const RUST = "#5d4a3c";
@@ -143,6 +149,139 @@ export function buildPine(
       i < 2 ? NEEDLE : NEEDLE_LIT,
       CONFIG.graphics.translucency.foliage,
     );
+  });
+  return trunk;
+}
+
+/**
+ * Jungle hardwood: a buttressed trunk running bare for two storeys and then
+ * spreading into a canopy of broad fronds. The tall counterpart to the pine —
+ * where a pine is a cone you see the whole of, this is a column with the
+ * foliage held above the fight, so a stand of them closes the sky without
+ * closing the sight lines under it.
+ *
+ * Three things about the shape are load-bearing rather than decorative:
+ *
+ * - **The lowest frond hangs at ~9 m**, five times clear of the 1.7 m hit
+ *   sphere. The collider is the trunk and its buttress core only (see
+ *   `PROP_BODIES`), so anything at chest height would be foliage rounds pass
+ *   straight through — the pine's rule, and a canopy tree has far more leaf to
+ *   get it wrong with.
+ * - **The buttresses stay inside 1.0 m of the axis**, which is the collider's
+ *   own half-width, so the flare a player walks up to is the flare that stops
+ *   them. They are what makes the trunk read as tropical at all; a bare
+ *   cylinder of this height is a telegraph pole.
+ * - **The fronds are two segments, not one**, and the outer one droops harder.
+ *   A single straight blade reads as a plank at any distance the fog leaves
+ *   visible; the break is where the whole silhouette comes from.
+ *
+ * Nothing here is scaled non-uniformly — `renderOutline` extrudes along vertex
+ * normals and `VertexData.transform` does not re-normalise them, so a squashed
+ * part grows a lopsided ink shell.
+ */
+export function buildJungleTree(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
+  const bark = mats.get(JUNGLE_BARK);
+  const trunk = MeshBuilder.CreateCylinder(
+    "jungle-trunk",
+    { height: 11.2, diameterTop: 0.42, diameterBottom: 1.0, tessellation: 6 },
+    scene,
+  );
+  trunk.position.y = 5.6;
+  trunk.material = bark;
+  // A hardwood carries its own weight — a fifth of the pine's already-slight
+  // lean, and only enough that a stand of them is not a row of posts.
+  trunk.rotation.z = (rng() - 0.5) * 0.05;
+
+  // Buttress roots. Thin radial fins, leaning their tops into the trunk so the
+  // flare widens toward the ground the way a real one does.
+  const fins = 3;
+  const finTurn = rng() * Math.PI * 2;
+  for (let i = 0; i < fins; i++) {
+    const a = (i / fins) * Math.PI * 2 + finTurn;
+    const fin = MeshBuilder.CreateBox(
+      `jungle-buttress${i}`,
+      { width: 0.2, height: 2.3 + rng() * 0.5, depth: 1.1 },
+      scene,
+    );
+    fin.parent = trunk;
+    // Local to the trunk's centre: -5.6 is its foot.
+    fin.position.set(Math.sin(a) * 0.42, -4.5, Math.cos(a) * 0.42);
+    fin.rotation.y = a;
+    fin.rotation.x = -0.16;
+    fin.material = bark;
+  }
+
+  // The crown's own mass, filling the middle the fronds radiate out of.
+  const crown = MeshBuilder.CreateCylinder(
+    "jungle-crown",
+    { height: 1.1, diameterTop: 0.7, diameterBottom: 2.3, tessellation: 6 },
+    scene,
+  );
+  crown.parent = trunk;
+  crown.position.y = 4.5;
+  crown.rotation.y = rng() * Math.PI * 2;
+  crown.material = mats.getTranslucent(
+    LEAF,
+    CONFIG.graphics.translucency.canopy,
+  );
+
+  // Two rings of fronds, offset from each other so the gaps in one sit over the
+  // blades of the other. Inner blade out from the crown, outer blade drooping
+  // off its tip.
+  const rings: [number, number, number, number][] = [
+    // count, height on the trunk, blade length, droop
+    [6, 4.2, 2.4, 0.34],
+    [5, 5.1, 2.0, 0.18],
+  ];
+  rings.forEach(([count, y, len, droop], ring) => {
+    const turn = rng() * Math.PI * 2;
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + turn + rng() * 0.25;
+      const tilt = droop + rng() * 0.16;
+      const blade = MeshBuilder.CreateBox(
+        `jungle-frond${ring}-${i}`,
+        { width: 0.95, height: 0.14, depth: len },
+        scene,
+      );
+      blade.parent = trunk;
+      blade.position.set(
+        Math.sin(a) * (len / 2 + 0.5),
+        y,
+        Math.cos(a) * (len / 2 + 0.5),
+      );
+      blade.rotation.y = a;
+      blade.rotation.x = tilt;
+      // The lit green goes on the upper ring: what a canopy shows the sky is
+      // never what it shows the ground beneath it.
+      blade.material = mats.getTranslucent(
+        ring === 0 ? LEAF : LEAF_LIT,
+        CONFIG.graphics.translucency.canopy,
+      );
+
+      // The drooping tip, hung off the blade's own far end so it rides the
+      // parent's yaw and tilt. Its centre is derived from its own break angle
+      // rather than authored: a fixed offset leaves the joint open at one
+      // angle and the two segments overlapping at another.
+      const brk = 0.5 + rng() * 0.3;
+      const tipLen = len * 0.8;
+      const tip = MeshBuilder.CreateBox(
+        `jungle-tip${ring}-${i}`,
+        { width: 0.7, height: 0.12, depth: tipLen },
+        scene,
+      );
+      tip.parent = blade;
+      tip.rotation.x = brk;
+      tip.position.set(
+        0,
+        (-Math.sin(brk) * tipLen) / 2,
+        len / 2 + (Math.cos(brk) * tipLen) / 2,
+      );
+      tip.material = blade.material;
+    }
   });
   return trunk;
 }

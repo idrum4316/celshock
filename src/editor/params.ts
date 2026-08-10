@@ -187,6 +187,11 @@ export const SCATTER_DEFAULTS: Record<ScatterProp, ScatterDefaults> = {
   // 3.3 m across at scale 1, so the dead tree's 0.55 grows a stand of pines
   // into one solid green mass.
   pine: { radius: 12, count: 9, scale: [0.9, 1.3], blocking: true, clearance: 1.2 },
+  // Wider again: the canopy reaches ~4.4 m at scale 1, and a clearance of 2.2
+  // puts the trunks 5.6 m apart, where the frond tips interlock and the trunks
+  // are still a stand you can walk and shoot between. Tighter and it merges
+  // into one green ceiling with no reason to be a scatter field at all.
+  jungleTree: { radius: 18, count: 22, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
   gravestone: { radius: 5, count: 8, scale: [0.8, 1.3], blocking: true, clearance: 0.6 },
   log: { radius: 12, count: 5, scale: [0.8, 1.2], blocking: true, clearance: 1.4 },
   fungus: { radius: 14, count: 5, scale: [0.8, 1.4] },

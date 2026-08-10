@@ -50,6 +50,7 @@ import {
   buildFireDrum,
   buildFungus,
   buildGravestone,
+  buildJungleTree,
   buildLog,
   buildPine,
   buildRubble,
@@ -214,6 +215,7 @@ export interface GameMap {
 const SCATTER_BUILDERS = {
   deadTree: buildDeadTree,
   pine: buildPine,
+  jungleTree: buildJungleTree,
   gravestone: buildGravestone,
   log: buildLog,
   fungus: buildFungus,
@@ -278,6 +280,13 @@ const PROP_BODIES: Record<ScatterSpec["prop"], PropBody> = {
   // daylight through. The builder keeps the lowest tier above the 1.7 m hit
   // sphere so nothing shootable hides in there. `visualTop` clears the tip.
   pine: { w: 0.62, d: 0.62, h: 6.4, visualTop: 7.0 },
+  // Trunk plus its buttress core: the fins reach 0.97 m from the axis at their
+  // widest, so a 1.0 m box is the flare you can see rather than a margin around
+  // it. The canopy is 4 m of frond starting nine metres up and is not in this —
+  // there is nothing to shoot up there, and a box that held it would stop
+  // rounds through open air across the whole stand. Full trunk height, so a
+  // jungle tree bakes as hard cover (CoverMap's 1.7 m) the way a wall does.
+  jungleTree: { w: 1.0, d: 1.0, h: 11.2, visualTop: 11.6 },
   // Slab and plinth: wide, and *thin*. The one prop whose orientation matters
   // most — squared off, it blocked five times its own thickness.
   gravestone: { w: 1.15, d: 0.42, h: 1.6, visualTop: 1.7 },

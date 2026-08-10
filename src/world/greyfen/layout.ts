@@ -69,7 +69,25 @@ const placements: Placement[] = [
   { kind: "manor", x: 0, z: -4, params: { litWindows: true } },
 ];
 
+/**
+ * The jungle: two belts of buttressed hardwoods closing the north and south
+ * ends of the valley, where the rim would otherwise be the only thing saying
+ * the map stops.
+ *
+ * The canopy starts nine metres up, so a belt is cover in the sense that
+ * TRUNKS are cover — sight lines under it stay open and the ground beneath
+ * reads as shaded rather than blocked. That is what lets a belt sit across a
+ * home spawn's approach without walling a team in.
+ *
+ * Each belt runs most of the map's width, which is well past the 78 m fog
+ * wall: a region is merged into one mesh and filed under the block its CENTRE
+ * falls in, so both cull as a unit and neither can be frustum-rejected while
+ * any of it is on screen. Splitting each into three rectangles is the fix if
+ * they start costing anything — see CLAUDE.md on scatter regions.
+ */
 const scatter: ScatterSpec[] = [
+  { prop: "jungleTree", x: 0, z: 96, width: 235, depth: 40, count: 80, scale: [0.85, 2], blocking: true, clearance: 2.2 },
+  { prop: "jungleTree", x: 7.68, z: -97.112, width: 220, depth: 40, count: 80, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
 ];
 
 const controlPoints: ControlPointDef[] = [
@@ -115,6 +133,7 @@ const spawns: SpawnPointDef[] = [
  * surrounding ground: -0.6 m of bed puts the surface at -0.28.
  */
 const water: WaterRect[] = [
+  { x: 1.693, z: -6.027, width: 250, depth: 250, y: -0.52 },
 ];
 
 /**

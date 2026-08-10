@@ -43,6 +43,7 @@ interface ScatterBase {
   prop:
     | "deadTree"
     | "pine"
+    | "jungleTree"
     | "gravestone"
     | "log"
     | "fungus"

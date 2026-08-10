@@ -2385,6 +2385,13 @@ export const CONFIG = {
        * so what comes through it is what got past all of them.
        */
       foliage: { color: "#61906f", intensity: 0.3 },
+      /**
+       * Jungle canopy: warmer, yellower and brighter than the pine's. A frond
+       * is one broad blade rather than a crown many needles deep, so far more
+       * gets through it — and what gets through a leaf that size arrives
+       * carrying the leaf's own colour rather than merely dimmed.
+       */
+      canopy: { color: "#8fb567", intensity: 0.45 },
     },
     /**
      * Cobblestone bump: fake relief height (metres) of a sett dome at
