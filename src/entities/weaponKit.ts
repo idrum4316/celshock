@@ -4,7 +4,8 @@
  * builder returns.
  * Owns: the build accumulator (`weaponBuild`) and the `WeaponParts` contract.
  * Owns no geometry of its own — `RifleModel`, `CarbineModel`, `SmgModel`,
- * `DmrModel` and `PistolModel` are the builders, and `optics.ts` is the sixth.
+ * `LmgModel`, `DmrModel` and `PistolModel` are the builders, and `optics.ts`
+ * is the seventh.
  *
  * Invariants:
  * - A builder assembles at the ORIGIN with its root at identity and merges
@@ -42,6 +43,17 @@ export const BODY = "#2b2b33"; // aluminium upper receiver, barrel, hinge block
 export const POLYMER = "#1d232c"; // lower receiver, grip, magazine, handguard, stock
 export const METAL = "#454e5e"; // rails, sights, charging handle, small fittings
 export const RUBBER = "#15181d"; // the contact surfaces: butt pad, grip cap, foregrip
+/**
+ * Cartridge brass — the LMG's exposed belt, and nothing else in the kit. Every
+ * other weapon keeps its ammunition inside a magazine, so this group is empty
+ * on four of the five and `merge` simply skips it there.
+ *
+ * A colour of its own rather than METAL, because it is the one part of a weapon
+ * that is not part of the weapon: brass has to read as loose rounds hanging off
+ * the gun, and merged into the fittings group it would be steel-coloured and
+ * steel-glossy along with the rails.
+ */
+export const BRASS = "#a8823a";
 export const RETICLE = "#ff3b30";
 
 /**
@@ -53,6 +65,7 @@ const SECTIONS: ReadonlyArray<readonly [string, string]> = [
   ["polymer", POLYMER],
   ["metal", METAL],
   ["rubber", RUBBER],
+  ["brass", BRASS],
 ];
 
 /** Facets around a round shell. 14 reads round at arm's length and stays cheap. */

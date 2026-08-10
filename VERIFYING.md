@@ -36,10 +36,11 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   touching the viewmodel or camera — for **every** optic, since each carries its
   own eye reference. Take
   `scene.getTransformNodeByName("view_<weapon>_<sight>_sightCenter")
-  .getAbsolutePosition()` (all twenty of `rifle`/`carbine`/`smg`/`dmr` ×
-  `reflex`/`iron`/`holo`/`prism`/`scope`, since a weapon change moves the optic
-  too, plus `view_pistol_iron_sightCenter`), subtract `camera.position`, and project onto
-  `cameraSys.forward` and a right vector built from `aimYaw` — `(cos(aimYaw), 0,
+  .getAbsolutePosition()` (all twenty-five of
+  `rifle`/`carbine`/`smg`/`dmr`/`lmg` × `reflex`/`iron`/`holo`/`prism`/`scope`, since
+  a weapon change moves the optic too, plus `view_pistol_iron_sightCenter`), subtract `cameraSys.camera.position`
+  (the camera is the CameraSystem's, not a field on `Game`), and project onto
+  `cameraSys.forward` and a right vector built from `cameraSys.aimYaw` — `(cos(aimYaw), 0,
   -sin(aimYaw))`. **Not `flatRight`**, which is deliberately the un-recoiled and
   un-swayed yaw (see `camera.aimSway`) and so is not perpendicular to `forward` while either is live;
   through it a correct sight reads millimetres off. At `adsBlend === 1` both

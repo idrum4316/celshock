@@ -58,13 +58,17 @@ src/
                         #   the camera, hip/ADS/sprint/reload, sway, bob, and
                         #   the kit turntable. Builds every weapon, enables one
     weaponKit.ts        # The build accumulator every weapon model is written
-                        #   in + WeaponParts and WeaponSights (rail, or fixed)
+                        #   in + WeaponParts and WeaponSights (rail, or fixed),
+                        #   and the five colour groups a weapon merges into
     RifleModel.ts       # Low-poly SCAR-pattern battle rifle
     CarbineModel.ts     # Low-poly FAMAS-pattern bullpup burst carbine —
                         #   magazine behind the grip, carry-handle blade,
                         #   full-hand trigger guard, folded bipod
     SmgModel.ts         # Low-poly compact SMG — same contract
     DmrModel.ts         # Low-poly semi-auto marksman rifle
+    LmgModel.ts         # Low-poly belt-fed light machine gun — feed cover and
+                        #   split rail, box under the receiver, the exposed
+                        #   brass belt, side-folded carry handle
     PistolModel.ts      # 1911 sidearm — the one weapon that does not call
                         #   optics.ts: no rail, so its notch and blade are its
                         #   own and are all it ever wears

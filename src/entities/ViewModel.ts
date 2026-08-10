@@ -65,6 +65,7 @@ import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import { buildCarbine } from "./CarbineModel";
 import { buildDmr } from "./DmrModel";
+import { buildLmg } from "./LmgModel";
 import { buildPistol } from "./PistolModel";
 import { buildRifle } from "./RifleModel";
 import { buildSmg } from "./SmgModel";
@@ -96,6 +97,7 @@ const WEAPON_BUILDERS: Record<WeaponId, WeaponBuilder> = {
   carbine: buildCarbine,
   smg: buildSmg,
   dmr: buildDmr,
+  lmg: buildLmg,
   pistol: buildPistol,
 };
 

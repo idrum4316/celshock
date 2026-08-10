@@ -140,7 +140,7 @@ the top.
 - **Ragdolls are cosmetic.** Havok runs the fall and nothing else: a corpse is
   absent from navigation, cover and hit detection, so bots walk through bodies
   and rounds pass through them.
-- Four primaries, a fixed sidearm and five optics — but **no classes and no
+- Five primaries, a fixed sidearm and five optics — but **no classes and no
   vehicles**, and the sidearm is not a choice.
 - Nav cells hold up to three surfaces, so unusually deep stacks of walkable
   geometry would need `MAX_SURFACES` raised.
@@ -156,7 +156,7 @@ the top.
 - A second map: one new `layout.ts` plus an `EnvironmentSpec`.
 - Player-issued squad orders. Bots already plan their objectives as squads;
   what is missing is a way for you to tell one which flag to take.
-- A fifth weapon or a sixth optic — both are a config entry plus a builder.
+- A sixth weapon or a sixth optic — both are a config entry plus a builder.
 - Vehicles, which would need physics driving something other than corpses, new
   camera modes, and AI.
 

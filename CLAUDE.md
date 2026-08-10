@@ -230,7 +230,7 @@ must ABANDON what is left rather than bank it.
 
 → **[`docs/weapons.md`](docs/weapons.md)** — the viewmodel's own rendering group
 and pose stack, the bob phase's single integrator, the two slots and their
-holsters, the four weapons and the three fire modes, how an optic's size and its
+holsters, the five weapons and the three fire modes, how an optic's size and its
 eye relief are one number, and the procedural-model rules (merge per colour; never
 scale a part non-uniformly).
 

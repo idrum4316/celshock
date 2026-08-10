@@ -19,15 +19,18 @@
  * table spells out: the rifle hits hard enough to kill in four and holds a
  * line across the valley, the SMG empties a bigger magazine half again as
  * fast and cannot be trusted past the far side of a street, the DMR kills in
- * two and gives you one trigger pull at a time to do it with, and the carbine
- * spends three rounds on every pull whether or not it needed them.
+ * two and gives you one trigger pull at a time to do it with, the carbine
+ * spends three rounds on every pull whether or not it needed them, and the
+ * LMG is the one that does not have to stop.
  *
- * The time to kill is deliberately close for the two automatics (rifle 4
- * rounds at 8/s = 0.375 s, SMG 6 at 13/s = 0.385 s). What you are choosing
- * between them is not damage per second, it is how much of the screen a
- * burst covers. The other two step outside that at opposite ends: the DMR is
- * 2 rounds at 3/s = 0.333 s, faster than either, and it pays for it with the
- * error budget — a missed rifle round costs 0.125 s and a missed DMR round
+ * The time to kill is deliberately close for the three automatics (rifle 4
+ * rounds at 8/s = 0.375 s, SMG 6 at 13/s = 0.385 s, LMG 5 at 10/s = 0.4 s).
+ * What you are choosing between them is not damage per second — the rifle and
+ * the LMG deliver the identical 240 — it is how much of the screen a burst
+ * covers, how far away it still means anything, and how long you may keep
+ * firing it. The other two step outside that at opposite ends: the DMR is
+ * 2 rounds at 3/s = 0.333 s, faster than any of them, and it pays for it with
+ * the error budget — a missed rifle round costs 0.125 s and a missed DMR round
  * costs 0.333 — while the carbine's three rounds leave in 0.1 s and cost 0.4 s
  * of nothing at all afterwards.
  *
@@ -300,6 +303,87 @@ export const weapons = {
     /** A heavier charge in a longer barrel: lower, and (see `Sfx.shoot`,
      *  where level tracks 1/pitch) louder, because it fires far less often. */
     sfxPitch: 0.82,
+  },
+  /**
+   * The LMG: belt-fed, and the only weapon here that does not have to stop.
+   *
+   * Every other primary is built around its magazine running out. Twenty-four
+   * rounds is three seconds of rifle fire, and the fight you are in is decided
+   * by whether it ends before that does. This one carries seventy-five, which
+   * is fifteen kills and seven and a half seconds of continuous fire, and that
+   * is the entire weapon.
+   *
+   * The arithmetic is deliberately a wash, and it is the reason the magazine
+   * can be this big without the weapon being the obvious pick. Sustained output
+   * is 240 damage per second — exactly the rifle's, to the round — and the duty
+   * cycle is the same to within a percent: the rifle fires 3.0 s and reloads
+   * 1.4 (68%), this fires 7.5 s and reloads 3.4 (69%). What differs is not how
+   * much it delivers but WHEN it has to stop, and that is worth paying for,
+   * because the fight in the middle of a rifle's reload is the fight the rifle
+   * loses. Against three men crossing a square, the rifle is a weapon that runs
+   * out halfway through the second one.
+   *
+   * The bill is in the two things a support weapon is bad at, and both are the
+   * worst figures in the kit by a distance. It cannot START a fight: 0.55 on
+   * the ADS blend and 0.95 s to draw mean anything already aimed in gets its
+   * burst off first, and `spreadHip` at 0.115 makes firing it unaimed a way of
+   * announcing where you are. And it cannot RECOVER from being caught empty:
+   * 3.4 s is more than twice any reload here, in a game with no reserve
+   * ammunition and a sidearm that comes up in 0.34 — which is the answer, and
+   * is what the second slot is for.
+   *
+   * `bloomMult` at 0.5 is the one number that is a reward rather than a cost,
+   * and it is what makes a long burst worth firing: bloom tops out at 0.015
+   * against the rifle's 0.03, so the fortieth round lands where the fourth did.
+   * A weapon whose group opened up like the rifle's would have a seventy-five
+   * round magazine and nothing to do with it past the first second.
+   */
+  lmg: {
+    name: "Machine Gun",
+    short: "LMG",
+    /** 24 against 100 HP = 5 shots to kill — the most rounds of anything here. */
+    damage: 24,
+    /** 5 rounds at 10/s is 0.4 s: the worst ideal TTK of the three automatics,
+     *  by a hair, and on purpose. */
+    fireRate: 10,
+    semiAuto: false,
+    burst: 1,
+    burstCycle: 0,
+    /** Fifteen kills on one belt, against the rifle's six. The weapon. */
+    magSize: 75,
+    /** A belt box is not a magazine, and this is where it says so. */
+    reloadTime: 3.4,
+    /** The worst on offer. A machine gun fired from the hip is theatre. */
+    spreadHip: 0.115,
+    /** Wider than the rifle's 0.006 — honest, not a marksman's. What it has
+     *  over the rifle is that this figure barely moves; see `bloomMult`. */
+    spreadAds: 0.008,
+    /** A full-power round out of a long heavy barrel: further than the rifle,
+     *  well short of the DMR's. */
+    range: 130,
+    /**
+     * Mass, and it has to be: at 10 rounds a second the rifle's own kick would
+     * be 0.26 rad/s of climb. At 0.7 it is 0.182 — the gentlest climb in the
+     * kit, under both the rifle's 0.208 and the SMG's 0.187, which is what
+     * makes a long burst a thing you steer rather than a thing you abandon.
+     */
+    recoilMult: 0.7,
+    /** The heart of the weapon — see the header. Half the rifle's ceiling. */
+    bloomMult: 0.5,
+    /** The slowest thing here into the shoulder. */
+    adsSpeedMult: 0.55,
+    /** Long, and front-heavy with a box under the receiver: it sits further
+     *  out than the rifle or the muzzle fills the frame. */
+    hipZ: 0.05,
+    hipY: 0,
+    /** Heavy, and carried low on a bipod's worth of nose weight. Steadier than
+     *  anything but the DMR, which is the trade its own optic pays for. */
+    swayMult: 0.75,
+    /** Nothing here is slower to get up. Caught with it slung is caught. */
+    drawTime: 0.95,
+    /** A heavy charge in a long barrel, and (see `Sfx.shoot`, where level
+     *  tracks 1/pitch) the loudest report in the kit. */
+    sfxPitch: 0.88,
   },
   /**
    * The sidearm. Not a kit choice — every loadout carries it, and `Q` (pad Y)

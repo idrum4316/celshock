@@ -125,7 +125,7 @@ is the trade it is asking you to make.
 `Player.setBodyHidden` hides the viewmodel, which matters in the editor: it flies
 the same camera the weapon is parented to.
 
-## The loadout: four weapons, five optics, and a sidearm
+## The loadout: five weapons, five optics, and a sidearm
 
 Two tables, two slots, neither knowing about the other. `CONFIG.weapons` declares
 what can be carried and `CONFIG.sights` what can be bolted to it;
@@ -153,9 +153,10 @@ game. `bloomMult` multiplies the *ceiling* as well as the per-shot term — a we
 that blooms faster has to be allowed to bloom further, or the extra rounds per
 second cost it nothing after the second shot.
 
-The two automatics are balanced on time to kill, not damage per second: 4 rifle
-rounds at 8/s is 0.375 s, 6 SMG rounds at 13/s is 0.385 s. The choice buys how much
-of the screen a burst covers and how far away it still means anything.
+The three automatics are balanced on time to kill, not damage per second: 4 rifle
+rounds at 8/s is 0.375 s, 6 SMG rounds at 13/s is 0.385 s, 5 LMG rounds at 10/s is
+0.4 s. The choice buys how much of the screen a burst covers, how far away it still
+means anything, and how long you may go on firing it.
 
 **The carbine is the third question the trigger can be asked, and `semiAuto` and
 `burst` are why there are three.** `semiAuto` asks whether the trigger has to come
@@ -168,7 +169,7 @@ and the whole of the price is `burstCycle`: 0.4 s in which the weapon will not
 fire, spent identically whether the burst killed, missed, or landed two of three.
 That is the error budget again in its harshest form — a missed rifle round costs
 0.125 s and a wasted carbine burst costs half a second — and it is what keeps the
-sustained figure (6 rounds/s, 204 dps) the worst of the three automatics.
+sustained figure (6 rounds/s, 204 dps) the worst of the four automatics.
 
 **A burst in flight is the one thing that fires with the trigger up, and that is
 what makes it a mode rather than three fast rounds.** `Player.burstLeft` is the
@@ -192,6 +193,34 @@ half of the bill: only 70% of a kick springs back (`recoil.recoverFraction`), so
 third of a second after a shot ~1.2 deg is still on the aim. That also makes a high
 `bloomMult` cheap: at any deliberate pace the bloom has bled off before the next
 round leaves.
+
+**The LMG is the third weapon you simply hold the trigger down on, and the only
+one here that does not have to stop; every other number on it is the price of
+that.** Seventy-five rounds is
+fifteen kills and seven and a half seconds of fire; the rifle's twenty-four is six
+kills and three seconds. What makes that affordable is that the ARITHMETIC is a
+wash and only the timing differs: 24 damage at 10/s is 240 a second, exactly the
+rifle's 30 at 8/s, and the duty cycle matches to within a percent (3.0 s of fire
+against 1.4 s of reload is 68%; 7.5 against 3.4 is 69%). Two weapons deliver the
+same damage over a minute, and the one that never has to stop in the middle of a
+fight is choosing WHEN, not how much — which is worth exactly as much as the fight
+in the middle of the rifle's reload was going to cost.
+
+The bill is the two things it cannot do, and both are the worst figures in the
+kit. It cannot start a fight — `adsSpeedMult` 0.55 and `drawTime` 0.95 against the
+sidearm's 0.34, and a hip spread of 0.115 that makes firing it unaimed a way of
+saying where you are. And it cannot recover from being caught empty: 3.4 s is more
+than twice any other reload, in a game with no reserve ammunition, which is the
+[sidearm](#the-sidearm)'s case made by a second weapon rather than by argument.
+
+`bloomMult` is the one number on it that is a reward, and it is what makes the
+magazine mean anything: at 0.5 the bloom ceiling is 0.015 against the rifle's
+0.03, so the aimed group opens to 0.023 rad and stops, and the fortieth round of a
+burst lands where the fourth did. A weapon that bloomed like the rifle would carry
+seventy-five rounds and have nothing to do with the last fifty. `recoilMult` 0.7 is
+the same argument on the other axis: at 10 rounds a second the rifle's own kick is
+0.26 rad/s of climb, and 0.182 is the gentlest in the kit — a burst you steer
+rather than one you abandon.
 
 The trigger latch lives in **`Player.tryShot`, which takes the trigger rather than
 being called behind it** — a semi-automatic has to see the trigger come *up*, and a
@@ -279,6 +308,19 @@ of that weapon did for the same reason. What carries the silhouette instead is
 everything BELOW the rail, where there is no cone to answer to — the blade and the
 raked strut onto the gas block, a full-hand trigger guard drawn around the
 viewmodel's own glove, and a bipod folded down the handguard's flanks.
+
+**The LMG is the third weapon that rule has shaped, and there it took the rail
+apart.** A belt-fed carries two things on top of the barrel that nothing else here
+does — a folding carry handle and a front sight standing well forward — and both
+are above `railTop` where a real one puts them, which is the middle of the scope's
+picture. So the handle is hinged at the front and folded back down the barrel's
+LEFT flank, under the sight line, and the rail is split: it runs the length of the
+feed cover and stops with it, and what bridges the gap to the front iron station is
+a tower standing on the barrel whose top face IS `RAIL_TOP` and no higher. That
+split is also the honest read of the weapon — the barrel comes off a machine gun,
+and nothing that is lifted away mid-fight may carry the optic — which is the same
+bargain the carbine's handle struck: the constraint answered by the layout instead
+of paid for.
 
 **Read from the optic's side, that is one constraint and `RAIL_REACH` is it: how
 high a sight is carried and how wide its picture is are ONE decision, not two.**
@@ -398,11 +440,19 @@ already applied, so there is nothing for a confirm and a cancel to disagree abou
 ## Procedural models
 
 `RifleModel.buildRifle()` merges its ~150 static parts into one mesh per colour
-(BODY/POLYMER/METAL/RUBBER) — that merge is what makes the outline pass draw one
-border per colour group instead of a black shell around every screw, and it is what
-makes detail nearly free: four draws however many boxes go in. A colour missing from
-`SECTIONS` is silently never merged, so anything `collect()` takes has to be listed
-there. The merge works only because the root is still at identity while building.
+(BODY/POLYMER/METAL/RUBBER/BRASS) — that merge is what makes the outline pass draw
+one border per colour group instead of a black shell around every screw, and it is
+what makes detail nearly free: one draw per colour however many boxes go in. A
+colour missing from `SECTIONS` is silently never merged, so anything `collect()`
+takes has to be listed there. The merge works only because the root is still at
+identity while building.
+
+**A colour group is free where it is unused, which is why BRASS is one.** `merge`
+skips a group with nothing in it, so the LMG's exposed belt costs the other four
+weapons nothing at all — and the belt has to be its own group rather than METAL,
+because brass is the one thing on a weapon that is not part of the weapon and
+merged into the fittings it would come out steel-coloured and steel-glossy along
+with the rails.
 
 **Nothing in the rifle may be scaled non-uniformly.** `VertexData.transform`
 transforms normals *without* re-normalising them, and `renderOutline` extrudes each

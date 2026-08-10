@@ -66,6 +66,7 @@ const WEAPON_BLURBS: Record<PrimaryWeaponId, string> = {
     "A bullpup, and the trigger buys three rounds rather than one. All three land in a tenth of a second and all three together are a kill — then the weapon sits out four tenths whether they hit or not, which makes a wasted burst the most expensive mistake in the kit.",
   smg: "Pistol-calibre, and it empties a long magazine in under three seconds. Quickest to the shoulder, cheapest to miss with, and past the width of a street it will not group whatever optic is on top of it.",
   dmr: "Semi-automatic: one round per trigger pull, and two rounds anywhere on a man will do it. The tightest group and the longest reach in the kit, paid for with a kick that has to be ridden back down before the second shot means anything.",
+  lmg: "Belt-fed, and the only weapon here that does not have to stop: seventy-five rounds is fifteen kills without a pause, and the group barely opens across the whole belt. Slowest into the shoulder, useless from the hip, and a reload long enough that being caught empty is a decision about the sidearm.",
 };
 
 /**

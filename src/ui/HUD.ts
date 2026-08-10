@@ -115,6 +115,13 @@ function damageArcMarkup(): string {
   return `<svg viewBox="0 0 ${ARC_BOX} ${ARC_BOX}" width="${ARC_BOX}" height="${ARC_BOX}"><path d="${d}"/></svg>`;
 }
 
+/**
+ * The magazine strip's box, in px — the health bar's width, which is what the
+ * whole right column is measured in. Must match `#mag-strip` in `hud.css`,
+ * where the box is fixed and the ticks are placed inside it.
+ */
+const MAG_STRIP_W = 224;
+
 /** Signed shortest angle from `a` to `b`, in radians. */
 function angleDelta(a: number, b: number): number {
   let d = (b - a) % (Math.PI * 2);
@@ -585,6 +592,17 @@ export class HUD {
     if (this.magBuilt !== magSize) {
       this.magStrip.innerHTML = "";
       this.magTicks = [];
+      // One tick per round however many rounds there are, so it is the PITCH
+      // that gives way rather than the count: the LMG's belt is 75, and at the
+      // authored 5px tick and 2px gap that row would be 525px — more than
+      // twice the gauges it sits under. Both keep their authored size until
+      // the row would overflow (anything up to 32 rounds), so the rifle's
+      // strip is untouched; past that they close up together. The SMG's 34
+      // came to 236 and now fits the 224 the rest of the column is drawn in.
+      const pitch = MAG_STRIP_W / magSize;
+      const gap = Math.min(2, pitch * 0.32);
+      this.magStrip.style.setProperty("--pip-gap", `${gap.toFixed(2)}px`);
+      this.magStrip.style.setProperty("--pip-w", `${Math.min(5, pitch - gap).toFixed(2)}px`);
       for (let i = 0; i < magSize; i++) {
         const tick = document.createElement("i");
         this.magStrip.appendChild(tick);

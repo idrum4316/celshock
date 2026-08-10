@@ -31,6 +31,17 @@ goes up and the crosshair comes down, and they are not the same decision —
 `.overlaid` would take the tickets and vitals with it, which under a pause are
 still true.
 
+**The magazine strip is markup the WEAPON TABLE sizes**, and it is the one place
+a number in `CONFIG.weapons` reaches the DOM. `HUD.setAmmo` builds one `<i>` per
+round in the carried weapon's magazine — the count is what makes the strip
+readable without reading the number — so the row's length is a weapon's
+`magSize` and a new weapon can make it any width it likes. The box is therefore
+FIXED at the health bar's 224 px and the ticks are fitted into it: the pitch
+gives way, never the count, and never the strip's own width, which would
+otherwise redraw the right-hand column every time the kit changed. Ticks keep
+their authored 5 px until a magazine is bigger than 32 rounds; the LMG's belt of
+75 is what closes them up.
+
 **One stylesheet per module that writes markup, imported by that module**
 (`HUD.ts`→`hud.css` … `editor/EditorPanel.ts`→`editor/panel.css`); `main.ts`
 imports `base.css` first. Vite bundles them into one hashed stylesheet the built

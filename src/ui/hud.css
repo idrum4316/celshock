@@ -537,18 +537,28 @@
 }
 /* One tick per round left in the magazine. The count is legible without
    reading the number, which is what the strip is for — the number is the
-   confirmation, not the reading. */
+   confirmation, not the reading.
+
+   The BOX is fixed at the health bar's width and the ticks are laid into
+   it from the right, because a strip sized by its contents is a strip
+   whose width is the carried weapon's magazine: 24 rounds and 75 rounds
+   would draw two different HUDs. `HUD.setAmmo` writes the two custom
+   properties when it rebuilds the row, and the fallbacks here are the
+   authored size — what everything up to 32 rounds still gets. */
 #mag-strip {
   position: relative;
   display: flex;
-  gap: 2px;
+  justify-content: flex-end;
+  gap: var(--pip-gap, 2px);
+  width: 224px;
   height: 13px;
   overflow: hidden;
   transform: skewX(-20deg);
 }
 #mag-strip i {
   display: block;
-  width: 5px;
+  flex: 0 0 auto;
+  width: var(--pip-w, 5px);
   height: 100%;
   background: var(--hot);
   box-shadow: 0 0 4px rgba(255, 230, 128, 0.35);
@@ -587,7 +597,9 @@
 /* A sweep across the strip while the magazine is being changed. The 1.4s
    cycle mirrors the RIFLE's `CONFIG.weapons.rifle.reloadTime` so one
    pass ≈ one reload; the SMG's is a little shorter and the sweep simply
-   runs on. It is cosmetic, and nothing reads it back. */
+   runs on, and the LMG's 3.4 s belt change takes two and a half passes,
+   which reads as the long job it is. It is cosmetic, and nothing reads it
+   back. */
 #hud-right.reloading #mag-strip::after {
   content: "";
   position: absolute;
