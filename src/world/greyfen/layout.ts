@@ -67,6 +67,7 @@ import { GreyfenHeights } from "./heights";
  */
 const placements: Placement[] = [
   { kind: "manor", x: 0, z: -4, params: { litWindows: true } },
+  { kind: "tavern", x: -40.586, z: -54.804, rotY: Math.PI / 2 },
 ];
 
 /**
@@ -86,8 +87,11 @@ const placements: Placement[] = [
  * they start costing anything — see CLAUDE.md on scatter regions.
  */
 const scatter: ScatterSpec[] = [
-  { prop: "jungleTree", x: 0, z: 96, width: 235, depth: 40, count: 80, scale: [0.85, 2], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: 7.68, z: -97.112, width: 220, depth: 40, count: 80, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
+  { prop: "jungleTree", x: -37.5, z: 96, width: 78, depth: 40, count: 30, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
+  { prop: "jungleTree", x: 46.18, z: -97.112, width: 78, depth: 40, count: 30, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
+  { prop: "jungleTree", x: -32, z: -96.5, width: 78, depth: 40, count: 30, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
+  { prop: "jungleTree", x: -4.348, z: -43.465, width: 78, depth: 60, count: 34, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
+  { prop: "jungleTree", x: 75.268, z: -60.696, width: 78, depth: 24, count: 20, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
 ];
 
 const controlPoints: ControlPointDef[] = [
