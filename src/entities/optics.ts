@@ -216,8 +216,29 @@ const scopeBore = (dz: number): number =>
  * actual world (5.9 deg against 5.7) — the honest way round for the optic that
  * magnifies less.
  */
-const PRISM_WALL = 0.007;
-const PRISM_SECTIONS = 2;
+/**
+ * The wall and the step count are what the shooter actually LOOKS at, and they
+ * are not the same lever as the cone.
+ *
+ * The bore is the picture and is solved above; everything outside it is a black
+ * ring around that picture, and at the near end that ring was most of the
+ * screen. Two things set its width, and only one of them is the wall: a section
+ * carries its FAR rim's radius all the way back, so the ocular end stands
+ * `cone * seg` proud of the cone whatever the wall does. Halving the step
+ * length is therefore worth more than halving the wall — three sections over a
+ * body this short is still a fine staircase.
+ *
+ * Measured on the rifle at full ADS, against the flush rims below: the
+ * housing's outer edge came in from 97% of the half-screen to 81% while the
+ * picture stayed exactly where the cone puts it (~50%), which is 40% less black
+ * ring around the same view. The picture is not what got smaller and must not
+ * be — it is `PRISM_CONE`'s, and `PRISM_CONE` answers to the rail.
+ *
+ * The floor under both is the same as the scope's: a wall thinner than the ink
+ * shell `renderOutline` extrudes reads as a line rather than a rim.
+ */
+const PRISM_WALL = 0.005;
+const PRISM_SECTIONS = 3;
 const PRISM_OCULAR_DZ = -0.06;
 const PRISM_OBJECTIVE_DZ = 0.05;
 const PRISM_FLOOR_GAP = 0.0025;
@@ -590,13 +611,19 @@ export function buildOptics(
     }
     const rOcular = outerAt(PRISM_OCULAR_DZ);
     const rObjective = outerAt(PRISM_OBJECTIVE_DZ);
-    b.shell("prismOcular", POLYMER, rOcular * 2, 0.011, 0.014, prismY, ocularZ - 0.003);
+    // The two rims are the near end of the sight and therefore the widest thing
+    // in the frame — the eyecup more so than the ocular, since it is nearer the
+    // eye again. They are given the SAME outer radius rather than each standing
+    // proud of the last, so the near end is one diameter instead of a stack of
+    // three — a stack reads as detail on a bench and as a wider black band in
+    // the one place this sight is actually looked through.
+    b.shell("prismOcular", POLYMER, rOcular * 2, 0.005, 0.014, prismY, ocularZ - 0.003);
     // A rubber eyecup, which is the one part of this sight that is about the
     // eye relief rather than about the picture: it is short and unforgiving,
     // and a cup is what a shooter finds the box behind. Sized off the ocular's
     // OUTER radius, so it stands around the tube and never inside the cone.
-    b.shell("prismCup", RUBBER, rOcular * 2 + 0.004, 0.007, 0.013, prismY, ocularZ - 0.014);
-    b.shell("prismBell", POLYMER, rObjective * 2, 0.008, 0.022, prismY, objectiveZ + 0.01);
+    b.shell("prismCup", RUBBER, rOcular * 2, 0.005, 0.013, prismY, ocularZ - 0.014);
+    b.shell("prismBell", POLYMER, rObjective * 2, 0.006, 0.022, prismY, objectiveZ + 0.01);
     // The mount: one block from the rail to the OCULAR section's underside, so
     // the wider objective end overhangs it rather than the block having to
     // clear the fattest part of a body that changes width along its length.
@@ -625,53 +652,42 @@ export function buildOptics(
     b.pin("prismIllum", METAL, 0.03, 0.013, -(rTurret + 0.006), prismY, turretZ, "x");
     b.merge("prism", node);
 
-    // The reticle: a chevron on the axis, two stadia bars and a post under it,
-    // merged into one emissive mesh the way the scope's duplex is.
+    // The reticle: a caret and nothing else, two arms merged into one emissive
+    // mesh the way the scope's duplex is.
     //
-    // A chevron rather than a cross because the TIP is the aim point: at 2.5x
-    // a target is small enough that a crosshair's centre is the one part of the
-    // picture the bars are covering up. Everything is cut to just inside the
-    // cone at the reticle's own depth, so the bars stop at the edge of what can
-    // be seen rather than at a tube wall well outside it.
+    // A caret rather than a cross because the TIP is the aim point, and once
+    // the tip is doing the aiming every other mark is something laid over the
+    // target: the stadia bars and the drop post this carried were three more
+    // red lines across a picture at 2.5x, where a target is small enough that
+    // the marks meant to frame it cover it instead. What is left is the one
+    // stroke you actually put on a body.
+    //
+    // Its size is a share of the CONE at the reticle's own depth, not a length:
+    // the caret should read the same against the picture if the cone is ever
+    // re-solved, and the picture is what the cone is.
     const retZ = objectiveZ - 0.03;
-    const armIn = 0.014;
-    const armOut = PRISM_CONE * (eyeDistance("prism") + retZ - ocularZ) - 0.004;
-    const armLen = armOut - armIn;
-    const armMid = (armIn + armOut) / 2;
+    const clearR = PRISM_CONE * (eyeDistance("prism") + retZ - ocularZ);
+    const armLen = clearR * 0.5;
     const bars: Mesh[] = [];
     for (const side of [-1, 1] as const) {
-      const h = MeshBuilder.CreateBox(
-        `${prefix}_prismRetH`,
-        { width: armLen, height: 0.0016, depth: 0.0012 },
-        b.scene,
-      );
-      h.position.set(side * armMid, prismY, retZ);
-      bars.push(h);
-      // The chevron's arms: each hung from the axis so its top end lands ON it,
+      // The caret's arms: each hung from the axis so its top end lands ON it,
       // which is what makes the apex the aim point rather than something near
       // it. Babylon's rotation about z takes the bar's own +y to
       // `(-sin, cos)`, so the centre is half a length back down that vector.
       const a = 0.6;
       const arm = MeshBuilder.CreateBox(
-        `${prefix}_prismRetChev`,
-        { width: 0.0018, height: 0.019, depth: 0.0012 },
+        `${prefix}_prismRetCaret`,
+        { width: 0.0011, height: armLen, depth: 0.0012 },
         b.scene,
       );
       arm.rotation.z = side * a;
       arm.position.set(
-        side * Math.sin(a) * 0.0095,
-        prismY - Math.cos(a) * 0.0095,
+        (side * Math.sin(a) * armLen) / 2,
+        prismY - (Math.cos(a) * armLen) / 2,
         retZ,
       );
       bars.push(arm);
     }
-    const post = MeshBuilder.CreateBox(
-      `${prefix}_prismRetPost`,
-      { width: 0.0016, height: armLen, depth: 0.0012 },
-      b.scene,
-    );
-    post.position.set(0, prismY - armMid, retZ);
-    bars.push(post);
     const reticle = Mesh.MergeMeshes(bars, true, true);
     if (reticle) {
       reticle.name = `${prefix}_prismReticle`;
