@@ -17,7 +17,14 @@
  */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import { segmentHitsBox, topFaceHeight, verticalSpan } from "./boxGeometry";
+import {
+  halfDepth,
+  segmentHitsBox,
+  slabThickness,
+  topFaceAtLocalZ,
+  topFaceHeight,
+  verticalSpan,
+} from "./boxGeometry";
 import type { WorldBox } from "./MapBuilder";
 import type { TerrainField } from "./TerrainField";
 
@@ -362,17 +369,46 @@ export class NavGrid {
    * A box only counts as a barrier where it stands more than a step above both
    * ends of the link. Otherwise a bridge deck, a kerb or the terrace's own top
    * face would cut the links leading onto itself.
+   *
+   * ## Pitched boxes are asked the same question, not skipped
+   *
+   * That height test is evaluated from the box's top-face PLANE at the
+   * crossing, which is what lets a pitched box through the same gate as an
+   * upright one: a ramp's own slab is within a step of the surfaces at either
+   * end of a link running up it, so it spares itself exactly as the terrace top
+   * does, while its underside spares the ground beneath it by `HEADROOM`.
+   *
+   * This used to be `if (box.rotX !== 0) continue`, on the reasoning that ramps
+   * are surfaces to walk up rather than barriers. True of a ramp and false of
+   * everything else pitched — above all a stair's PARAPET, which is pitched
+   * only because it rails a pitched flight, and which stands a metre over the
+   * treads. The manor's grand stair was the worked example: the parapet severed
+   * nothing, so the graph offered diagonal links straight THROUGH the handrail,
+   * every flow field took that shortcut over the flight's own foot, and
+   * `ObstacleField` — which reads the same box correctly — pushed each bot
+   * back out, at exactly `bodyRadius` from the rail's face. `Bot`'s stuck
+   * watchdog is the only reason that was slow rather than fatal: it sidesteps
+   * along whatever it is grinding on, which eventually walks the bot round to
+   * the flight's foot. Measured on Greyfen, climbing from the great hall:
+   * **9.7 s, four detours and ~3 s of grinding, against 4.6 s and none** with
+   * the link cut. Cutting them costs no connectivity anywhere — the walkable
+   * count and all seven fields' reach are identical on both maps.
    */
   private severLinks(boxes: WorldBox[]): void {
     const linkStride = NEIGHBOURS.length;
     const step = CONFIG.nav.stepHeight;
     for (const box of boxes) {
       if (box.w > 200 || box.d > 200) continue;
-      // Ramps are surfaces to walk up, never barriers.
-      if (box.rotX !== 0) continue;
-      const top = box.cy + box.h / 2;
-      const bottom = box.cy - box.h / 2;
-      const reach = (Math.abs(box.w) + Math.abs(box.d)) / 2 + this.cellSize * 2;
+      const cosY = Math.cos(-box.rotY);
+      const sinY = Math.sin(-box.rotY);
+      const hd = halfDepth(box);
+      const thickness = slabThickness(box);
+      // The pitch term is what the footprint gains by leaning; the rest is the
+      // generous bound this always used.
+      const reach =
+        (Math.abs(box.w) + Math.abs(box.d)) / 2 +
+        (box.h / 2) * Math.abs(Math.sin(box.rotX)) +
+        this.cellSize * 2;
       const minX = Math.max(0, this.toCell(box.cx - reach));
       const maxX = Math.min(this.dim - 1, this.toCell(box.cx + reach));
       const minZ = Math.max(0, this.toCell(box.cz - reach));
@@ -389,9 +425,20 @@ export class NavGrid {
             const nx = cx + dx;
             const nz = cz + dz;
             if (nx < 0 || nz < 0 || nx >= this.dim || nz >= this.dim) continue;
-            if (!segmentHitsBox(box, wx, wz, this.toWorld(nx), this.toWorld(nz))) {
-              continue;
-            }
+            const ox = this.toWorld(nx);
+            const oz = this.toWorld(nz);
+            if (!segmentHitsBox(box, wx, wz, ox, oz)) continue;
+            // Where the link meets the box, taken at the halfway point and
+            // clamped into the footprint — the same plane `ObstacleField.push`
+            // reads, so a rail and a ramp are told apart by their geometry
+            // rather than by their `rotX`. An upright box has no slope, so
+            // this is its `cy ± h / 2` however the sample lands.
+            const mx = (wx + ox) / 2 - box.cx;
+            const mz = (wz + oz) / 2 - box.cz;
+            const lz = Math.max(-hd, Math.min(hd, -mx * sinY + mz * cosY));
+            const top = topFaceAtLocalZ(box, lz);
+            if (top === null) continue;
+            const bottom = top - thickness;
             for (let si = 0; si < this.counts[cell]; si++) {
               const surface = cell * MAX_SURFACES + si;
               const other = this.links[surface * linkStride + n];

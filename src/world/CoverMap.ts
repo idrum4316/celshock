@@ -125,8 +125,12 @@ export class CoverMap {
       // Same exclusions as the nav grid and the obstacle field: the ground
       // plane and the boundary ridge are not cover.
       if (box.w > 200 || box.d > 200) continue;
-      // `segmentHitsBox` is a footprint test and its contract says pitched
-      // boxes are not valid input — a ramp's footprint is not its slab.
+      // Pitched boxes are skipped here for a reason of this file's own, not
+      // `segmentHitsBox`'s (which handles them): the `top`/`bottom` below are
+      // the box's AABB, and a ramp's peak reported across its whole footprint
+      // would read as chest-high cover standing at its foot. Cover from a
+      // pitched box would have to be measured off the plane, one bearing at a
+      // time, and nothing has needed it.
       if (Math.abs(box.rotX) > 1e-3) continue;
 
       const top = box.cy + box.h / 2;

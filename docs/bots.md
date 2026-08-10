@@ -55,6 +55,28 @@ says to go). Testing the segment rather than blocking whole cells is what keeps 
 than `stepHeight` above both ends of the link, so decks, kerbs and the terrace's top
 face don't cut the links leading onto them.
 
+**That barrier test is evaluated from the top-face PLANE at the crossing, which is
+what lets a PITCHED box through the same gate as an upright one** — and it must,
+because "pitched" does not mean "ramp". A ramp spares itself: its slab at the
+crossing is within a step of the surfaces at either end of a link running up it,
+exactly as the terrace's top face is, and its underside spares the ground beneath
+it by `HEADROOM`. A stair's *parapet* is pitched too, only because it rails a
+pitched flight, and it stands a metre over the treads — so it severs, as it should.
+`severLinks` used to skip every `rotX !== 0` box outright on the reasoning that
+ramps are surfaces rather than barriers, and the manor's grand stair is what that
+cost: the parapet severed nothing, so the graph offered diagonal links straight
+*through* the handrail, every flow field preferred that shortcut to the flight's own
+foot, and `ObstacleField` — which reads the same box correctly — pushed each bot
+back out. Measured on Greyfen, a bot climbing from the great hall took **9.7 s with
+four watchdog detours and ~3 s of grinding against the rail, against 4.6 s and none
+once the link is cut**; the stuck watchdog is the only reason it was slow rather
+than stranded. Severing them changes no connectivity anywhere — walkable surface
+count and all seven flow fields' reach are identical on both maps — because a rail
+only ever cut the shortcut, never the route. `segmentHitsBox` answers for pitched
+boxes for the same reason: a footprint test says where a box *is*, and whether it is
+a barrier belongs to the caller. `CoverMap` still skips them, for a reason of its
+own that its comment carries.
+
 **A surface keeps ONE link per direction — the nearest STANDABLE neighbour — and
 that is why `clearBlocked` runs before `link`.** A surface with no headroom can
 never be stood on, so letting one win the single slot spends the link on a dead end.

@@ -13,8 +13,9 @@
  *
  * Invariants: half-thickness is h/2/cos(rotX) and the slope is tan(rotX) —
  * writing it as h/2*cos and -tan is the easy sign error and it silently makes
- * every ramp unwalkable. Callers must exclude pitched boxes from
- * `segmentHitsBox`: a ramp's footprint is not its slab.
+ * every ramp unwalkable. Every footprint here is `halfDepth`, never `d / 2`:
+ * a pitched slab covers more ground than its depth, and the two only agree at
+ * zero pitch.
  */
 import type { WorldBox } from "./MapBuilder";
 
@@ -101,8 +102,16 @@ export function verticalSpan(
 /**
  * True when the XZ segment from (x0,z0) to (x1,z1) crosses the box's footprint.
  * Slab test in the box's own frame, so a rotated wall is handled without
- * inflating it to an AABB. Callers must exclude pitched boxes — a ramp's
- * footprint is not its slab.
+ * inflating it to an AABB.
+ *
+ * The depth half-extent is `halfDepth`, so a PITCHED box is answered for
+ * correctly too — it reduces to `d / 2` at zero pitch, so nothing that was
+ * already passing flat boxes changes. This used to be `d / 2` outright, with a
+ * contract line telling callers to exclude pitched boxes; `NavGrid.severLinks`
+ * obeyed it by skipping every pitched box, which is how a stair's PARAPET —
+ * pitched, because it rails a pitched flight — came to sever nothing at all.
+ * A footprint test says where a box is, not whether it is a barrier; that
+ * second question belongs to the caller, which is where it now lives.
  */
 export function segmentHitsBox(
   box: WorldBox,
@@ -124,7 +133,7 @@ export function segmentHitsBox(
 
   let t0 = 0;
   let t1 = 1;
-  const half: [number, number] = [box.w / 2, box.d / 2];
+  const half: [number, number] = [box.w / 2, halfDepth(box)];
   const from: [number, number] = [ax, az];
   const dir: [number, number] = [bx - ax, bz - az];
   for (let axis = 0; axis < 2; axis++) {
