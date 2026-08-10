@@ -35,9 +35,9 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   touching the viewmodel or camera — for **every** optic, since each carries its
   own eye reference. Take
   `scene.getTransformNodeByName("view_<weapon>_<sight>_sightCenter")
-  .getAbsolutePosition()` (all nine of `rifle`/`smg`/`dmr` ×
-  `iron`/`holo`/`scope`, since a weapon change moves the optic too, plus
-  `view_pistol_iron_sightCenter`), subtract `camera.position`, and project onto
+  .getAbsolutePosition()` (all fifteen of `rifle`/`smg`/`dmr` ×
+  `reflex`/`iron`/`holo`/`prism`/`scope`, since a weapon change moves the optic
+  too, plus `view_pistol_iron_sightCenter`), subtract `camera.position`, and project onto
   `cameraSys.forward` and a right vector built from `aimYaw` — `(cos(aimYaw), 0,
   -sin(aimYaw))`. **Not `flatRight`**, which is deliberately the un-recoiled and
   un-swayed yaw (see `camera.aimSway`) and so is not perpendicular to `forward` while either is live;

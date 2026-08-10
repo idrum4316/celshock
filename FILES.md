@@ -34,7 +34,7 @@ src/
     PistolModel.ts      # 1911 sidearm — the one weapon that does not call
                         #   optics.ts: no rail, so its notch and blade are its
                         #   own and are all it ever wears
-    optics.ts           # The three optic assemblies, built onto whichever
+    optics.ts           # The five optic assemblies, built onto whichever
                         #   weapon's OpticMount asked for them
     weapons.ts          # WeaponId + WeaponSetup, + SIDEARM/PRIMARY_WEAPON_IDS
     sights.ts           # SightId + magnification -> FOV, sensitivity, zoomComp

@@ -71,8 +71,12 @@ const WEAPON_BLURBS: Record<PrimaryWeaponId, string> = {
  * and the magnification on each button is read from there.
  */
 const SIGHT_BLURBS: Record<SightId, string> = {
-  iron: "Rear aperture over a hooded post. The widest picture on the weapon and the fastest to the shoulder — best where the fight is already close.",
+  reflex:
+    "A lit dot in an open frame, and the least magnification on offer. Nothing to line up and nothing in the way — the clearest picture in the kit, a fraction slower up than the irons already standing on the rail.",
+  iron: "Rear aperture over a hooded post. Nothing to switch on and the fastest to the shoulder, paid for with a post that covers whatever it is aimed at.",
   holo: "A lit ring and dot floating in a tube optic. The issued sight: enough magnification to pick a target out of the dark, little enough to swing between two.",
+  prism:
+    "A short prismatic body on an integral mount, with an etched chevron. Enough magnification to make a body across the square worth shooting at, and enough field left to swing onto the next one.",
   scope:
     "Telescopic, with a duplex reticle. Slow to bring up and a tunnel to look down, and the only thing on offer that will show you a body at the far end of the valley.",
 };

@@ -295,13 +295,13 @@ is the trade it is asking you to make.
 `Player.setBodyHidden` hides the viewmodel, which matters in the editor: it flies
 the same camera the weapon is parented to.
 
-### The loadout: three weapons, three optics, and a sidearm
+### The loadout: three weapons, five optics, and a sidearm
 
 Two tables, two slots, neither knowing about the other. `CONFIG.weapons` declares
 what can be carried and `CONFIG.sights` what can be bolted to it;
 `entities/weapons.ts` and `entities/sights.ts` derive `WeaponId`/`SightId` **from
 those tables**, so each is declared in exactly one place. Every weapon *with a
-rail* takes all three optics; the sidearm has no rail.
+rail* takes every optic; the sidearm has no rail.
 
 **A weapon owns the round; an optic owns the picture.** Damage, rate, magazine,
 spread, range and the recoil multipliers are the weapon's and reach nothing but
@@ -386,7 +386,7 @@ does not fire the instant the reload ends.
 **The optics are built against the weapon, not for it.** `optics.ts` takes an
 `OpticMount` — the rail's height, where along it the sight sits, and its two back-up
 iron stations — and measures everything from those four numbers, so the SMG's
-shallow receiver and the DMR's deeper one carry the same three sights with nothing
+shallow receiver and the DMR's deeper one carry the same five sights with nothing
 re-tuned. Adding a weapon is a config entry, a model builder returning
 `WeaponParts`, and an `OpticMount` (or, with no rail, a `fixed` sight assembly);
 adding an optic is a config entry and a builder in `optics.ts`.
@@ -398,6 +398,18 @@ about z = 0.53, which is why the DMR's rail stops where it does and why its fron
 iron station sits no further out than the rifle's despite a longer receiver. The
 extra sight radius a marksman rifle wants comes out of the rear station instead;
 `DmrModel.ts`'s `MOUNT` documents both.
+
+**Read from the optic's side, that is one constraint and `RAIL_REACH` is it: how
+high a sight is carried and how wide its picture is are ONE decision, not two.**
+A view cone spreads with distance and the longest rail here (the DMR's, to
+z = 0.57) is what it runs onto, so a new optic gets `rise >= cone * (eyeDistance
++ RAIL_REACH - its ocular offset)` and no freedom left over — the reflex's window
+HEIGHT and the prism's `PRISM_CONE` are both that inequality solved rather than
+authored, which is what stops them going quietly wrong the next time a rise or an
+eye relief moves. What is left over is the daylight under the picture, and it is a
+named constant either way. The width of a window is free (nothing on a weapon
+stands out sideways) and the irons are exempt: what you see under the post through
+an aperture is meant to be the weapon.
 
 **The irons bound the weapon from the other end, and that is what the stock's
 heights are.** An aperture's eye relief is over half a receiver's length, so the eye

@@ -139,7 +139,7 @@ has a contract header at the top.
 - **Ragdolls are cosmetic.** Havok runs the fall and nothing else: a corpse is
   absent from navigation, cover and hit detection, so bots walk through bodies
   and rounds pass through them.
-- Three primaries, a fixed sidearm and three optics — but **no classes and no
+- Three primaries, a fixed sidearm and five optics — but **no classes and no
   vehicles**, and the sidearm is not a choice.
 - Nav cells hold up to three surfaces, so unusually deep stacks of walkable
   geometry would need `MAX_SURFACES` raised.

@@ -29,7 +29,14 @@
 import { MeshBuilder, Mesh, Color3, StandardMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { SIGHT_IDS, type SightId } from "./sights";
-import { FACETS, METAL, POLYMER, type SightAssembly, type WeaponBuild } from "./weaponKit";
+import {
+  FACETS,
+  METAL,
+  POLYMER,
+  RUBBER,
+  type SightAssembly,
+  type WeaponBuild,
+} from "./weaponKit";
 
 /**
  * Where a weapon offers its rail, and where along it a sight sits. Everything
@@ -82,6 +89,28 @@ const eyeDistance = (id: SightId): number =>
 const IRON_RISE = 0.036;
 const WIN_RISE = 0.078;
 const SCOPE_RISE = 0.1;
+const REFLEX_RISE = 0.072;
+const PRISM_RISE = 0.096;
+
+/**
+ * The far end of the longest rail any weapon here offers, as a depth past the
+ * optic's own mount — the DMR's, which runs to z = 0.57 off a `mountZ` of 0.02.
+ *
+ * This is the number every rise above is really solving against, and it was
+ * worked out by hand three times before it was written down: a sight's view
+ * cone spreads with distance, and where it spreads far enough it runs onto the
+ * weapon's own top deck. A cone that clears the rail HERE clears everything
+ * forward of it too, because past the rail there is nothing left standing as
+ * high — the gas block, the barrel and the flash hider are all well under it.
+ *
+ * So a new optic's rise and its cone are ONE decision, not two:
+ *
+ *     rise >= cone * (eyeDistance(id) + RAIL_REACH - <its ocular offset>)
+ *
+ * and the margin left over is how much daylight there is under the picture.
+ * Break it and the far ribs of the rail sit in the bottom of the sight.
+ */
+const RAIL_REACH = 0.55;
 
 /**
  * The holo's clear bore and wall. The shooter looks PAST the wall, so every
@@ -103,6 +132,26 @@ const WALL = 0.007;
  * it reads as twice the size and the front hood floats inside it.
  */
 const IRON_BORE = 0.048;
+
+/**
+ * The reflex's window, and the frame around it. Rectangular rather than round,
+ * which is the whole silhouette: there is no tube here, so the frame is the
+ * only thing between the eye and the world and it is kept to `REFLEX_FRAME`
+ * either side of the glass.
+ *
+ * The HEIGHT is therefore not authored: it is `RAIL_REACH` solved for, the
+ * tallest window this rise can carry with `REFLEX_FLOOR_GAP` of daylight left
+ * under the picture, and it comes out at 0.060. Written as a number instead it
+ * would go quietly wrong the first time the rise or the eye relief moved. The
+ * WIDTH is free — nothing on a weapon stands out sideways — so it is simply
+ * wider than it is tall, the way a reflex lens is.
+ */
+const REFLEX_WIN_W = 0.076;
+const REFLEX_FLOOR_GAP = 0.005;
+const REFLEX_WIN_H =
+  (2 * (REFLEX_RISE - REFLEX_FLOOR_GAP) * eyeDistance("reflex")) /
+  (eyeDistance("reflex") + RAIL_REACH);
+const REFLEX_FRAME = 0.006;
 
 /**
  * The 3.5x scope. A telescope here is a real tube the eye looks down — there
@@ -149,6 +198,38 @@ const scopeBore = (dz: number): number =>
   2 * SCOPE_CONE * (eyeDistance("scope") + dz - SCOPE_OCULAR_DZ);
 
 /**
+ * The 2.5x prism. Built the same way as the scope — a stepped tube that
+ * circumscribes the view cone — and everything different about it comes out of
+ * one fact: a lower magnification is a WIDER aimed FOV, so filling the same
+ * share of the screen needs a wider cone, and a wider cone needs either a
+ * taller mount or a shorter body.
+ *
+ * It buys the second. The tube is a third of the scope's length and the eye is
+ * held nearly as close, which is what keeps the objective under the scope's own
+ * bell despite the wider cone — a prism is a glass block with a short air path
+ * either side of it, and this is that shape rather than a shrunken telescope.
+ *
+ * `PRISM_CONE` is then not a choice at all — it is whatever `PRISM_RISE` will
+ * pay for against `RAIL_REACH`, solved rather than written the way the reflex's
+ * window is. It works out at 0.104: in screen terms a circle a little over half
+ * the frame high, smaller than the scope's two thirds, and a WIDER cone of
+ * actual world (5.9 deg against 5.7) — the honest way round for the optic that
+ * magnifies less.
+ */
+const PRISM_WALL = 0.007;
+const PRISM_SECTIONS = 2;
+const PRISM_OCULAR_DZ = -0.06;
+const PRISM_OBJECTIVE_DZ = 0.05;
+const PRISM_FLOOR_GAP = 0.0025;
+const PRISM_CONE =
+  (PRISM_RISE - PRISM_FLOOR_GAP) /
+  (eyeDistance("prism") + RAIL_REACH - PRISM_OCULAR_DZ);
+
+/** `scopeBore`'s twin: the clear bore a prism section ending at `dz` carries. */
+const prismBore = (dz: number): number =>
+  2 * PRISM_CONE * (eyeDistance("prism") + dz - PRISM_OCULAR_DZ);
+
+/**
  * The height a weapon's own geometry must stay UNDER at depth `z`, if it is not
  * to eat into the iron sight picture.
  *
@@ -191,6 +272,8 @@ export function buildOptics(
   const ironY = mount.railTop + IRON_RISE;
   const winY = mount.railTop + WIN_RISE;
   const scopeY = mount.railTop + SCOPE_RISE;
+  const reflexY = mount.railTop + REFLEX_RISE;
+  const prismY = mount.railTop + PRISM_RISE;
   const winZ = mount.mountZ;
 
   /**
@@ -249,6 +332,131 @@ export function buildOptics(
     // The eye reference is the REAR aperture: that is the hole you look
     // through, and the front post lands on the axis behind it for free.
     return new Vector3(0, ironY, mount.ironRearZ);
+  };
+
+  /**
+   * The miniature reflex sight: a small body on the rail carrying an open
+   * rectangular frame, with one lit dot on the axis and a canted lens behind
+   * it.
+   *
+   * The frame is the whole design. There is no tube and no rear ring, so the
+   * only thing this sight puts in the picture is `REFLEX_FRAME` of wall around
+   * a window wider than the holo's bore — which is what makes it the choice
+   * for a fight already inside a room, where what you can see PAST the sight
+   * is worth more than what you can see through it.
+   */
+  const buildReflex = (node: TransformNode): Vector3 => {
+    // The rear leaf only. The window is lower than the holo's and its cone is
+    // wider, so a standing front leaf sits about a millimetre inside the
+    // bottom of the picture — the same call the scope makes, one size down.
+    foldedIrons(false);
+    const halfW = REFLEX_WIN_W / 2;
+    const halfH = REFLEX_WIN_H / 2;
+    const f = REFLEX_FRAME;
+    // The body is whatever is LEFT between the rail and the window's lower
+    // rim, exactly as the holo's saddle is: the rise is the constrained
+    // number, so anything with a height of its own here fights it.
+    const footY = mount.railTop + 0.004;
+    const bodyFrom = mount.railTop + 0.008;
+    const bodyTo = reflexY - halfH;
+    b.box("reflexFoot", METAL, 0.046, 0.01, 0.064, 0, footY, winZ);
+    b.box(
+      "reflexBody",
+      POLYMER,
+      REFLEX_WIN_W + f * 2,
+      bodyTo - bodyFrom,
+      0.052,
+      0,
+      (bodyFrom + bodyTo) / 2,
+      winZ,
+    );
+    b.box("reflexLever", METAL, 0.012, 0.02, 0.034, 0.03, footY + 0.007, winZ - 0.012);
+    // The frame: two posts and a lid, each sized OUTWARD from the window so a
+    // heavier frame can never eat the picture. The bottom bar is the body's
+    // own top face, which is why there are three parts here and not four.
+    for (const side of [-1, 1] as const) {
+      b.box(
+        "reflexPost",
+        POLYMER,
+        f,
+        REFLEX_WIN_H + f,
+        0.016,
+        side * (halfW + f / 2),
+        reflexY + f / 2,
+        winZ,
+      );
+    }
+    b.box(
+      "reflexHood",
+      POLYMER,
+      REFLEX_WIN_W + f * 2,
+      f,
+      0.018,
+      0,
+      reflexY + halfH + f / 2,
+      winZ,
+    );
+    // The emitter, in the rear lip of the window — the one part of this sight
+    // deliberately standing INTO the picture, because that is where the thing
+    // projecting the dot has to be. It costs almost nothing: it sits at the
+    // very bottom and well behind the glass, and the cone rises going back
+    // toward the eye, so what it actually eats is a couple of millimetres.
+    b.box("reflexEmitter", METAL, 0.018, 0.009, 0.014, 0, bodyTo, winZ - 0.021);
+    b.pin("reflexElev", METAL, 0.011, 0.008, 0, reflexY + halfH + f + 0.004, winZ, "y");
+    b.pin("reflexWind", METAL, 0.011, 0.008, halfW + f + 0.004, reflexY, winZ, "x");
+    b.pin("reflexBattery", METAL, 0.016, 0.009, -(halfW + f + 0.004), bodyTo - 0.008, winZ, "x");
+    b.merge("reflex", node);
+
+    // The dot IS the sight — there is nothing else to align, which is the one
+    // thing this has over the irons. Smaller than the holo's, because there is
+    // no ring around it to give it a scale.
+    const dot = b.lit(
+      MeshBuilder.CreateSphere(
+        `${prefix}_reflexDot`,
+        { diameter: 0.0028, segments: 6 },
+        b.scene,
+      ),
+      node,
+    );
+    dot.position.set(0, reflexY, winZ);
+
+    // The lens, canted back the way a reflex's is — it is a mirror for the
+    // emitter under it, not a window. Its own material, for the same reason
+    // the holo's glass has one: an alpha leaked into the shared emissive cache
+    // would take every tracer and reticle in the game with it.
+    const glassMat = new StandardMaterial(`${prefix}_reflexGlass`, b.scene);
+    glassMat.emissiveColor = Color3.FromHexString("#3af0d6");
+    glassMat.diffuseColor = Color3.Black();
+    glassMat.specularColor = Color3.Black();
+    glassMat.disableLighting = true;
+    // Fainter than the holo's for the same reading: this window is twice the
+    // area, and a tint that sits politely in a 0.072 bore is a green filter
+    // across the whole picture at this size.
+    glassMat.alpha = 0.07;
+    const glass = MeshBuilder.CreatePlane(
+      `${prefix}_reflexGlass`,
+      {
+        width: REFLEX_WIN_W,
+        height: REFLEX_WIN_H,
+        sideOrientation: Mesh.DOUBLESIDE,
+      },
+      b.scene,
+    );
+    glass.parent = node;
+    glass.position.set(0, reflexY, winZ);
+    // The cant is small enough to stay inside the frame's own depth: any more
+    // and the glass corners poke out through the posts.
+    glass.rotation.x = -0.12;
+    // Not optional, and the failure is not subtle: this scene has no Babylon
+    // lights at all, so a mesh left on the default material renders BLACK —
+    // which on a sight is an opaque window, not a missing tint.
+    glass.material = glassMat;
+    // noGlow for the holo's reason — bloom on a full-window tint is a haze
+    // over the one thing the sight exists to keep clear.
+    glass.metadata = { noOutline: true, noGlow: true };
+    glass.isPickable = false;
+
+    return new Vector3(0, reflexY, winZ);
   };
 
   /**
@@ -343,6 +551,136 @@ export function buildOptics(
     glass.isPickable = false;
 
     return new Vector3(0, winY, winZ);
+  };
+
+  /**
+   * The 2.5x prism: a short stepped body on ONE integral mount, with an etched
+   * chevron hung near the objective.
+   *
+   * The mount is what tells it apart from the scope at a glance, and it is not
+   * decoration: a prism carries its glass in a single block and is bolted down
+   * as one piece, where a scope is a tube borrowed by two rings. It also earns
+   * its keep — a body this short in two rings would be rings end to end.
+   */
+  const buildPrism = (node: TransformNode): Vector3 => {
+    // No front leaf, for the scope's reason: this cone is wider still.
+    foldedIrons(false);
+    const ocularZ = winZ + PRISM_OCULAR_DZ;
+    const objectiveZ = winZ + PRISM_OBJECTIVE_DZ;
+    const seg = (PRISM_OBJECTIVE_DZ - PRISM_OCULAR_DZ) / PRISM_SECTIONS;
+    /** The radius a section carries — its FAR rim's. See `outerAt` in the scope. */
+    const outerAt = (dz: number): number => {
+      const i = Math.min(
+        PRISM_SECTIONS,
+        Math.max(1, Math.ceil((dz - PRISM_OCULAR_DZ) / seg)),
+      );
+      return prismBore(PRISM_OCULAR_DZ + i * seg) / 2 + PRISM_WALL;
+    };
+    for (let i = 0; i < PRISM_SECTIONS; i++) {
+      const far = PRISM_OCULAR_DZ + seg * (i + 1);
+      b.shell(
+        "prismTube",
+        POLYMER,
+        prismBore(far),
+        PRISM_WALL,
+        seg,
+        prismY,
+        winZ + far - seg / 2,
+      );
+    }
+    const rOcular = outerAt(PRISM_OCULAR_DZ);
+    const rObjective = outerAt(PRISM_OBJECTIVE_DZ);
+    b.shell("prismOcular", POLYMER, rOcular * 2, 0.011, 0.014, prismY, ocularZ - 0.003);
+    // A rubber eyecup, which is the one part of this sight that is about the
+    // eye relief rather than about the picture: it is short and unforgiving,
+    // and a cup is what a shooter finds the box behind. Sized off the ocular's
+    // OUTER radius, so it stands around the tube and never inside the cone.
+    b.shell("prismCup", RUBBER, rOcular * 2 + 0.004, 0.007, 0.013, prismY, ocularZ - 0.014);
+    b.shell("prismBell", POLYMER, rObjective * 2, 0.008, 0.022, prismY, objectiveZ + 0.01);
+    // The mount: one block from the rail to the OCULAR section's underside, so
+    // the wider objective end overhangs it rather than the block having to
+    // clear the fattest part of a body that changes width along its length.
+    const baseBottom = mount.railTop - 0.003;
+    const baseTop = prismY - rOcular - 0.004;
+    b.box(
+      "prismMount",
+      METAL,
+      0.05,
+      baseTop - baseBottom,
+      0.088,
+      0,
+      (baseBottom + baseTop) / 2,
+      winZ - 0.008,
+    );
+    b.box("prismLever", METAL, 0.013, 0.024, 0.044, 0.031, mount.railTop + 0.014, winZ - 0.02);
+    b.pin("prismBolt", METAL, 0.011, 0.06, 0, mount.railTop + 0.014, winZ + 0.024);
+    // Capped turrets, low against the body — a prism is zeroed once and left.
+    // The wider knob opposite them is the reticle's illumination, which is the
+    // part of this sight that gets used mid-round.
+    const turretZ = winZ + 0.005;
+    const rTurret = outerAt(0.005);
+    b.pin("prismElev", METAL, 0.022, 0.012, 0, prismY + rTurret + 0.005, turretZ, "y");
+    b.pin("prismElevCap", METAL, 0.017, 0.005, 0, prismY + rTurret + 0.0145, turretZ, "y");
+    b.pin("prismWind", METAL, 0.022, 0.012, rTurret + 0.005, prismY, turretZ, "x");
+    b.pin("prismIllum", METAL, 0.03, 0.013, -(rTurret + 0.006), prismY, turretZ, "x");
+    b.merge("prism", node);
+
+    // The reticle: a chevron on the axis, two stadia bars and a post under it,
+    // merged into one emissive mesh the way the scope's duplex is.
+    //
+    // A chevron rather than a cross because the TIP is the aim point: at 2.5x
+    // a target is small enough that a crosshair's centre is the one part of the
+    // picture the bars are covering up. Everything is cut to just inside the
+    // cone at the reticle's own depth, so the bars stop at the edge of what can
+    // be seen rather than at a tube wall well outside it.
+    const retZ = objectiveZ - 0.03;
+    const armIn = 0.014;
+    const armOut = PRISM_CONE * (eyeDistance("prism") + retZ - ocularZ) - 0.004;
+    const armLen = armOut - armIn;
+    const armMid = (armIn + armOut) / 2;
+    const bars: Mesh[] = [];
+    for (const side of [-1, 1] as const) {
+      const h = MeshBuilder.CreateBox(
+        `${prefix}_prismRetH`,
+        { width: armLen, height: 0.0016, depth: 0.0012 },
+        b.scene,
+      );
+      h.position.set(side * armMid, prismY, retZ);
+      bars.push(h);
+      // The chevron's arms: each hung from the axis so its top end lands ON it,
+      // which is what makes the apex the aim point rather than something near
+      // it. Babylon's rotation about z takes the bar's own +y to
+      // `(-sin, cos)`, so the centre is half a length back down that vector.
+      const a = 0.6;
+      const arm = MeshBuilder.CreateBox(
+        `${prefix}_prismRetChev`,
+        { width: 0.0018, height: 0.019, depth: 0.0012 },
+        b.scene,
+      );
+      arm.rotation.z = side * a;
+      arm.position.set(
+        side * Math.sin(a) * 0.0095,
+        prismY - Math.cos(a) * 0.0095,
+        retZ,
+      );
+      bars.push(arm);
+    }
+    const post = MeshBuilder.CreateBox(
+      `${prefix}_prismRetPost`,
+      { width: 0.0016, height: armLen, depth: 0.0012 },
+      b.scene,
+    );
+    post.position.set(0, prismY - armMid, retZ);
+    bars.push(post);
+    const reticle = Mesh.MergeMeshes(bars, true, true);
+    if (reticle) {
+      reticle.name = `${prefix}_prismReticle`;
+      b.lit(reticle, node);
+    }
+
+    // The eye reference is the ocular rim, exactly as the scope's is: the eye
+    // goes behind the glass it looks through, not behind the middle of a body.
+    return new Vector3(0, prismY, ocularZ);
   };
 
   /**
@@ -471,8 +809,10 @@ export function buildOptics(
   };
 
   const BUILDERS: Record<SightId, (node: TransformNode) => Vector3> = {
+    reflex: buildReflex,
     iron: buildIron,
     holo: buildHolo,
+    prism: buildPrism,
     scope: buildScope,
   };
 

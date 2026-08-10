@@ -1579,8 +1579,8 @@ export const CONFIG = {
   /**
    * The optics the player can fit, and everything that differs between them.
    * The keys ARE the sight ids — `SightId` in `entities/sights.ts` is derived
-   * from this table, so adding an optic here and a builder in `RifleModel`
-   * is the whole job.
+   * from this table, so adding an optic here and a builder in `optics.ts` is
+   * the whole job.
    *
    * Every sight fires the same bullets: damage, spread and recoil are the
    * rifle's, not the optic's. What an optic changes is what you can SEE and
@@ -1593,16 +1593,24 @@ export const CONFIG = {
    * (`viewmodel.adsMagReference`) all fall out of it. Holo is 1.6, which is
    * exactly the 0.62 rad the camera used before optics were a choice, so
    * fitting it reproduces the shipped weapon frame for frame.
+   *
+   * **Written in ascending magnification, because that order IS the loadout
+   * row** — `SIGHT_IDS` is `Object.keys` of this table, and it is what the
+   * buttons are drawn in and what left/right steps through. A sight inserted
+   * out of order puts a 3.5x scope between two red dots.
    */
   sights: {
     /**
-     * Irons: a rear aperture and a hooded front post. No glass, the least
-     * zoom, the widest picture and the fastest to the shoulder — the choice
-     * for close work, where a magnified sight is a liability.
+     * A miniature reflex sight: one lit dot floating in an open frame, and
+     * the least zoom in the kit. Nothing to line up and almost nothing in the
+     * way — where the irons put a post and a ring in the picture, this puts a
+     * dot on the target and leaves the rest of the frame alone. The cost is
+     * that it is a sight to bring UP rather than a leaf already standing, so
+     * the irons still beat it to the shoulder.
      */
-    iron: {
-      name: "Iron",
-      magnification: 1.35,
+    reflex: {
+      name: "Reflex",
+      magnification: 1.15,
       /**
        * Distance from the eye to the sight's own eye reference, aimed (m).
        *
@@ -1611,10 +1619,27 @@ export const CONFIG = {
        * eye sees through a sight is an angle: shorten this and shrink the
        * optic by the same factor, and the sight picture is identical while
        * the thing on the weapon is smaller. That is exactly what was done to
-       * all three, which had been sized for an eye held so far back that the
-       * optics came out wider than the receiver they stood on. Changing one
-       * of the two alone re-sizes the picture instead.
+       * the original three, which had been sized for an eye held so far back
+       * that the optics came out wider than the receiver they stood on.
+       * Changing one of the two alone re-sizes the picture instead.
+       *
+       * The shortest here, and that is what makes this a mini dot rather than
+       * a small holo: the whole assembly is measured against it, so an eye
+       * held closer buys the same window on a smaller sight.
        */
+      eyeRelief: 0.28,
+      adsSpeedMult: 1.15,
+    },
+    /**
+     * Irons: a rear aperture and a hooded front post. No glass at all, and
+     * still the fastest to the shoulder — there is nothing to raise, which is
+     * the one thing the reflex cannot match. What it costs is the picture: a
+     * post that covers what it is aimed at and a ring around everything else.
+     */
+    iron: {
+      name: "Iron",
+      magnification: 1.35,
+      /** See `reflex.eyeRelief` — the pairing every dimension is measured against. */
       eyeRelief: 0.33,
       /** Multiplier on `camera.adsBlendSpeed` — how fast it comes up. */
       adsSpeedMult: 1.2,
@@ -1625,6 +1650,25 @@ export const CONFIG = {
       magnification: 1.6,
       eyeRelief: 0.38,
       adsSpeedMult: 1,
+    },
+    /**
+     * A 2.5x prismatic sight with an etched chevron: a short one-piece body on
+     * an integral mount, sitting between the holo and the scope at both ends.
+     * It magnifies enough to make a body across the square a target rather
+     * than a smudge, and keeps enough field to swing onto a second one.
+     */
+    prism: {
+      name: "Prism",
+      magnification: 2.5,
+      /**
+       * Short, and shorter than the picture alone would ask for. A prism is
+       * built around a glass block rather than a long air path, and it is the
+       * eye relief that pays for that: this is barely past the scope's, and it
+       * is what keeps a 2.5x optic to a body the length of the receiver's
+       * ejection port rather than a second scope.
+       */
+      eyeRelief: 0.18,
+      adsSpeedMult: 0.88,
     },
     /**
      * A 3.5x telescopic sight with a duplex reticle. Slow to raise and a
