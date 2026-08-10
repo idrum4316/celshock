@@ -268,6 +268,18 @@ station is where it wins: the receiver runs to the butt pad, so the aperture sit
 sight radius out of a weapon 0.96 long, against the rifle's 0.715 out of 1.25 — the
 same trade the layout makes everywhere else on it.
 
+**Its carry handle is the same rule from the other side, and is why that handle has
+no bridge.** The model is a FAMAS, whose one unmistakable feature is a triangular
+handle over the barrel with the sights in a tunnel through it — and a tunnel is
+exactly what `RAIL_REACH` forbids, since nothing forward of the mount may stand
+above `railTop` without sitting in the middle of the scope's picture. So the handle
+is cut off at the sight line: a blade running the full depth from the barrel to the
+rail's underside, with the rail as its top face, which is what the flat-top variant
+of that weapon did for the same reason. What carries the silhouette instead is
+everything BELOW the rail, where there is no cone to answer to — the blade and the
+raked strut onto the gas block, a full-hand trigger guard drawn around the
+viewmodel's own glove, and a bipod folded down the handguard's flanks.
+
 **Read from the optic's side, that is one constraint and `RAIL_REACH` is it: how
 high a sight is carried and how wide its picture is are ONE decision, not two.**
 A view cone spreads with distance and the longest rail here (the DMR's, to

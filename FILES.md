@@ -60,9 +60,9 @@ src/
     weaponKit.ts        # The build accumulator every weapon model is written
                         #   in + WeaponParts and WeaponSights (rail, or fixed)
     RifleModel.ts       # Low-poly SCAR-pattern battle rifle
-    CarbineModel.ts     # Low-poly bullpup burst carbine — magazine behind the
-                        #   grip, and the only layout here that is not the
-                        #   rifle's at another size
+    CarbineModel.ts     # Low-poly FAMAS-pattern bullpup burst carbine —
+                        #   magazine behind the grip, carry-handle blade,
+                        #   full-hand trigger guard, folded bipod
     SmgModel.ts         # Low-poly compact SMG — same contract
     DmrModel.ts         # Low-poly semi-auto marksman rifle
     PistolModel.ts      # 1911 sidearm — the one weapon that does not call
