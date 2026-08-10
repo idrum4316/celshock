@@ -145,8 +145,8 @@ const placements: Placement[] = [
   { kind: "boardwalk", x: 0, z: 25, params: { length: 12, railSide: "none" } },
   { kind: "boardwalk", x: 0, z: 37, params: { length: 12, railSide: "none" } },
   { kind: "boardwalk", x: 0, z: 48, params: { length: 11, railSide: "none" } },
-  { kind: "stiltHut", x: 5.5, z: 31, rotY: Math.PI / 2 },
-  { kind: "stiltHut", x: -5.5, z: 42, rotY: -Math.PI / 2 },
+  { kind: "stiltHut", x: 5.456, z: 31, rotY: Math.PI / 2 },
+  { kind: "stiltHut", x: -5.447, z: 42, rotY: -Math.PI / 2 },
   { kind: "road", x: -102.37, z: 33.852, params: { surface: "dirt", length: 78 } },
   { kind: "road", x: -52.241, z: 60.715, rotY: Math.PI / 2, params: { surface: "dirt", length: 100 } },
 ];
