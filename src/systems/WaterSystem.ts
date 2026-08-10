@@ -77,13 +77,15 @@ export class WaterSystem {
     if (rects.length === 0 || !env.water) return;
 
     if (!this.textures) {
+      // Plain trilinear, deliberately. Anisotropy is the obvious reach for a
+      // surface seen this close to edge-on, and it was in here — but with the
+      // wave scales where `CONFIG.water` now puts them the mip chain already
+      // has the aliasing, and 8x over five fetches per water pixel bought a
+      // frame that is indistinguishable from this one at both a grazing and a
+      // steep angle. Checked, not assumed. If a future scale change brings the
+      // moire back, fix the scale.
       const normal = new Texture(normalUrl, this.scene);
-      // Water is the one surface in the game seen almost edge-on, over a
-      // hundred metres of it: without anisotropy the tiling turns to moire in
-      // the middle distance no matter what the shader does with it.
-      normal.anisotropicFilteringLevel = 8;
       const foam = new Texture(foamUrl, this.scene);
-      foam.anisotropicFilteringLevel = 8;
       this.textures = { normal, foam };
     }
 
