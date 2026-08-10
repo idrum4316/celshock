@@ -1061,6 +1061,32 @@ the stored override rather than its caller's values, because materials are built
 during `installMap`, which runs *after* `applyEnvironment`: a fresh material would
 otherwise be born with the shipped night sheen and never revisited.
 
+**What the floor is MADE of is a second per-map choice, and it owns no colour.**
+`EnvironmentSpec.floorSurface` names a pattern out of `src/world/floorSurfaces.ts`
+— `flat` (the default, and the plain cel colour the floor has always been), `dirt`,
+`gravel`, `sand` or `turf` — and every tone that pattern paints is *derived* from
+`floorColor` by `shadeOf`. That is the rule holding the two apart: `floorColor` is
+already what the untextured floor is, what `ridgeScreeColor` is asked to melt into
+and what a grass field's roots are matched against, so a surface carrying a palette
+of its own would be a second answer to one question and the two would drift the
+first time a map was re-tinted. Switching a map's surface changes the grain of its
+ground, never the colour of it. Three consequences:
+
+- **The albedo cache key carries the colour and the bump's does not.** Grain
+  layouts are seeded per surface and read no colour, so one height map serves every
+  tint of `dirt` — while two maps on `dirt` in different soils must be two albedo
+  textures rather than whichever asked first, the same trap `setGroundSpec` exists
+  to close.
+- **The floor material is deliberately MATTE and must stay that way.**
+  `getGroundTextured` only registers a material for `setGroundSpec` to re-apply to
+  when the caller asked for a spec at all, and that sheen is the wet *cobble* one —
+  a road's weather. Asking for a spec here would put a wet-stone glint on soil on
+  every map that states a `groundSpec`.
+- **It is a MATERIAL, so it is the one thing on an `EnvironmentSpec` that
+  `applyEnvironment` cannot push.** It is baked by `MapBuilder.buildValley`, which
+  is why the editor treats a floor edit as a full rebuild and why `workLight.ts`
+  refuses to touch `floorColor` alongside the two rim colours.
+
 **The floor is a height field, not a flat plane.** A `Heightfield` in the layout
 feeds a `TerrainField` (`src/world/TerrainField.ts`), the one place the ground's
 height is decided. It used to be the literal `0`, asserted independently in
@@ -1344,6 +1370,23 @@ written**, and absent-means-default fields (`y`, `rotY`, `blocking`, `clearance`
 zero. Angles are edited in degrees and stored in radians so `Math.PI / 2` survives —
 see `qAngle`.
 
+**The map's FLOOR is edited through that same inspector, off a `SelectionRef` that
+names no layout array.** `{ list: "floor" }` is a singleton ref reached from a panel
+button — never from a pick, because the floor is under everything and picking it
+would take every click meant for what stands on it, the same competition terrain
+mode exists to settle. It rides the selection union rather than getting a panel of
+its own because everything downstream of a selection (the shape-diffed inspector,
+the debounced rebuild tier, the dirty flag) is written against a ref, and a second
+path through all of that to edit two fields is the expensive way to spell it. Two
+seams it opens: `setField`'s contract is "a layout entry, mutated in place", so the
+floor takes its own writer (`setFloorField`) which also **reports whether anything
+moved** — a colour input fires on every step of a drag and each step would otherwise
+buy the ~570 ms rebuild; and the inspector's controls are now live whenever there
+are any, with only the delete BUTTON conditional, since the two used to travel
+together and a map cannot be without a floor. `fields.ts` grew a `color` kind for
+it — a hex string is not something anyone can read as a colour, and choosing one
+against the map it is going onto is the whole point of doing it here.
+
 **Saving (`Ctrl+S`) patches `layout.ts`'s text; it does not regenerate it.** The
 file is authored — the ASCII village map, the district commentary, and
 `BANK_H`/`TERRACE_H`/`WARDEN`/`BLIGHT` in place of bare numbers would all die on the
@@ -1368,7 +1411,25 @@ than throwing. `serializeHeights` takes the id for the same reason: it writes th
 `export const <MapId>Heights` that map's `layout.ts` imports, and a wrong name there
 is a checkout that stops compiling after a terrain save.
 
-**`vite.config.ts`'s `WRITABLE` stays a literal table — two lines per map.** Path
+**`environment.ts` is the third file a save may write, and it is patched one KEY
+at a time** (`src/editor/saveEnvironment.ts`). The floor picker is what writes it,
+and the file is authored in the same sense `layout.ts` is — nearly every colour in
+a spec carries the argument for why it is that colour — so the same rule applies:
+rewrite the line, leave everything around it alone. It is deliberately **not** built
+on `sourceScan.ts`, which models flat arrays of one-line entries anchored on their
+own `const name: Type = [`; a spec is one nested literal with multi-line members,
+exactly the shape that scanner refuses to touch. Three rules make the shortcut safe:
+a key is anchored at the literal's **own two-space indent**, so `lighting`, `sky`,
+`water` and `grade`'s members (four spaces and deeper) are unreachable by
+construction; the anchor must match **exactly once** or the patch is refused rather
+than guessed; and the source must declare that map's own
+`export const <MapId>Environment`, the same pairing check and the same silent
+failure mode `LayoutSaver` documents. A `null` value REMOVES the line, which is how
+`floorSurface` returns to its default. What it cannot do is keep the **comment**
+above a key true — that prose is the author's, and after re-tinting a floor from the
+editor the note explaining the old colour is theirs to bring back into line.
+
+**`vite.config.ts`'s `WRITABLE` stays a literal table — three lines per map.** Path
 safety comes from the client's path only ever being *looked up* in it and never used
 to build a path, so a regex or a directory listing trades the guarantee for
 convenience in the one tool here that writes to disk.
@@ -1429,9 +1490,19 @@ everything since the last save.
 `vite.config.ts` holds the dev-only write endpoint. It is deliberately outside
 `tsconfig.json`'s `include` (`@types/node` is not installed), so it stays trivial
 and the real logic lives in `src/editor/serialize.ts` under the typecheck. Its
-`handleHotUpdate` swallows the editor's own writes: `layout.ts` has no
+`handleHotUpdate` swallows the editor's own writes: none of the three files has
 `import.meta.hot.accept`, so an update would propagate to `main.ts`, find no
 accepting module, and full-reload the page on every save.
+
+**Both sides of that swallow go through `norm`, and they have to.** The written
+path comes from `resolve`, which uses the platform's own separators, while Vite
+normalises the `ctx.file` it hands `handleHotUpdate` to POSIX ones — so on Windows
+the Set was keyed on `C:\...\layout.ts` and probed with `C:/.../layout.ts` and never
+matched. Nothing throws and no save fails; the page simply full-reloads on every
+`Ctrl+S`, taking the camera, the selection and the whole session with it, which
+reads as the editor crashing on save rather than as a path bug — and it cannot
+reproduce for anyone authoring on Linux. Normalising both sides rather than adopting
+Vite's spelling is what stops the two drifting apart again.
 
 `build(layout, env, { editor: true })` skips `BlockMerge` so each placement keeps
 its own meshes — ~1740 draws against ~150. **Never judge frame cost from the

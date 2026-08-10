@@ -60,6 +60,7 @@ export class EditorPanel {
   private addList: HTMLSelectElement;
   private addChoice: HTMLSelectElement;
   private addButton: HTMLButtonElement;
+  private floorButton: HTMLButtonElement;
   private groups: AddGroup[] = [];
 
   /** Controls of the inspector as currently drawn, by field key. */
@@ -91,6 +92,10 @@ export class EditorPanel {
         <select id="ed-add-list"></select>
         <select id="ed-add-choice"></select>
         <button id="ed-add-go" type="button">add at view centre</button>
+      </div>
+      <div id="ed-map" class="ed-add">
+        <div class="ed-title">map</div>
+        <button id="ed-map-floor" type="button">floor &mdash; colour &amp; surface</button>
       </div>
       <div id="ed-inspector" class="ed-inspector"></div>
       <div id="ed-findings" class="ed-findings"></div>
@@ -126,6 +131,17 @@ export class EditorPanel {
     this.addList = this.root.querySelector("#ed-add-list")!;
     this.addChoice = this.root.querySelector("#ed-add-choice")!;
     this.addButton = this.root.querySelector("#ed-add-go")!;
+    this.floorButton = this.root.querySelector("#ed-map-floor")!;
+  }
+
+  /**
+   * The map's own properties, which have nothing to click in the viewport.
+   * A button rather than a pick: the floor is under everything, so making it
+   * selectable would take every click meant for what stands on it — the same
+   * competition terrain mode exists to settle.
+   */
+  setMapMenu(onFloor: () => void): void {
+    this.floorButton.addEventListener("click", () => onFloor());
   }
 
   /**
@@ -229,6 +245,14 @@ export class EditorPanel {
       input.type = "checkbox";
       input.checked = f.value;
       input.addEventListener("change", () => emit(input.checked));
+    } else if (f.kind === "color") {
+      input.type = "color";
+      input.value = f.value;
+      // `input`, not `change`: a colour picker reports every step of a drag,
+      // and watching the ground change under the swatch is the entire point of
+      // choosing it here rather than in the file. What it costs is a rebuild
+      // per step, which is exactly what the caller's debounce is for.
+      input.addEventListener("input", () => emit(input.value));
     } else if (f.kind === "number") {
       input.type = "number";
       input.step = String(f.step);
@@ -264,7 +288,7 @@ export class EditorPanel {
         el.checked = f.value;
       } else if (f.kind === "number" && el instanceof HTMLInputElement) {
         el.value = f.value === null ? "" : String(f.value);
-      } else if (f.kind === "choice" || f.kind === "text") {
+      } else if (f.kind === "choice" || f.kind === "text" || f.kind === "color") {
         el.value = f.value;
       }
     }

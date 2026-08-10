@@ -15,16 +15,18 @@ import { join, relative, resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 
 /**
- * The only files the editor may write, as a LITERAL table — one pair per map.
+ * The only files the editor may write, as a LITERAL table — one group per map.
  * Compared, never used to build a path. `layout.ts` is patched line by line and
  * must look like a layout; `heights.ts` is regenerated wholesale by terrain mode
- * and must look like a heightfield.
+ * and must look like a heightfield; `environment.ts` is patched one key at a
+ * time by the floor picker and must look like a spec.
  *
  * Deliberately not derived from a directory listing or matched with a regex,
- * however repetitive two entries per map becomes: path safety here comes from
+ * however repetitive three entries per map becomes: path safety here comes from
  * the client's path only ever being LOOKED UP in this object, and anything that
  * computes the set of writable files trades that guarantee for convenience in
- * the one tool here whose whole job is writing to disk. A new map adds two lines.
+ * the one tool here whose whole job is writing to disk. A new map adds three
+ * lines.
  */
 const WRITABLE = {
   "src/world/hollowmere/layout.ts": {
@@ -35,6 +37,10 @@ const WRITABLE = {
     min: 500,
     marker: "export const HollowmereHeights",
   },
+  "src/world/hollowmere/environment.ts": {
+    min: 1200,
+    marker: "export const HollowmereEnvironment",
+  },
   "src/world/greyfen/layout.ts": {
     min: 4000,
     marker: "export const GreyfenLayout",
@@ -43,10 +49,30 @@ const WRITABLE = {
     min: 500,
     marker: "export const GreyfenHeights",
   },
+  "src/world/greyfen/environment.ts": {
+    min: 1200,
+    marker: "export const GreyfenEnvironment",
+  },
 };
 
+/**
+ * One spelling for a path, so both sides of `selfWritten` agree.
+ *
+ * `resolve` returns the platform's own separators — on Windows
+ * `C:\...\layout.ts` — while Vite normalises the `ctx.file` it hands
+ * `handleHotUpdate` to POSIX ones, `C:/.../layout.ts`. A Set keyed on one and
+ * probed with the other never matches, and the swallow below silently stops
+ * swallowing: nothing throws, but every Ctrl+S full-reloads the page and takes
+ * the editing session, the camera and the selection with it, which reads as the
+ * editor crashing on save rather than as a path bug. Normalising BOTH sides
+ * rather than adopting Vite's spelling means neither can drift from the other.
+ */
+const norm = (p: string) => p.replace(/\\/g, "/");
+
 function layoutWriter(): Plugin {
-  const absOf = (rel: string) => resolve(process.cwd(), rel);
+  // Forward slashes reach `node:fs` fine on Windows, so the write path can be
+  // the normalised one too and there is only ever one form in flight.
+  const absOf = (rel: string) => norm(resolve(process.cwd(), rel));
   const selfWritten = new Set();
 
   return {
@@ -97,13 +123,15 @@ function layoutWriter(): Plugin {
     },
 
     handleHotUpdate(ctx) {
-      // Neither file has import.meta.hot.accept, so an update propagates all
-      // the way to main.ts, finds no accepting module, and full-reloads the
-      // page — losing the camera, the selection, and the editing session, on
-      // every save. Swallow the editor's OWN writes. A manual edit in the
-      // editor of your choice still reloads, which is what you want.
-      if (selfWritten.has(ctx.file)) {
-        selfWritten.delete(ctx.file);
+      // None of the three files has import.meta.hot.accept, so an update
+      // propagates all the way to main.ts, finds no accepting module, and
+      // full-reloads the page — losing the camera, the selection, and the
+      // editing session, on every save. Swallow the editor's OWN writes. A
+      // manual edit in the editor of your choice still reloads, which is what
+      // you want. Both sides go through `norm`; see its note.
+      const file = norm(ctx.file);
+      if (selfWritten.has(file)) {
+        selfWritten.delete(file);
         return [];
       }
     },

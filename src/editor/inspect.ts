@@ -13,10 +13,17 @@
  * and leaving them unset is what keeps the layout line short.
  */
 import { CONFIG } from "../config";
+import type { EnvironmentSpec } from "../world/environment";
+import {
+  DEFAULT_FLOOR_SURFACE,
+  FLOOR_SURFACE_IDS,
+  floorSurfaceLabel,
+} from "../world/floorSurfaces";
 import { isScatterRect, type MapLayout } from "../world/layout";
 import {
   boolean,
   choice,
+  color,
   note,
   number,
   text,
@@ -66,7 +73,17 @@ function rect(r: { x: number; z: number; y?: number; width: number; depth: numbe
   ];
 }
 
-export function inspect(layout: MapLayout, ref: SelectionRef | null): Inspection {
+/**
+ * @param env the map's own environment. Only the `floor` ref reads it — a
+ *   floor is a statement about the place rather than an entry in one of the
+ *   layout's arrays, so it is the one selection whose fields do not come out
+ *   of `layout` at all.
+ */
+export function inspect(
+  layout: MapLayout,
+  env: EnvironmentSpec,
+  ref: SelectionRef | null,
+): Inspection {
   if (!ref) return EMPTY;
 
   switch (ref.list) {
@@ -228,6 +245,31 @@ export function inspect(layout: MapLayout, ref: SelectionRef | null): Inspection
       };
     }
 
+    case "floor": {
+      // The map's ground, off the EnvironmentSpec rather than the layout —
+      // one colour and the grain painted in it. Never deletable: every map has
+      // a floor, and `flat` is how one says it wants no pattern.
+      return {
+        title: "map floor",
+        deletable: false,
+        fields: [
+          color("floorColor", "colour", env.floorColor),
+          choice(
+            "floorSurface",
+            "surface",
+            env.floorSurface ?? DEFAULT_FLOOR_SURFACE,
+            FLOOR_SURFACE_IDS.map((id) => ({
+              value: id,
+              label: floorSurfaceLabel(id),
+            })),
+          ),
+          note(
+            "note",
+            "rebuilds the map · tones are derived from the colour",
+          ),
+        ],
+      };
+    }
   }
 
   // A stale ref — the layout changed under the selection.

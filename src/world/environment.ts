@@ -6,6 +6,7 @@
  */
 import { Color3, Color4, Scene, Vector3 } from "@babylonjs/core";
 import type { CelMaterialFactory, SpecSpec } from "../shaders/CelShader";
+import type { FloorSurfaceId } from "./floorSurfaces";
 
 /** A dynamic point light carried by a prop, registered when the prop is placed. */
 export interface LightSpec {
@@ -119,7 +120,24 @@ export interface GrassEnvSpec {
  * carries its own placements, so the environment no longer owns a prop roster.
  */
 export interface EnvironmentSpec {
+  /**
+   * The valley floor's colour, and the ONE answer to what colour the ground
+   * is: `floorSurface` derives every tone it paints from this, `ridgeScreeColor`
+   * is asked to melt into it, and a grass field's roots are matched to it.
+   */
   floorColor: string;
+  /**
+   * What the floor is made of — the grain painted in `floorColor`, not a
+   * second colour. Defaults to `flat`, the untextured cel colour the floor
+   * has always been and the only one that costs no texture sample per ground
+   * pixel. See `floorSurfaces.ts` for the roster.
+   *
+   * It is a MATERIAL, so unlike everything else here it is baked at build time
+   * rather than pushed as a uniform: changing it needs the map rebuilt, which
+   * is why the editor treats it as a structural edit and why `workLight.ts`
+   * leaves it alone along with the two rim colours.
+   */
+  floorSurface?: FloorSurfaceId;
   /**
    * The valley rim's rock. Read only by the ridge — nothing in the village is
    * coloured from here; a building's palette is its builder's. Past the fog

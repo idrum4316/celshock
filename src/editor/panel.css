@@ -126,6 +126,16 @@
   width: auto;
   accent-color: #35f0ff;
 }
+/* A colour swatch is the control AND the value, so it takes the same width
+   the numbers and dropdowns line up on. The padding is squeezed because a
+   native swatch draws its colour inside the box, and the shared 2px would
+   leave a dark border thick enough to misread the tone against the map. */
+#editor-panel .ed-field input[type="color"] {
+  width: 108px;
+  height: 18px;
+  padding: 1px 2px;
+  cursor: pointer;
+}
 #editor-panel .ed-field { align-items: center; }
 #editor-panel .ed-head {
   display: flex;

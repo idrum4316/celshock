@@ -237,8 +237,12 @@ export class LayoutSaver {
   }
 }
 
-/** POSTs one file to the dev server's write endpoint. */
-async function post(path: string, source: string): Promise<SaveResult> {
+/**
+ * POSTs one file to the dev server's write endpoint. Shared with
+ * `saveEnvironment.ts`: what a file IS differs, but the wire, the path check
+ * on the far end and the failure reporting are the same for all of them.
+ */
+export async function post(path: string, source: string): Promise<SaveResult> {
   try {
     const res = await fetch("/__layout", {
       method: "POST",

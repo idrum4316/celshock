@@ -21,12 +21,28 @@ import type { EnvironmentSpec } from "../environment";
  * is the honest version of what the engine can currently do.
  */
 export const GreyfenEnvironment: EnvironmentSpec = {
-  // Wet grey-green stone rather than Hollowmere's near-black. The sky term
-  // lifts albedo, so a floor much brighter than this comes back chalky on
-  // every up-facing surface once the ambient is raised too.
-  floorColor: "#6f7266",
+  /**
+   * Wet jungle loam: a warm red-brown, well down from the grey-green stone
+   * this map started on. The sky term lifts albedo, so a floor much brighter
+   * than this comes back chalky on every up-facing surface once the ambient is
+   * raised too — which is the ceiling a bright soil runs into, and why this one
+   * is dark for a brown.
+   *
+   * It is also the only colour the surface below is painted in: every tone
+   * `dirt` puts on the ground is derived from this, so re-tinting the valley
+   * is this one line.
+   */
+  floorColor: "#4a3928",
+  /**
+   * Clods and grit rather than the flat colour Hollowmere's floor is. A jungle
+   * valley is soil underfoot, and at 4 m a tile the grain is still legible at
+   * the eye height a first-person camera reads the ground from.
+   */
+  floorSurface: "dirt",
   ridgeColor: "#5c6360",
-  ridgeScreeColor: "#6b6d5f",
+  // Moved with the floor: this band's whole job is melting the rim's foot into
+  // `floorColor`, so it follows the soil rather than the rock above it.
+  ridgeScreeColor: "#6a5a46",
   accentColor: "#7fe0a0",
   skyColor: "#b9c6cf",
   /**

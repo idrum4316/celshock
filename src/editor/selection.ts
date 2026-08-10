@@ -22,13 +22,28 @@ import { EDITOR } from "./tuning";
 /**
  * Which layout array, and where in it. `EditorRef` (what MapBuilder tags real
  * geometry with) is a subset: the rest come from proxy meshes.
+ *
+ * `floor` is the one member that is not a layout array at all — it is the map's
+ * own ground, on the `EnvironmentSpec` rather than the `MapLayout`, and there
+ * is exactly one of it (hence the unused index, which every ref carries so
+ * `sameRef` needs no special case). It rides this union rather than getting an
+ * inspector of its own because everything downstream of a selection — the
+ * panel, the shape-diffed rebuild, the debounced save — is written against a
+ * ref, and a second path through all of that to edit two fields would be the
+ * expensive way to spell it. It is reached from the panel, never from a click:
+ * the floor is under everything, and picking it would take every click meant
+ * for what is standing on it.
  */
 export type SelectionRef =
   | EditorRef
   | { list: "controlPoints"; index: number }
   | { list: "spawns"; index: number }
   | { list: "water"; index: number }
-  | { list: "grass"; index: number };
+  | { list: "grass"; index: number }
+  | { list: "floor"; index: number };
+
+/** The floor is a singleton; this is the only ref that ever names it. */
+export const FLOOR_REF: SelectionRef = { list: "floor", index: 0 };
 
 export type SelectionList = SelectionRef["list"];
 

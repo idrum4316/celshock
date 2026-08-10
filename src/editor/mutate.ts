@@ -25,6 +25,12 @@
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { BuilderKind } from "../world/BuildingKit";
+import type { EnvironmentSpec } from "../world/environment";
+import {
+  DEFAULT_FLOOR_SURFACE,
+  FLOOR_SURFACE_IDS,
+  type FloorSurfaceId,
+} from "../world/floorSurfaces";
 import { isScatterRect, type MapLayout } from "../world/layout";
 import { repositionItem, type GameMap } from "../world/MapBuilder";
 import { waterY, type TerrainField } from "../world/TerrainField";
@@ -79,6 +85,10 @@ export function originOf(
       const r = layout.grass?.[ref.index];
       return r ? lift(r.x, r.y ?? 0, r.z) : null;
     }
+    // The floor is the whole map. Nothing to attach a gizmo to, and a handle
+    // planted somewhere on it would claim it could be dragged.
+    case "floor":
+      return null;
   }
 }
 
@@ -247,6 +257,13 @@ export function applyTransform(
  * so they need a full rebuild. Control points and spawns produce no geometry
  * at all — they are proxy meshes plus one flow field each, so navigation is
  * the whole cost.
+ *
+ * The floor takes the full rebuild too, and for a reason worth stating: unlike
+ * everything else on an `EnvironmentSpec`, its colour and surface are a
+ * MATERIAL, baked into the terrain blocks by `MapBuilder.buildValley` rather
+ * than pushed as a uniform. `applyEnvironment` cannot reach it — which is the
+ * same fact `workLight.ts` states from the other side when it refuses to touch
+ * `floorColor`.
  */
 export type Tier = "geometry" | "navigation";
 
@@ -445,6 +462,44 @@ export function setField(
     return;
   }
   put(entry, key, value);
+}
+
+/**
+ * Applies one inspector field to the map's ENVIRONMENT — the floor's colour
+ * and surface, which live on the `EnvironmentSpec` rather than in any layout
+ * array. Its own entry point rather than a branch inside `setField` because
+ * that function's whole contract is "a layout entry, mutated in place", and
+ * the two writes have nothing in common but the caller.
+ *
+ * Reports whether anything actually moved. A colour input fires on every step
+ * of a drag and the rebuild it schedules is the ~570 ms one, so a value that
+ * repeats must not buy another.
+ */
+export function setFloorField(
+  env: EnvironmentSpec,
+  key: string,
+  value: FieldValue,
+): boolean {
+  if (key === "floorColor") {
+    // Normalised because the control emits `#RRGGBB` in whichever case the
+    // browser prefers, and the colour is part of a material's cache key.
+    const hex = String(value).toLowerCase();
+    if (!/^#[0-9a-f]{6}$/.test(hex) || hex === env.floorColor) return false;
+    env.floorColor = hex;
+    return true;
+  }
+  if (key === "floorSurface") {
+    const id = String(value) as FloorSurfaceId;
+    if (!FLOOR_SURFACE_IDS.includes(id)) return false;
+    // The default is spelled by absence, like every other optional field —
+    // a map that wants no pattern says nothing rather than saying "flat".
+    const next = id === DEFAULT_FLOOR_SURFACE ? undefined : id;
+    if (next === env.floorSurface) return false;
+    if (next === undefined) delete env.floorSurface;
+    else env.floorSurface = next;
+    return true;
+  }
+  return false;
 }
 
 /**

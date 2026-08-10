@@ -30,6 +30,7 @@ import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
 import type { LightingSystem } from "../systems/LightingSystem";
 import { BUILDERS, type BoxSpec, type Structure } from "./BuildingKit";
 import type { EnvironmentSpec } from "./environment";
+import { floorMaterial } from "./floorSurfaces";
 import {
   isScatterRect,
   type MapLayout,
@@ -524,7 +525,12 @@ export class MapBuilder {
     terrainColliders: Mesh[],
     ridge: RidgeSpec | undefined,
   ): void {
-    const floorMat = this.mats.get(env.floorColor);
+    const floorMat = floorMaterial(
+      this.mats,
+      this.scene,
+      env.floorColor,
+      env.floorSurface,
+    );
     for (const patch of terrainPatches(terrain, size, BLOCK_SIZE)) {
       const ground = new Mesh(`terrain-${patch.key}`, this.scene);
       patch.data.applyToMesh(ground);

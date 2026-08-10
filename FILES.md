@@ -81,6 +81,8 @@ src/
     sourceScan.ts       #   layout.ts as text: regions, entries, tokens
     terrainBrush.ts     #   Terrain mode: hover highlight + sculpt stroke
     serialize.ts/save.ts#   Minimal-diff emit + POST to the dev server
+    saveEnvironment.ts  #   environment.ts patched one top-level KEY at a time
+                        #     — what the floor picker writes
     tuning.ts           #   Tool constants (NOT config.ts — not gameplay)
   world/
     layout.ts           # Placement/ScatterSpec/Heightfield/MapLayout — the
@@ -109,7 +111,10 @@ src/
     ObstacleField.ts    # Sub-cell collision push-out for thin props
     Props.ts            # Scatter props: trees, graves, rubble, braziers,
                         #   boulders, brambles, barrels
-    textures.ts         # Generated canvas textures (cobblestone etc.)
+    textures.ts         # Generated canvas textures: the cobbles, and the floor
+                        #   surfaces — grain painted from the map's floorColor
+    floorSurfaces.ts    # What the valley floor is MADE of: the surface roster
+                        #   and the ONE place a floor material is built
     environment.ts      # EnvironmentSpec + applyEnvironment
     maps.ts             # MapDef + the MAPS registry. The only EXISTING file a
                         #   new map has to touch (plus vite.config's WRITABLE)

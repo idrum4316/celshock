@@ -91,6 +91,17 @@ export interface TextField extends FieldBase {
   value: string;
 }
 
+/**
+ * A colour, as `#rrggbb`. Its own kind rather than a `text` field because a
+ * hex string is not something anyone can read as a colour — the whole value of
+ * editing a palette in the editor is seeing the swatch you are choosing
+ * against the map it is going onto.
+ */
+export interface ColorField extends FieldBase {
+  kind: "color";
+  value: string;
+}
+
 /** Something worth showing but not worth editing. */
 export interface NoteField extends FieldBase {
   kind: "note";
@@ -101,6 +112,7 @@ export type FieldSpec =
   | NumberField
   | BooleanField
   | ChoiceField
+  | ColorField
   | TextField
   | NoteField;
 
@@ -130,6 +142,13 @@ export const choice = (
   value: string,
   options: ChoiceOption[],
 ): ChoiceField => ({ kind: "choice", key, label, value, options });
+
+export const color = (key: string, label: string, value: string): ColorField => ({
+  kind: "color",
+  key,
+  label,
+  value,
+});
 
 export const text = (key: string, label: string, value: string): TextField => ({
   kind: "text",

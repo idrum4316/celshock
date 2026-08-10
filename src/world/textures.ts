@@ -1,6 +1,7 @@
 /**
- * textures.ts — Runtime-generated canvas textures (cobblestone albedo + its
- * matching bump height map), cached per scene via WeakMap. Zero asset files.
+ * textures.ts — Runtime-generated canvas textures (the cobblestone albedo and
+ * its matching bump height map, plus the valley floor's own surfaces), cached
+ * per scene via WeakMap. Zero asset files.
  * Deterministic PRNG so every client renders identical ground, and so the
  * bump domes land exactly on the painted stones.
  * Invariants: texture SIZE must stay a power of two (mipmaps) and
@@ -287,4 +288,325 @@ export function getCobblestoneTexture(scene: Scene): DynamicTexture {
  */
 export function getCobblestoneBumpTexture(scene: Scene): DynamicTexture {
   return getGenerated(scene, "cobblestone-bump", drawCobblestoneHeights);
+}
+
+/* ------------------------------------------------------------------------ *
+ * The valley floor's surfaces
+ *
+ * The cobbles above are a place — a village street, painted in the village's
+ * own colours. These are the opposite: a PATTERN with no colour of its own,
+ * painted from whatever `EnvironmentSpec.floorColor` the map states. That
+ * split is the whole reason a map can pick one.
+ *
+ * **The colour stays one fact.** `floorColor` is already what the untextured
+ * floor is, what `ridgeScreeColor` is asked to melt into and what a grass
+ * field's roots are matched against; a surface that carried its own palette
+ * would be a second answer to the same question, and the two would drift the
+ * first time a map was re-tinted. So every tone here is DERIVED from the base
+ * — `shadeOf` lightens, darkens and warms it — and the tile's average is kept
+ * near the base, so switching a map from `flat` to `dirt` changes the grain
+ * without changing the colour of the ground.
+ *
+ * **Albedo and bump share one grain layout, and the bump is cached without
+ * the colour.** The layouts are seeded per surface and read no colour at all,
+ * so the height map for `dirt` is one texture however many maps ask for it in
+ * however many tints — the same reasoning that gives the cobbles one bump map,
+ * for the same reason: a dome that does not sit on the grain it belongs to
+ * lights the gaps and sinks the lumps.
+ * ------------------------------------------------------------------------ */
+
+/** A base colour's channels, 0..255. */
+function rgbOf(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/**
+ * A tone derived from the map's floor colour: `mul` scales it toward white or
+ * black, `warm` pushes it toward red-brown (positive) or blue-green
+ * (negative), in fractions of full scale.
+ *
+ * Derivation rather than authored tones is what lets one pattern serve every
+ * map — the same clods over Greyfen's loam and over a grey silt read as the
+ * same ground in two different soils.
+ */
+export function shadeOf(hex: string, mul: number, warm = 0): string {
+  const [r, g, b] = rgbOf(hex);
+  const w = warm * 255;
+  const c = (v: number, d: number) =>
+    Math.round(Math.min(255, Math.max(0, v * mul + d)));
+  return `rgb(${c(r, w)},${c(g, 0)},${c(b, -w)})`;
+}
+
+/** One painted grain: a squashed disc, plus the roll that picks its tone. */
+interface Grain {
+  x: number;
+  y: number;
+  /** Half-width, in texels. */
+  r: number;
+  /** Vertical squash — 1 is circular, lower is flatter. */
+  ry: number;
+  /** 0..1. The grain's own roll: its tone in the albedo, its height in the
+   *  bump. Stored rather than re-drawn so the two passes agree. */
+  t: number;
+}
+
+/**
+ * A scatter of grains over the tile from one seed. Sizes are authored in
+ * 256-space like the cobbles' jitter, so `SIZE` can move without re-tuning
+ * every surface.
+ */
+function grainField(
+  seed: number,
+  count: number,
+  rMin: number,
+  rMax: number,
+  squash: number,
+): Grain[] {
+  const rng = mulberry32(seed);
+  const out: Grain[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push({
+      x: rng() * SIZE,
+      y: rng() * SIZE,
+      r: (rMin + rng() * (rMax - rMin)) * PX,
+      ry: 1 - rng() * squash,
+      t: rng(),
+    });
+  }
+  return out;
+}
+
+/**
+ * Every grain layout, by surface. Read by both the albedo and the bump, and
+ * by neither with a colour in hand — see the header.
+ */
+const GRAINS = {
+  /** Clods, with a fine litter of small stuff worked through them. */
+  dirt: () => [
+    ...grainField(0xd1d7, 520, 3, 13, 0.5),
+    ...grainField(0xd1d8, 320, 1, 3.4, 0.3),
+  ],
+  /** Dense small stones, almost no gap left between them. */
+  gravel: () => grainField(0x9a4e1, 1020, 2, 5.5, 0.35),
+  /** Fine speckle. The ripples are drawn on top and are not grains. */
+  sand: () => grainField(0x5a4d, 900, 0.8, 2.6, 0.55),
+  /** Broad mottled patches — ground cover rather than soil. */
+  turf: () => grainField(0x70f13, 480, 5, 22, 0.5),
+} as const;
+
+/**
+ * Which floor patterns exist, derived from the layouts above so the id is
+ * declared exactly once. `floorSurfaces.ts` keys its tuning table off this,
+ * which is what makes a new pattern a compile error until it is tuned.
+ */
+export type FloorPatternId = keyof typeof GRAINS;
+
+/**
+ * Paints one grain, wrapped only where it actually crosses an edge. The
+ * cobbles stamp the whole layout nine times because a sett is a tenth of the
+ * tile wide; a thousand grains stamped nine times is nine thousand fills for
+ * the sake of the few dozen on a border.
+ */
+function paintGrain(g: Grain, paint: (x: number, y: number) => void): void {
+  const w = g.r + 1;
+  const dxs = g.x < w ? [0, SIZE] : g.x > SIZE - w ? [0, -SIZE] : [0];
+  const dys = g.y < w ? [0, SIZE] : g.y > SIZE - w ? [0, -SIZE] : [0];
+  for (const dy of dys) for (const dx of dxs) paint(g.x + dx, g.y + dy);
+}
+
+/** Flat discs in a tone picked by each grain's own roll. */
+function paintGrains(
+  ctx: ReturnType<DynamicTexture["getContext"]>,
+  grains: Grain[],
+  tone: (t: number) => string,
+): void {
+  for (const g of grains) {
+    ctx.fillStyle = tone(g.t);
+    paintGrain(g, (x, y) => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(1, g.ry);
+      ctx.beginPath();
+      ctx.arc(0, 0, g.r, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+}
+
+/**
+ * The same grains as height: a flat crown falling to black at the rim, the
+ * cobbles' worn-pillow profile at a smaller scale. `peak` maps a grain's roll
+ * onto 0..1 height and `plateau` is how much of the radius stays flat — a low
+ * plateau is a lump, a high one is a pebble with a shoulder.
+ */
+function paintGrainHeights(
+  ctx: ReturnType<DynamicTexture["getContext"]>,
+  grains: Grain[],
+  peak: (t: number) => number,
+  plateau: number,
+): void {
+  for (const g of grains) {
+    const h = Math.min(1, Math.max(0, peak(g.t)));
+    paintGrain(g, (x, y) => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(g.r, g.r * g.ry);
+      const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+      grad.addColorStop(0, gray(h));
+      grad.addColorStop(plateau, gray(h * 0.95));
+      grad.addColorStop(plateau + (1 - plateau) * 0.55, gray(h * 0.4));
+      grad.addColorStop(1, "#000000");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, 1, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+}
+
+/**
+ * Wind ripples for sand: shallow bands crossing the tile, drawn as blocks
+ * rather than as a curve because a hard-edged step is what the posterized
+ * palette wants anyway — and because `arc` is the only curve the canvas
+ * interface guarantees.
+ *
+ * The band count divides SIZE exactly and the phase is a whole number of
+ * cycles across the tile, so both ends meet at the seam.
+ */
+const RIPPLE_BANDS = 16;
+const RIPPLE_STEP = 8;
+
+function paintRipples(
+  ctx: ReturnType<DynamicTexture["getContext"]>,
+  crest: string,
+  trough: string,
+): void {
+  const band = SIZE / RIPPLE_BANDS;
+  for (let b = 0; b < RIPPLE_BANDS; b++) {
+    for (let x = 0; x < SIZE; x += RIPPLE_STEP) {
+      // Two whole cycles across the tile, offset per band so the ripples are
+      // not a stack of identical waves.
+      const wave = Math.sin((x / SIZE) * Math.PI * 4 + b * 1.7) * band * 0.22;
+      const y = b * band + band * 0.5 + wave;
+      ctx.fillStyle = crest;
+      ctx.fillRect(x, y, RIPPLE_STEP, band * 0.16);
+      ctx.fillStyle = trough;
+      ctx.fillRect(x, y + band * 0.16, RIPPLE_STEP, band * 0.1);
+    }
+  }
+}
+
+/**
+ * The albedo painters. Each fills the tile with a base a little off the map's
+ * own colour and then puts the grain back on top around it, so the tile
+ * averages near `base` — a surface changes the grain, not the ground's colour.
+ */
+const ALBEDO: Record<
+  FloorPatternId,
+  (ctx: ReturnType<DynamicTexture["getContext"]>, base: string) => void
+> = {
+  dirt: (ctx, base) => {
+    ctx.fillStyle = shadeOf(base, 0.88, 0.02);
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    // Warmer where it is lighter: dry crumbs on top, damp soil underneath.
+    paintGrains(ctx, GRAINS.dirt(), (t) =>
+      shadeOf(base, 0.78 + t * 0.48, (t - 0.5) * 0.05),
+    );
+  },
+  gravel: (ctx, base) => {
+    // A deep gap colour, because gravel reads as stones-and-shadow. Most of
+    // it is covered by the stones themselves.
+    ctx.fillStyle = shadeOf(base, 0.52);
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    const grains = GRAINS.gravel();
+    paintGrains(ctx, grains, (t) => shadeOf(base, 0.84 + t * 0.5));
+    // One flat lit facet on the upper stones — the cobbles' trick, at a
+    // fifth of the size.
+    for (const g of grains) {
+      if (g.t < 0.62) continue;
+      ctx.fillStyle = shadeOf(base, 1.38);
+      paintGrain(g, (x, y) => {
+        ctx.beginPath();
+        ctx.arc(x - g.r * 0.22, y - g.r * g.ry * 0.28, g.r * 0.4, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.fill();
+      });
+    }
+  },
+  sand: (ctx, base) => {
+    ctx.fillStyle = shadeOf(base, 0.97, 0.01);
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    paintRipples(ctx, shadeOf(base, 1.1, 0.02), shadeOf(base, 0.88));
+    paintGrains(ctx, GRAINS.sand(), (t) => shadeOf(base, 0.9 + t * 0.26));
+  },
+  turf: (ctx, base) => {
+    // Cooler and darker between the patches: the gaps are where the litter
+    // and the shade are, not bare soil.
+    ctx.fillStyle = shadeOf(base, 0.76, -0.03);
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    paintGrains(ctx, GRAINS.turf(), (t) =>
+      shadeOf(base, 0.84 + t * 0.44, (t - 0.5) * -0.07),
+    );
+  },
+};
+
+/** The matching height maps, off the same grains. */
+const HEIGHTS: Record<
+  FloorPatternId,
+  (ctx: ReturnType<DynamicTexture["getContext"]>) => void
+> = {
+  dirt: (ctx) =>
+    paintGrainHeights(ctx, GRAINS.dirt(), (t) => 0.34 + t * 0.5, 0.28),
+  // Harder and rounder than soil: a high plateau is a stone, not a lump.
+  gravel: (ctx) =>
+    paintGrainHeights(ctx, GRAINS.gravel(), (t) => 0.5 + t * 0.5, 0.42),
+  sand: (ctx) => {
+    paintRipples(ctx, gray(0.5), gray(0.16));
+    paintGrainHeights(ctx, GRAINS.sand(), (t) => 0.2 + t * 0.3, 0.3);
+  },
+  turf: (ctx) =>
+    paintGrainHeights(ctx, GRAINS.turf(), (t) => 0.3 + t * 0.42, 0.35),
+};
+
+/**
+ * A floor pattern's albedo in this map's own floor colour.
+ *
+ * The cache key carries the colour, so two maps on the same pattern in
+ * different soils are two textures rather than whichever asked first — the
+ * trap `CelMaterialFactory`'s spec registry documents from the other side.
+ */
+export function getFloorTexture(
+  scene: Scene,
+  id: FloorPatternId,
+  baseHex: string,
+): DynamicTexture {
+  return getGenerated(scene, `floor-${id}-${baseHex}`, (ctx) =>
+    ALBEDO[id](ctx, baseHex),
+  );
+}
+
+/**
+ * The height map matching that albedo. Keyed WITHOUT the colour: the grains
+ * are seeded per surface and read none, so every tint of one pattern shares
+ * one bump map.
+ */
+export function getFloorBumpTexture(
+  scene: Scene,
+  id: FloorPatternId,
+): DynamicTexture {
+  return getGenerated(scene, `floor-${id}-bump`, (ctx) => {
+    // Explicitly black rather than the canvas's transparent start, exactly as
+    // the cobbles' height map is: what the shader reads is the red channel,
+    // and a height map that is transparent where nothing was painted leaves
+    // the flat ground between grains at the mercy of how the upload treats
+    // alpha.
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    HEIGHTS[id](ctx);
+  });
 }

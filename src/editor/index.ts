@@ -36,6 +36,7 @@ import {
   repositionScene,
   rotationOf,
   setField,
+  setFloorField,
   tierFor,
   type Tier,
 } from "./mutate";
@@ -44,9 +45,11 @@ import { MAX_WALKABLE_GRADE, TerrainBrush } from "./terrainBrush";
 import { BUILDER_KINDS, SCATTER_PROPS } from "./params";
 import { ProxyLayer } from "./proxies";
 import { LayoutSaver } from "./save";
+import { EnvironmentSaver, floorEdits } from "./saveEnvironment";
 import { EDITOR } from "./tuning";
 import { validate, type Finding } from "./validate";
 import {
+  FLOOR_REF,
   pickRef,
   sameRef,
   SelectionHighlight,
@@ -133,6 +136,13 @@ export class EditorSession {
   private selected: SelectionRef | null = null;
   private dirty = false;
   private saver: LayoutSaver;
+  private envSaver: EnvironmentSaver;
+  /**
+   * Whether the map's environment has been edited. Tracked apart from `dirty`
+   * because it is a second FILE: an untouched `environment.ts` should not be
+   * rewritten by a save that only moved a fence.
+   */
+  private envDirty = false;
   private saving = false;
   private navOverlay: NavOverlay;
   private brush: TerrainBrush;
@@ -161,6 +171,7 @@ export class EditorSession {
     this.panel = new EditorPanel();
     this.panel.setVisible(true);
     this.panel.setAddMenu(ADD_GROUPS, (list, choice) => this.onAdd(list, choice));
+    this.panel.setMapMenu(() => this.select(FLOOR_REF));
     this.proxies = new ProxyLayer(deps.scene, deps.glow);
     this.proxies.build(this.map);
     this.proxies.buildScatter(deps.layout.scatter, this.map.terrain);
@@ -177,8 +188,10 @@ export class EditorSession {
     this.brush = new TerrainBrush(deps.scene, deps.glow, this.map);
     this.revalidate();
     this.saver = new LayoutSaver(deps.mapId, deps.layout);
-    if (this.saver.blocked) {
-      this.panel.setStatus(`cannot save: ${this.saver.blocked}`, "error");
+    this.envSaver = new EnvironmentSaver(deps.mapId);
+    const blocked = this.saver.blocked ?? this.envSaver.blocked;
+    if (blocked) {
+      this.panel.setStatus(`cannot save: ${blocked}`, "error");
     } else {
       this.panel.setStatus("ready", "idle");
     }
@@ -338,14 +351,18 @@ export class EditorSession {
   }
 
   private refreshInspector(): void {
-    const view = inspect(this.deps.layout, this.selected);
+    const view = inspect(this.deps.layout, this.deps.environment, this.selected);
+    // Controls are live whenever there are any; only the delete BUTTON is
+    // conditional. The two used to travel together, which was fine while every
+    // selection was a layout entry — the map's own floor is editable and is
+    // not something a map can be without.
     this.panel.setInspector(
       view.title,
       view.fields,
-      view.deletable
+      view.fields.length
         ? {
             onChange: (key, value) => this.onField(key, value),
-            onDelete: () => this.onDelete(),
+            onDelete: view.deletable ? () => this.onDelete() : undefined,
           }
         : null,
     );
@@ -360,6 +377,18 @@ export class EditorSession {
   private onField(key: string, value: FieldValue): void {
     const ref = this.selected;
     if (!ref) return;
+    // The floor is the map's environment, not one of the layout's arrays, so
+    // it takes its own write — and reports whether anything moved, because a
+    // colour picker fires on every step of a drag and each step would
+    // otherwise buy the ~570 ms rebuild.
+    if (ref.list === "floor") {
+      if (!setFloorField(this.deps.environment, key, value)) return;
+      this.envDirty = true;
+      this.dirty = true;
+      this.refreshInspector();
+      this.schedule(tierFor(ref.list));
+      return;
+    }
     setField(this.deps.layout, ref, key, value);
     this.dirty = true;
     this.refreshInspector();
@@ -398,7 +427,8 @@ export class EditorSession {
   private onDelete(): void {
     const ref = this.selected;
     if (!ref) return;
-    const what = inspect(this.deps.layout, ref).title || ref.list;
+    const what =
+      inspect(this.deps.layout, this.deps.environment, ref).title || ref.list;
     if (!deleteItem(this.deps.layout, ref)) return;
     this.dirty = true;
     this.panel.setStatus(`deleted ${what}`, "ok");
@@ -602,15 +632,27 @@ export class EditorSession {
   }
 
   /**
-   * Writes the layout back to src/world/hollowmere/layout.ts through the dev
-   * server. Entries nobody touched come back byte-identical, so the diff is
-   * only what was actually edited.
+   * Writes the map back through the dev server: `layout.ts` (and `heights.ts`
+   * with it), then `environment.ts` if the map's own palette was touched.
+   * Entries nobody edited come back byte-identical, so the diff is only what
+   * was actually changed.
+   *
+   * The environment goes LAST and only when dirty, for the same reason the
+   * heights go after the layout: a file that nobody asked to change should not
+   * be rewritten, and a failure must not land in the middle.
    */
   async save(): Promise<void> {
     if (this.saving) return;
     this.saving = true;
     this.panel.setStatus("saving…", "busy");
-    const result = await this.saver.save(this.deps.layout);
+    let result = await this.saver.save(this.deps.layout);
+    if (result.ok && this.envDirty) {
+      const env = await this.envSaver.save(floorEdits(this.deps.environment));
+      if (env.ok) this.envDirty = false;
+      result = env.ok
+        ? { ok: true, message: `${result.message} + environment.ts` }
+        : { ok: false, message: `layout saved, environment failed: ${env.message}` };
+    }
     this.saving = false;
     if (result.ok) this.dirty = false;
     this.panel.setStatus(result.message, result.ok ? "ok" : "error");
