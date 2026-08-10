@@ -26,7 +26,7 @@ one fact is what pinned `maxDistance` to `lodFreezeDistance` (35) and stopped an
 dying across the square from falling over at all — a marksman rifle's whole range.
 
 **The gate is the FOG WALL, and it is one number for everything that stops at it.**
-`FOG_WALL` in `config.ts` is a module constant because two unrelated tunables are the
+`FOG_WALL` in `config/fogWall.ts` is its own module because two unrelated tunables are the
 same distance and must move together: `bots.lodDisableDistance`, where `BattleSystem`
 stops drawing a rig, and `death.maxDistance`, one metre past which the solver would be
 tumbling something nobody can see. `BattleSystem` wrote its own `78` out by hand

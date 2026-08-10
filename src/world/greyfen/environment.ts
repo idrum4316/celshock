@@ -12,7 +12,7 @@ import type { EnvironmentSpec } from "../environment";
  * hour of the day.
  *
  * **`fogEnd` stays at 78, and that is a design decision rather than an
- * oversight.** `FOG_WALL` in `config.ts` is the same number as
+ * oversight.** `FOG_WALL` in `config/fogWall.ts` is the same number as
  * `bots.lodDisableDistance` and `bots.death.maxDistance`, and it is also what
  * `bots.perception.engageRange` (55), `audio.maxDistance` (70) and the 110 m
  * shadow window were all sized against. A daylight map that could see 200 m
@@ -68,8 +68,8 @@ export const GreyfenEnvironment: EnvironmentSpec = {
      * ~38. Higher is deliberate and buys two things — shorter shadows, which
      * a 110 m shadow window can hold without ending them in a line across
      * open ground, and a much weaker grazing sheen on the cobbles, which is
-     * what `graphics.spec.cobble` is tuned against (see its note in config.ts
-     * and the override below).
+     * what `graphics.spec.cobble` is tuned against (see its note in
+     * config/graphics.ts and the override below).
      */
     direction: [-0.5, -0.79, 0.35],
     /**

@@ -12,7 +12,31 @@ main.ts             # Bootstrap. Imports src/ui/base.css FIRST.
 public/             # Copied to dist/ VERBATIM — unhashed URLs named by hand
                     #   (manifest.webmanifest, icons/ from `npm run icons`).
 src/
-  config.ts         # ALL tunable constants (no magic numbers in code)
+  config/           # ALL tunable constants (no magic numbers in code).
+                    #   One module per subsystem; import `CONFIG` from "…/config"
+    index.ts            # Composes CONFIG from the sections. The ONLY importer of
+                        #   them. A new tunable goes in a section, not here
+    fogWall.ts          # FOG_WALL alone — bots.ts reads it, so it cannot live in
+                        #   index.ts without an import cycle
+    conquest.ts         # Flags, capture meter, tickets, bleed
+    bots.ts             # Bot AI + the nav grid (bots, nav)
+    player.ts           # Movement, crouch, ground probe, vitals
+    weapons.ts          # The weapon table, recoil, gunfeel (weapons, recoil,
+                        #   gunfeel)
+    sights.ts           # The optic table — its ORDER is the loadout row
+    viewmodel.ts        # Where the weapon sits in front of the camera
+    grenade.ts          # The throw, bounce, fuse and blast
+    camera.ts           # Look, FOV, view punch, shake
+    aimAssist.ts        # Controller aim assist and its three invariants
+    input.ts            # Deadzones, curves, pad haptics (input, rumble)
+    audio.ts            # Levels, distances, rolloff for the synthesized mix
+    graphics.ts         # Render pipeline knobs + pooled effects (graphics,
+                        #   effects)
+    hud.ts              # Minimap and damage arcs (minimap, damageIndicator)
+    lighting.ts         # The dynamic light budget (uniforms, not Babylon lights)
+    world.ts            # Map extents, water, grass (map, water, grass)
+    sky.ts              # The painted sky and moon shafts (sky, godRays)
+    teams.ts            # The two sides; index 0 is the player's
   core/
     Game.ts             # Orchestrator + state machine + main loop
     InputManager.ts     # Keyboard/mouse + gamepad state + rumble
@@ -84,7 +108,7 @@ src/
     serialize.ts/save.ts#   Minimal-diff emit + POST to the dev server
     saveEnvironment.ts  #   environment.ts patched one top-level KEY at a time
                         #     — what the floor picker writes
-    tuning.ts           #   Tool constants (NOT config.ts — not gameplay)
+    tuning.ts           #   Tool constants (NOT src/config/ — not gameplay)
   world/
     layout.ts           # Placement/ScatterSpec/Heightfield/MapLayout — the
                         #   map-data vocabulary, map-agnostic

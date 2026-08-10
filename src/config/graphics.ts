@@ -1,0 +1,233 @@
+/**
+ * config/graphics.ts — the render pipeline's knobs, and the pooled effects.
+ * Owns: glow, outlines, shadows, fog and the post chain, plus tracer/spark
+ * pool sizes. Contract: `docs/rendering.md`.
+ * Gotcha: several values here look like bugs if you 'fix' them — image
+ * processing off, rendering group 1, the shadow window. Read the contract.
+ */
+
+export const graphics = {
+  /** Emissive glow (neon, reticle, tracers) — GlowLayer settings. */
+  glowIntensity: 1.15,
+  glowKernel: 56,
+  /** Horror grade post-process (vignette / grain / chromatic aberration). */
+  vignette: 0.62,
+  grain: 0.055,
+  aberration: 0.55,
+  /** Peak red edge flash when the player is hit, and how fast it decays. */
+  damageFlash: 1.0,
+  damageFlashDecay: 2.6,
+  /**
+   * Motion blur on the look. A rotation reprojects identically at every
+   * distance, so this needs no depth buffer and no second pass over the
+   * scene — and equally, translation (strafing past a wall) does not blur.
+   */
+  motionBlur: {
+    /**
+     * Fraction of the frame's rotation to smear across — how long the
+     * shutter is open. 1 covers the whole frame (a 360-degree shutter,
+     * more than a real camera); film convention is nearer 0.5. This sits
+     * well under that on purpose: the blur should register as weight
+     * behind a whip pan and stay unnoticed on an ordinary look around,
+     * which is most of what a round is. 0 disables the pass, at which
+     * point the shader is a straight copy.
+     *
+     * Measured: smear length is exactly linear in speed x strength, so
+     * halving this is identical to halving the pan rate.
+     */
+    strength: 0.3,
+    /** Taps along the smear, the sharp one included. Must be at least 2. */
+    samples: 10,
+    /**
+     * Longest smear, as a fraction of the frame. This is a safety cap, not
+     * a look: one dropped frame arrives as a single huge rotation, and
+     * headless captures run slow enough to smear the screen flat without
+     * it. It bites at a pan rate inversely proportional to `strength` —
+     * roughly 550 deg/s at the value above — so ordinary play never
+     * reaches it and a hitch saturates instead of exploding.
+     */
+    maxShift: 0.04,
+    /** Rotation in one frame (radians) below which the pass is skipped. */
+    minRotation: 0.0015,
+    /**
+     * Radial falloff, sharp at the crosshair and full past the outer edge.
+     * The viewmodel is fixed in screen space and must not smear with the
+     * world behind it, and there is no depth in this pass to tell them
+     * apart — so the centre of the frame, where the weapon sits and where
+     * the eye is tracking, keeps its edges. Widening the sharp core is the
+     * second subtlety lever after `strength`, and the better-behaved one:
+     * it takes the blur off exactly the pixels the player is reading and
+     * leaves it where peripheral motion belongs.
+     */
+    maskInner: 0.35,
+    maskOuter: 0.85,
+  },
+  /**
+   * Hard-edged directional shadows from the key light (the moon), plus a
+   * soft contact blob under every combatant. The shadow camera follows the
+   * player inside a fixed ortho window — the fog wall at 78 m hides the
+   * edge of the coverage.
+   */
+  shadows: {
+    /** Shadow map resolution (square). 110 m / 2048 ≈ 5.4 cm texels. */
+    mapSize: 2048,
+    /** Width/height of the light's fixed ortho window, in metres. */
+    frustumSize: 110,
+    /** Light camera distance behind the focus, along the light direction. */
+    distance: 90,
+    /** Depth range of the ortho volume — must span valley floor to roofs. */
+    depthRange: 180,
+    /** Fraction of the key light that survives inside shadow. */
+    darkness: 0.15,
+    /**
+     * Consumer-side depth bias and facet-normal offset (metres). The
+     * faceted shader shades whole triangles at once, so the offset pushes
+     * each triangle's sample off its own plane — flat faces never
+     * self-shadow (acne) and cast shadows stay put.
+     */
+    bias: 0.0025,
+    normalBias: 0.06,
+    /** Soft contact disc under each combatant. */
+    blobRadius: 0.6,
+    blobOpacity: 0.55,
+  },
+  /**
+   * Outlines are coloured ink (a darkened take on the mesh's own palette
+   * colour) that thins out with distance, so far buildings stop reading as
+   * black cut-outs against the fog.
+   */
+  outlines: {
+    /** Full width this near; shrinks to minScale by farDistance. */
+    fullDistance: 14,
+    farDistance: 60,
+    minScale: 0.3,
+    /** Outline colour = the mesh's base colour scaled by this. */
+    tintFactor: 0.3,
+    /** Fallback ink for materials with no flat base colour to darken. */
+    fallbackColor: "#12141a",
+  },
+  /**
+   * Toon specular: one hard two-band Blinn highlight from the key light,
+   * gated by the same stepped shadow as the diffuse term. Only surfaces
+   * listed here carry it — everything else stays matte, which is most of
+   * the point: a highlight reads as special when metal and wet stone are
+   * the only things that shine.
+   */
+  spec: {
+    /**
+     * Rifle metal (rails, fittings, crown): tight cold glint off the
+     * moon. High shininess keeps it a pinpoint on small parts.
+     */
+    rifle: { color: "#aecbf2", intensity: 0.6, shininess: 32 },
+    /**
+     * Wet cobblestone streets: broad, dim grazing sheen, so the road
+     * catches a streak when you look toward the moon — the "rained an
+     * hour ago" read. Low shininess spreads it across the street.
+     *
+     * Intensity is tied to how high the moon sits: the lower it is, the
+     * closer the half-vector comes to the street's own normal when you look
+     * along it, so the same number that read as a streak under a 59-degree
+     * moon turned the whole road into the brightest thing in the frame at
+     * 38 degrees. If the key light's elevation changes, re-check this.
+     */
+    cobble: { color: "#5f7ba6", intensity: 0.18, shininess: 8 },
+  },
+  /**
+   * Translucency: the key light coming THROUGH a thin surface rather than
+   * off it, banded and gated by the same stepped shadow as the diffuse.
+   * Same opt-in shape as `spec` above and the same restraint — the term
+   * only reads as transmission while almost nothing in the frame carries
+   * it, and only where a surface genuinely is thin enough to.
+   *
+   * It fires when the eye comes round to look INTO the moon through the
+   * surface, so these are judged from under an awning or beneath a tree
+   * with the moon beyond it, never from the lit side. The colour is what
+   * the light arrives as after passing through and is NOT multiplied by
+   * the surface's albedo, so both of these are far paler than the material
+   * they sit on.
+   */
+  translucency: {
+    /**
+     * Market-stall canvas: pale, slightly warmed by the cloth, and the
+     * brightest of the two because an awning is a single thin sheet.
+     */
+    awning: { color: "#c3cbd6", intensity: 0.5 },
+    /**
+     * Pine needles: cold green, and dimmer — a crown is many layers deep,
+     * so what comes through it is what got past all of them.
+     */
+    foliage: { color: "#61906f", intensity: 0.3 },
+    /**
+     * Jungle canopy: warmer, yellower and brighter than the pine's. A frond
+     * is one broad blade rather than a crown many needles deep, so far more
+     * gets through it — and what gets through a leaf that size arrives
+     * carrying the leaf's own colour rather than merely dimmed.
+     */
+    canopy: { color: "#8fb567", intensity: 0.45 },
+  },
+  /**
+   * Cobblestone bump: fake relief height (metres) of a sett dome at
+   * height-map value 1.0. The light bands ripple across individual
+   * stones; too high and the street reads as rubble.
+   */
+  cobbleBumpScale: 0.1,
+  /**
+   * The most slots the drifting mote field (`systems/Atmosphere.ts`) may
+   * allocate — a **VRAM ceiling and NOTHING else**, never a target. What the
+   * ash looks like (colour, size, drift, how much of it there is) is the
+   * map's, because a valley of falling ash and a room full of rising embers
+   * disagree about every one of those; that lives on `ParticleSpec` in
+   * `world/environment.ts`.
+   *
+   * `Atmosphere` sizes the buffer to whichever spec is applied — `count / 3
+   * * 14`, the slots a life can still be running in — and rebuilds the
+   * system when a map asks for a different number, so this is spent only by
+   * a map that would exceed it. Hollowmere asks for 4,000, so 18,667 slots
+   * at a 21-float stride across two ping-pong buffers: 3.1 MB, against the
+   * 5.4 MB a fixed 32,000-slot pool would stand at whatever the map wanted.
+   * It bounds a `ParticleSpec.count` of about 6,800.
+   *
+   * **Hitting it costs density, not correctness.** `Atmosphere` shortens
+   * mote lives to match the buffer it was allowed, which keeps the circular
+   * recycle from cutting motes off mid-fade; the field ends up thinner and
+   * shorter-drifting, and `warnIfCeilingClamped` says so with numbers in dev
+   * builds. Raise this only for a map that genuinely wants denser air.
+   *
+   * The headroom is deliberately modest, because **count is the weaker of
+   * the two levers on how dense the air looks and the only one that costs
+   * anything.** Measured on the shipped map: raising `count` from 4,000 to
+   * 16,000 — 18,667 slots to 74,667 — is not visible in a still at all,
+   * because each mote is one to three pixels at street distance, while
+   * frame time doubles. What makes the field read is `ParticleSpec.size`.
+   * Anyone reaching for this number should raise that one instead.
+   */
+  particlePoolCeiling: 32000,
+} as const;
+
+export const effects = {
+  /**
+   * A tracer is a short streak that FLIES, not a beam drawn muzzle-to-impact.
+   * Everyone is hitscan, so the damage has already happened by the time the
+   * streak leaves the barrel — the flight is pure presentation, and these two
+   * numbers are what stop a shot reading as a laser.
+   *
+   * `tracerLength` is the streak itself (metres of lit round). Long enough to
+   * read as a direction at 60 m, short enough that it never joins the muzzle
+   * to the target. `tracerSpeed` is well under a real 900 m/s round: at true
+   * muzzle velocity a 120 m shot crosses in 0.13 s, which at 60 fps is eight
+   * frames of a streak nobody can follow, so it degenerates back into the
+   * beam it is meant to replace.
+   */
+  tracerLength: 6,
+  tracerSpeed: 320,
+  /**
+   * Sized for a 16-bot firefight: everyone is hitscan, so a tracer is drawn
+   * per shot from every combatant that fires — and now each one lives for its
+   * whole flight (up to `weapon.range / tracerSpeed`, ~0.4 s) rather than a
+   * fixed 0.07 s, so several times as many are in the air at once. An
+   * exhausted pool steals the oldest slot, which shows as a streak vanishing
+   * mid-flight.
+   */
+  tracerPoolSize: 96,
+  sparkPoolSize: 48,
+} as const;

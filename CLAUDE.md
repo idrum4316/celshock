@@ -447,8 +447,15 @@ the phone-shaped details (fullscreen on the document element, `--ov-scale`, why
 
 ## Conventions
 
-- **All tunables live in `src/config.ts`** (`CONFIG`, `as const`). No gameplay magic
-  numbers elsewhere — art/geometry constants stay in their model file.
+- **All tunables live in `src/config/`** (`CONFIG`, `as const`). No gameplay magic
+  numbers elsewhere — art/geometry constants stay in their model file. It is one
+  module per subsystem, composed into a single `CONFIG` by `config/index.ts`,
+  which is the only file that imports the sections. Everything else imports
+  `CONFIG` from `"…/config"` exactly as before. **A new tunable goes in the
+  section module it belongs to, never in `index.ts`** — that file is a spine and
+  stays one import and one key per section. `FOG_WALL` is alone in
+  `config/fogWall.ts` because `config/bots.ts` reads it, and taking it from
+  `index.ts` would be an import cycle.
 - `CONFIG` is `as const`, so a field like `bots.engageRange` has a *literal* type.
   `let x = CONFIG.bots.engageRange` then reassigning it fails to compile — annotate
   `let x: number` instead.

@@ -2,7 +2,7 @@
  * editor/tuning.ts — Constants for the map editor tool.
  * Owns: fly speeds, snap sizes, overlay and proxy colours.
  *
- * Deliberately NOT in src/config.ts. That file owns gameplay tunables — things
+ * Deliberately NOT in src/config/. That directory owns gameplay tunables — things
  * that change how the game plays and that a designer balances. Nothing here
  * reaches the shipped game: the editor is dev-only and dynamically imported, so
  * these values never load in a production build.
