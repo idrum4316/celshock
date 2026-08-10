@@ -1,9 +1,10 @@
 # VERIFYING.md
 
 How to drive this game from a headless browser, and the quirks that have already
-cost time doing it. Split out of [`CLAUDE.md`](CLAUDE.md), which is still the
-source of truth for architecture and invariants — read this when you are writing a
-smoke test, not when you are reasoning about a change.
+cost time doing it. Split out of [`CLAUDE.md`](CLAUDE.md), which with the
+subsystem contracts under [`docs/`](docs/) is still the source of truth for
+architecture and invariants — read this when you are writing a smoke test, not
+when you are reasoning about a change.
 
 Playwright + Chromium are devDeps for ad-hoc smoke tests; write throwaway scripts
 to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock`

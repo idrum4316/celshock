@@ -1,8 +1,9 @@
 # FILES.md
 
 The module map, one line per file, stating what it owns. Split out of
-[`CLAUDE.md`](CLAUDE.md), which carries the rules these modules obey and is still
-the source of truth; this file is for finding your way to the right one.
+[`CLAUDE.md`](CLAUDE.md), which is still the source of truth — it and the
+subsystem contracts under [`docs/`](docs/) that it points to carry the rules
+these modules obey; this file is for finding your way to the right one.
 
 ```
 index.html          # The head, and NO interface CSS. The one inline rule is a

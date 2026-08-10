@@ -5,7 +5,8 @@ yet acted on. Each entry says what is **measured**, what is **derived from the
 code** and therefore still a hypothesis, and what would settle it.
 
 This is not a bug tracker and not a design document. A finding leaves here by
-being fixed (and folded into `CLAUDE.md` if it turns out to be load-bearing)
+being fixed (and folded into `CLAUDE.md` or the subsystem's contract under
+`docs/` if it turns out to be load-bearing)
 or by being disproved. If you disprove one, delete it and say so in the
 commit — a stale finding is worse than no finding, because the next person
 spends an afternoon re-deriving it.

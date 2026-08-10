@@ -123,8 +123,9 @@ objective — no pathfinding at all. The one engine in the tree is Havok, which
 does nothing but drop the dead.
 
 **Contributor/agent documentation lives in [`CLAUDE.md`](CLAUDE.md)** —
-architecture, load-bearing invariants, and conventions. Every source file also
-has a contract header at the top.
+architecture, load-bearing invariants, and conventions, with one contract per
+subsystem under [`docs/`](docs/). Every source file also has a contract header at
+the top.
 
 ## Known limitations
 
