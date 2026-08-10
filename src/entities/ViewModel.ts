@@ -63,6 +63,7 @@ import {
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
+import { buildCarbine } from "./CarbineModel";
 import { buildDmr } from "./DmrModel";
 import { buildPistol } from "./PistolModel";
 import { buildRifle } from "./RifleModel";
@@ -92,6 +93,7 @@ export const VIEWMODEL_GROUP = 1;
  */
 const WEAPON_BUILDERS: Record<WeaponId, WeaponBuilder> = {
   rifle: buildRifle,
+  carbine: buildCarbine,
   smg: buildSmg,
   dmr: buildDmr,
   pistol: buildPistol,

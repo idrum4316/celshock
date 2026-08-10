@@ -36,7 +36,7 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   touching the viewmodel or camera — for **every** optic, since each carries its
   own eye reference. Take
   `scene.getTransformNodeByName("view_<weapon>_<sight>_sightCenter")
-  .getAbsolutePosition()` (all fifteen of `rifle`/`smg`/`dmr` ×
+  .getAbsolutePosition()` (all twenty of `rifle`/`carbine`/`smg`/`dmr` ×
   `reflex`/`iron`/`holo`/`prism`/`scope`, since a weapon change moves the optic
   too, plus `view_pistol_iron_sightCenter`), subtract `camera.position`, and project onto
   `cameraSys.forward` and a right vector built from `aimYaw` — `(cos(aimYaw), 0,
@@ -51,6 +51,14 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   read a perfect zero and still be looking at the weapon's own stock, which is what
   the DMR's irons did. `optics.ts`'s `ironSightFloor` keeps geometry out of the
   aperture; a screenshot at `adsBlend === 1` confirms it.
+- **A fire mode is a synchronous test, and the burst has to be one.** Its rounds
+  are 0.05 s apart and headless frames are 0.5 s, so nothing about it is
+  observable by holding a key down. `player.tryShot(trigger)` is a pure state
+  machine over `fireCooldown`/`triggerHeld`/`burstLeft`: zero the cooldown by
+  hand between calls and a whole burst, a refused held trigger and an abandoned
+  remainder are one `page.evaluate`. What to assert is the pair the mode is made
+  of — `tryShot(false)` returning **true** while rounds are owed, and
+  `tryShot(true)` returning **false** on a trigger that was never released.
 - **Grenades are testable without waiting for a round**: `g.grenades` takes
   `throwAlong`/`throwAt` and `g.grenades.update(1/60)` steps the flight, so a whole
   detonation is a synchronous loop in one `page.evaluate`. A bot moved by hand must

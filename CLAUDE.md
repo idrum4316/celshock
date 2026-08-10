@@ -222,10 +222,17 @@ change, *including a change of weapon*. **The aimed hold sway is on the AIM, not
 the rendered camera**: applied to the camera it would slide the world behind a
 reticle still welded to the bore, and the sight picture would lie.
 
+**The trigger is two questions, not one**: `semiAuto` asks whether it has to come
+up between pulls and `burst` asks what one pull spends. `Player.tryShot` owns both,
+and the burst is the one thing in the game that fires with the trigger *released* —
+the rounds are owed by the pull, so a reload, a swap, an empty magazine or a death
+must ABANDON what is left rather than bank it.
+
 → **[`docs/weapons.md`](docs/weapons.md)** — the viewmodel's own rendering group
 and pose stack, the bob phase's single integrator, the two slots and their
-holsters, how an optic's size and its eye relief are one number, and the
-procedural-model rules (merge per colour; never scale a part non-uniformly).
+holsters, the four weapons and the three fire modes, how an optic's size and its
+eye relief are one number, and the procedural-model rules (merge per colour; never
+scale a part non-uniformly).
 
 ### Grenades
 

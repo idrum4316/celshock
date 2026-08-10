@@ -69,10 +69,15 @@ export interface WeaponSetup {
   name: string;
   short: string;
   damage: number;
-  /** Rounds per second — a ceiling on the trigger when `semiAuto`. */
+  /** Rounds per second — a ceiling on the trigger when `semiAuto`, and the
+   *  rate WITHIN a burst when `burst` > 1. */
   fireRate: number;
-  /** One round per trigger pull. `Player.tryShot` is where that is enforced. */
+  /** The trigger has to come up between pulls. `Player.tryShot` enforces it. */
   semiAuto: boolean;
+  /** Rounds one pull spends; 1 for everything but the carbine. */
+  burst: number;
+  /** Seconds after a burst's last round before the next may leave. */
+  burstCycle: number;
   magSize: number;
   reloadTime: number;
   spreadHip: number;
@@ -111,6 +116,8 @@ export function weaponSetup(id: WeaponId): WeaponSetup {
     damage: w.damage,
     fireRate: w.fireRate,
     semiAuto: w.semiAuto,
+    burst: w.burst,
+    burstCycle: w.burstCycle,
     magSize: w.magSize,
     reloadTime: w.reloadTime,
     spreadHip: w.spreadHip,

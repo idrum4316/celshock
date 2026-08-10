@@ -62,6 +62,8 @@ const SLOTS: readonly Slot[] = ["weapon", "sight"];
 const WEAPON_BLURBS: Record<PrimaryWeaponId, string> = {
   rifle:
     "A full-power battle rifle. Four rounds kill at any distance you can see a target at, and it holds its group across the valley — but the magazine is short and every round has to be worth its recoil.",
+  carbine:
+    "A bullpup, and the trigger buys three rounds rather than one. All three land in a tenth of a second and all three together are a kill — then the weapon sits out four tenths whether they hit or not, which makes a wasted burst the most expensive mistake in the kit.",
   smg: "Pistol-calibre, and it empties a long magazine in under three seconds. Quickest to the shoulder, cheapest to miss with, and past the width of a street it will not group whatever optic is on top of it.",
   dmr: "Semi-automatic: one round per trigger pull, and two rounds anywhere on a man will do it. The tightest group and the longest reach in the kit, paid for with a kick that has to be ridden back down before the second shot means anything.",
 };
@@ -104,6 +106,34 @@ function least(pick: (w: (typeof CONFIG.weapons)[WeaponId]) => number): number {
 }
 
 /**
+ * Rounds a weapon actually delivers per second, held down.
+ *
+ * For everything but the carbine that is `fireRate` itself. A burst weapon's
+ * `fireRate` is the rate WITHIN its burst — 20/s on a weapon that fires six —
+ * and charting that would put the longest bar in the kit against the lowest
+ * sustained output in it, which is the opposite of what the bar is for. The
+ * burst's own rate is not lost: it is what the damage bar is about, since the
+ * three rounds arrive together.
+ */
+function sustainedRate(w: (typeof CONFIG.weapons)[WeaponId]): number {
+  if (w.burst <= 1) return w.fireRate;
+  return w.burst / (w.burstCycle + (w.burst - 1) / w.fireRate);
+}
+
+/**
+ * How a weapon's trigger behaves, in the one word a button has room for.
+ *
+ * The burst carries its COUNT, because that is the number the mode is about —
+ * three rounds is the difference between a kill on one pull and 68 damage and
+ * a wait. `semiAuto` is not mentioned for a burst weapon even though it is set:
+ * "one pull, one burst" is what "burst" already means to anyone reading it.
+ */
+function fireMode(w: (typeof CONFIG.weapons)[WeaponId]): string {
+  if (w.burst > 1) return `burst ×${w.burst}`;
+  return w.semiAuto ? "semi" : "auto";
+}
+
+/**
  * The chart for one weapon. Accuracy is the AIMED spread inverted — a bar
  * that grows with the number would rank the SMG as the accurate one — and is
  * shown in degrees, which is the only unit that means anything at a glance.
@@ -116,12 +146,13 @@ function least(pick: (w: (typeof CONFIG.weapons)[WeaponId]) => number): number {
 function weaponStats(id: PrimaryWeaponId): StatRow[] {
   const w = CONFIG.weapons[id];
   const deg = (rad: number) => ((rad * 180) / Math.PI).toFixed(2);
+  const rate = sustainedRate(w);
   return [
     { label: "Damage", value: `${w.damage}`, frac: w.damage / best((x) => x.damage) },
     {
       label: "Rate",
-      value: `${w.fireRate}/s`,
-      frac: w.fireRate / best((x) => x.fireRate),
+      value: `${rate % 1 === 0 ? rate : rate.toFixed(1)}/s`,
+      frac: rate / best(sustainedRate),
     },
     {
       label: "Magazine",
@@ -312,7 +343,7 @@ export class LoadoutScreen {
       const w = CONFIG.weapons[id];
       return `
         <button class="lo-opt${id === this.weapon ? " on" : ""}" data-weapon="${id}">
-          <b>${w.name}</b><i>${w.damage} dmg · ${w.fireRate}/s ${w.semiAuto ? "semi" : "auto"}</i>
+          <b>${w.name}</b><i>${w.damage} dmg · ${fireMode(w)}</i>
         </button>`;
     }).join("");
     const sights = SIGHT_IDS.map(

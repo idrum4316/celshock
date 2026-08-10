@@ -5,8 +5,8 @@
  * reference each one reports. Owns nothing about what a sight DOES — that is
  * `sights.ts`, from `CONFIG.sights`.
  *
- * Shared by both weapons on purpose: an optic is a thing bolted to a rail, and
- * the rifle and the SMG both have one. Duplicating these builders per weapon
+ * Shared by every weapon with a rail on purpose: an optic is a thing bolted to
+ * one, and all four primaries have one. Duplicating these builders per weapon
  * would be three more places for the eye reference to drift, and the eye
  * reference is the number ADS derives the whole aimed pose from.
  *

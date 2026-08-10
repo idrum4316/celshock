@@ -257,11 +257,22 @@ export class Player implements Combatant {
   private fireCooldown = 0;
   /**
    * Whether the trigger has been down since before the last thing it asked
-   * for. A semi-automatic weapon needs a release between rounds, and this is
+   * for. A semi-automatic weapon needs a release between pulls, and this is
    * the only state that remembers one — `InputManager.fire` is held state and
    * has no idea what it was last used for.
    */
   private triggerHeld = false;
+  /**
+   * Rounds still owed by the burst in flight, or 0 when there is none.
+   *
+   * This is the whole of what makes a burst a burst rather than three quick
+   * shots: the trigger has already said everything it is going to say, so the
+   * remaining rounds leave on the weapon's clock and a release cannot stop
+   * them. It is therefore also the one piece of firing state that has to be
+   * ABANDONED rather than allowed to run out — see the guards in `tryShot`,
+   * which drop it on anything that takes the weapon away.
+   */
+  private burstLeft = 0;
   private velY = 0;
   /** Seconds until the arm is ready to throw another grenade. */
   private throwCooldown = 0;
@@ -473,6 +484,7 @@ export class Player implements Combatant {
     this.reloading = false;
     this.reloadT = 0;
     this.fireCooldown = 0;
+    this.burstLeft = 0;
     this.spreadBloom = 0;
     this.ammo = this.magSize;
     this.view.setWeapon(id);
@@ -532,11 +544,13 @@ export class Player implements Combatant {
    * The trigger latch deliberately is NOT: it belongs to the finger rather
    * than to the weapon, so a trigger held down across a swap still has to be
    * released before the new weapon fires, exactly as it does across a reload.
+   * A burst is the weapon's, not the finger's, and goes with it.
    */
   private completeSwap(): void {
     this.slot = this.swapTo;
     this.swapPending = false;
     this.fireCooldown = 0;
+    this.burstLeft = 0;
     this.spreadBloom = 0;
     this.view.setWeapon(this.weapon.id);
     this.onCarryChanged();
@@ -591,6 +605,10 @@ export class Player implements Combatant {
     this.throwPending = false;
     this.reloading = false;
     this.fireCooldown = 0;
+    // A body that died mid-burst does not owe the rounds: `dying` stops
+    // `tryShot` being called at all, so the guards that would abandon it never
+    // run and the remainder would leave out of the next life's first frame.
+    this.burstLeft = 0;
     this.velY = 0;
     this.spreadBloom = 0;
     this.weaponKickT = 0;
@@ -936,7 +954,7 @@ export class Player implements Combatant {
    *
    * Takes the trigger rather than being called behind it, because a
    * semi-automatic weapon has to see the trigger come UP: the release is what
-   * arms the next round, and a caller that only speaks when the trigger is
+   * arms the next pull, and a caller that only speaks when the trigger is
    * down can never report one. Every path through here therefore ends with
    * the latch matching the trigger.
    *
@@ -944,27 +962,54 @@ export class Player implements Combatant {
    * holding the trigger through a reload or a sprint does not fire the instant
    * either ends — which is exactly what a trigger that was never released
    * should do.
+   *
+   * A burst already in flight does not ask the trigger anything. It is the
+   * one case where a released trigger still fires a round: the pull spent all
+   * three, and a burst that stopped halfway because the finger came up would
+   * be a fire mode nobody could aim, since the release lands mid-burst every
+   * time it is tapped. The latch is still maintained underneath, so the pull
+   * after it needs a genuine release exactly as the first one did.
    */
   tryShot(trigger: boolean): boolean {
-    if (!trigger) {
-      this.triggerHeld = false;
-      return false;
+    const wasHeld = this.triggerHeld;
+    this.triggerHeld = trigger;
+    // What a pull is allowed to ask for: a fresh round (or burst) needs the
+    // trigger down, and needs it to have come up first on a weapon that says
+    // so. A burst owed rounds asks on its own behalf.
+    if (this.burstLeft <= 0) {
+      if (!trigger) return false;
+      if (this.weapon.semiAuto && wasHeld) return false;
     }
-    if (this.weapon.semiAuto && this.triggerHeld) return false;
-    this.triggerHeld = true;
+    // The cooldown is the weapon's clock and is NOT a refusal: mid-burst it is
+    // the gap between the rounds, so it must be tested before anything that
+    // would abandon the burst below.
+    if (this.fireCooldown > 0) return false;
     if (
       !this.alive ||
       this.reloading ||
       this.sprinting ||
       this.swapping ||
-      this.fireCooldown > 0 ||
       this.ammo <= 0
     ) {
+      // Whatever the burst had left is gone with the weapon, the magazine or
+      // the body. Remembering it would fire the remainder out of a reload or
+      // out of a fresh spawn, seconds after the pull that asked for it.
+      this.burstLeft = 0;
       return false;
     }
     const r = CONFIG.recoil;
     this.ammo -= 1;
-    this.fireCooldown = this.weapon.shotInterval;
+    // A burst opens on its first round and closes on its last: within it the
+    // gap is the weapon's rate, and at the end it is `burstCycle` — the dwell
+    // that is the entire cost of the mode.
+    if (this.weapon.burst > 1) {
+      if (this.burstLeft <= 0) this.burstLeft = this.weapon.burst;
+      this.burstLeft -= 1;
+      this.fireCooldown =
+        this.burstLeft > 0 ? this.weapon.shotInterval : this.weapon.burstCycle;
+    } else {
+      this.fireCooldown = this.weapon.shotInterval;
+    }
     // Weapon-side recoil: the spread bloom the next shot inherits, and the
     // punch the body rides out. The aim kick itself belongs to the camera.
     // The ceiling takes the weapon's multiplier along with the per-shot term:

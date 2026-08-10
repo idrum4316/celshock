@@ -18,15 +18,25 @@
  * rail and every weapon here has one. What separates them is the trade this
  * table spells out: the rifle hits hard enough to kill in four and holds a
  * line across the valley, the SMG empties a bigger magazine half again as
- * fast and cannot be trusted past the far side of a street, and the DMR
- * kills in two and gives you one trigger pull at a time to do it with.
+ * fast and cannot be trusted past the far side of a street, the DMR kills in
+ * two and gives you one trigger pull at a time to do it with, and the carbine
+ * spends three rounds on every pull whether or not it needed them.
  *
  * The time to kill is deliberately close for the two automatics (rifle 4
  * rounds at 8/s = 0.375 s, SMG 6 at 13/s = 0.385 s). What you are choosing
  * between them is not damage per second, it is how much of the screen a
- * burst covers. The DMR is the one that steps outside that: 2 rounds at 3/s
- * is 0.333 s, faster than either, and it pays for it with the error budget
- * — a missed rifle round costs 0.125 s and a missed DMR round costs 0.333.
+ * burst covers. The other two step outside that at opposite ends: the DMR is
+ * 2 rounds at 3/s = 0.333 s, faster than either, and it pays for it with the
+ * error budget — a missed rifle round costs 0.125 s and a missed DMR round
+ * costs 0.333 — while the carbine's three rounds leave in 0.1 s and cost 0.4 s
+ * of nothing at all afterwards.
+ *
+ * `semiAuto` and `burst` are two different questions and the carbine is what
+ * proves it: `semiAuto` asks whether the trigger has to come UP between pulls
+ * and `burst` asks what one pull SPENDS. Three of the four answer only the
+ * first; the carbine answers both, and nothing here answers `burst` without
+ * also answering `semiAuto`, because a burst weapon that fired on a held
+ * trigger would be an automatic with a stutter.
  *
  * `recoilMult` and `bloomMult` SCALE `CONFIG.recoil` rather than restating
  * it: the shape of recoil — how much springs back, how fast, where it is
@@ -44,10 +54,27 @@ export const weapons = {
     /** Rounds per second. */
     fireRate: 8,
     /**
-     * Whether the trigger has to be released between rounds. Held fire is
+     * Whether the trigger has to be released between pulls. Held fire is
      * the default; see `Player.tryShot`, which owns the latch.
      */
     semiAuto: false,
+    /**
+     * Rounds one trigger pull spends. 1 is a weapon that fires a round when
+     * it is asked to, which is everything here but the carbine — see the
+     * table's header for why this is a separate question from `semiAuto`.
+     *
+     * Above 1 the rounds leave at `fireRate` and the trigger has no say once
+     * the first is gone: a burst finishes itself, which is the whole point of
+     * one, and `Player.burstLeft` is where that is remembered.
+     */
+    burst: 1,
+    /**
+     * Seconds from a burst's LAST round to the earliest next one — the
+     * weapon's own dwell, not the finger's. Read only when `burst` > 1, where
+     * it replaces `shotInterval` at the end of the burst and is the entire
+     * cost of the mode.
+     */
+    burstCycle: 0,
     magSize: 24,
     reloadTime: 1.4,
     /** Bullet spread half-angle (radians). */
@@ -97,6 +124,77 @@ export const weapons = {
     sfxPitch: 1,
   },
   /**
+   * The carbine: a bullpup firing a mechanical three-round burst, and the one
+   * weapon here whose trigger buys a decision rather than a round.
+   *
+   * Three rounds at 34 is 102 against 100 HP, so a burst that lands is a kill
+   * — the whole of it, in the 0.1 s the three take to leave. Nothing else here
+   * comes close to that number, and nothing else here is punished for missing
+   * the way this is: `burstCycle` is 0.4 s of a weapon that will not fire,
+   * whether the burst hit, missed, or hit twice out of three. A carbine that
+   * dropped two of the three has done 68, and the 32 that is left costs the
+   * full half second — against the rifle's 0.125 s for the same mistake.
+   *
+   * So the sustained figure is deliberately the worst of the automatics: 3
+   * rounds per 0.5 s is 6/s and 204 damage per second, under the rifle's 240
+   * and the SMG's 234. What is being sold is not throughput, it is that the
+   * fight can be over on one trigger pull if the pull was right — and that
+   * the pull is a commitment, because those three rounds are gone whatever
+   * happens after the first.
+   *
+   * `recoilMult` is 0.8 rather than the rifle's 1, and the burst is why: at 20
+   * rounds a second there is no recovery between them, so the three climb as
+   * one motion — about 2 deg aimed from the first round to the third, which
+   * is a chest that becomes a head at ~25 m and a miss well past it. That is
+   * the range cap doing its work by hand before the range cap has to.
+   */
+  carbine: {
+    name: "Burst Carbine",
+    short: "Carbine",
+    /** 34 x 3 = 102 against 100 HP: the burst is the kill, not the round. */
+    damage: 34,
+    /** WITHIN the burst — 0.05 s a round, so three take 0.1 s. */
+    fireRate: 20,
+    /** One pull, one burst: the trigger has to come up for the next. */
+    semiAuto: true,
+    burst: 3,
+    /** The bill for the mode, and the only thing holding it in the kit. */
+    burstCycle: 0.4,
+    /** Seven bursts, so seven kills — one more than the rifle's magazine. */
+    magSize: 21,
+    reloadTime: 1.45,
+    /**
+     * The worst hip figure of the three automatics, and consistent with the
+     * mode: an unaimed burst does not scatter one round, it scatters three.
+     */
+    spreadHip: 0.075,
+    /**
+     * Tighter than the rifle's 0.006 and still twice the DMR's. It has to be
+     * tighter: three rounds have to land on one decision, so a group that
+     * merely covers a torso is a group that drops one of them.
+     */
+    spreadAds: 0.0055,
+    /**
+     * Between the SMG's street and the rifle's valley. Past this the burst's
+     * own climb has already taken the third round over the shoulder, so the
+     * cap mostly names a limit the weapon reaches on its own.
+     */
+    range: 90,
+    recoilMult: 0.8,
+    /** Blooms through the burst and has the whole cycle to bleed it off. */
+    bloomMult: 1.15,
+    adsSpeedMult: 1.15,
+    /** Short overall — a bullpup's barrel is inside its stock. */
+    hipZ: -0.05,
+    hipY: 0,
+    /** Mass sat back over the shoulder: steadier than its length suggests. */
+    swayMult: 0.95,
+    drawTime: 0.5,
+    /** A rifle round out of a short barrel: sharper than the rifle, not thinner
+     *  than the SMG. */
+    sfxPitch: 1.08,
+  },
+  /**
    * The SMG: a pistol-calibre burst weapon. Higher rate, bigger magazine,
    * quicker to raise and quicker to reload; a third less damage per round,
    * spread half again as wide aimed and much wider from the hip, and a
@@ -115,6 +213,8 @@ export const weapons = {
     damage: 18,
     fireRate: 13,
     semiAuto: false,
+    burst: 1,
+    burstCycle: 0,
     magSize: 34,
     reloadTime: 1.15,
     spreadHip: 0.07,
@@ -164,6 +264,8 @@ export const weapons = {
     fireRate: 3,
     /** One round per pull. `Player.tryShot` holds the latch. */
     semiAuto: true,
+    burst: 1,
+    burstCycle: 0,
     magSize: 12,
     reloadTime: 1.9,
     spreadHip: 0.09,
@@ -224,6 +326,8 @@ export const weapons = {
     /** A ceiling on the trigger finger, as on the DMR. */
     fireRate: 5.5,
     semiAuto: true,
+    burst: 1,
+    burstCycle: 0,
     /** Seven in the magazine and one up the spout. */
     magSize: 8,
     reloadTime: 1.05,

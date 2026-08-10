@@ -3,8 +3,8 @@
  * colour groups, the primitive helpers, the merge, and the shape of what a
  * builder returns.
  * Owns: the build accumulator (`weaponBuild`) and the `WeaponParts` contract.
- * Owns no geometry of its own — `RifleModel`, `SmgModel`, `DmrModel` and
- * `PistolModel` are the builders, and `optics.ts` is the fifth.
+ * Owns no geometry of its own — `RifleModel`, `CarbineModel`, `SmgModel`,
+ * `DmrModel` and `PistolModel` are the builders, and `optics.ts` is the sixth.
  *
  * Invariants:
  * - A builder assembles at the ORIGIN with its root at identity and merges

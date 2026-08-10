@@ -125,7 +125,7 @@ is the trade it is asking you to make.
 `Player.setBodyHidden` hides the viewmodel, which matters in the editor: it flies
 the same camera the weapon is parented to.
 
-## The loadout: three weapons, five optics, and a sidearm
+## The loadout: four weapons, five optics, and a sidearm
 
 Two tables, two slots, neither knowing about the other. `CONFIG.weapons` declares
 what can be carried and `CONFIG.sights` what can be bolted to it;
@@ -157,7 +157,34 @@ The two automatics are balanced on time to kill, not damage per second: 4 rifle
 rounds at 8/s is 0.375 s, 6 SMG rounds at 13/s is 0.385 s. The choice buys how much
 of the screen a burst covers and how far away it still means anything.
 
-**The DMR steps outside that, and `semiAuto` is why it can.** Two rounds at 3/s is
+**The carbine is the third question the trigger can be asked, and `semiAuto` and
+`burst` are why there are three.** `semiAuto` asks whether the trigger has to come
+UP between pulls; `burst` asks what one pull SPENDS. The rifle and the SMG answer
+neither, the DMR and the pistol answer only the first, and the carbine answers both
+— nothing may answer `burst` alone, because a burst weapon firing on a held trigger
+is an automatic with a stutter in it. Its three rounds at 34 are 102 against 100 HP
+and leave in 0.1 s, the best ideal time to kill in the game by a factor of three,
+and the whole of the price is `burstCycle`: 0.4 s in which the weapon will not
+fire, spent identically whether the burst killed, missed, or landed two of three.
+That is the error budget again in its harshest form — a missed rifle round costs
+0.125 s and a wasted carbine burst costs half a second — and it is what keeps the
+sustained figure (6 rounds/s, 204 dps) the worst of the three automatics.
+
+**A burst in flight is the one thing that fires with the trigger up, and that is
+what makes it a mode rather than three fast rounds.** `Player.burstLeft` is the
+whole of it: the pull spent all three, so the remainder leaves on the weapon's
+clock and the release cannot stop it — a burst that stopped when the finger came
+up would stop mid-burst on every tap, which is not something a player could aim.
+Two rules keep it honest. The `fireCooldown` test comes FIRST, before the guards,
+because mid-burst that cooldown is the gap between rounds rather than a refusal.
+And the guards then ABANDON what is owed rather than banking it: a reload, a
+sprint, a swap, an empty magazine or a death drops the remainder on the floor,
+because a burst that resumed after any of them would fire seconds later out of a
+weapon the player has since reloaded, holstered or died holding. `fullReset` clears
+it for the one case the guards cannot see — `dying` stops `tryShot` being called at
+all, so a body killed mid-burst would otherwise owe rounds to the next life.
+
+**The DMR steps outside that too, and `semiAuto` is why it can.** Two rounds at 3/s is
 0.333 s — the best ideal TTK in the kit — but the rate is a *ceiling on the trigger
 finger* rather than a cadence, and the error budget pays for it: a missed rifle
 round costs 0.125 s, a missed DMR round 0.333. Its `recoilMult` of 2.2 is the second
@@ -170,7 +197,9 @@ The trigger latch lives in **`Player.tryShot`, which takes the trigger rather th
 being called behind it** — a semi-automatic has to see the trigger come *up*, and a
 caller that only speaks while it is down can never report one. The latch is set
 *before* the alive/reloading/sprinting guards, so a trigger held through a reload
-does not fire the instant the reload ends.
+does not fire the instant the reload ends. It belongs to the FINGER, which is why a
+swap keeps it (a trigger held across one still needs releasing) while the burst,
+which belongs to the weapon, goes with the weapon.
 
 - **Every weapon and every optic is built once; all but one of each is
   `setEnabled(false)`.** A loadout change is a handful of boolean writes and a
@@ -228,6 +257,16 @@ about z = 0.53, which is why the DMR's rail stops where it does and why its fron
 iron station sits no further out than the rifle's despite a longer receiver. The
 extra sight radius a marksman rifle wants comes out of the rear station instead;
 `DmrModel.ts`'s `MOUNT` documents both.
+
+**The carbine is that constraint answered by the layout rather than paid for.** A
+bullpup keeps nothing above the rail forward of the mount — no gas block standing
+proud, no folding leaf on the end of a long rail — so the cone would carry a folded
+front iron out past z = 0.5, and what stops the station short is the rail itself
+ending at the gas block because the barrel is exposed from there on. The rear
+station is where it wins: the receiver runs to the butt pad, so the aperture sits at
+-0.28 where the rifle's stops at -0.185 and there is still stock behind it. 0.60 of
+sight radius out of a weapon 0.96 long, against the rifle's 0.715 out of 1.25 — the
+same trade the layout makes everywhere else on it.
 
 **Read from the optic's side, that is one constraint and `RAIL_REACH` is it: how
 high a sight is carried and how wide its picture is are ONE decision, not two.**
