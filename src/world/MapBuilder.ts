@@ -47,7 +47,10 @@ import {
   buildBarrel,
   buildBoulder,
   buildBramble,
+  buildButtressLog,
+  buildCarvedStele,
   buildDeadTree,
+  buildFernClump,
   buildFireDrum,
   buildFungus,
   buildGravestone,
@@ -217,6 +220,9 @@ const SCATTER_BUILDERS = {
   deadTree: buildDeadTree,
   pine: buildPine,
   jungleTree: buildJungleTree,
+  fernClump: buildFernClump,
+  buttressLog: buildButtressLog,
+  carvedStele: buildCarvedStele,
   gravestone: buildGravestone,
   log: buildLog,
   fungus: buildFungus,
@@ -288,6 +294,23 @@ const PROP_BODIES: Record<ScatterSpec["prop"], PropBody> = {
   // rounds through open air across the whole stand. Full trunk height, so a
   // jungle tree bakes as hard cover (CoverMap's 1.7 m) the way a wall does.
   jungleTree: { w: 1.0, d: 1.0, h: 11.2, visualTop: 11.6 },
+  // Never blocking, so w/d/h are never read — filled honestly anyway, because
+  // this is a Record and a lie here would be believed the day someone sets
+  // `blocking` on a fern. `visualTop` IS read: findSpot's burial check runs for
+  // every prop, blocking or not. The reasoning for keeping ferns walk-through
+  // is in buildFernClump.
+  fernClump: { w: 1.7, d: 1.7, h: 1.0, visualTop: 1.2 },
+  // TRUNK ONLY, and lying along its own local X like the log — 5.2 m one way
+  // and 1.0 m the other is meaningless axis-aligned. The buttress fins (1.4 m)
+  // and the root plate (1.9 m) are thin plates and are deliberately outside
+  // this: a box that held them would stop rounds through a metre of daylight
+  // down the whole prop. At 1.0 m it sits under CoverMap's 1.7 m hard-cover
+  // line, so it bakes as low cover — which is what a fallen log is.
+  buttressLog: { w: 5.2, d: 1.0, h: 1.0, visualTop: 1.9 },
+  // Wide and thin and oriented, the gravestone's lesson at temple scale. The
+  // only understory prop that clears the 1.7 m hit sphere, so the only one
+  // CoverMap bakes as hard cover.
+  carvedStele: { w: 1.0, d: 0.45, h: 2.3, visualTop: 2.6 },
   // Slab and plinth: wide, and *thin*. The one prop whose orientation matters
   // most — squared off, it blocked five times its own thickness.
   gravestone: { w: 1.15, d: 0.42, h: 1.6, visualTop: 1.7 },

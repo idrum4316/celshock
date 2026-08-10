@@ -1,5 +1,6 @@
 /**
- * kit/terrain.ts — Ground-shaping builders: terrace, ramp, road, jetty.
+ * kit/terrain.ts — Ground-shaping builders: terrace, ramp, road, jetty,
+ * boardwalk.
  * All follow the contract in kit/core.ts (origin-local geometry, no
  * solid/pickable/collisions metadata).
  * Extra care here: these are walkable surfaces, so their collider top faces
@@ -14,9 +15,12 @@ import {
   type BuildCtx,
   type BuildParams,
   type Structure,
+  CREEPER,
   DARK_STONE,
   DIRT,
+  GUARD_THICKNESS,
   PLANK,
+  TEAK,
   TIMBER,
 } from "./core";
 
@@ -122,6 +126,108 @@ export function buildRoad(
   if (contoured) b.surface(contoured, dirt ? DIRT : undefined);
   else if (dirt) b.box(w, h, len, 0, top - h / 2, 0, DIRT);
   else b.groundBox(w, h, len, 0, top - h / 2, 0);
+  return b;
+}
+
+// --- the boardwalk --------------------------------------------------------
+
+/**
+ * Walked height of a boardwalk deck. Inside CONFIG.nav.stepHeight (0.6), which
+ * is the whole design: every cell of the deck links to the ground beside it, so
+ * a walk has no ramps and you step on and off it anywhere along its length.
+ */
+const WALK_DECK = 0.5;
+/**
+ * The deck slab's thickness, placed by its TOP face so the walked surface is
+ * WALK_DECK however this changes.
+ *
+ * It is deliberately deeper than the height it stands at. `OutlineRenderer`
+ * draws the outline shell with a slope-scaled negative depth offset, and at the
+ * grazing angle you see a walked surface from, the shell's underside wins the
+ * depth test unless there is real depth behind the top face — which paints the
+ * deck flat in its own ink. The manor's 0.14 m board deck is the worked failure
+ * (see CLAUDE.md); `boardDeck` in kit/manor.ts is the worked fix. Everything
+ * else the boardwalk draws hangs BELOW this box, because a batten laid on top
+ * of the walked surface would be a thin slab again with nothing behind it.
+ */
+const WALK_DECK_T = 0.64;
+/** Metres between pile bents. */
+const WALK_BENT = 3.5;
+
+/**
+ * A plank causeway on piles: the connective tissue between stilt huts, and the
+ * way across marsh that is too shallow to be worth a bridge.
+ *
+ * ## Why this is not the trestle bridge with a height spinner
+ *
+ * The two have opposite navigation contracts, and it is geometry rather than a
+ * parameter. A boardwalk's deck is under `stepHeight` above its own ground, so
+ * it links along its whole length and needs no ramps; its underside is a
+ * handspan off the ground, so `severLinks` cuts every link that crosses it and
+ * `clearBlocked` blanks the ground beneath. It is a CAUSEWAY — you walk on it,
+ * never under it, and that is correct. A trestle's deck is 1.6 m up: it links
+ * only at its two ramped ends, and its underside clears `HEADROOM`, so the bed
+ * stays walkable and you wade underneath. One builder with a `height` spinner
+ * would cross 0.6 somewhere in the middle of its range and silently disconnect
+ * itself from the map, with nothing to see and nothing thrown.
+ *
+ * ## Author it as a chain
+ *
+ * `MapBuilder` samples the terrain ONCE, at a placement's own centre, so a long
+ * walk over anything but level ground floats at one end and buries itself at
+ * the other — the problem `terrainSlab` solves for roads, which is not
+ * available here because a boardwalk is a collider and a road is not. The fix
+ * is authoring: lay a run as two or three 9–16 m placements so each samples its
+ * own ground. Adjacent decks whose heights differ by less than `HEIGHT_EPS`
+ * merge into one nav surface, so the joints cost nothing.
+ */
+export function buildBoardwalk(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  p: BuildParams = {},
+): Structure {
+  const b = new Build(scene, mats, "boardwalk");
+  const len = p.length ?? 14;
+  const w = p.width ?? 2.4;
+  const rails = p.railSide ?? "both";
+
+  // The deck: visual and collider in one box, placed by its top face.
+  b.wall(w, WALK_DECK_T, len, 0, WALK_DECK - WALK_DECK_T / 2, 0, PLANK);
+
+  const under = WALK_DECK - WALK_DECK_T;
+  const bents = Math.max(1, Math.round(len / WALK_BENT));
+  for (let i = 0; i <= bents; i++) {
+    const z = -len / 2 + (i / bents) * len;
+    // Cross-bearer, tucked directly under the deck so the slab reads as boards
+    // carried on timber rather than as one extruded block.
+    b.box(w + 0.24, 0.18, 0.22, 0, under - 0.09, z, TEAK);
+    for (const sx of [-1, 1]) {
+      // Piles. Visual only, and they must stay that way: a collider here would
+      // sever the links under the walk, spend a nav surface below the deck, and
+      // give bots something to wedge on. buildJetty makes the same call.
+      b.cyl(1.5, 0.2, 0.26, 5, (sx * w) / 2.6, under - 0.18 - 0.75, z, TEAK);
+    }
+    // Creeper down alternate outer piles — the jungle read, and the reason a
+    // boardwalk over a channel does not look like decking.
+    if (i % 2 === 1) {
+      b.box(0.07, 0.9, 0.16, (-w) / 2.6 - 0.13, under - 0.55, z, CREEPER);
+    }
+  }
+
+  // Rails. `guard` stands them OUTBOARD of the deck edge — a rail sitting on the
+  // walked surface would steal whichever 1.5 m nav cell its sample lands in.
+  for (const side of ["-x", "+x"] as const) {
+    if (rails !== "both" && rails !== side) continue;
+    const sx = side === "+x" ? 1 : -1;
+    b.guard(side, (sx * w) / 2, 0, len, WALK_DECK, { color: TEAK });
+    // Posts on the rail's own centreline, which is half a thickness outboard —
+    // drawn at the deck edge they would be inside the guard box and invisible.
+    const postX = (sx * (w + GUARD_THICKNESS)) / 2;
+    for (let i = 0; i <= bents; i++) {
+      const z = -len / 2 + (i / bents) * len;
+      b.box(0.17, 1.1, 0.17, postX, WALK_DECK + 0.55, z, TIMBER);
+    }
+  }
   return b;
 }
 

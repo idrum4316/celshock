@@ -32,6 +32,8 @@ import {
   buildMill,
   buildBoathouse,
   buildGatehouse,
+  buildStiltHut,
+  buildJungleRuin,
 } from "./kit/buildings";
 import { buildJungleManor } from "./kit/manor";
 import {
@@ -41,6 +43,8 @@ import {
   buildFence,
   buildStoneWall,
   buildBridge,
+  buildTrestleBridge,
+  buildTempleRuin,
   buildHaystack,
   buildLampPost,
   buildCart,
@@ -51,7 +55,13 @@ import {
   buildShrine,
   buildKiln,
 } from "./kit/structures";
-import { buildTerrace, buildRamp, buildRoad, buildJetty } from "./kit/terrain";
+import {
+  buildTerrace,
+  buildRamp,
+  buildRoad,
+  buildJetty,
+  buildBoardwalk,
+} from "./kit/terrain";
 
 /** Every builder, keyed by the name the layout data uses. */
 export const BUILDERS = {
@@ -68,15 +78,20 @@ export const BUILDERS = {
   boathouse: buildBoathouse,
   gatehouse: buildGatehouse,
   manor: buildJungleManor,
+  stiltHut: buildStiltHut,
+  jungleRuin: buildJungleRuin,
   well: buildWell,
   stall: buildStall,
   fence: buildFence,
   stoneWall: buildStoneWall,
   bridge: buildBridge,
+  trestleBridge: buildTrestleBridge,
+  templeRuin: buildTempleRuin,
   terrace: buildTerrace,
   ramp: buildRamp,
   road: buildRoad,
   jetty: buildJetty,
+  boardwalk: buildBoardwalk,
   haystack: buildHaystack,
   lamp: buildLampPost,
   cart: buildCart,

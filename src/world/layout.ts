@@ -44,6 +44,9 @@ interface ScatterBase {
     | "deadTree"
     | "pine"
     | "jungleTree"
+    | "fernClump"
+    | "buttressLog"
+    | "carvedStele"
     | "gravestone"
     | "log"
     | "fungus"
@@ -59,7 +62,14 @@ interface ScatterBase {
   scale?: [number, number];
   /** Blocking scatter gets a collider and punches a hole in the nav grid. */
   blocking?: boolean;
-  /** Collider half-extent at scale 1. */
+  /**
+   * Rejection-sampling pad: how far this prop's centre must stay from anything
+   * already placed. NOT the collider — that comes from `PROP_BODIES` in
+   * MapBuilder, measured against the prop's own geometry. The two are
+   * deliberately different numbers, because clearance is a spacing rule and is
+   * generous on purpose: sizing a collider from it once gave a 0.24 m headstone
+   * a box that stopped rounds through 1.2 m of air.
+   */
   clearance?: number;
 }
 

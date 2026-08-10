@@ -77,6 +77,15 @@ export interface BuildParams {
   teamColor?: string;
   /** Road: cobblestone street (default) or the old flat dirt track. */
   surface?: "cobble" | "dirt";
+  /**
+   * Boardwalk: which long edges carry a guard rail.
+   *
+   * Deliberately not `rampSide`, which is already spoken for and means "which Z
+   * face" — reusing it would be a name lying about what it selects. A walk
+   * between two huts wants no rail (you step off it anywhere, and a rail would
+   * make a corridor of it); a walk along a channel wants one on the wet side.
+   */
+  railSide?: "both" | "none" | "-x" | "+x";
 }
 
 /**

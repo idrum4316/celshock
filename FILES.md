@@ -96,21 +96,23 @@ src/
     BuildingKit.ts      # Facade: shared types + BUILDERS registry
     kit/core.ts         #   Build accumulator, palette, builder contract
     kit/buildings.ts    #   cottage, townhouse, tavern, smithy, ruin,
-                        #   watchtower, chapel, barn, mill, boathouse, gatehouse
+                        #   watchtower, chapel, barn, mill, boathouse,
+                        #   gatehouse, stiltHut, jungleRuin
     kit/manor.ts        #   manor — the two-storey colonial house with the
                         #   wrap-around gallery. Its own file: bigger than the
                         #   rest of buildings.ts together
     kit/structures.ts   #   silo, well, stall, fence, stoneWall, bridge,
-                        #   haystack, lamp, cart, crates, woodpile, shed,
-                        #   trough, shrine, kiln
-    kit/terrain.ts      #   terrace, ramp, road, jetty
+                        #   trestleBridge, templeRuin, haystack, lamp, cart,
+                        #   crates, woodpile, shed, trough, shrine, kiln
+    kit/terrain.ts      #   terrace, ramp, road, jetty, boardwalk
     NavGrid.ts          # Walkable-surface graph + precomputed flow fields
     CoverMap.ts         # Baked per-surface directional cover masks
     boxGeometry.ts      # Analytic WorldBox primitives, shared by NavGrid /
                         #   ObstacleField / CoverMap
     ObstacleField.ts    # Sub-cell collision push-out for thin props
     Props.ts            # Scatter props: trees, graves, rubble, braziers,
-                        #   boulders, brambles, barrels
+                        #   boulders, brambles, barrels, and the understory —
+                        #   ferns, fallen buttress logs, carved stelae
     textures.ts         # Generated canvas textures: the cobbles, and the floor
                         #   surfaces — grain painted from the map's floorColor
     floorSurfaces.ts    # What the valley floor is MADE of: the surface roster
@@ -122,8 +124,10 @@ src/
     hollowmere/heights.ts     # GENERATED floor heights (editor terrain mode)
     hollowmere/environment.ts # Palette, fog, mist, particles — night
     greyfen/layout.ts         # The second map, being built: the jungle manor
-                              #   on C, and flags and spawns around it
-    greyfen/heights.ts        # GENERATED floor heights — currently all level
+                              #   on C, a stilt-hut settlement and a temple on
+                              #   the other flags, and the trestle over the river
+    greyfen/heights.ts        # GENERATED floor heights — a Y-shaped river,
+                              #   wadeable everywhere (banks grade at 0.22)
     greyfen/environment.ts    # Palette, fog, sun, sky — overcast dawn
   ui/                   # One .css beside each module that writes markup
     base.css            #   Reset, canvas, #hud root, and ONLY primitives two

@@ -1,13 +1,19 @@
 /**
  * kit/structures.ts — Small standalone structures and cover: silo, well,
- * stall, fence, stone wall, bridge, haystack, lamp post, cart, crates,
- * woodpile, shed, trough, shrine, kiln. All follow the contract in
- * kit/core.ts (origin-local geometry, no solid/pickable/collisions metadata).
+ * stall, fence, stone wall, bridge, trestle bridge, temple ruin, haystack,
+ * lamp post, cart, crates, woodpile, shed, trough, shrine, kiln. All follow
+ * the contract in kit/core.ts (origin-local geometry, no
+ * solid/pickable/collisions metadata).
  *
  * Cover vocabulary, so a layout can pick the right height deliberately:
  * fence and trough are *low* (step over with the eyes, not the body), cart,
  * crates, woodpile and haystack are *waist/chest* high cover you crouch
  * behind, and stone wall, shed, silo and kiln break sightlines outright.
+ *
+ * Two things here are walked ON rather than hidden behind — the two bridges and
+ * the temple — so they additionally owe what kit/terrain.ts's header states:
+ * collider top faces within CONFIG.nav.stepHeight of adjacent ground, and rotX
+ * on the COLLIDER of anything pitched, not just on the visual.
  */
 import { Scene } from "@babylonjs/core";
 import { CONFIG } from "../../config";
@@ -17,6 +23,7 @@ import {
   type BuildParams,
   type Structure,
   BRICK,
+  CREEPER,
   DARK_STONE,
   EMBER,
   FLAME,
@@ -25,6 +32,7 @@ import {
   MOSS_STONE,
   PLANK,
   STONE,
+  TEAK,
   THATCH,
   TIMBER,
   SLATE,
@@ -156,6 +164,333 @@ export function buildBridge(
     const posts = Math.round(len / 3);
     for (let i = 0; i <= posts; i++) {
       b.box(0.2, 1.2, 0.2, postX, top + 0.6, -len / 2 + (i / posts) * len, TIMBER);
+    }
+  }
+  return b;
+}
+
+// --- the trestle -----------------------------------------------------------
+
+/** Walked height of the trestle deck above LOCAL ZERO, which is bank grade. */
+const TRESTLE_DECK = 1.6;
+/**
+ * Deck slab thickness, placed by its TOP face.
+ *
+ * The footbridge gets away with 0.28 and the jetty with 0.24; this does not,
+ * and the difference is area seen at a grazing angle. `OutlineRenderer` draws
+ * the outline shell with a slope-scaled negative depth offset, and the manor's
+ * documented failure is a 0.14 m deck over 22 x 15 m coming back painted flat
+ * in its own ink. A cart-width deck over a 26 m span is 83 m² walked down its
+ * long axis — squarely between the two, and not somewhere to guess.
+ *
+ * The girder read therefore comes from bracing hung BELOW this box. A plank cap
+ * laid on top would put its own top face 0.12 m in front of nothing again;
+ * depth behind the WALKED face is the only thing that buys the margin.
+ */
+const TRESTLE_DECK_T = 0.6;
+/** Approach gradient. Inside the 0.4 at which NavGrid.link severs itself. */
+const TRESTLE_GRADE = 0.32;
+/**
+ * How far each ramp foot runs on PAST local zero, to be buried.
+ *
+ * buildBarn's `rampDrop` and the manor's `SERVICE_DROP` under another name, for
+ * the same reason: nothing guarantees the ground at a ramp's foot is exactly
+ * the height its structure was sampled at, and a foot even a couple of
+ * centimetres over `stepHeight` above the terrain severs everything above it.
+ * A `stepHeight` of overrun buries the last stretch instead, where the terrain
+ * simply wins the surface and it costs nothing.
+ */
+const TRESTLE_DROP = 0.6;
+/** Metres between pile bents along the span. */
+const TRESTLE_BENT = 4.0;
+
+/**
+ * A timber trestle carried on raked pile bents, with a graded approach at each
+ * end: the plantation road's way over a river, and the piece that makes a
+ * colonial valley read as settled rather than merely built on.
+ *
+ * ## Local zero is BANK grade, not the ground under the centre
+ *
+ * This is the one thing to get right when placing one. `MapBuilder` samples the
+ * terrain ONCE, at the placement's own (x, z), and translates the whole
+ * structure by it — and a bridge's centre is over the CHANNEL, so that sample
+ * is the river bed. Left alone the whole trestle sinks by the bed's depth and
+ * both ramp feet end up floating a metre over the banks, severing everything.
+ *
+ * The fix is one authored number in the layout: give the placement a `y` equal
+ * to minus the bed depth at its centre, so local zero lands back at bank grade
+ * and the feet bury themselves by `TRESTLE_DROP` as intended.
+ *
+ * It could instead read `BuildCtx` and derive that itself. It deliberately does
+ * not: that would put it in `CONFORMS_TO_TERRAIN`, whose members the editor
+ * REBUILDS rather than translates on every frame of a drag (~570 ms against
+ * sub-ms), and a landmark placed once does not need to cost that. If a second
+ * trestle ever lands somewhere awkward, this is the thing to change.
+ *
+ * ## Why the deck is 1.6 m up, which is not a choice
+ *
+ * A deck low enough to link to a 0-height bank without ramps needs its top at
+ * or under `stepHeight` (0.6). A deck high enough for the river bed underneath
+ * to stay walkable needs its UNDERSIDE more than `HEADROOM` (1.7) above that
+ * bed, or `severLinks` cuts every link crossing it and `clearBlocked` blanks the
+ * ground beneath — an invisible wall across the channel, exactly where a player
+ * would run under a bridge. Over a 1.34 m bed with a 0.6 m slab those two want
+ * `top <= 0.6` and `top > 0.66`. No height does both.
+ *
+ * So the ramps are not decoration. They are the only way to have a deck you
+ * walk over AND a river you can wade under, and at 1.6 m the underside clears
+ * the bed by 2.34 m with room to spare.
+ *
+ * ## It runs along Z, and must
+ *
+ * `Build.guard` throws in DEV on a pitched run that is not along Z, because a
+ * pitched rail turns about X. The ramps are pitched and railed, so the whole
+ * structure is built along Z and turned by the placement's `rotY` — the same
+ * rule every other pitched slab in the kit follows.
+ */
+export function buildTrestleBridge(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  p: BuildParams = {},
+): Structure {
+  const b = new Build(scene, mats, "trestle");
+  /** The WATER span. The two approaches are extra, and considerable. */
+  const len = p.length ?? 26;
+  const w = p.width ?? 3.2;
+  const rise = TRESTLE_DECK + TRESTLE_DROP;
+  const run = rise / TRESTLE_GRADE;
+  // Pitch from the RUN, never from the slab's own length: conflating the two is
+  // what left buildBarn's ramp 0.3 m short of the loft and 1.5 m past the barn.
+  const pitch = Math.atan(TRESTLE_GRADE);
+  const slab = Math.hypot(run, rise);
+  const rampT = 0.5;
+  const under = TRESTLE_DECK - TRESTLE_DECK_T;
+
+  // The deck: visual and collider in one box, placed by its top face.
+  b.wall(w, TRESTLE_DECK_T, len, 0, TRESTLE_DECK - TRESTLE_DECK_T / 2, 0, PLANK);
+  // Longitudinal girders under it — the read the deck slab cannot carry itself.
+  for (const sx of [-1, 1]) {
+    b.box(0.3, 0.5, len, (sx * (w - 0.5)) / 2, under - 0.25, 0, TEAK);
+  }
+
+  // The two approaches, mirrored. `s` is +1 for the one running out to +Z.
+  for (const s of [-1, 1]) {
+    const midZ = s * (len / 2 + run / 2);
+    // Walked height at the run's centre: half the rise below the deck.
+    const surface = TRESTLE_DECK - rise / 2;
+    // Placed by its TOP face; the half-thickness is measured VERTICALLY, so
+    // that term is h/2/cos, not h/2*cos.
+    const y = surface - rampT / 2 / Math.cos(pitch);
+    b.box(w, rampT, slab, 0, y, midZ, PLANK, { x: s * pitch });
+    b.block({ w, h: rampT, d: slab, x: 0, y, z: midZ, rotX: s * pitch });
+    // Abutment where the ramp meets the deck, and a sleeper wall at the foot.
+    b.box(w + 1.0, 1.1, 1.2, 0, TRESTLE_DECK - 0.75, s * (len / 2 + 0.5), MOSS_STONE);
+    b.box(w + 0.6, 0.7, 0.8, 0, -0.45, s * (len / 2 + run - 0.3), MOSS_STONE);
+  }
+
+  // Pile bents. All visual: a collider on a pile would sever the bed links this
+  // bridge exists to leave alone, and give bots something to wedge on mid-river.
+  const bents = Math.max(2, Math.round(len / TRESTLE_BENT));
+  for (let i = 0; i <= bents; i++) {
+    const z = -len / 2 + (i / bents) * len;
+    for (const sx of [-1, 1]) {
+      // Raked so the bent is wider at the mud than at the cap.
+      b.cyl(3.4, 0.32, 0.42, 6, (sx * (w - 0.6)) / 2, under - 1.7, z, TEAK, {
+        z: sx * 0.1,
+      });
+    }
+    // Cap beam and a cross brace: what makes a row of posts read as a trestle.
+    b.box(w + 0.7, 0.26, 0.34, 0, under - 0.13, z, TEAK);
+    for (const sd of [-1, 1]) {
+      b.box(w + 0.5, 0.16, 0.18, 0, under - 1.3, z, TEAK, { z: sd * 0.55 });
+    }
+    // Creeper up two of them — enough to say the forest is winning, not enough
+    // to say the bridge is derelict.
+    if (i === 1 || i === bents - 1) {
+      b.box(0.12, 1.6, 0.12, (w - 0.6) / 2, under - 0.9, z + 0.2, CREEPER);
+    }
+  }
+
+  // Rails, along the deck and both approaches. `guard`'s `pitch` is positive for
+  // a run RISING toward +Z, which is the opposite sign to the slab's own rotX,
+  // and its `length` is the RUN rather than the slab — it cuts the section by
+  // cos itself so a ramp's rail meets the deck's in one line.
+  for (const side of ["-x", "+x"] as const) {
+    const sx = side === "+x" ? 1 : -1;
+    const edge = (sx * w) / 2;
+    b.guard(side, edge, 0, len, TRESTLE_DECK, { color: TEAK });
+    for (const s of [-1, 1]) {
+      b.guard(side, edge, s * (len / 2 + run / 2), run, TRESTLE_DECK - rise / 2, {
+        pitch: -s * pitch,
+        color: TEAK,
+      });
+    }
+    // Posts on the rail's own centreline, half a thickness outboard — drawn at
+    // the deck edge they would be inside the guard box and invisible.
+    const postX = (sx * (w + GUARD_THICKNESS)) / 2;
+    for (let i = 0; i <= bents; i++) {
+      const z = -len / 2 + (i / bents) * len;
+      b.box(0.2, 1.3, 0.2, postX, TRESTLE_DECK + 0.65, z, TIMBER);
+    }
+  }
+  return b;
+}
+
+// --- the temple ------------------------------------------------------------
+
+/**
+ * Rise per tier. It has to clear `NavGrid`'s HEIGHT_EPS (0.35) or `addSurface`
+ * merges two tiers into one surface and the climb stops existing; and it has to
+ * stay under CONFIG.nav.stepHeight (0.6) or a tier is a wall the flood fill
+ * refuses. That is a 0.25 m window, and this sits near its middle — the slack
+ * over 0.5 is what pays for the terrain varying across a 26 m footprint that
+ * MapBuilder height-samples at ONE point.
+ */
+const TIER_RISE = 0.45;
+/** How far each tier steps in from the one below, on every side. */
+const TIER_INSET = 3.2;
+/** How far the tiers are sunk below the placement's own ground. */
+const TIER_BURY = 0.4;
+
+/**
+ * A stepped stone platform with the jungle growing over it: three tiers, a
+ * broken sanctuary wall across the top, stelae at the corners and a toppled
+ * column lying where it fell.
+ *
+ * ## What it is for
+ *
+ * It is the only elevation in the kit that needs no ramp, no stair and no
+ * doorway. Every tier is a step inside `stepHeight`, so it is walked up from
+ * any bearing by anything with feet — which makes it high ground a bot can hold
+ * without the pathing having to be clever, and high ground a player can be
+ * pushed off from four sides at once. The watchtower and the barn loft are
+ * verticality with ONE way up; this is the opposite of that on purpose.
+ *
+ * There is deliberately no `guard` anywhere on it. A rail would turn a platform
+ * you can leave in any direction into a fortress with one entrance, and would
+ * cost a nav cell on every face.
+ *
+ * ## The colliders are RINGS, and the whole thing turns on it
+ *
+ * The obvious build is three nested solid boxes. It looks right, it walks right
+ * in the editor, and it silently loses its top tier. `NavGrid` keeps
+ * MAX_SURFACES = 3 per cell and `addSurface` RETURNS when it is full — so trace
+ * a cell at the centre: terrain goes in, tier 1's top goes in, tier 2's top goes
+ * in, and tier 3's top — the summit, the only part anyone climbs for — is
+ * dropped. Nothing throws, nothing draws differently, and the flag on top is
+ * unstandable.
+ *
+ * So each tier's COLLIDER is only the ring of tread it actually exposes.
+ * `topFaceHeight` returns null outside a box's own XZ footprint and
+ * `NavGrid.rasterize` skips on null, so a cell centre lands inside exactly one
+ * ring and every cell carries two surfaces instead of four.
+ *
+ * The VISUALS stay three nested solid boxes, and that is what satisfies the
+ * thick-box rule: every walked tread is the top face of a 0.85–1.75 m block, so
+ * the outline shell has real depth behind it and cannot paint the tread flat in
+ * its own ink. They are also all one colour, so they merge into a single mesh
+ * and their buried coplanar faces cannot be a depth-test tie.
+ *
+ * ## The nav budget, which is the thing to preserve
+ *
+ * | cell | surfaces |
+ * | --- | --- |
+ * | off the temple | terrain |
+ * | on any tread | terrain (blocked) + that tread |
+ * | under a stele, the wall, or the column | terrain + tread + that thing's top |
+ *
+ * Never four. So: no fourth tier, no nested solid COLLIDERS, and nothing new
+ * standing in a cell that already carries two treads.
+ */
+export function buildTempleRuin(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  p: BuildParams = {},
+): Structure {
+  const b = new Build(scene, mats, "temple");
+  const w = p.width ?? 26;
+  const d = p.depth ?? 22;
+  // Keep the top tier from inverting on a small footprint: three tiers need six
+  // insets out of the shorter half-span and something left to stand on.
+  const inset = Math.min(TIER_INSET, (Math.min(w, d) / 2 - 2.2) / 2);
+  const half = [
+    { x: w / 2, z: d / 2 },
+    { x: w / 2 - inset, z: d / 2 - inset },
+    { x: w / 2 - inset * 2, z: d / 2 - inset * 2 },
+  ];
+  /** Walked height of tier `i`. */
+  const top = (i: number): number => (i + 1) * TIER_RISE;
+
+  // The visuals: three nested solid boxes, each placed by its TOP face, each
+  // reaching down to the same buried base.
+  for (let i = 0; i < 3; i++) {
+    const h = top(i) + TIER_BURY;
+    b.box(half[i].x * 2, h, half[i].z * 2, 0, top(i) - h / 2, 0, MOSS_STONE);
+  }
+
+  // The colliders: for tiers 0 and 1, the exposed ring only. The ±X runs take
+  // the corners and the ±Z runs stop short of them, so the four abut without
+  // overlapping and no cell centre falls in two.
+  for (let i = 0; i < 2; i++) {
+    const h = top(i) + TIER_BURY;
+    const y = top(i) - h / 2;
+    const band = half[i].x - half[i + 1].x;
+    for (const s of [-1, 1]) {
+      b.block({ w: band, h, d: half[i].z * 2, x: s * (half[i].x - band / 2), y, z: 0 });
+      b.block({ w: half[i + 1].x * 2, h, d: band, x: 0, y, z: s * (half[i].z - band / 2) });
+    }
+  }
+  // The summit is the one tier that can be a single solid box: nothing steps in
+  // above it, so its cells carry terrain and one tread and no more.
+  {
+    const h = top(2) + TIER_BURY;
+    b.block({ w: half[2].x * 2, h, d: half[2].z * 2, x: 0, y: top(2) - h / 2, z: 0 });
+  }
+
+  // Drip courses: a shadow line along each riser. Their tops sit BELOW the tread
+  // above them, so nothing here is a thin slab anyone stands on.
+  for (let i = 0; i < 3; i++) {
+    const y = top(i) - 0.08;
+    for (const s of [-1, 1]) {
+      b.box(0.16, 0.12, half[i].z * 2 + 0.3, s * (half[i].x + 0.07), y, 0, DARK_STONE);
+      b.box(half[i].x * 2 + 0.3, 0.12, 0.16, 0, y, s * (half[i].z + 0.07), DARK_STONE);
+    }
+  }
+
+  // The sanctuary wall across the summit's north edge — the height the tiers
+  // deliberately do not provide, and hard cover for whoever holds the top.
+  const sanctH = p.ruined ? 1.3 : 2.9;
+  if (p.ruined) {
+    b.wall(half[2].x * 1.1, sanctH, 0.5, -half[2].x * 0.4, top(2) + sanctH / 2, half[2].z - 0.25, MOSS_STONE);
+  } else {
+    b.doorWall(half[2].x * 2, sanctH, 0.5, 0, top(2) + sanctH / 2, half[2].z - 0.25, MOSS_STONE, 1.8, 2.0);
+  }
+
+  // Stelae on the middle tread's corners — not the summit's, which the wall
+  // already spends cells on.
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const x = sx * (half[2].x + (half[1].x - half[2].x) / 2);
+      const z = sz * (half[2].z + (half[1].z - half[2].z) / 2);
+      b.wall(0.9, 2.6, 0.9, x, top(1) + 1.3, z, MOSS_STONE);
+      b.box(1.06, 0.18, 1.06, x, top(1) + 2.69, z, DARK_STONE);
+    }
+  }
+
+  // A toppled column on the lowest tread: waist-high cover on the climb, which
+  // is what stops the bottom tier being a shooting gallery.
+  const colX = half[1].x + (half[0].x - half[1].x) / 2;
+  const colY = top(0) + 0.39;
+  b.cyl(5.0, 0.7, 0.78, 7, colX, colY, d * 0.1, MOSS_STONE, { x: Math.PI / 2 });
+  b.block({ w: 0.78, h: 0.78, d: 5.0, x: colX, y: colY, z: d * 0.1 });
+
+  // What the forest has taken. Mats are sunk into the treads and stand a
+  // fraction proud — a mat flush with the stone is two up-facing faces in
+  // different colour groups sharing a plane, which strobes.
+  for (let i = 0; i < 3; i++) {
+    for (const s of [-1, 1]) {
+      b.box(half[i].x * 0.5, 0.36, 1.1, s * half[i].x * 0.45, top(i) + 0.03 - 0.18, s * (half[i].z - 0.9), CREEPER);
+      b.box(0.1, TIER_RISE * 0.9, 0.8, s * (half[i].x + 0.05), top(i) - TIER_RISE * 0.45, -s * half[i].z * 0.4, CREEPER);
     }
   }
   return b;

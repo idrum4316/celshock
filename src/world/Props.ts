@@ -39,7 +39,12 @@ const NEEDLE_LIT = "#35563d";
 const JUNGLE_BARK = "#5b5443";
 const LEAF = "#2c5230";
 const LEAF_LIT = "#437a3e";
+// Creeper and moss. The same value as the kit's CREEPER, deliberately restated
+// rather than imported: Props.ts owns its own palette and takes nothing from
+// the structure kit, so a prop stays placeable without a builder.
+const VINE = "#41552f";
 const STONE = "#7a7f7c";
+const DARK_STONE = "#5f6461";
 const IRON = "#2f3338";
 const RUST = "#5d4a3c";
 const DARK_METAL = "#262a33";
@@ -284,6 +289,229 @@ export function buildJungleTree(
     }
   });
   return trunk;
+}
+
+/**
+ * Fern clump: a low crown of arching fronds, each broken into two segments the
+ * same way a canopy tree's are.
+ *
+ * **Non-blocking, and that is the load-bearing decision here.** The canopy tree
+ * keeps its foliage out of its collider because there is nothing to shoot nine
+ * metres up; a fern sits at exactly the height of the hit sphere, so the same
+ * reasoning inverts — anything soft at chest height must be either genuinely
+ * solid or genuinely absent, never visible and shot straight through. And
+ * solid is the wrong answer, because the one promise a jungle-tree belt makes
+ * is that the canopy starts nine metres up and the sight lines under it stay
+ * open. A bullet-stopping box in every gap between the trunks would contradict
+ * that, punch nav holes through the understory and give bots one more thing to
+ * wedge on. You walk through ferns. `bramble` makes the same call.
+ */
+export function buildFernClump(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
+  const crown = MeshBuilder.CreateCylinder(
+    "fern-crown",
+    { height: 0.3, diameterTop: 0.26, diameterBottom: 0.4, tessellation: 5 },
+    scene,
+  );
+  crown.position.y = 0.15;
+  crown.material = mats.get(LEAF);
+
+  // MANY blades, and SHORT ones. Both numbers are the difference between a
+  // fern and an agave: the canopy tree's fronds are 2.0-2.4 m and read as a
+  // canopy because they are nine metres up, but the same blade at ankle height
+  // is a plank lying in the dirt — which is what the first pass looked like.
+  // A clump reads as foliage from the count of edges in its silhouette, not
+  // from the size of any one leaf.
+  const blades = 7 + Math.floor(rng() * 4);
+  const turn = rng() * Math.PI * 2;
+  for (let i = 0; i < blades; i++) {
+    const a = (i / blades) * Math.PI * 2 + turn + rng() * 0.3;
+    const len = 0.72 + rng() * 0.3;
+    const blade = MeshBuilder.CreateBox(
+      `fern-blade${i}`,
+      { width: 0.3, height: 0.07, depth: len },
+      scene,
+    );
+    blade.parent = crown;
+    blade.position.set(Math.sin(a) * len * 0.42, 0.42, Math.cos(a) * len * 0.42);
+    blade.rotation.y = a;
+    // Negative: a frond leaves the crown climbing, then breaks over.
+    blade.rotation.x = -0.5 - rng() * 0.25;
+    blade.material = mats.getTranslucent(
+      i % 2 === 0 ? LEAF_LIT : LEAF,
+      CONFIG.graphics.translucency.canopy,
+    );
+
+    // The drooping tip, hung off the blade's far end with its centre derived
+    // from its own break angle — buildJungleTree's frond, at a third the size.
+    const brk = 0.8 + rng() * 0.4;
+    const tipLen = len * 0.75;
+    const tip = MeshBuilder.CreateBox(
+      `fern-tip${i}`,
+      { width: 0.22, height: 0.06, depth: tipLen },
+      scene,
+    );
+    tip.parent = blade;
+    tip.rotation.x = brk;
+    tip.position.set(
+      0,
+      (-Math.sin(brk) * tipLen) / 2,
+      len / 2 + (Math.cos(brk) * tipLen) / 2,
+    );
+    tip.material = blade.material;
+  }
+  return crown;
+}
+
+/**
+ * A fallen jungle hardwood: a rolled trunk lying along its own local X, with
+ * two buttress fins still standing off it and the torn root plate at one end.
+ *
+ * The buttresses are what make this a jungle log rather than the temperate one
+ * — the same fins `buildJungleTree` stands its trunks on, seen from the side.
+ *
+ * Its collider (`PROP_BODIES`) is the TRUNK only. The fins reach 1.4 m and the
+ * root plate 1.9, but both are thin plates, and a box that held them would stop
+ * rounds through a metre of visible daylight along the whole prop — the canopy
+ * tree's rule, applied in the same direction rather than inverted. At the trunk
+ * height alone it also bakes as low cover rather than as a wall, which is what
+ * a log should be.
+ */
+export function buildButtressLog(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
+  const bark = mats.get(JUNGLE_BARK);
+  const trunk = MeshBuilder.CreateCylinder(
+    "buttresslog-trunk",
+    { height: 5.2, diameterTop: 0.72, diameterBottom: 0.95, tessellation: 7 },
+    scene,
+  );
+  trunk.position.y = 0.48;
+  trunk.rotation.z = Math.PI / 2;
+  // Rolled about its own axis, so no two logs show the same facet uppermost.
+  trunk.rotation.x = (rng() - 0.5) * 0.3;
+  trunk.material = bark;
+
+  // Buttress fins, still standing off the butt end. Parented to the trunk, so
+  // they ride its roll — a fin that ignored it would float.
+  for (let i = 0; i < 2; i++) {
+    const fin = MeshBuilder.CreateBox(
+      `buttresslog-fin${i}`,
+      { width: 0.16, height: 1.5, depth: 1.1 },
+      scene,
+    );
+    fin.parent = trunk;
+    fin.position.set(0, -2.0, (i === 0 ? 1 : -1) * 0.42);
+    fin.rotation.x = (i === 0 ? 1 : -1) * 0.22;
+    fin.material = bark;
+  }
+
+  // The torn root plate: a disc on edge, closing the butt.
+  const plate = MeshBuilder.CreateCylinder(
+    "buttresslog-plate",
+    { height: 0.28, diameterTop: 1.7, diameterBottom: 1.9, tessellation: 7 },
+    scene,
+  );
+  plate.parent = trunk;
+  plate.position.y = -2.7;
+  plate.material = mats.get(DEAD_BARK);
+
+  // Moss along the upper flank — a log on a wet floor is the first thing the
+  // forest takes.
+  for (let i = 0; i < 3; i++) {
+    const moss = MeshBuilder.CreateBox(
+      `buttresslog-moss${i}`,
+      { width: 0.5, height: 0.1, depth: 0.62 },
+      scene,
+    );
+    moss.parent = trunk;
+    moss.position.set(0.44, -1.4 + i * 1.5, 0);
+    moss.rotation.z = 0.3;
+    moss.material = mats.get(VINE);
+  }
+  return trunk;
+}
+
+/**
+ * A carved stele: a leaning slab of worked stone with relief bands and a
+ * chamfered cap, half-swallowed at the foot.
+ *
+ * The temple's outriders — the thing that says a stepped platform in a jungle
+ * was a place rather than a hill. It is the only one of the three understory
+ * props that clears the 1.7 m hit sphere, so it is the only one `CoverMap`
+ * bakes as genuine hard cover.
+ *
+ * Its collider is wide and thin and oriented with the prop, which is the
+ * gravestone's lesson: squared off to its own width it would block five times
+ * its thickness. The stone leans a few degrees while the box does not, so the
+ * top corner stands a little outside it — the same approximation the gravestone
+ * already makes at a much steeper angle.
+ */
+export function buildCarvedStele(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
+  const stone = mats.get(STONE);
+  const slab = MeshBuilder.CreateBox(
+    "stele-slab",
+    { width: 0.95, height: 2.3, depth: 0.42 },
+    scene,
+  );
+  slab.position.y = 1.15;
+  // Shallower than the gravestone's: nobody has been keeping this one upright,
+  // but a temple mason set it deeper than a village sexton did.
+  slab.rotation.x = (rng() - 0.5) * 0.18;
+  slab.rotation.z = (rng() - 0.5) * 0.24;
+  slab.material = stone;
+
+  const cap = MeshBuilder.CreateCylinder(
+    "stele-cap",
+    { height: 0.2, diameter: 0.98, tessellation: 6 },
+    scene,
+  );
+  cap.parent = slab;
+  cap.rotation.x = Math.PI / 2;
+  cap.position.y = 1.2;
+  cap.material = stone;
+
+  // Relief bands across the face — the carving, at the only fidelity a cel
+  // shader's flat bands can carry at this distance.
+  for (let i = 0; i < 3; i++) {
+    const band = MeshBuilder.CreateBox(
+      `stele-band${i}`,
+      { width: 0.78, height: 0.14, depth: 0.06 },
+      scene,
+    );
+    band.parent = slab;
+    band.position.set(0, 0.55 - i * 0.55, 0.24);
+    band.material = mats.get(DARK_STONE);
+  }
+
+  const plinth = MeshBuilder.CreateBox(
+    "stele-plinth",
+    { width: 1.3, height: 0.3, depth: 0.7 },
+    scene,
+  );
+  plinth.parent = slab;
+  plinth.position.y = -1.1;
+  plinth.material = mats.get(DARK_STONE);
+
+  // Creeper up one face.
+  const vine = MeshBuilder.CreateBox(
+    "stele-vine",
+    { width: 0.16, height: 1.6, depth: 0.08 },
+    scene,
+  );
+  vine.parent = slab;
+  vine.position.set(-0.3, -0.15, -0.25);
+  vine.material = mats.get(VINE);
+  return slab;
 }
 
 /** Leaning headstone with a cracked-off corner. */

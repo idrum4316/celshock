@@ -1273,7 +1273,18 @@ Layout gotchas that have already cost time:
   beside it, or the nav flood fill never reaches it and bots treat it as a wall. The
   boathouse and jetty decks both failed this at 0.62–0.73 m.
 - A control point's `pos` must not be inside a collider, or `surfaceAt` returns -1
-  there. Flag C was originally centred on the well.
+  there. Flag C was originally centred on the well. **A BLOCKING SCATTER REGION
+  reaches a flag the same way and is much easier to miss**, because nothing in the
+  layout says where its props will land: size and place one so its own radius plus
+  the prop's half-length still clears the nearest flag centre. Measured on Greyfen —
+  a log region centred 4.5 m off flag A dropped a 5.2 m trunk 0.53 m from the flag
+  and made it uncapturable. Non-blocking props (ferns, brambles) carry no collider
+  and may sit straight over a capture point.
+- **Adding a placement rerolls every scatter region on the map.** `findSpot` draws
+  from the shared stream once per *attempt*, accepted or rejected, and placements
+  build before scatter — so a new building anywhere moves every belt and every
+  dressing field, which is how the flag-A log above appeared from a change that
+  never mentioned it. Re-walk the flags after touching either array.
 - Ramps need `rotX` on the **collider**, not just the visual box, or the player
   walks into an invisible flat slab.
 - A run of fence or dry-stone wall must be split wherever a road, ramp or gate
@@ -1572,6 +1583,20 @@ Four flags, all read elsewhere; new geometry that omits them misbehaves silently
 **surface** — a (cell, height) pair — not a cell, because one cell can hold the creek
 floor and the bridge deck above it, or the barn floor and its hayloft.
 `MAX_SURFACES` is 3.
+
+**Three is a hard cap that fails SILENTLY, and anything stacked has to be built
+around it.** `addSurface` returns when the list is full, so the fourth candidate in
+a cell is discarded with nothing thrown and nothing to see. Terrain always takes one
+slot, which leaves two. A stepped structure built the obvious way — nested solid
+colliders, one per tier — spends a slot per tier in the cells at its centre and
+therefore loses its TOP tier, the one thing anyone climbs it for. The fix is that
+**each tier's collider is only the RING of tread it actually exposes**, so a cell
+centre falls inside exactly one: `topFaceHeight` returns null outside a box's own
+XZ footprint and `rasterize` skips on null. The visuals stay nested solid boxes,
+which is also what satisfies the thick-box rule. `buildTempleRuin` in
+`kit/structures.ts` is the worked example and carries the per-cell budget as a
+table; `buildStiltHut` is the other end of it, sitting at exactly three (terrain,
+platform, roof block) and forbidding a second floor slab in its header.
 
 Every cell's *base* surface comes from `TerrainField.heightAt` at the cell centre.
 Heights above the base come from evaluating each collider's top-face *plane* at the

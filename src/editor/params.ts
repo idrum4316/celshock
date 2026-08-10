@@ -81,6 +81,20 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
   // against one another, so a width spinner would break three of them.
   manor: [bool("litWindows", "lit windows")],
   ruin: [num("width", "width", 10, 3, 40), num("depth", "depth", 8, 3, 40)],
+  // Enterable by DEFAULT, unlike the cottage: a stilt hut's walls stand on a
+  // platform that is already a walked surface, so the interior costs the nav
+  // grid nothing extra and the doorway is what makes it worth approaching.
+  stiltHut: [
+    ...wdh(6.4, 5.2, 2.8),
+    bool("enterable", "enterable", true),
+    bool("ruined", "ruined"),
+    bool("litWindows", "lit windows"),
+  ],
+  jungleRuin: [
+    num("width", "width", 12, 5, 30),
+    num("depth", "depth", 9, 4, 24),
+    num("height", "height", 3.6, 2, 8, 0.2),
+  ],
   gatehouse: [
     { key: "teamColor", type: "choice", label: "team", def: "#c9a15e", options: ["#c9a15e", "#ff3b3b"] },
   ],
@@ -93,6 +107,17 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
   bridge: [
     num("length", "length", 12, 4, 40, 1),
     num("width", "width", 3.2, 1.5, 12, 0.2),
+  ],
+  // `length` is the WATER span. Each approach ramp adds another 6.9 m at the
+  // shipped deck height, so the placed structure is ~14 m longer than this says.
+  trestleBridge: [
+    num("length", "length", 26, 8, 60, 1),
+    num("width", "width", 3.2, 2, 8, 0.2),
+  ],
+  templeRuin: [
+    num("width", "width", 26, 10, 48, 1),
+    num("depth", "depth", 22, 8, 44, 1),
+    bool("ruined", "ruined"),
   ],
   woodpile: [num("length", "length", 5, 1, 20, 0.5)],
   cart: [bool("ruined", "ruined")],
@@ -121,6 +146,19 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
     { key: "surface", type: "choice", label: "surface", def: "cobble", options: ["cobble", "dirt"] },
   ],
   jetty: [num("length", "length", 18, 4, 60, 1)],
+  boardwalk: [
+    num("length", "length", 14, 4, 40, 1),
+    num("width", "width", 2.4, 1.5, 6, 0.2),
+    // A plain choice, NOT numeric: unlike rampSide the stored value genuinely
+    // is the string the builder switches on.
+    {
+      key: "railSide",
+      type: "choice",
+      label: "rails",
+      def: "both",
+      options: ["both", "none", "-x", "+x"],
+    },
+  ],
 
   // Fixed-geometry kinds: placed, rotated, and otherwise not configurable.
   tavern: [],
@@ -192,6 +230,16 @@ export const SCATTER_DEFAULTS: Record<ScatterProp, ScatterDefaults> = {
   // are still a stand you can walk and shoot between. Tighter and it merges
   // into one green ceiling with no reason to be a scatter field at all.
   jungleTree: { radius: 18, count: 22, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
+  // The understory. A fern is NON-BLOCKING for the same reason a bramble is,
+  // and here it is load-bearing rather than incidental: a canopy belt's whole
+  // promise is that the foliage starts nine metres up and the sight lines under
+  // it stay open, and a bullet-stopping box at chest height in every gap
+  // between the trunks would take that back. Dense count, because you walk
+  // through them.
+  fernClump: { radius: 12, count: 20, scale: [0.8, 1.4] },
+  // Against the temperate log's 1.4, for a trunk nearly twice as long.
+  buttressLog: { radius: 14, count: 4, scale: [0.85, 1.2], blocking: true, clearance: 1.6 },
+  carvedStele: { radius: 9, count: 5, scale: [0.85, 1.25], blocking: true, clearance: 0.7 },
   gravestone: { radius: 5, count: 8, scale: [0.8, 1.3], blocking: true, clearance: 0.6 },
   log: { radius: 12, count: 5, scale: [0.8, 1.2], blocking: true, clearance: 1.4 },
   fungus: { radius: 14, count: 5, scale: [0.8, 1.4] },

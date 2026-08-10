@@ -1,6 +1,7 @@
 /**
  * kit/buildings.ts — The big enterable/landmark buildings: cottage, townhouse,
- * tavern, smithy, ruin, watchtower, chapel, barn, mill, boathouse, gatehouse.
+ * tavern, smithy, ruin, watchtower, chapel, barn, mill, boathouse, gatehouse,
+ * stiltHut, jungleRuin.
  * All follow the contract in kit/core.ts (origin-local geometry, no
  * solid/pickable/collisions metadata).
  */
@@ -11,6 +12,7 @@ import {
   type BuildParams,
   type Structure,
   BRICK,
+  CREEPER,
   DARK_STONE,
   EMBER,
   FLAME,
@@ -21,8 +23,11 @@ import {
   PLASTER,
   SLATE,
   STONE,
+  STUCCO,
+  TEAK,
   THATCH,
   TIMBER,
+  VERDIGRIS,
 } from "./core";
 
 /**
@@ -861,5 +866,272 @@ export function buildGatehouse(
     b.glow(0.15, 3.2, 1.6, (sx * w) / 2 - sx * 2.4, h - 2.4, 0, teamColor);
   }
   b.light(teamColor, 24, 1.6, 0.1, 0, h - 2, 0);
+  return b;
+}
+
+// --- the tropical dwelling -------------------------------------------------
+
+/**
+ * Walked height of a stilt hut's platform. INSIDE CONFIG.nav.stepHeight (0.6),
+ * which is the entire reason the builder contains no ramp and no stair: every
+ * cell of the platform links to the ground beside it from every bearing. It is
+ * the manor's 0.40 m podium trick at 0.55.
+ */
+const HUT_DECK = 0.55;
+/** The platform slab, placed by its TOP face. See `boardDeck` in kit/manor.ts. */
+const HUT_DECK_T = 0.69;
+/** How far the platform oversails the walls, on all four sides. */
+const HUT_VER = 1.6;
+/** How far the piles run below the platform's underside. */
+const HUT_POST = 1.5;
+
+/**
+ * The jungle's cottage: a shuttered box of a house standing on a teak platform
+ * carried on piles, with a deep thatch roof and creeper up one gable.
+ *
+ * This is the repeatable dwelling the tropical end of the kit was missing. A
+ * village is a dozen of these and some boardwalk; the manor is the landmark
+ * they are a village *of*.
+ *
+ * ## Raised, and linked, and those are separate problems
+ *
+ * The obvious way to build a stilt house is to put its floor where a stilt
+ * house's floor goes — a metre and a half up — and hang a stair off it. That
+ * costs a ramp, a nav surface, and a climb; and it makes every hut a building
+ * you enter rather than cover you move through. So the two reads are decoupled:
+ *
+ * - **The walked surface is `HUT_DECK`, full stop.** Inside `stepHeight`, so
+ *   the platform links on every bearing with nothing to climb.
+ * - **The stilt read costs navigation nothing**, and comes from three things
+ *   that are true whatever height the deck is at. The platform OVERSAILS the
+ *   walls by `HUT_VER` on all four sides, and a house reads as raised because
+ *   the thing on posts is visibly wider than the box it carries. The piles run
+ *   `HUT_POST` below the deck's underside, which on level ground is simply
+ *   buried — and `MapBuilder` samples the terrain ONCE, at the placement's own
+ *   centre, so wherever the ground falls away inside the footprint that buried
+ *   length becomes exposed post with nothing in the builder changing. And the
+ *   water surface never moves, so a hut whose local ground is under it has
+ *   water beneath its floor for free.
+ *
+ * Worked example, on Greyfen's west branch: a hut centred where the terrain
+ * reads -0.45 puts its deck at +0.10 absolute. The landward corner stands
+ * 0.10 m over dry ground and links trivially; the seaward corner stands over a
+ * bed at -1.34, which is 1.44 m of deck above the mud with 0.82 m of standing
+ * water under the piles. One placement, both reads.
+ *
+ * **So a stilt hut wants its centre on ground that falls away within a few
+ * metres.** On dead-level ground it reads as a raised timber house, which is
+ * also correct and is what a hamlet inland should look like.
+ *
+ * ## Three things that must not change
+ *
+ * A cell under this building carries exactly THREE nav surfaces — the terrain,
+ * the platform top, and `gableRoof`'s eaves block — and `NavGrid` keeps three
+ * and silently drops the fourth. So: no second floor slab inside the walls (the
+ * platform is the floor), no colliders on the piles, and **the roof is emitted
+ * last**. Any of the three costs the platform, which is the only thing here
+ * anything actually walks on.
+ *
+ * The guards are on ±X only. The ±Z faces are deliberately open: a platform
+ * railed on all four sides links to the map on none of them, and the door is in
+ * the -Z elevation.
+ */
+export function buildStiltHut(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  p: BuildParams = {},
+): Structure {
+  const b = new Build(scene, mats, "stilthut");
+  const w = p.width ?? 6.4;
+  const d = p.depth ?? 5.2;
+  const h = p.height ?? 2.8;
+  const t = 0.28;
+  const enterable = p.enterable ?? true;
+  const fw = w + HUT_VER * 2;
+  const fd = d + HUT_VER * 2;
+  const under = HUT_DECK - HUT_DECK_T;
+
+  // The platform: visual and collider in one box, placed by its top face.
+  b.wall(fw, HUT_DECK_T, fd, 0, HUT_DECK - HUT_DECK_T / 2, 0, PLANK);
+
+  // Piles. Visual only — a collider on one would spend a nav surface under the
+  // deck and give bots something to wedge on. buildJetty makes the same call.
+  for (const px of [-1, 0, 1]) {
+    for (const pz of [-1, 0, 1]) {
+      b.cyl(
+        HUT_POST + 0.7,
+        0.24,
+        0.32,
+        6,
+        (px * (fw - 1.0)) / 2,
+        under - HUT_POST / 2,
+        (pz * (fd - 1.0)) / 2,
+        TEAK,
+      );
+    }
+  }
+  // Head beams under the platform, along both axes: what the piles carry.
+  for (const sz of [-1, 1]) {
+    b.box(fw, 0.2, 0.26, 0, under - 0.1, (sz * (fd - 1.0)) / 2, TEAK);
+  }
+
+  // The house itself, standing on the platform.
+  const wallY = HUT_DECK + h / 2;
+  if (enterable) {
+    b.doorWall(w, h, t, 0, wallY, -d / 2, STUCCO, 1.6, 2.1);
+    b.wall(w, h, t, 0, wallY, d / 2, STUCCO);
+    b.wall(t, h, d, -w / 2, wallY, 0, STUCCO);
+    b.wall(t, h, d, w / 2, wallY, 0, STUCCO);
+  } else {
+    b.box(w, h, d, 0, wallY, 0, STUCCO);
+    b.block({ w, h, d, x: 0, y: wallY, z: 0 });
+  }
+
+  // Corner posts and a shuttered opening each side — the louvred read that
+  // separates a tropical house from a plastered one.
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      b.box(0.24, h, 0.24, (sx * w) / 2, wallY, (sz * d) / 2, TEAK);
+    }
+    b.box(0.06, 1.0, 1.5, (sx * (w + t)) / 2, HUT_DECK + h * 0.6, 0, TEAK);
+    for (let i = 0; i < 4; i++) {
+      b.box(0.1, 0.14, 1.4, (sx * (w + t)) / 2, HUT_DECK + h * 0.45 + i * 0.24, 0, TEAK);
+    }
+  }
+
+  if (p.ruined) {
+    // One slope gone and a wall stove in: the same trade buildCottage makes.
+    b.box(w * 0.7, 0.18, d + 0.8, -w * 0.18, HUT_DECK + h + 0.5, 0, THATCH, { z: -0.5 });
+    b.block({ w: w + 0.8, h: 0.3, d: d + 0.8, x: 0, y: HUT_DECK + h, z: 0 });
+  }
+
+  // Creeper up one gable and down two piles — the jungle read is CREEPER
+  // against STUCCO, never saturation.
+  b.box(0.09, h * 0.8, 0.5, -(w + t) / 2 - 0.05, HUT_DECK + h * 0.5, d * 0.3, CREEPER);
+  b.box(0.12, 1.1, 0.12, -(fw - 1.0) / 2, under - 0.6, (fd - 1.0) / 2, CREEPER);
+
+  if (p.litWindows) {
+    b.glow(0.9, 0.7, 0.06, 0, HUT_DECK + h * 0.6, -d / 2 - t / 2 - 0.02, "#ffb257");
+  }
+
+  // Rails, on ±X only. `guard` stands them outboard of the platform edge, which
+  // is what keeps them out of the nav samples the platform needs.
+  for (const side of ["-x", "+x"] as const) {
+    const sx = side === "+x" ? 1 : -1;
+    b.guard(side, (sx * fw) / 2, 0, fd, HUT_DECK, { color: TEAK });
+    const postX = (sx * (fw + GUARD_THICKNESS)) / 2;
+    for (const sz of [-1, 0, 1]) {
+      b.box(0.18, 1.1, 0.18, postX, HUT_DECK + 0.55, (sz * (fd - 0.6)) / 2, TEAK);
+    }
+  }
+
+  // LAST, and it has to be: this block is the third and final nav surface the
+  // cells under the hut can hold.
+  if (!p.ruined) {
+    b.gableRoof(w + 0.6, d + 0.6, 1.5, 0, HUT_DECK + h, 0, THATCH, 0.5);
+  }
+  return b;
+}
+
+/**
+ * Walked height of a jungle ruin's floor. Three numbers had to agree: inside
+ * `stepHeight` so the plinth links from every bearing with no ramp, at least
+ * `HEIGHT_EPS` (0.35) above the terrain so it is a genuine second nav surface
+ * rather than a coplanar smear on the floor, and standing on enough slab that
+ * the outline shell cannot win the depth test across it.
+ */
+const RUIN_FLOOR = 0.45;
+
+/**
+ * A colonial house the forest has taken back: stucco walls with the roof gone,
+ * a surviving corner of the veranda colonnade, a sheet of the copper roof lying
+ * where it fell, and a hardwood coming up through the north-east corner.
+ *
+ * `buildRuin` is this building's temperate cousin and the grammar is
+ * deliberately the same — every wall is cover on both sides and none of them
+ * reaches the eaves — but two things are different and both are the point.
+ *
+ * **The floor is real.** `buildRuin` lays a 0.2 m visual-only slab and gets away
+ * with it because nothing stands on it: its walls are chest-high and the fight
+ * is around them. This one has walls at head height and doorways through them,
+ * so the fight is INSIDE it, and a floor you fight on is a walked surface with
+ * everything that implies — a thick box placed by its top face, and a collider.
+ *
+ * **One wall can be shot through.** The +X elevation keeps its full height but
+ * carries an empty window: a ruin whose every standing wall is opaque is a set
+ * of blinds, and the one opening is what makes holding the inside a decision
+ * rather than a default. It is a window and not a door — sill at 1.2 above the
+ * floor — so it is a firing port, not a fourth way in.
+ *
+ * Nav: two surfaces per cell, terrain and the plinth. There is no roof and no
+ * upper storey, which is the whole reason this one can carry a fallen roof
+ * sheet and a tree without anyone having to count.
+ */
+export function buildJungleRuin(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  p: BuildParams = {},
+): Structure {
+  const b = new Build(scene, mats, "jungleruin");
+  const w = p.width ?? 12;
+  const d = p.depth ?? 9;
+  const h = p.height ?? 3.6;
+  const t = 0.45;
+  /** Centre height of a wall of height `hh` standing on the plinth. */
+  const on = (hh: number): number => RUIN_FLOOR + hh / 2;
+
+  // The plinth, and the floor you fight on: one box, placed by its top face.
+  b.wall(w + 0.8, 0.6, d + 0.8, 0, RUIN_FLOOR - 0.3, 0, DARK_STONE);
+  // Flagstones, sunk so their top is a hair under the plinth's — two up-facing
+  // surfaces in different colour groups must never share a plane.
+  b.box(w - 0.4, 0.36, d - 0.4, 0, RUIN_FLOOR - 0.19, 0, MOSS_STONE);
+
+  // North wall: standing over most of its run, broken down at one end.
+  b.wall(w * 0.62, h, t, -w * 0.19, on(h), d / 2, STUCCO);
+  b.wall(w * 0.38, 1.1, t, w * 0.31, on(1.1), d / 2, STUCCO);
+
+  // East wall: full height, with an empty window punched through it.
+  const runZ = d * 0.72;
+  const midZ = d * 0.14;
+  const gap = 1.5;
+  const sill = 1.2;
+  const head = 2.4;
+  const leg = (runZ - gap) / 2;
+  for (const sz of [-1, 1]) {
+    b.wall(t, h, leg, w / 2, on(h), midZ + (sz * (gap + leg)) / 2, STUCCO);
+  }
+  b.wall(t, sill, gap, w / 2, on(sill), midZ, STUCCO);
+  b.wall(t, h - head, gap, w / 2, RUIN_FLOOR + head + (h - head) / 2, midZ, STUCCO);
+
+  // West wall down to a stub, south wall down to two jambs.
+  b.wall(t, 1.1, d * 0.5, -w / 2, on(1.1), -d * 0.1, STUCCO);
+  b.doorWall(w, 2.4, t, 0, on(2.4), -d / 2, STUCCO, 2.0, 2.2);
+
+  // The one surviving corner of the veranda colonnade. Each column is a wall of
+  // its own: a column you shoot through standing beside one you do not reads as
+  // a hitscan bug, which is the manor's rule at :780.
+  for (let i = 0; i < 2; i++) {
+    b.wall(0.34, 3.0, 0.34, w / 2 + 1.5, on(3.0), -d / 2 - 0.4 - i * 2.4, TEAK);
+  }
+  b.box(0.5, 0.3, 5.2, w / 2 + 1.5, RUIN_FLOOR + 3.15, -d / 2 - 1.6, TEAK);
+
+  // A sheet of the copper roof, lying where it came down. Chest cover inside,
+  // and the only thing here that says what the roof was made of.
+  b.wall(3.6, 0.9, 2.6, -w * 0.16, on(0.9), d * 0.1, VERDIGRIS);
+  b.box(2.4, 0.5, 1.8, w * 0.24, RUIN_FLOOR + 0.25, -d * 0.22, VERDIGRIS, { z: 0.3 });
+
+  // A hardwood coming up through the north-east corner. Its trunk stands inside
+  // the corner the two walls already occupy, so it costs no nav cell of its own.
+  b.cyl(7.4, 0.34, 0.62, 6, w / 2 - 0.9, RUIN_FLOOR + 3.7, d / 2 - 0.9, TIMBER);
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 + 0.4;
+    b.box(2.6, 0.16, 0.9, w / 2 - 0.9 + Math.sin(a) * 1.2, RUIN_FLOOR + 6.6, d / 2 - 0.9 + Math.cos(a) * 1.2, CREEPER, { y: a, x: -0.2 });
+  }
+
+  // Creeper down both tall elevations — blank bays only, never over an opening,
+  // and standing proud of the face it grows on rather than buried in it.
+  b.box(0.7, h * 0.85, 0.1, -w * 0.34, on(h * 0.85), d / 2 + t / 2 + 0.05, CREEPER);
+  b.box(0.5, h * 0.6, 0.1, w * 0.02, on(h * 0.6), d / 2 + t / 2 + 0.05, CREEPER);
+  b.box(0.1, h * 0.7, 0.7, w / 2 + t / 2 + 0.05, on(h * 0.7), midZ - runZ / 2 + 0.6, CREEPER);
   return b;
 }
