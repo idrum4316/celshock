@@ -129,6 +129,28 @@ export const FLAME = "#ffbe63";
 /** Forge/kiln mouth — hotter and redder than a lantern's FLAME. */
 export const EMBER = "#ff7a2a";
 
+// --- the tropical end of the same palette ----------------------------------
+// A second climate rather than a second map's private colours: the kit stays
+// map-agnostic, so anything built out of these is available to Hollowmere too.
+// They are deliberately drawn from the same muted, desaturated family as the
+// village above — a jungle read comes from CREEPER against STUCCO, not from
+// saturation, which the cel shader's flat bands would post-erise.
+
+/** Lime-washed stucco gone green-grey under a wet canopy. */
+export const STUCCO = "#7f8474";
+/** Oiled tropical hardwood: posts, shutters, balustrades, louvres. */
+export const TEAK = "#4a3a2c";
+/**
+ * Sheet copper left out for a century — the roof of anything colonial.
+ *
+ * Deliberately dark for a green: this is the largest single area of colour any
+ * building here puts on screen, and the sky term lifts an up-facing surface
+ * hard. A tone picked to look right in isolation came back mint.
+ */
+export const VERDIGRIS = "#3f6055";
+/** Creeper, vine and moss: what the forest has already taken back. */
+export const CREEPER = "#41552f";
+
 // --- guard rails -----------------------------------------------------------
 
 /**

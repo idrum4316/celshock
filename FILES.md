@@ -95,6 +95,9 @@ src/
     kit/core.ts         #   Build accumulator, palette, builder contract
     kit/buildings.ts    #   cottage, townhouse, tavern, smithy, ruin,
                         #   watchtower, chapel, barn, mill, boathouse, gatehouse
+    kit/manor.ts        #   manor — the two-storey colonial house with the
+                        #   wrap-around gallery. Its own file: bigger than the
+                        #   rest of buildings.ts together
     kit/structures.ts   #   silo, well, stall, fence, stoneWall, bridge,
                         #   haystack, lamp, cart, crates, woodpile, shed,
                         #   trough, shrine, kiln
@@ -113,8 +116,9 @@ src/
     hollowmere/layout.ts      # A MAP — every placement, flag and spawn
     hollowmere/heights.ts     # GENERATED floor heights (editor terrain mode)
     hollowmere/environment.ts # Palette, fog, mist, particles — night
-    greyfen/layout.ts         # The second map. Forked from Hollowmere's and
-    greyfen/heights.ts        #   diverging; the two share no module
+    greyfen/layout.ts         # The second map, being built: the jungle manor
+                              #   on C, and flags and spawns around it
+    greyfen/heights.ts        # GENERATED floor heights — currently all level
     greyfen/environment.ts    # Palette, fog, sun, sky — overcast dawn
   ui/                   # One .css beside each module that writes markup
     base.css            #   Reset, canvas, #hud root, and ONLY primitives two

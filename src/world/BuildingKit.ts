@@ -2,7 +2,7 @@
  * BuildingKit.ts — Facade for the parametric structure builders. Re-exports
  * the shared types and the BUILDERS registry; the implementation lives in
  * kit/ (core.ts = Build accumulator + palette + contract, buildings.ts,
- * structures.ts, terrain.ts).
+ * manor.ts, structures.ts, terrain.ts).
  * Invariants: builders assemble AT THE ORIGIN, UNROTATED and NEVER set
  * metadata.solid, checkCollisions, or isPickable — MapBuilder owns the
  * visual/collider split. A builder may take a BuildCtx to read the world it is
@@ -33,6 +33,7 @@ import {
   buildBoathouse,
   buildGatehouse,
 } from "./kit/buildings";
+import { buildJungleManor } from "./kit/manor";
 import {
   buildSilo,
   buildWell,
@@ -66,6 +67,7 @@ export const BUILDERS = {
   mill: buildMill,
   boathouse: buildBoathouse,
   gatehouse: buildGatehouse,
+  manor: buildJungleManor,
   well: buildWell,
   stall: buildStall,
   fence: buildFence,

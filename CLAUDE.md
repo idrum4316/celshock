@@ -1015,9 +1015,11 @@ arguments for the same reason.
 touches.** A `MapDef` is `{ id, name, layout, environment }`; `MAPS` is the registry
 and `DEFAULT_MAP` is the fallback. `Game` holds one `mapDef` field (`Game.mapDef`) and
 reads both halves off it. Nothing outside `maps.ts` may import a map's own modules.
-The shipped maps are **Hollowmere** (night) and **Greyfen** (overcast dawn); the
-second was forked from the first's layout and is diverging, and the two share no
-module in either direction.
+The shipped maps are **Hollowmere** (night) and **Greyfen** (overcast dawn). The
+second was forked from the first's layout, cleared back to a blank valley, and is
+now being rebuilt as a jungle one: what stands is the **manor** on flag C and
+nothing else, so it is the map being built rather than a second finished one. The
+two share no module in either direction.
 
 Three rules:
 
@@ -1874,6 +1876,20 @@ never refills turns the round into a respawn queue.
 - `renderOutline` draws a back-face shell expanded by `outlineWidth` in every
   direction, so an emissive detail must protrude past its neighbours' shells or the
   glow is swallowed (why the player's visor slit and the lamp lens stick out).
+- **A flat surface you WALK on must be a thick box, not a thin slab**, and the
+  reason is that same shell. `OutlineRenderer` draws it with a negative,
+  slope-scaled polygon offset (`setZOffset(-1)`, `setZOffsetUnits(-4)`) that pulls
+  it toward the camera, and the slope term is enormous at the grazing angle a
+  floor is seen from — so the shell's underside, only `height + outlineWidth`
+  behind the real top face, WINS the depth test and paints the surface flat in its
+  own ink. The manor's board deck was 0.14 m thick and its whole 22 x 15 m hall
+  floor came back as `outlineInkFor` of the boards, which on a dark timber reads as
+  a black void and on a pale one as a grey wash. Nothing in the console, and the
+  usual suspects all test clean: clearing the shadow casters changes nothing,
+  because it is not a lighting bug at all. The same floor as a 0.54 m box renders
+  correctly, which is why the podium under it never showed the fault. Depth is what
+  buys the margin, so a walked surface gets a box as deep as whatever it stands on
+  and is placed by its TOP face.
 - **The rim highlight is gated off near-level surfaces, and the gate is not
   optional.** On a plane the grazing angle it keys on is nothing but distance from the
   eye — for a floor, `1 - dot(viewDir, n)` is `1 - eyeHeight/dist` — so an ungated rim

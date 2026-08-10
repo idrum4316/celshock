@@ -76,6 +76,10 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
     bool("enterable", "enterable"),
     bool("litWindows", "lit windows"),
   ],
+  // Fixed footprint, for the reason buildJungleManor's header gives: the plan,
+  // both stair runs, the stairwell void and the colonnade's bays are solved
+  // against one another, so a width spinner would break three of them.
+  manor: [bool("litWindows", "lit windows")],
   ruin: [num("width", "width", 10, 3, 40), num("depth", "depth", 8, 3, 40)],
   gatehouse: [
     { key: "teamColor", type: "choice", label: "team", def: "#c9a15e", options: ["#c9a15e", "#ff3b3b"] },
