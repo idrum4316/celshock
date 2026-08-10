@@ -75,6 +75,35 @@ const LIGHT_SLOTS = 16;
 export type NavSnapshot = ReturnType<GameMap["nav"]["debugSnapshot"]>;
 
 /**
+ * A cell id's grid coordinates, and the world centre of a cell.
+ *
+ * `NavGrid` indexes `cell = cz * dim + cx` everywhere — `rasterize`, `link`,
+ * `positionOf` — so `cell % dim` is the X column and `Math.floor(cell / dim)`
+ * is the Z row. Every check in this file used to open those two the other way
+ * round, which is a mistake that mostly hides: the neighbour table is closed
+ * under transposing dx/dz, so a walk over it is unaffected and only the
+ * step that leaves the grid for WORLD space goes wrong. It went wrong twice —
+ * `validateClearance` probed the obstacle field at the map's mirror image, and
+ * an island's `at` flew the editor camera to a spot reflected across the
+ * diagonal. Both read plausibly, because a transposed probe still lands on
+ * real geometry; it is just not the geometry the surface belongs to.
+ *
+ * Hence one decomposition, used by everything here.
+ */
+function cellX(cell: number, dim: number): number {
+  return cell % dim;
+}
+function cellZ(cell: number, dim: number): number {
+  return Math.floor(cell / dim);
+}
+function cellOf(cx: number, cz: number, dim: number): number {
+  return cz * dim + cx;
+}
+function worldOf(c: number, origin: number, cellSize: number): number {
+  return origin + (c + 0.5) * cellSize;
+}
+
+/**
  * Builds a test for "is this unreached surface a mistake, or a roof?".
  *
  * Shared with the nav overlay so the red cells on screen are exactly the
@@ -86,13 +115,13 @@ export function makeIslandTest(snap: NavSnapshot): (s: number) => boolean {
   const { dim, maxSurfaces, counts, walkable, heights, neighbours } = snap;
   return (s: number): boolean => {
     const cell = Math.floor(s / maxSurfaces);
-    const cx = Math.floor(cell / dim);
-    const cz = cell % dim;
+    const cx = cellX(cell, dim);
+    const cz = cellZ(cell, dim);
     for (const [dx, dz] of neighbours) {
       const nx = cx + dx;
       const nz = cz + dz;
       if (nx < 0 || nz < 0 || nx >= dim || nz >= dim) continue;
-      const ncell = nx * dim + nz;
+      const ncell = cellOf(nx, nz, dim);
       for (let si = 0; si < counts[ncell] && si < maxSurfaces; si++) {
         const ns = ncell * maxSurfaces + si;
         if (!walkable[ns]) continue;
@@ -210,14 +239,14 @@ function islands(snap: ReturnType<GameMap["nav"]["debugSnapshot"]>): Finding[] {
    */
   const gapToGround = (s: number): number => {
     const cell = Math.floor(s / maxSurfaces);
-    const cx = Math.floor(cell / dim);
-    const cz = cell % dim;
+    const cx = cellX(cell, dim);
+    const cz = cellZ(cell, dim);
     let best = Infinity;
     for (const [dx, dz] of neighbours) {
       const nx = cx + dx;
       const nz = cz + dz;
       if (nx < 0 || nz < 0 || nx >= dim || nz >= dim) continue;
-      const ncell = nx * dim + nz;
+      const ncell = cellOf(nx, nz, dim);
       for (let si = 0; si < counts[ncell] && si < maxSurfaces; si++) {
         const ns = ncell * maxSurfaces + si;
         if (!walkable[ns]) continue;
@@ -247,8 +276,8 @@ function islands(snap: ReturnType<GameMap["nav"]["debugSnapshot"]>): Finding[] {
       const cur = stack.pop()!;
       size++;
       const cell = Math.floor(cur / maxSurfaces);
-      const x = origin + (Math.floor(cell / dim) + 0.5) * cellSize;
-      const z = origin + ((cell % dim) + 0.5) * cellSize;
+      const x = worldOf(cellX(cell, dim), origin, cellSize);
+      const z = worldOf(cellZ(cell, dim), origin, cellSize);
       sx += x;
       sz += z;
       sy += heights[cur];
@@ -489,8 +518,8 @@ export function validateClearance(map: GameMap): Finding[] {
   let first: Vector3 | null = null;
 
   for (let cell = 0; cell < dim * dim; cell++) {
-    const x = origin + (Math.floor(cell / dim) + 0.5) * cellSize;
-    const z = origin + ((cell % dim) + 0.5) * cellSize;
+    const x = worldOf(cellX(cell, dim), origin, cellSize);
+    const z = worldOf(cellZ(cell, dim), origin, cellSize);
     for (let si = 0; si < maxSurfaces; si++) {
       const s = cell * maxSurfaces + si;
       if (!walkable[s]) continue;

@@ -204,6 +204,23 @@ a handful survive on Hollowmere while it plays perfectly well. Read that number 
 **delta**: note it, move a wall, look again. `makeIslandTest` is shared with the
 overlay so the red cells on screen are exactly the reported findings.
 
+**A cell id decomposes as `cell = cz * dim + cx`, which is `NavGrid`'s convention
+and not negotiable here** — `cell % dim` is the X column, `Math.floor(cell / dim)`
+is the Z row. Every check in `validate.ts` had those two the other way round, and
+the reason it survived is worth knowing before anyone writes the next check: the
+8-neighbour table is closed under transposing `dx`/`dz`, so a walk over it gives
+bit-identical answers, and only the step that leaves the grid for WORLD space is
+wrong. So the bug hides in exactly the two places that matter. `validateClearance`
+probed the obstacle field at the map's mirror image and reported **177 spots on
+Greyfen and 813 on Hollowmere that do not exist — the true count is zero on both**,
+while 659 and 1,286 surfaces respectively do get a genuine push-out and every one
+of them lands somewhere walkable. An island's `at` flew the camera to a point
+reflected across the diagonal. Neither looks wrong: a transposed probe still lands
+on real geometry, and a mirrored camera position still shows you *a* part of the
+map. `navOverlay.ts` had it right all along, which is why the overlay and the list
+quietly disagreed about where a finding was. `cellX`/`cellZ`/`cellOf`/`worldOf` at
+the top of the file are now the only decomposition; use them.
+
 That flatness filter is why terrain is checked directly by `terrainGrade` rather
 than left to `islands()`: a sculpting brush is a machine for producing unreachable
 ground, but a flat pit floor looks exactly like the top of a boulder to the island
