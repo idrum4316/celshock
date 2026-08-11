@@ -180,6 +180,19 @@ export class InputManager {
    */
   pausePressed = false;
   /**
+   * Whether the keyboard pause key is physically DOWN, as opposed to the edge
+   * above.
+   *
+   * The one place a held key matters outside gameplay: `Game` will not ask for
+   * the pointer lock back while Escape is down, because the browser is still
+   * treating that press as its own exit gesture and will take the lock away
+   * again — the auto-repeat of a key held a beat too long is enough to do it,
+   * and the round would put the pause menu back up on its own.
+   */
+  get pauseKeyHeld(): boolean {
+    return this.keys.has("Escape");
+  }
+  /**
    * Edge-triggered "open the loadout" (L / gamepad X). Menus only: it is read
    * in the menu and deploy states and nowhere else, which is what keeps the
    * kit out of reach inside a round you are already standing in.

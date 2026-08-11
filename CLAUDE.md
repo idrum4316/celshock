@@ -184,9 +184,20 @@ lock (a pad player) has none to lose, hence the transition test rather than a ba
 button), so the paused branch handles pause first and breaks. Gamepad **B** resumes
 (`menuBackPressed`). The list is confirmed with `menuConfirmPressed` — Enter and
 pad A but *not* the mouse — because a click on the empty half of a pause screen is
-not a menu choice. Re-taking the lock on resume tolerates a rejection: Chrome
-refuses one for about a second after Escape released it, which is exactly how a
-pause ends, and the next click gets it.
+not a menu choice.
+
+**Re-taking the lock on resume is deferred, retried, and never pauses on its own
+failure** — the one key that ends a pause is the one key the browser reads as
+"drop the lock", so asking for it back in the same breath loses three ways.
+Chrome refuses outright for about a second after an Escape-exit; a lock granted
+while Escape is still down is taken away again by the key's auto-repeat; and
+that revocation arrives as a `pointerlockchange` the pause trigger would read as
+a player leaving, putting the menu back up a split second after it was
+dismissed. So `resume` only *marks* the lock as owed, `updatePendingLock` waits
+for the key to come up and then asks on an interval until the lock lands or the
+window runs out, and a loss inside `CONFIG.input.lockGrace` of taking it is read
+as a refusal rather than a departure. If the browser holds out, the round is
+still running with the CLICK hint up and the next click gets it.
 
 `#hud.paused` is deliberately **not** `.overlaid`: the menu and round-over card
 hide the gauges because what is under them is last round's, while under a pause the

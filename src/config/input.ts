@@ -46,6 +46,32 @@ export const input = {
    */
   menuRepeatDelay: 0.42,
   menuRepeatInterval: 0.14,
+  /**
+   * Taking the pointer lock back when a pause ends, in seconds.
+   *
+   * Escape is both the resume key and the browser's own gesture for dropping
+   * the lock, so a resume asks for the lock in the same breath the UA is still
+   * treating that key press as a reason to refuse one. Chrome refuses outright
+   * for about a second after an Escape-exit, and a lock taken while the key is
+   * still down is dropped again by its auto-repeat. Neither is an error: the
+   * request is retried on this interval until the lock lands or the window runs
+   * out, after which the CLICK hint and the player's next click take it. The
+   * window is long enough to outlast the refusal and short enough that a
+   * browser which will never say yes stops being asked.
+   */
+  lockRetryInterval: 0.4,
+  lockRetryWindow: 1.6,
+  /**
+   * How long after taking the lock a LOSS of it is read as the browser
+   * refusing rather than the player leaving, in seconds.
+   *
+   * Pausing on a lost lock is what makes alt-tab hold the round, but a lock
+   * granted and revoked in the same beat is the UA finishing an Escape it had
+   * already started — pausing on that puts the menu back up a split second
+   * after the player dismissed it. Well under the time it takes to see the
+   * world again and decide to leave it.
+   */
+  lockGrace: 0.25,
 } as const;
 
 /**

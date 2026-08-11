@@ -231,6 +231,19 @@ export class Game {
    * — a pad player who never took the lock has none to lose.
    */
   private hadPointerLock = false;
+  /**
+   * `performance.now()` of the last time the lock was TAKEN. A loss inside
+   * `CONFIG.input.lockGrace` of it is the browser finishing an Escape it had
+   * already started rather than the player leaving, and does not pause.
+   */
+  private lockTakenAt = 0;
+  /**
+   * A resume that still owes the pointer lock: how long it has been owed, and
+   * how long until the next attempt. See `updatePendingLock`.
+   */
+  private lockPending = false;
+  private lockPendingT = 0;
+  private lockRetryT = 0;
   private map: GameMap | null = null;
   /** Small delay so overlay confirms aren't triggered by held buttons. */
   private overlayT = 0;
@@ -627,6 +640,15 @@ export class Game {
     // (Start) and for the keyboard player who was not locked to begin with.
     document.addEventListener("pointerlockchange", () => {
       const locked = document.pointerLockElement === canvas;
+      if (locked) this.lockTakenAt = performance.now();
+      // A lock granted and revoked in the same beat is the browser refusing,
+      // not the player leaving: the request a resume makes lands while the UA
+      // still owes an Escape-exit, and it takes back what it just gave. Pausing
+      // on that is how a dismissed pause menu reappeared a split second later,
+      // with nothing but the browser between the two. The retry in
+      // `updatePendingLock` is what carries the resume from here.
+      const refused =
+        performance.now() - this.lockTakenAt < CONFIG.input.lockGrace * 1000;
       // `dying` counts too. The death cam deliberately KEEPS the lock — there
       // is nothing to click, and dropping it on the way in would pause the
       // very shot it is about to show — so it has a lock to lose like any
@@ -634,6 +656,7 @@ export class Game {
       if (
         !locked &&
         this.hadPointerLock &&
+        !refused &&
         (this.state === "playing" || this.state === "dying")
       ) {
         this.pause();
@@ -1127,6 +1150,10 @@ export class Game {
           this.pause();
           break;
         }
+        // After the pause check, so a frame that ends the round's hold never
+        // also chases a lock for it. Both live states owe it, for the same
+        // reason the resume gives the lock back to both.
+        this.updatePendingLock(dt);
         this.updateGameplay(dt);
         break;
       case "dying":
@@ -1137,6 +1164,7 @@ export class Game {
           this.pause();
           break;
         }
+        this.updatePendingLock(dt);
         this.updateDeathCam(dt);
         break;
       case "editor":
@@ -1368,9 +1396,11 @@ export class Game {
    * Chrome refuses a fresh lock for about a second after the user pressed
    * Escape to leave one — which is precisely the sequence a pause menu ends
    * with — and reports it by rejecting the promise. That is not an error worth
-   * surfacing: the lock hint is already on screen and the player's next click
-   * takes the lock through the `pointerdown` handler above. Older browsers
-   * return nothing at all from this call, hence the shape of the check.
+   * surfacing: `updatePendingLock` asks again a moment later, and if the
+   * browser holds out, the lock hint is already on screen and the player's next
+   * click takes the lock through the `pointerdown` handler above. Older
+   * browsers return nothing at all from this call, hence the shape of the
+   * check.
    */
   private requestLock(): void {
     const pending = this.canvas.requestPointerLock() as unknown as
@@ -1402,6 +1432,10 @@ export class Game {
     }
     this.pausedFrom = this.state;
     this.state = "paused";
+    // A pause outranks a resume that never got its lock: a second pause taken
+    // while one was still being chased must not have the round grab the mouse
+    // out from under the menu it just raised.
+    this.lockPending = false;
     this.hud.setPaused(true);
     this.overlayScreen.showPause();
     // Suspends the audio clock, so the tail of the last shot is still there
@@ -1434,8 +1468,49 @@ export class Game {
       // the click that takes the pointer lock back — the same trap the deploy
       // map's click documents in `spawnPlayer`.
       this.input.consumeFire();
-      this.requestLock();
+      // NOT a bare `requestLock()`: a resume driven by Escape is asking for the
+      // lock with the browser's own release-the-lock key still down. See
+      // `updatePendingLock`.
+      this.lockPending = true;
+      this.lockPendingT = 0;
+      this.lockRetryT = 0;
     }
+  }
+
+  /**
+   * Carries a resume's pointer lock until the browser agrees to it.
+   *
+   * A pause taken with Escape ends with Escape, and that one key is both the
+   * resume and the UA's gesture for dropping a lock — so the request a resume
+   * makes is the one request the browser is least willing to grant. Chrome
+   * refuses outright for about a second after an Escape-exit, and a lock taken
+   * while the key is still down is dropped again by its auto-repeat, which
+   * `pointerlockchange` would read as a player leaving and pause on. Both look
+   * to the player like the same thing: a menu that flickers off and back on,
+   * and a round that eventually resumes with the mouse still loose.
+   *
+   * So the request waits for the key to come UP and is then retried on an
+   * interval until the lock lands, or until the window runs out — at which
+   * point the round is still running, the lock hint is on screen, and the next
+   * click takes it through the `pointerdown` handler. Nothing here can pause:
+   * a refusal is not a state change.
+   */
+  private updatePendingLock(dt: number): void {
+    if (!this.lockPending) return;
+    if (this.input.pointerLocked) {
+      this.lockPending = false;
+      return;
+    }
+    this.lockPendingT += dt;
+    if (this.lockPendingT > CONFIG.input.lockRetryWindow) {
+      this.lockPending = false;
+      return;
+    }
+    if (this.input.pauseKeyHeld) return;
+    this.lockRetryT -= dt;
+    if (this.lockRetryT > 0) return;
+    this.lockRetryT = CONFIG.input.lockRetryInterval;
+    this.requestLock();
   }
 
   /**
