@@ -257,11 +257,23 @@ and the burst is the one thing in the game that fires with the trigger *released
 the rounds are owed by the pull, so a reload, a swap, an empty magazine or a death
 must ABANDON what is left rather than bank it.
 
+**The reload is a timeline keyed to its own sound, and the magazine is the one
+part of a weapon that moves.** `CONFIG.viewmodel.reload` lays the gesture out in
+fractions of the weapon's `reloadTime`, and three of them are `Sfx.reload`'s
+clacks to the frame — change one and change the other. The magazine can move at
+all only because the model merged it into a node of its own (`WeaponParts.magazine`);
+everything else on a weapon is inside one merged mesh per colour and cannot be
+animated without the same split. The gesture is a CANT rather than a lift, and it
+**breaks the aim** (`reload.aimBreak`) rather than posing the weapon where it
+stands: an aimed weapon is on the camera axis, so any reload pose applied there
+puts the receiver across the middle of the screen.
+
 → **[`docs/weapons.md`](docs/weapons.md)** — the viewmodel's own rendering group
-and pose stack, the bob phase's single integrator, the two slots and their
-holsters, the five weapons and the three fire modes, how an optic's size and its
-eye relief are one number, and the procedural-model rules (merge per colour; never
-scale a part non-uniformly).
+and pose stack, the bob phase's single integrator, the reload's four beats and
+the magazine that leaves the weapon on them, the two slots and their holsters,
+the five weapons and the three fire modes, how an optic's size and its eye relief
+are one number, and the procedural-model rules (merge per colour; a second merge
+is how a part is let out of the weapon; never scale a part non-uniformly).
 
 ### Grenades
 

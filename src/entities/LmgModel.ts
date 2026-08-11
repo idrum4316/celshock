@@ -212,43 +212,11 @@ export function buildLmg(
   }
   b.box("gripCap", RUBBER, 0.058, 0.018, 0.082, 0, -0.15, 0, gripPivot);
 
-  // --- the box: a container, not a magazine ---
-  // Wider than the receiver and half its depth again. This is the part that
-  // makes the weapon read as bottom-heavy, and the reason the hip pose pushes
-  // it further out than the rifle's.
-  b.box("boxBody", POLYMER, 0.1, 0.145, 0.22, 0, -0.105, 0.09);
-  b.box("boxLid", BODY, 0.104, 0.016, 0.2, 0, -0.038, 0.085);
-  for (let i = 0; i < 3; i++) {
-    b.box("boxRib", BODY, 0.104, 0.008, 0.212, 0, -0.068 - i * 0.036, 0.09);
-  }
-  b.box("boxLatch", METAL, 0.03, 0.032, 0.014, 0, -0.062, 0.198);
-  b.box("boxHinge", METAL, 0.03, 0.012, 0.014, 0, -0.046, -0.018);
+  // The box's mount stays on the WEAPON: it is the shelf the container hangs
+  // off, and a reload that took it away would leave nothing for the fresh one
+  // to hang from. Everything else the box is made of goes below, after the
+  // weapon's own merge.
   b.box("boxMount", METAL, 0.062, 0.022, 0.06, 0, -0.036, 0.02);
-  b.box("boxFloor", METAL, 0.098, 0.012, 0.2, 0, -0.179, 0.09);
-  // The chute the belt climbs out of, on the box's top left corner. Wide
-  // enough that the belt is seen LEAVING something: a run of brass that starts
-  // in mid-air beside the box is a decal on the receiver, not a feed.
-  b.box("boxChute", BODY, 0.03, 0.042, 0.06, -0.05, -0.052, 0.034);
-  b.box("boxChuteLip", METAL, 0.034, 0.009, 0.062, -0.051, -0.028, 0.034);
-
-  // --- the belt: seven rounds and their links, up the outside of the gun ---
-  // Pins ACROSS the weapon, so the flank the camera sees shows a stack of case
-  // heads rather than a row of bullets. Two things are deliberately oversized
-  // and both are legibility rather than calibre: the rounds are drawn nearer a
-  // rifle round's proportions against a receiver half a real one's depth, and
-  // they stand a full case-length PROUD of the flank. Flush and to scale, the
-  // one feature this weapon is built around reads as a scratch in the paint.
-  for (let i = 0; i < 7; i++) {
-    const t = i / 6;
-    const y = -0.058 + t * 0.084;
-    const z = 0.036 - t * 0.016;
-    b.pin("beltRound", BRASS, 0.015, 0.056, -0.05, y, z, "x");
-    b.pin("beltRim", BRASS, 0.019, 0.007, -0.076, y, z, "x");
-    // The link between this round and the next, dark against the brass.
-    if (i < 6) {
-      b.box("beltLink", METAL, 0.034, 0.009, 0.017, -0.048, y + 0.007, z - 0.0013);
-    }
-  }
 
   // --- stock: solid, hollowed, with the shoulder rest under the butt ---
   b.box("stockNeck", POLYMER, 0.072, 0.09, 0.07, 0, 0.008, -0.325);
@@ -352,6 +320,52 @@ export function buildLmg(
   // The LMG itself is finished. Merge it before any optic is built, so a
   // sight's parts can never end up inside the weapon's colour groups.
   const meshes = b.merge("lmg", root);
+
+  // --- the box and its belt: a container, not a magazine ---
+  // Wider than the receiver and half its depth again. This is the part that
+  // makes the weapon read as bottom-heavy, and the reason the hip pose pushes
+  // it further out than the rifle's.
+  //
+  // It is this weapon's `magazine`, merged into a node of its own so the
+  // reload can drop it — and the BELT goes with it rather than staying behind,
+  // because a belt is fed from the box it is coiled in. Swapping the container
+  // and leaving a run of brass hanging out of the feed would be a reload that
+  // loaded nothing.
+  const magazine = new TransformNode(`${prefix}_magazine`, scene);
+  magazine.parent = root;
+  b.box("boxBody", POLYMER, 0.1, 0.145, 0.22, 0, -0.105, 0.09);
+  b.box("boxLid", BODY, 0.104, 0.016, 0.2, 0, -0.038, 0.085);
+  for (let i = 0; i < 3; i++) {
+    b.box("boxRib", BODY, 0.104, 0.008, 0.212, 0, -0.068 - i * 0.036, 0.09);
+  }
+  b.box("boxLatch", METAL, 0.03, 0.032, 0.014, 0, -0.062, 0.198);
+  b.box("boxHinge", METAL, 0.03, 0.012, 0.014, 0, -0.046, -0.018);
+  b.box("boxFloor", METAL, 0.098, 0.012, 0.2, 0, -0.179, 0.09);
+  // The chute the belt climbs out of, on the box's top left corner. Wide
+  // enough that the belt is seen LEAVING something: a run of brass that starts
+  // in mid-air beside the box is a decal on the receiver, not a feed.
+  b.box("boxChute", BODY, 0.03, 0.042, 0.06, -0.05, -0.052, 0.034);
+  b.box("boxChuteLip", METAL, 0.034, 0.009, 0.062, -0.051, -0.028, 0.034);
+  // --- the belt: seven rounds and their links, up the outside of the gun ---
+  // Pins ACROSS the weapon, so the flank the camera sees shows a stack of case
+  // heads rather than a row of bullets. Two things are deliberately oversized
+  // and both are legibility rather than calibre: the rounds are drawn nearer a
+  // rifle round's proportions against a receiver half a real one's depth, and
+  // they stand a full case-length PROUD of the flank. Flush and to scale, the
+  // one feature this weapon is built around reads as a scratch in the paint.
+  for (let i = 0; i < 7; i++) {
+    const t = i / 6;
+    const y = -0.058 + t * 0.084;
+    const z = 0.036 - t * 0.016;
+    b.pin("beltRound", BRASS, 0.015, 0.056, -0.05, y, z, "x");
+    b.pin("beltRim", BRASS, 0.019, 0.007, -0.076, y, z, "x");
+    // The link between this round and the next, dark against the brass.
+    if (i < 6) {
+      b.box("beltLink", METAL, 0.034, 0.009, 0.017, -0.048, y + 0.007, z - 0.0013);
+    }
+  }
+  meshes.push(...b.merge("lmgBox", magazine));
+
   const optics = buildOptics(b, MOUNT, prefix);
   meshes.push(...optics.meshes);
   b.disposePivots();
@@ -369,6 +383,7 @@ export function buildLmg(
     // a magwell under the receiver, and this weapon's box is exactly there —
     // the hand lands on its rear underside, which is where you take hold of a
     // container you are about to unlatch and swing off.
+    magazine,
     sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };

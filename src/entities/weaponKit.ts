@@ -123,6 +123,20 @@ export function wornSight(
     : { id: fitted, assembly: sights.assemblies[fitted] };
 }
 
+/**
+ * The axis a magazine raked by `rake` leaves its well along, weapon-local and
+ * unit length — what a builder hands back as `WeaponParts.magDrop`.
+ *
+ * A pivot's positive `rotX` sends everything BELOW it backwards (the rule every
+ * raked grip and magwell in the kit is built on), so the line down a raked
+ * magazine's own body is down and back by that same angle. Sliding it out
+ * straight down instead shears it through the front wall of the well it is
+ * leaving, which at a pistol's grip rake is the whole magazine's width.
+ */
+export function magDropAxis(rake: number): Vector3 {
+  return new Vector3(0, -Math.cos(rake), -Math.sin(rake));
+}
+
 /** Where one hand grips, and where its elbow trails, in weapon-local units. */
 export interface GripSpec {
   hand: Vector3;
@@ -148,6 +162,31 @@ export interface WeaponParts {
    * the grip, so the same move throws the hand out behind the weapon.
    */
   magHand?: Vector3;
+  /**
+   * The magazine, under a node of its own so a reload can pull it OUT — the
+   * one part of a weapon that is not welded to the rest of it. Merged by a
+   * second `merge` call, exactly as an optic is, and for the same reason:
+   * anything that has to move independently cannot be inside the weapon's own
+   * colour groups.
+   *
+   * The node sits at identity, so the merged geometry is where it was built
+   * and `position`/`rotation` are pure offsets from seated. `ViewModel` is the
+   * only thing that may write them, and it always leaves the magazine seated
+   * when no reload is in flight.
+   *
+   * Optional because a weapon may have nothing to drop — every one in the kit
+   * does today, the belt-fed one included, but a fixed-magazine weapon would
+   * simply not set it and reload with the weapon pose alone.
+   */
+  magazine?: TransformNode;
+  /**
+   * The direction a dropped magazine leaves along, weapon-local and unit
+   * length. Defaults to straight down, which is right for anything standing
+   * vertically in its well; a raked magazine (and a pistol's, which is up
+   * inside a raked grip) has to leave along its OWN axis or it shears through
+   * the well it is sliding out of.
+   */
+  magDrop?: Vector3;
   /** A rail's worth of optics, or the one sight this weapon was born with. */
   sights: WeaponSights;
   /** Every visible mesh, every optic's included. */
@@ -333,8 +372,9 @@ export class WeaponBuild {
   /**
    * Merges everything `collect` has gathered since the last call into one mesh
    * per colour, hangs the results off `parent`, and arms a fresh group for the
-   * next caller. Run once for the weapon and once per optic, which is what
-   * keeps a loadout change from touching the weapon underneath it.
+   * next caller. Run once for the weapon, once for its magazine and once per
+   * optic — which is what keeps a loadout change from touching the weapon
+   * underneath it, and what lets the magazine leave the weapon at all.
    *
    * Everything is still at identity under `root` here, so the bake leaves the
    * geometry exactly where it was built.

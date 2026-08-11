@@ -11,10 +11,21 @@
 import { Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import { buildOptics, type OpticMount } from "./optics";
-import { BODY, METAL, POLYMER, RUBBER, WeaponBuild, type WeaponParts } from "./weaponKit";
+import {
+  BODY,
+  METAL,
+  magDropAxis,
+  POLYMER,
+  RUBBER,
+  WeaponBuild,
+  type WeaponParts,
+} from "./weaponKit";
 
 /** Top face of the receiver's rail — what every sight base stands on. */
 const RAIL_TOP = 0.084;
+
+/** The magazine's rake, which is also the line it drops out along. */
+const MAG_RAKE = 0.14;
 
 /**
  * Where the rifle offers its rail. The iron stations are as far apart as the
@@ -120,16 +131,6 @@ export function buildRifle(
   // Dark cap: a light one reads as a second magazine floorplate at a glance.
   b.box("gripCap", RUBBER, 0.058, 0.018, 0.082, 0, -0.15, 0, gripPivot);
 
-  // Curved STANAG magazine: two segments, the lower one kicked further out.
-  const magPivot = b.pivot("magPivot", 0, -0.115, 0.055, 0.14);
-  b.box("magUpper", POLYMER, 0.058, 0.1, 0.105, 0, -0.05, 0, magPivot);
-  b.box("magRibU", BODY, 0.061, 0.008, 0.108, 0, -0.04, 0, magPivot);
-  const magLower = b.pivot("magLowerPivot", 0, -0.1, 0, 0.13, magPivot);
-  b.box("magLower", POLYMER, 0.056, 0.085, 0.1, 0, -0.0425, 0, magLower);
-  b.box("magRibL", BODY, 0.059, 0.008, 0.103, 0, -0.04, 0, magLower);
-  b.box("magFloor", METAL, 0.062, 0.02, 0.108, 0, -0.095, 0, magLower);
-  b.box("magBase", RUBBER, 0.058, 0.014, 0.1, 0, -0.11, 0, magLower);
-
   // --- side-folding skeleton stock: hinge block, split struts, cheek riser ---
   b.box("stockHinge", BODY, 0.078, 0.1, 0.07, 0, 0.015, -0.3);
   b.pin("hingePin", METAL, 0.02, 0.086, 0, 0.045, -0.3);
@@ -191,6 +192,22 @@ export function buildRifle(
   // The rifle itself is finished. Merge it before any optic is built, so a
   // sight's parts can never end up inside the weapon's colour groups.
   const meshes = b.merge("rifle", root);
+
+  // Curved STANAG magazine: two segments, the lower one kicked further out.
+  // Built AFTER the weapon's own merge and merged into a node of its own, so
+  // the reload can drop it out of the well — see `WeaponParts.magazine`.
+  const magazine = new TransformNode(`${prefix}_magazine`, scene);
+  magazine.parent = root;
+  const magPivot = b.pivot("magPivot", 0, -0.115, 0.055, MAG_RAKE);
+  b.box("magUpper", POLYMER, 0.058, 0.1, 0.105, 0, -0.05, 0, magPivot);
+  b.box("magRibU", BODY, 0.061, 0.008, 0.108, 0, -0.04, 0, magPivot);
+  const magLower = b.pivot("magLowerPivot", 0, -0.1, 0, 0.13, magPivot);
+  b.box("magLower", POLYMER, 0.056, 0.085, 0.1, 0, -0.0425, 0, magLower);
+  b.box("magRibL", BODY, 0.059, 0.008, 0.103, 0, -0.04, 0, magLower);
+  b.box("magFloor", METAL, 0.062, 0.02, 0.108, 0, -0.095, 0, magLower);
+  b.box("magBase", RUBBER, 0.058, 0.014, 0.1, 0, -0.11, 0, magLower);
+  meshes.push(...b.merge("rifleMag", magazine));
+
   const optics = buildOptics(b, MOUNT, prefix);
   meshes.push(...optics.meshes);
   b.disposePivots();
@@ -203,6 +220,8 @@ export function buildRifle(
     ejectPort: new Vector3(0.05, 0.04, 0.06),
     grip: { hand: GRIP_HAND, elbow: GRIP_ELBOW },
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
+    magazine,
+    magDrop: magDropAxis(MAG_RAKE),
     sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };

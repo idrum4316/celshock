@@ -255,6 +255,16 @@ export class Player implements Combatant {
   /** Counts down from `regenDelay` after each hit; regen resumes at zero. */
   private regenLockT = 0;
   private reloadT = 0;
+  /**
+   * 0..1 through the reload, and it FREEZES rather than resetting when one
+   * ends. The viewmodel plays the whole gesture off this (see
+   * `CONFIG.viewmodel.reload`), so a reload cancelled at a third of the way
+   * through has to leave the phase at a third: `reloadBlend` is what eases the
+   * weapon back out of the pose, and a phase that snapped to 1 underneath it
+   * would take the pose off in a single frame instead. Reset by
+   * `startReload`, which is the only thing that begins a gesture.
+   */
+  private reloadPhase = 1;
   private fireCooldown = 0;
   /**
    * Whether the trigger has been down since before the last thing it asked
@@ -997,6 +1007,7 @@ export class Player implements Combatant {
     );
     if (this.reloading) {
       this.reloadT -= dt;
+      this.reloadPhase = Math.min(1, 1 - this.reloadT / this.weapon.reloadTime);
       if (this.reloadT <= 0) {
         this.reloading = false;
         this.ammo = this.magSize;
@@ -1090,6 +1101,7 @@ export class Player implements Combatant {
       sprintBlend: this.sprintBlend,
       reloadBlend: this.reloadBlend,
       reloadPhase: this.reloadProgress,
+      reloading: this.reloading,
       swapBlend: this.swapWeight(),
       throwTime: this.throwT,
       kick: this.weaponKickT * this.weaponKickT,
@@ -1335,11 +1347,13 @@ export class Player implements Combatant {
     if (this.reloading || this.swapping || this.ammo >= this.magSize) return false;
     this.reloading = true;
     this.reloadT = this.weapon.reloadTime;
+    this.reloadPhase = 0;
     return true;
   }
 
+  /** Where the gesture is, 0..1 — frozen where a cancelled reload left it. */
   get reloadProgress(): number {
-    return this.reloading ? 1 - this.reloadT / this.weapon.reloadTime : 1;
+    return this.reloadPhase;
   }
 
   /** World position of the rifle muzzle (tracer origin). */

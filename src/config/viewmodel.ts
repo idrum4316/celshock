@@ -59,9 +59,144 @@ export const viewmodel = {
    */
   sprintPos: { x: -0.01, y: -0.05, z: -0.03 },
   sprintRot: { x: 0.2, y: -0.4, z: 0.3 },
-  /** Reload: tipped down and rolled toward the magwell. */
-  reloadPos: { x: 0.02, y: -0.1, z: -0.05 },
-  reloadRot: { x: 0.3, y: -0.2, z: 0.42 },
+  /**
+   * Reload: the weapon held at about the height it is carried at, pulled in a
+   * little, and CANTED so the magwell rolls over toward the support hand.
+   *
+   * **It is a ROTATION, not a lift, and that is the whole shape of it.** A
+   * rifle is not hoisted in front of the face to change a magazine — it is
+   * canted at the shoulder and worked by feel — so the roll is what puts the
+   * magwell where the eye can find it while the weapon stays roughly where it
+   * is being held. An earlier pass raised it far enough to frame the magazine
+   * dead centre; it looked staged at the hip and it put a receiver across the
+   * middle of the screen on an aimed reload, which is the one place a weapon
+   * must never end up.
+   *
+   * **The roll's SIGN carries it, and it was once the wrong way round.** A
+   * positive `rotZ` takes the weapon's right flank UP (the +x axis rotates
+   * toward +y), which tips the top inboard and swings the underside out to the
+   * right — away from a camera that sits to the LEFT of a weapon carried at
+   * `hipPos.x`. That is a reload presenting the magwell to nobody, and it reads
+   * as the weapon being held out at an angle rather than worked on. Negative
+   * rolls the underside toward the camera and carries the magwell inboard, to
+   * the side the support hand comes from, which is the same direction a
+   * right-handed shooter cants a rifle to change magazines.
+   *
+   * The pitch is small and positive (nose-down, see `recoil.kickPitch`): a
+   * muzzle that stays level reads as the weapon being presented rather than
+   * worked on, and one much lower takes the magwell down with it.
+   */
+  reloadPos: { x: 0.01, y: 0.015, z: -0.02 },
+  reloadRot: { x: 0.12, y: -0.2, z: -0.45 },
+  /**
+   * The reload, as a TIMELINE rather than as a pose held for the duration.
+   * Everything here is a fraction of `weapons[id].reloadTime`, which is what
+   * lets one set of numbers carry a 1.05 s sidearm and a 3.4 s machine gun:
+   * the beats keep their proportions and the weapon that takes three times as
+   * long takes three times as long over every part of it.
+   *
+   * **The first three are `Sfx.reload`'s clacks and must move with them.** That
+   * sound is four metallic events — catch, magazine out, fresh magazine seated,
+   * bolt — and the whole reason the gesture is legible is that what you SEE
+   * lands on what you HEAR. A magazine that falls half a beat after the clack
+   * that released it reads as two unrelated things happening at once, which is
+   * exactly what the old hold-one-pose reload looked like with the sound over
+   * it. Change a fraction in either file and change it in both.
+   *
+   * The order the beats run in:
+   * - `0` — the catch. The weapon tips out of the aim and the support hand
+   *   leaves the handguard for the magwell.
+   * - `magOut` — the magazine is released and falls free, out of the bottom of
+   *   the frame under `dropDist`/`dropTumble` while the hand carries on down
+   *   after a fresh one.
+   * - `[insertFrom, magSeat]` — the fresh magazine rises back into frame WITH
+   *   the hand, rocked nose-first into the well, arriving exactly on the seat.
+   * - `magSeat` — it is slapped home: `seatKick` is the weapon taking that.
+   * - `bolt` — the bolt goes forward and the weapon settles back to the carry.
+   */
+  reload: {
+    /** The magazine falls free. `Sfx.reload`'s second clack. */
+    magOut: 0.18,
+    /** The fresh magazine is seated. `Sfx.reload`'s third clack. */
+    magSeat: 0.55,
+    /** The bolt goes forward. `Sfx.reload`'s fourth and last clack. */
+    bolt: 0.8,
+    /**
+     * The weapon's tip out of the carry and back into it. The return starts
+     * on the bolt and finishes just short of the end, because the round the
+     * player is waiting for is fired from the carry: a weapon still coming
+     * level on the frame the magazine refills is a reload that lied about
+     * when it ended.
+     */
+    tiltIn: 0.14,
+    tiltOut: [0.8, 0.97],
+    /**
+     * How much of the AIM the gesture takes away, on the same weight as the
+     * tilt: 1 puts the weapon all the way back to the carry pose for the
+     * duration, 0 reloads it wherever the aim left it.
+     *
+     * This is the half of the pose that only shows up while aimed, and it is
+     * the realistic half rather than a concession. A shouldered weapon comes
+     * down to be reloaded — nobody changes a magazine through their optic —
+     * and geometrically an aimed weapon is ON the camera axis, so a reload
+     * pose applied there swings the receiver across the middle of the screen
+     * whatever direction it moves in. Breaking the aim first means the aimed
+     * reload is the hip reload, off to the side where it belongs, and the
+     * sight is back on the axis by the end of `tiltOut` — before the round it
+     * is loading can be fired.
+     *
+     * Not 1: a little of the aim is left in, so the weapon settles back to the
+     * sight from somewhere near it rather than swinging up from the hip on the
+     * last beat. It also keeps a scoped weapon from being flung out of a
+     * narrow FOV and back in.
+     */
+    aimBreak: 0.8,
+    /**
+     * The old magazine: how long it takes to clear the frame, how far it
+     * travels along `magDrop` doing it (model units, as every offset in this
+     * file is), and how far it tumbles on the way (radians). It ACCELERATES —
+     * the fall is the one thing in the gesture that is not a hand's doing, and
+     * a magazine leaving at a constant rate reads as being lowered on a wire.
+     */
+    dropTime: 0.15,
+    dropDist: 0.9,
+    dropTumble: 1.3,
+    /**
+     * The fresh magazine: when it comes back into frame, how far below the
+     * well it starts, and how far its nose is rocked back (radians) when it
+     * gets there. It arrives ON `magSeat`, at its fastest — a magazine that
+     * eased to a halt at the well would be a magazine placed rather than
+     * seated, and the clack has nothing to be the sound of.
+     *
+     * `insertDist` has a floor that is not about timing: one node stands in
+     * for both magazines, so the frame the old one is swapped for the new one
+     * is a JUMP from `dropDist` to this, and it has to happen far enough below
+     * the bottom edge that the bob cannot bring it back into view. Measured at
+     * 1280x720, 0.62 left that jump only ~40 px clear — inside a fast walk's
+     * vertical bob. Deeper costs nothing: the travel eases so late that the
+     * magazine is still in view for the last third of its trip.
+     */
+    insertFrom: 0.34,
+    insertDist: 0.72,
+    insertTilt: 0.38,
+    /** The support hand's trip back to the handguard, once the mag is home. */
+    handHome: [0.6, 0.82],
+    /**
+     * The two impacts, as impulses on the weapon: the magazine going home
+     * under the heel of the hand, and the bolt slamming forward. Metres and
+     * radians in the camera's frame, laid on top of the tilt, with an instant
+     * attack and a squared decay over `kickFall` — the same shape as a shot's
+     * kick, because they are the same kind of event.
+     *
+     * Both roll AGAINST `reloadRot.z` rather than with it: a magazine driven
+     * up into the well knocks the cant out of the weapon for a moment, and a
+     * kick that deepened the roll instead would read as the weapon flinching
+     * away from its own hand. Flip these with the cant if it is ever flipped.
+     */
+    seatKick: { pos: { x: 0, y: 0.024, z: 0.006 }, rot: { x: -0.06, y: 0, z: 0.08 } },
+    boltKick: { pos: { x: 0, y: -0.006, z: -0.016 }, rot: { x: 0.05, y: 0, z: 0.04 } },
+    kickFall: 0.12,
+  },
   /**
    * The weapon swap: one gun goes away below the frame and the other comes
    * up in its place, on a triangle that peaks halfway through
@@ -165,8 +300,6 @@ export const viewmodel = {
   },
   /** Where the support hand travels to for the magazine swap. */
   magHandOffset: { x: -0.02, y: -0.09, z: -0.34 },
-  /** Support-hand window over the reload: leaves the guard, swaps, returns. */
-  magWindow: [0.15, 0.35, 0.6, 0.8],
   /**
    * Sway: the weapon lags the view. Position offsets oppose the turn,
    * rotation follows it, both clamped so a fast flick can't swing the

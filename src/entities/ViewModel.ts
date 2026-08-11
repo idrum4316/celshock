@@ -1,11 +1,18 @@
 /**
  * ViewModel.ts — The first-person weapon: whichever gun is carried and the two
  * gloved arms holding it, parented to the camera, plus every offset that moves
- * them (hip/ADS pose, sprint carry, reload dip and mag swap, the off-hand
- * throw's arm and give, sway, bob, kick).
+ * them (hip/ADS pose, sprint carry, the reload's timeline and the magazine it
+ * changes, the off-hand throw's arm and give, sway, bob, kick).
  * Owns: the on-screen weapon. Nothing else may reparent or pose it.
  *
  * Invariants:
+ * - The magazine is the one part of a weapon that may move on its own, and it
+ *   is only movable because the model merged it into a node of its own (see
+ *   `WeaponParts.magazine`). Nothing else may be animated off a weapon without
+ *   the same split — everything else is inside one merged mesh per colour.
+ *   `stow()` is the only place that state is cleared, and every way out of a
+ *   half-finished reload has to go through it or the weapon comes back without
+ *   a magazine in it.
  * - The ADS pose is DERIVED, never authored: `adsPos` places the weapon so
  *   that the FITTED sight's own `sightCenter` lands on the camera's axis at
  *   that sight's `eyeRelief`. The reticle then projects to the exact centre
@@ -108,9 +115,27 @@ export interface ViewModelParams {
   /** 0..1 movement drive — the same value the camera bobs on. */
   moveBlend: number;
   sprintBlend: number;
+  /**
+   * The GATE on the reload gesture, eased — it is what takes the pose back off
+   * the weapon when a reload is cancelled by a swap or a death. What the
+   * gesture DOES is the phase's business, not this one's.
+   */
   reloadBlend: number;
-  /** 0..1 through the reload, for the support hand's trip to the magwell. */
+  /**
+   * 0..1 through the reload: the whole timeline in `CONFIG.viewmodel.reload`
+   * is read off it, from the magazine leaving the well to the bolt going
+   * forward. Frozen by Player where a cancelled reload left it, so the pose
+   * eases out of where it was rather than off the end of the gesture.
+   */
   reloadPhase: number;
+  /**
+   * Whether a reload is actually in flight, as opposed to the weapon easing
+   * out of one that was cancelled. The magazine keys off THIS rather than off
+   * the blend: it has two places to be — in the weapon or out of it — and no
+   * way to be halfway between them, so a cancelled reload has to put it back
+   * rather than fade it home through the receiver.
+   */
+  reloading: boolean;
   /**
    * 0 = the weapon is in the hands, 1 = it is fully out of frame. A TRIANGLE
    * over the swap rather than a blend toward a state, because a swap is a
@@ -188,6 +213,16 @@ const smoothstep01 = (x: number) => x * x * (3 - 2 * x);
 /** Ramp from a to b, clamped at both ends. */
 const ramp = (a: number, b: number, x: number) =>
   smoothstep01(clamp((x - a) / (b - a), 0, 1));
+/**
+ * An impact and its die-away: 1 on the beat at `at`, squared to nothing over
+ * `fall`, and zero outside. All attack and no ease-in, which is the difference
+ * between something arriving and something being moved into place — the same
+ * shape the per-shot kick has, for the same reason.
+ */
+const impulse = (x: number, at: number, fall: number) => {
+  const t = (x - at) / fall;
+  return t < 0 || t > 1 ? 0 : (1 - t) * (1 - t);
+};
 
 /**
  * What the turntable needs from the camera it is parented to. The weapon is
@@ -209,6 +244,14 @@ interface WeaponRig {
   parts: WeaponParts;
   /** The support arm, which leaves the handguard for the magazine swap. */
   supportArm: TransformNode;
+  /** This weapon's magazine, or null if it has nothing that comes out. */
+  magazine: TransformNode | null;
+  /**
+   * The unit axis that magazine leaves along, weapon-local, resolved once from
+   * the model's own rake. Straight down for anything standing vertically in
+   * its well; see `magDropAxis`.
+   */
+  magDrop: Vector3;
 }
 
 export class ViewModel {
@@ -362,7 +405,15 @@ export class ViewModel {
       ];
       this.meshes.push(...parts.meshes, ...arms);
       this.arms.push(...arms);
-      this.rigs[id] = { root, parts, supportArm };
+      this.rigs[id] = {
+        root,
+        parts,
+        supportArm,
+        magazine: parts.magazine ?? null,
+        // Straight down is the default, and it is right for anything standing
+        // upright in its well — only a raked magazine has to say otherwise.
+        magDrop: parts.magDrop ? parts.magDrop.clone() : new Vector3(0, -1, 0),
+      };
     }
 
     // The throwing arm: ONE rig shared by every weapon, unlike the two arms
@@ -455,13 +506,11 @@ export class ViewModel {
   setWeapon(id: WeaponId): void {
     this.weaponFit = weaponSetup(id);
     // The rig being put down keeps whatever mid-reload offset its support arm
-    // had — and, if the swap caught a throw in flight, an arm switched off
-    // for it. Both are per-rig state that a weapon this hand has never held
-    // must not inherit.
-    for (const wid of WEAPON_IDS) {
-      this.rigs[wid].supportArm.position.setAll(0);
-      this.rigs[wid].supportArm.setEnabled(true);
-    }
+    // had, whatever the magazine was doing when the reload was cancelled —
+    // and, if the swap caught a throw in flight, an arm switched off for it.
+    // All of it is per-rig state that a weapon this hand has never held must
+    // not inherit.
+    this.stow();
     this.applyFit();
   }
 
@@ -580,11 +629,27 @@ export class ViewModel {
     this.swayY = 0;
     this.swayYaw = 0;
     this.swayPitch = 0;
-    for (const id of WEAPON_IDS) {
-      this.rigs[id].supportArm.position.setAll(0);
-      this.rigs[id].supportArm.setEnabled(true);
-    }
+    this.stow();
     this.throwHand.setEnabled(false);
+  }
+
+  /**
+   * Puts every rig back the way it is carried: both hands on the weapon and
+   * the magazine in it. The one place that state is cleared, because there are
+   * three ways to leave a reload half-finished — a swap, a round starting, and
+   * the kit screen coming up over one — and a magazine left out of frame by
+   * any of them is a weapon that comes back without one.
+   */
+  private stow(): void {
+    for (const id of WEAPON_IDS) {
+      const rig = this.rigs[id];
+      rig.supportArm.position.setAll(0);
+      rig.supportArm.setEnabled(true);
+      if (!rig.magazine) continue;
+      rig.magazine.position.setAll(0);
+      rig.magazine.rotation.x = 0;
+      rig.magazine.setEnabled(true);
+    }
   }
 
   /**
@@ -606,8 +671,10 @@ export class ViewModel {
     this.weapon.rotationQuaternion = this.spinQ;
     this.inspecting = true;
     // Nothing here runs `update`, so a throw caught by the kit screen would
-    // leave its arm frozen across the turntable for as long as the screen is up.
+    // leave its arm frozen across the turntable for as long as the screen is
+    // up — and a reload, a magazine hanging in the air beside the turntable.
     this.throwHand.setEnabled(false);
+    this.stow();
     this.applyMeshVisibility();
   }
 
@@ -687,7 +754,18 @@ export class ViewModel {
 
   update(dt: number, p: ViewModelParams): void {
     const v = CONFIG.viewmodel;
-    const t = smoothstep01(clamp(p.adsBlend, 0, 1));
+    // The reload's weight is resolved FIRST, because the aim is one of the
+    // things it acts on: a shouldered weapon comes down to be reloaded, and an
+    // aimed one is on the camera axis, where any reload pose swings the
+    // receiver across the middle of the screen whichever way it moves. Broken
+    // out of the aim, the aimed reload is simply the hip reload.
+    const r = v.reload;
+    const rp = p.reloadPhase;
+    const reloadW =
+      p.reloadBlend *
+      ramp(0, r.tiltIn, rp) *
+      (1 - ramp(r.tiltOut[0], r.tiltOut[1], rp));
+    const t = smoothstep01(clamp(p.adsBlend, 0, 1)) * (1 - reloadW * r.aimBreak);
 
     // --- base pose: hip -> aimed, with sprint and reload layered on top ---
     // The state offsets are additive rather than exclusive, so a reload that
@@ -700,10 +778,34 @@ export class ViewModel {
       addScaled(this.off, v.sprintPos, sprintW);
       addScaled(this.rot, v.sprintRot, sprintW);
     }
-    const reloadW = p.reloadBlend;
+    // The reload is a TIMELINE, not a state the weapon sits in. `reloadBlend`
+    // is only the gate — it is what eases a cancelled one back off — and the
+    // phase is the gesture: the weapon cants out of the carry as the support
+    // hand leaves the handguard, holds while the magazine is changed under it,
+    // and is level again on the bolt. The old pose was this offset held flat
+    // for the whole duration, which is why a reload read as the weapon being
+    // switched off and on rather than as anything being done to it.
     if (reloadW > 0.001) {
       addScaled(this.off, v.reloadPos, reloadW);
       addScaled(this.rot, v.reloadRot, reloadW);
+    }
+    // The magazine going home and the bolt going forward, laid on top as
+    // IMPULSES rather than as poses. They are impacts, and the shape a weapon
+    // answers an impact with is the one the per-shot kick already has: all
+    // attack, then a squared decay. Sat in the pose stack as blends instead,
+    // they would be two more places the weapon leans and neither would land on
+    // the sound it belongs to.
+    if (p.reloadBlend > 0.001) {
+      const seat = p.reloadBlend * impulse(rp, r.magSeat, r.kickFall);
+      if (seat > 0.001) {
+        addScaled(this.off, r.seatKick.pos, seat);
+        addScaled(this.rot, r.seatKick.rot, seat);
+      }
+      const bolt = p.reloadBlend * impulse(rp, r.bolt, r.kickFall);
+      if (bolt > 0.001) {
+        addScaled(this.off, r.boltKick.pos, bolt);
+        addScaled(this.rot, r.boltKick.rot, bolt);
+      }
     }
     // The swap, on the same additive footing as the two above — which is what
     // lets a swap taken out of a sprint bend out of the carry rather than
@@ -795,13 +897,9 @@ export class ViewModel {
     this.weapon.rotation.copyFrom(this.rot);
     this.weapon.scaling.setAll(v.scale * k);
 
-    // --- support hand: off the handguard, to the magwell, and back ---
-    const magW = this.magWindow(p);
+    // --- the magazine change: the hand's trip and the magazine's ---
+    this.poseReload(p);
     const supportArm = this.rigs[this.weaponFit.id].supportArm;
-    if (magW > 0.0001 || supportArm.position.lengthSquared() > 0) {
-      const o = this.magHand;
-      supportArm.position.set(o.x * magW, o.y * magW, o.z * magW);
-    }
     // ...and off the weapon entirely for a throw. The hand that throws IS the
     // support hand, so leaving it welded to the handguard would put two left
     // arms on screen at once — and hiding it is what motivates the give above:
@@ -882,14 +980,100 @@ export class ViewModel {
   }
 
   /**
-   * Support-hand weight over the reload: ramps in as the hand leaves the
-   * handguard, holds through the swap, ramps out on the way back. Zero unless
-   * a reload is actually in flight.
+   * The magazine change: where the magazine is on the reload's timeline, and
+   * where the hand doing it is. The half of the gesture that is not the
+   * weapon's pose, and the half that says what is actually happening — a
+   * weapon that only tips and comes back is a weapon being fiddled with.
+   *
+   * The two are one motion by construction rather than by matching keys: from
+   * the moment the fresh magazine enters the frame the hand rides EXACTLY the
+   * travel the magazine rides, so it is carrying it rather than arriving with
+   * it. Before that they part company on purpose — the old magazine is falling
+   * free and accelerating away while the hand goes down after the new one, and
+   * a hand that chased it down would read as having dropped it.
+   *
+   * Everything is scaled by `magHand`, which is the weapon's own answer to
+   * "where is the well" — this runs for a pistol whose magazine is up inside
+   * the grip and for a machine gun with a box under it, with no case for
+   * either.
    */
-  private magWindow(p: ViewModelParams): number {
-    if (p.reloadBlend < 0.01) return 0;
-    const w = CONFIG.viewmodel.magWindow;
-    return p.reloadBlend * ramp(w[0], w[1], p.reloadPhase) * (1 - ramp(w[2], w[3], p.reloadPhase));
+  private poseReload(p: ViewModelParams): void {
+    const r = CONFIG.viewmodel.reload;
+    const rig = this.rigs[this.weaponFit.id];
+    const ph = p.reloadPhase;
+
+    // How far the magazine is out of the well along this weapon's drop axis,
+    // how far it has tipped getting there, and whether it is in frame at all.
+    let dist = 0;
+    let tilt = 0;
+    let shown = true;
+    // Where the hand is on that same axis. Not the magazine's travel until the
+    // fresh one is in it: while the old one falls, the hand is going down for
+    // the new one at its own pace.
+    let handDist = 0;
+    if (ph > r.magOut) {
+      const fall = (ph - r.magOut) / r.dropTime;
+      if (fall < 1) {
+        // Falling free, and accelerating — this is the one part of a reload
+        // with no hand on it, and a magazine leaving at a constant rate reads
+        // as being lowered rather than dropped.
+        dist = r.dropDist * fall * fall;
+        tilt = r.dropTumble * fall * fall;
+      } else if (ph < r.insertFrom) {
+        // Out of the bottom of the frame and gone. The one that comes back is
+        // read as a fresh magazine because it was never seen to be the same
+        // one, which is the whole reason the drop has to CLEAR the frame.
+        shown = false;
+      } else if (ph < r.magSeat) {
+        // Coming up: distance to go falls as (1 - x²), so the magazine is at
+        // its fastest on the frame it arrives. That is what makes the seat an
+        // impact the weapon can flinch from and the clack a sound of something.
+        const x = (ph - r.insertFrom) / (r.magSeat - r.insertFrom);
+        const k = 1 - x * x;
+        dist = r.insertDist * k;
+        // Rocked in nose-first, the way a magazine with a lip at the front of
+        // its well has to go in. The sign is the other way from the tumble
+        // above: this is the mouth coming UP to meet the weapon.
+        tilt = -r.insertTilt * k;
+      }
+      handDist =
+        ph < r.insertFrom ? r.insertDist * ramp(r.magOut, r.insertFrom, ph) : dist;
+    }
+
+    // The magazine, gated on the reload being live rather than on the eased
+    // blend: it belongs either in the weapon or out of it, so a cancelled
+    // reload puts it back instead of lerping it home through the receiver.
+    const mag = rig.magazine;
+    if (mag) {
+      if (p.reloading) {
+        const axis = rig.magDrop;
+        mag.position.set(axis.x * dist, axis.y * dist, axis.z * dist);
+        mag.rotation.x = tilt;
+        mag.setEnabled(shown);
+      } else if (mag.position.lengthSquared() > 0 || !mag.isEnabled(false)) {
+        mag.position.setAll(0);
+        mag.rotation.x = 0;
+        mag.setEnabled(true);
+      }
+    }
+
+    // The hand. Off the handguard by the time the magazine is released, home
+    // again once it is seated, and the eased blend on top of both so a reload
+    // cancelled halfway takes the arm back with the pose rather than dropping
+    // it back on the weapon in one frame.
+    const w =
+      p.reloadBlend * ramp(0, r.magOut, ph) * (1 - ramp(r.handHome[0], r.handHome[1], ph));
+    const arm = rig.supportArm;
+    if (w > 0.0001 || arm.position.lengthSquared() > 0) {
+      const o = this.magHand;
+      const d = handDist * p.reloadBlend;
+      const axis = rig.magDrop;
+      arm.position.set(
+        o.x * w + axis.x * d,
+        o.y * w + axis.y * d,
+        o.z * w + axis.z * d,
+      );
+    }
   }
 }
 

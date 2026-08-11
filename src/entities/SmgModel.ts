@@ -11,7 +11,18 @@
 import { Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import { buildOptics, type OpticMount } from "./optics";
-import { BODY, METAL, POLYMER, RUBBER, WeaponBuild, type WeaponParts } from "./weaponKit";
+import {
+  BODY,
+  METAL,
+  magDropAxis,
+  POLYMER,
+  RUBBER,
+  WeaponBuild,
+  type WeaponParts,
+} from "./weaponKit";
+
+/** The magazine's rake, which is also the line it drops out along. */
+const MAG_RAKE = 0.1;
 
 /**
  * Top face of the receiver's rail. Lower than the rifle's, because the whole
@@ -115,13 +126,6 @@ export function buildSmg(
   b.box("magFlareF", POLYMER, 0.068, 0.018, 0.012, 0, -0.084, 0.086);
   b.box("magFlareR", POLYMER, 0.068, 0.018, 0.012, 0, -0.084, -0.002);
   b.box("magRelease", METAL, 0.012, 0.026, 0.026, 0.038, -0.048, -0.014);
-  const magPivot = b.pivot("magPivot", 0, -0.085, 0.045, 0.1);
-  b.box("mag", POLYMER, 0.05, 0.2, 0.072, 0, -0.1, 0, magPivot);
-  for (let i = 0; i < 3; i++) {
-    b.box("magRib", BODY, 0.053, 0.007, 0.075, 0, -0.05 - i * 0.05, 0, magPivot);
-  }
-  b.box("magFloor", METAL, 0.054, 0.016, 0.076, 0, -0.198, 0, magPivot);
-  b.box("magBase", RUBBER, 0.05, 0.012, 0.07, 0, -0.21, 0, magPivot);
 
   // --- handguard: a short vented sleeve with a stubby vertical foregrip ---
   b.box("handguard", POLYMER, 0.07, 0.05, 0.16, 0, -0.005, 0.2);
@@ -163,6 +167,20 @@ export function buildSmg(
   b.shell("crown", METAL, 0.028, 0.009, 0.012, 0, 0.482, 10);
 
   const meshes = b.merge("smg", root);
+
+  // The straight stick standing ahead of the trigger group, merged into a node
+  // of its own so the reload can pull it out (see `WeaponParts.magazine`).
+  const magazine = new TransformNode(`${prefix}_magazine`, scene);
+  magazine.parent = root;
+  const magPivot = b.pivot("magPivot", 0, -0.085, 0.045, MAG_RAKE);
+  b.box("mag", POLYMER, 0.05, 0.2, 0.072, 0, -0.1, 0, magPivot);
+  for (let i = 0; i < 3; i++) {
+    b.box("magRib", BODY, 0.053, 0.007, 0.075, 0, -0.05 - i * 0.05, 0, magPivot);
+  }
+  b.box("magFloor", METAL, 0.054, 0.016, 0.076, 0, -0.198, 0, magPivot);
+  b.box("magBase", RUBBER, 0.05, 0.012, 0.07, 0, -0.21, 0, magPivot);
+  meshes.push(...b.merge("smgMag", magazine));
+
   const optics = buildOptics(b, MOUNT, prefix);
   meshes.push(...optics.meshes);
   b.disposePivots();
@@ -173,6 +191,8 @@ export function buildSmg(
     ejectPort: new Vector3(0.046, 0.036, 0.03),
     grip: { hand: GRIP_HAND, elbow: GRIP_ELBOW },
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
+    magazine,
+    magDrop: magDropAxis(MAG_RAKE),
     sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };

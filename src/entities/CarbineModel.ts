@@ -256,15 +256,6 @@ export function buildCarbine(
   b.box("magwell", POLYMER, 0.068, 0.06, 0.1, 0, -0.06, -0.235);
   b.box("magFlareF", POLYMER, 0.072, 0.016, 0.012, 0, -0.086, -0.19);
   b.box("magFlareR", POLYMER, 0.072, 0.016, 0.012, 0, -0.086, -0.28);
-  b.box("mag", POLYMER, 0.05, 0.13, 0.076, 0, -0.145, -0.235);
-  for (let i = 0; i < 3; i++) {
-    b.box("magRib", BODY, 0.053, 0.007, 0.078, 0, -0.11 - i * 0.04, -0.235);
-    // Witness slots down the flank, so the block is a magazine rather than a
-    // handle. They read as cuts because they are darker, not because they are.
-    b.box("magSlot", BODY, 0.052, 0.014, 0.01, 0, -0.115 - i * 0.04, -0.198);
-  }
-  b.box("magFloor", METAL, 0.054, 0.014, 0.08, 0, -0.217, -0.235);
-  b.box("magBase", RUBBER, 0.05, 0.012, 0.074, 0, -0.229, -0.235);
   // The release is at the BACK of the well, worked by the firing thumb — the
   // hand nearest it is the one on the grip, not the one on the handguard.
   b.box("magRelease", METAL, 0.03, 0.028, 0.012, 0, -0.05, -0.293);
@@ -317,6 +308,23 @@ export function buildCarbine(
   // The carbine itself is finished. Merge it before any optic is built, so a
   // sight's parts can never end up inside the weapon's colour groups.
   const meshes = b.merge("carbine", root);
+
+  // The magazine itself, merged into a node of its own so the reload can pull
+  // it out of the shell (see `WeaponParts.magazine`). No rake, so it also
+  // needs no `magDrop`: it leaves straight down, which is the way it stands.
+  const magazine = new TransformNode(`${prefix}_magazine`, scene);
+  magazine.parent = root;
+  b.box("mag", POLYMER, 0.05, 0.13, 0.076, 0, -0.145, -0.235);
+  for (let i = 0; i < 3; i++) {
+    b.box("magRib", BODY, 0.053, 0.007, 0.078, 0, -0.11 - i * 0.04, -0.235);
+    // Witness slots down the flank, so the block is a magazine rather than a
+    // handle. They read as cuts because they are darker, not because they are.
+    b.box("magSlot", BODY, 0.052, 0.014, 0.01, 0, -0.115 - i * 0.04, -0.198);
+  }
+  b.box("magFloor", METAL, 0.054, 0.014, 0.08, 0, -0.217, -0.235);
+  b.box("magBase", RUBBER, 0.05, 0.012, 0.074, 0, -0.229, -0.235);
+  meshes.push(...b.merge("carbineMag", magazine));
+
   const optics = buildOptics(b, MOUNT, prefix);
   meshes.push(...optics.meshes);
   b.disposePivots();
@@ -330,6 +338,7 @@ export function buildCarbine(
     grip: { hand: GRIP_HAND, elbow: GRIP_ELBOW },
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
     magHand: MAG_HAND,
+    magazine,
     sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };

@@ -11,7 +11,18 @@
 import { Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import { buildOptics, ironSightFloor, type OpticMount } from "./optics";
-import { BODY, METAL, POLYMER, RUBBER, WeaponBuild, type WeaponParts } from "./weaponKit";
+import {
+  BODY,
+  METAL,
+  magDropAxis,
+  POLYMER,
+  RUBBER,
+  WeaponBuild,
+  type WeaponParts,
+} from "./weaponKit";
+
+/** The magazine's rake, which is also the line it drops out along. */
+const MAG_RAKE = 0.06;
 
 /**
  * Top face of the receiver's rail. Higher than the rifle's: this receiver is
@@ -174,17 +185,6 @@ export function buildDmr(
   }
   b.box("gripCap", RUBBER, 0.058, 0.018, 0.086, 0, -0.155, 0, gripPivot);
 
-  // --- magazine: a deep straight twenty-round box ---
-  // Straight rather than curved, and it is the read: the rifle's banana under
-  // the same receiver would say "same cartridge, longer barrel".
-  const magPivot = b.pivot("magPivot", 0, -0.125, 0.05, 0.06);
-  b.box("mag", POLYMER, 0.06, 0.215, 0.108, 0, -0.108, 0, magPivot);
-  for (let i = 0; i < 4; i++) {
-    b.box("magRib", BODY, 0.063, 0.008, 0.11, 0, -0.05 - i * 0.05, 0, magPivot);
-  }
-  b.box("magFloor", METAL, 0.064, 0.02, 0.112, 0, -0.225, 0, magPivot);
-  b.box("magBase", RUBBER, 0.06, 0.014, 0.104, 0, -0.242, 0, magPivot);
-
   // --- handguard: a long free-float tube, slotted, running past the receiver
   // to carry the bipod at its far end ---
   b.box("handguard", POLYMER, 0.088, 0.062, 0.42, 0, -0.015, 0.42);
@@ -289,6 +289,22 @@ export function buildDmr(
   // Merged before any optic is built, so a sight's parts can never end up
   // inside the weapon's colour groups.
   const meshes = b.merge("dmr", root);
+
+  // --- magazine: a deep straight twenty-round box ---
+  // Straight rather than curved, and it is the read: the rifle's banana under
+  // the same receiver would say "same cartridge, longer barrel". Merged into a
+  // node of its own so the reload can drop it (see `WeaponParts.magazine`).
+  const magazine = new TransformNode(`${prefix}_magazine`, scene);
+  magazine.parent = root;
+  const magPivot = b.pivot("magPivot", 0, -0.125, 0.05, MAG_RAKE);
+  b.box("mag", POLYMER, 0.06, 0.215, 0.108, 0, -0.108, 0, magPivot);
+  for (let i = 0; i < 4; i++) {
+    b.box("magRib", BODY, 0.063, 0.008, 0.11, 0, -0.05 - i * 0.05, 0, magPivot);
+  }
+  b.box("magFloor", METAL, 0.064, 0.02, 0.112, 0, -0.225, 0, magPivot);
+  b.box("magBase", RUBBER, 0.06, 0.014, 0.104, 0, -0.242, 0, magPivot);
+  meshes.push(...b.merge("dmrMag", magazine));
+
   const optics = buildOptics(b, MOUNT, prefix);
   meshes.push(...optics.meshes);
   b.disposePivots();
@@ -300,6 +316,8 @@ export function buildDmr(
     ejectPort: new Vector3(0.05, 0.044, 0.08),
     grip: { hand: GRIP_HAND, elbow: GRIP_ELBOW },
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
+    magazine,
+    magDrop: magDropAxis(MAG_RAKE),
     sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };

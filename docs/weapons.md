@@ -125,6 +125,88 @@ is the trade it is asking you to make.
 `Player.setBodyHidden` hides the viewmodel, which matters in the editor: it flies
 the same camera the weapon is parented to.
 
+## The reload is a gesture with a magazine in it
+
+Every fraction below is a share of `CONFIG.weapons[id].reloadTime`, laid out in
+`CONFIG.viewmodel.reload`, so one timeline carries a 1.05 s sidearm and a 3.4 s
+machine gun without a per-weapon number anywhere.
+
+- **It is a TIMELINE, not a pose.** `reloadBlend` is only the gate — what eases
+  the weapon back out when a swap or a death cancels one — and `reloadPhase` is
+  the gesture. The weapon tips out of the carry over `tiltIn`, holds while the
+  magazine is changed under it, and is level again by `tiltOut`'s end, which is
+  before the magazine refills: a weapon still coming level on the frame the
+  round is available is a reload that lied about when it ended.
+- **The beats are `Sfx.reload`'s clacks and must move with them.** That sound is
+  four metallic events — catch, magazine out, magazine seated, bolt — and
+  `magOut`/`magSeat`/`bolt` are three of them to the frame. What makes the
+  gesture legible is that what you see lands on what you hear; a magazine that
+  falls half a beat off the clack releasing it is two unrelated things happening
+  at once. **Change a fraction in one file and change it in the other.**
+- **The magazine is the one part of a weapon that moves on its own**, and it can
+  only move because the model merged it into a node of its own
+  (`WeaponParts.magazine`, a second `merge` call exactly like an optic's).
+  Everything else on a weapon is inside one merged mesh per colour and cannot be
+  animated at all without the same split. It leaves along `magDrop` — the
+  weapon's own rake, from `magDropAxis`, because a magazine sliding straight
+  down out of a raked well shears through the front of it.
+- **The old one FALLS and the new one is DRIVEN**, and the two easings say so:
+  the drop accelerates (nothing has a hand on it) and clears the frame entirely,
+  while the insert's distance-to-go falls as `1 - x²` so the magazine is at its
+  fastest on the frame it arrives. The clear is what lets one node stand in for
+  two magazines — what comes back is read as a fresh one because it was never
+  seen to be the same one.
+- **The hand carries it by construction, not by matching keys.** From
+  `insertFrom` the support hand rides exactly the travel the magazine rides;
+  before that they part company on purpose, because a hand chasing a falling
+  magazine down reads as having dropped it.
+- **The seat and the bolt are IMPULSES, not poses** — instant attack, squared
+  decay, the same shape as the per-shot kick, because they are the same kind of
+  event. In the pose stack as blends they would be two more places the weapon
+  leans and neither would land on its sound.
+- **The magazine keys off `reloading`, never off the eased blend.** It has two
+  places to be and no way to be between them, so a cancelled reload puts it back
+  in the weapon rather than lerping it home through the receiver.
+  `ViewModel.stow()` is the only place that state is cleared and all three ways
+  out of a half-finished reload — a swap, a round starting, the kit screen
+  coming up over one — go through it, or the weapon comes back without a
+  magazine in it.
+- **`Player.reloadPhase` freezes where a cancelled reload left it** rather than
+  resetting to 1. The pose is played off the phase and eased out by the blend,
+  so a phase that snapped to the end underneath a blend still at 1 would take
+  the pose off in a single frame.
+- **The pose is a CANT, not a lift.** A rifle is not hoisted in front of the
+  face to change a magazine, so `reloadPos` barely moves — the weapon stays near
+  carry height, pulled in a little — and the roll is what brings the magwell
+  where the eye can find it. Two passes got this wrong from opposite ends. The
+  original *dipped* the weapon, which played the whole magazine change below the
+  bottom edge of a frame the magwell was already hanging out of. The fix over-
+  corrected and raised it far enough to frame the magazine dead centre, which
+  looked staged at the hip and put a receiver across the middle of the screen on
+  an aimed reload.
+- **`reloadRot.z` must be negative.** A positive roll takes the right flank up
+  and swings the underside out to the right, away from a camera sitting to the
+  LEFT of a weapon carried at `hipPos.x`: the magwell is presented to nobody and
+  the weapon reads as held out at an angle rather than worked on. Negative rolls
+  the underside toward the camera and carries the magwell inboard, which is both
+  where the support hand comes from and the way a right-handed shooter actually
+  cants a rifle to change magazines. `seatKick`/`boltKick` roll *against* that
+  cant — a magazine driven home knocks the cant out — and flip with it.
+- **A reload BREAKS THE AIM (`reload.aimBreak`), and that is geometry as much as
+  realism.** Nobody changes a magazine through their optic, and an aimed weapon
+  is *on the camera axis*, so a reload pose applied there swings the receiver
+  across the middle of the screen whichever way it moves. The gesture's weight
+  scales the hip→ADS blend back down, so the aimed reload is the hip reload, off
+  to the side where it belongs, and the sight is back on the axis by the end of
+  `tiltOut` — before the round it is loading can be fired. It is not a full 1: a
+  little aim is left in so the weapon settles back from near the sight instead of
+  swinging up from the hip on the last beat, which also keeps a scoped weapon
+  from being flung out of a narrow FOV and back into it.
+- Measured at 1280x720 through the hold: the magwell and the top third of a
+  seated rifle magazine sit inside the bottom of the frame (roughly y 600–720),
+  the magazine leaves through that edge, and the aimed reload keeps the whole
+  middle of the screen clear.
+
 ## The loadout: five weapons, five optics, and a sidearm
 
 Two tables, two slots, neither knowing about the other. `CONFIG.weapons` declares
@@ -598,6 +680,21 @@ what makes detail nearly free: one draw per colour however many boxes go in. A
 colour missing from `SECTIONS` is silently never merged, so anything `collect()`
 takes has to be listed there. The merge works only because the root is still at
 identity while building.
+
+**A merge is also how a part is let OUT of the weapon.** `merge` swaps the
+accumulator, so a builder that wants a piece to move on its own builds it after
+the weapon's own merge and merges it into a node of its own — which is what the
+optics have always done and what the **magazine** now does. That node sits at
+identity, so the merged geometry lands where it was built and its
+`position`/`rotation` are pure offsets from seated. It costs one more merged mesh
+per colour the magazine uses, on a rig that is disabled unless it is the carried
+one. The LMG's `magazine` is its belt box **and the belt** — a belt is fed from
+the box it is coiled in, so swapping the container and leaving a run of brass
+hanging out of the feed would be a reload that loaded nothing — while `boxMount`
+stays with the weapon, since the fresh box needs a shelf to hang from. The
+pistol's is the only one built with geometry a seated magazine never shows: its
+magazine is up inside the grip, so the body is there to be seen on the way out
+and sized clear of the grip's walls on every face.
 
 **A colour group is free where it is unused, which is why BRASS is one.** `merge`
 skips a group with nothing in it, so the LMG's exposed belt costs the other four

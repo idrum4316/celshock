@@ -28,12 +28,19 @@ import type { CelMaterialFactory } from "../shaders/CelShader";
 import {
   BODY,
   METAL,
+  magDropAxis,
   POLYMER,
   RUBBER,
   WeaponBuild,
   type SightAssembly,
   type WeaponParts,
 } from "./weaponKit";
+
+/**
+ * The grip's rake — the 1911's signature ~18° off vertical, and the line the
+ * magazine inside it both stands and drops along.
+ */
+const GRIP_RAKE = 0.32;
 
 /**
  * The line of sight: the top of the rear posts and of the front blade, which
@@ -172,7 +179,7 @@ export function buildPistol(
   // `rotX` sends everything BELOW the pivot backwards, which is the ~18° off
   // vertical the grip is famous for. Negative would stand it out over the
   // trigger guard, which is a Luger.
-  const gripPivot = b.pivot("gripPivot", 0, -0.078, -0.108, 0.32);
+  const gripPivot = b.pivot("gripPivot", 0, -0.078, -0.108, GRIP_RAKE);
   b.box("grip", POLYMER, 0.03, 0.094, 0.05, 0, -0.047, 0, gripPivot);
   for (const side of [-1, 1] as const) {
     b.box("gripPanel", RUBBER, 0.006, 0.078, 0.046, side * 0.017, -0.046, 0, gripPivot);
@@ -184,13 +191,29 @@ export function buildPistol(
     b.box("strapRib", BODY, 0.026, 0.007, 0.008, 0, -0.024 - i * 0.019, 0.025, gripPivot);
   }
   b.box("mainspring", BODY, 0.028, 0.088, 0.011, 0, -0.047, -0.026, gripPivot);
-  b.box("magFloor", METAL, 0.032, 0.008, 0.056, 0, -0.096, 0.002, gripPivot);
-  b.box("magPad", RUBBER, 0.03, 0.008, 0.05, 0, -0.103, 0.002, gripPivot);
   b.box("lanyard", METAL, 0.012, 0.012, 0.008, 0, -0.092, -0.024, gripPivot);
 
   // The pistol itself is finished. Merged before the sight is built, so the
   // sight's parts land in their own colour groups exactly as an optic's do.
   const meshes = b.merge("pistol", root);
+
+  // --- the magazine, in a node of its own so the reload can drop it ---
+  // The only magazine in the kit that is INSIDE the weapon: all a seated one
+  // shows is the floorplate under the grip. So the body is built too, sized to
+  // sit wholly within the grip's walls — invisible while it is home, and the
+  // whole point of the animation the moment it slides out. It leaves along the
+  // grip's own rake (`magDrop`), which at 18° off vertical is the difference
+  // between a magazine coming out and one passing through the front strap.
+  const magazine = new TransformNode(`${prefix}_magazine`, scene);
+  magazine.parent = root;
+  // Held clear of the grip's own walls on every face — a body sized flush with
+  // the cavity would share its bottom plane with the grip and z-fight along it
+  // the moment the floorplate below stopped covering the seam.
+  b.box("magBody", METAL, 0.022, 0.08, 0.04, 0, -0.05, 0.002, gripPivot);
+  b.box("magFloor", METAL, 0.032, 0.008, 0.056, 0, -0.096, 0.002, gripPivot);
+  b.box("magPad", RUBBER, 0.03, 0.008, 0.05, 0, -0.103, 0.002, gripPivot);
+  meshes.push(...b.merge("pistolMag", magazine));
+
   const sight = buildFixedIrons(b, prefix, root);
   meshes.push(...sight.meshes);
   b.disposePivots();
@@ -203,6 +226,8 @@ export function buildPistol(
     grip: { hand: GRIP_HAND, elbow: GRIP_ELBOW },
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
     magHand: MAG_HAND,
+    magazine,
+    magDrop: magDropAxis(GRIP_RAKE),
     sights: { kind: "fixed", sight: "iron", assembly: sight },
     meshes,
   };
