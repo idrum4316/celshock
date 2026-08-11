@@ -24,7 +24,11 @@ import {
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { Combatant } from "../entities/Combatant";
-import { MAX_POINT_LIGHTS, type PointLightData } from "../shaders/CelShader";
+import {
+  MAX_POINT_LIGHTS,
+  type CelMaterialFactory,
+  type PointLightData,
+} from "../shaders/CelShader";
 import { createGrassMaterial } from "../shaders/GrassShader";
 import type { EnvironmentSpec } from "../world/environment";
 import type { GrassRect, WorldBox } from "../world/MapBuilder";
@@ -117,6 +121,7 @@ export class GrassSystem {
   constructor(
     private scene: Scene,
     private glow: GlowLayer,
+    private mats: CelMaterialFactory,
   ) {}
 
   /**
@@ -165,6 +170,10 @@ export class GrassSystem {
     mat.setVector2("mistParams", new Vector2(env.mistHeight, env.mistStrength));
     mat.setColor3("rootColor", Color3.FromHexString(env.grass.rootColor));
     mat.setColor3("tipColor", Color3.FromHexString(env.grass.tipColor));
+    // The depth map, its matrix and its params come from the factory, which is
+    // the one publisher of all three. Unregistered, the shader would sample an
+    // unbound sampler and the field would stand in permanent shadow.
+    this.mats.registerShadowConsumer(mat);
     mesh.material = mat;
 
     this.mesh = mesh;
@@ -235,6 +244,9 @@ export class GrassSystem {
   }
 
   dispose(): void {
+    // Before the dispose, not after: the factory would otherwise keep writing
+    // three uniforms a frame into a dead material for the rest of the session.
+    if (this.mat) this.mats.unregisterShadowConsumer(this.mat);
     this.mesh?.dispose();
     this.mat?.dispose();
     this.mesh = null;

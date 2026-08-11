@@ -7,6 +7,25 @@
  */
 
 export const graphics = {
+  /**
+   * The render-scale ladder, as a fraction of the display's NATIVE pixels —
+   * `engine.setHardwareScalingLevel(1 / (devicePixelRatio * scale))`.
+   *
+   * Native rather than CSS pixels because CSS pixels are not a resolution: on a
+   * 2x panel one CSS pixel is four real ones, so a ladder in CSS terms means
+   * something different on every machine. This one means the same thing
+   * everywhere, and 1.0 is exactly "as sharp as the panel goes".
+   *
+   * **Nothing above 1.0, deliberately.** Supersampling four chained full-screen
+   * passes plus a 2048-squared depth map is not a quality setting, it is a
+   * different game — and `FINDINGS.md` §1 already has a 1% low of 28 on a 60 Hz
+   * panel to spend before anyone reaches for headroom.
+   *
+   * The DEFAULT is not on this list: it is derived per machine by
+   * `defaultRenderScale` in `core/settings.ts`, so a fresh install draws exactly
+   * the pixels this game has always drawn and the player opts up from there.
+   */
+  renderScales: [0.5, 0.75, 1] as const,
   /** Emissive glow (neon, reticle, tracers) — GlowLayer settings. */
   glowIntensity: 1.15,
   glowKernel: 56,
@@ -85,8 +104,34 @@ export const graphics = {
      * each triangle's sample off its own plane — flat faces never
      * self-shadow (acne) and cast shadows stay put.
      */
-    bias: 0.0025,
+    bias: 0.0035,
     normalBias: 0.06,
+    /**
+     * Half-width of the shadow lookup's four-tap kernel, in shadow-map texels.
+     *
+     * **0.5 is one texel of support, and one texel is the artefact.** A single
+     * tap put the depth map's own grid on screen — at 110 m over 2048 texels an
+     * edge climbs in 5.4 cm steps — and a staircase with a one-texel period is
+     * cancelled by a kernel that spans exactly one texel. Going wider does not
+     * clean it up further; it starts producing a genuine penumbra, which is the
+     * one thing `CelShader`'s flat bands cannot have. Treat this as a constant
+     * with an argument attached rather than as a dial.
+     *
+     * **Measured as a containment check rather than as a win**, which is the
+     * honest way round for this one. Setting the map size to 1e9 collapses the
+     * radius to zero and makes all four taps the same fetch — exactly the old
+     * single-tap lookup — so differencing the two frames isolates every pixel
+     * the kernel touches. Over the village from above: **0.33% of the frame
+     * differs, with a peak of 55/255 on the pixels that do.** A large local
+     * change on a third of one percent of the frame is the shape a kernel
+     * confined to shadow BOUNDARIES has; a penumbra would have shown up as a
+     * small change over a large area, and did not.
+     *
+     * `bias` above went 0.0025 -> 0.0035 with it: a half-texel wider footprint
+     * is a half-texel more depth error on a sloped receiver, and the roofs are
+     * where that shows.
+     */
+    pcfRadiusTexels: 0.5,
     /** Soft contact disc under each combatant. */
     blobRadius: 0.6,
     blobOpacity: 0.55,
@@ -164,6 +209,39 @@ export const graphics = {
      * carrying the leaf's own colour rather than merely dimmed.
      */
     canopy: { color: "#8fb567", intensity: 0.45 },
+  },
+  /**
+   * Albedo weathering on flat cel colours — a slow value drift over world space
+   * so a merged block stops arriving as one tone. Costs three ALU and no data.
+   */
+  albedoVariation: {
+    /**
+     * Metres per noise cell. Wide on purpose: the artefact being fixed is a
+     * 48 m block in a single value, so the variation has to be BIGGER than a
+     * building or it reads as dirt on the wall rather than as one cottage being
+     * a little paler than its neighbour. Under about 3 m it starts to look like
+     * texture, which this palette has no way to support.
+     */
+    metersPerCell: 5,
+    /**
+     * Peak-to-peak swing on the base colour.
+     *
+     * The ceiling is set by the shading, not by taste: the key light is
+     * quantised into four bands, so one band is ~25% of the value, and a
+     * variation approaching that reads as a LIGHTING error — a wall that looks
+     * like it is catching a light that is not there. Judge it on the shadowed
+     * side, where the ambient term is the only light and this is the entire
+     * signal. 0 disables it.
+     *
+     * Measured over the village from above: this moves 3.0% of the frame,
+     * peaking at 36/255 — visible as one roof slope sitting a shade off its
+     * neighbour, which is the whole intent. The mask was measured too, and it
+     * is the half that could go wrong silently: with the viewmodel isolated to
+     * its own 10,553 pixels and this swung from 0 to 2.0 — fourteen times the
+     * shipped value — **not one of those pixels changed**. That is `vBaked.y`
+     * reading the disabled attrib's 0 on anything the map did not bake.
+     */
+    amount: 0.14,
   },
   /**
    * Cobblestone bump: fake relief height (metres) of a sett dome at

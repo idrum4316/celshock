@@ -111,6 +111,37 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   fallback path is reached with `g.ragdolls.setEnabled(false)` before the kill;
   check the rig is STILL ENABLED past `bots.death.hideTime`, the one way it differs
   from `Bot`'s copy of the tween.
+- **A pixel diff needs the frame FROZEN, and three separate things move it.**
+  Measured noise floor between two consecutive grabs with nothing changed at all:
+  **42-47% of pixels**, which swamps anything being looked for. The grade's grain
+  is by far the largest — it is re-hashed every frame at ~14 LSB, so
+  `g.post.setEnabled(false)` on its own takes the floor to **0.00%**. The ash is
+  next (see below), and `g.sky.update = () => {}` pins the cloud decks, which
+  drift even under the pause lid because `sky.update` is called from `tick`
+  OUTSIDE `updateGameplay`. Check the floor by grabbing twice and diffing before
+  trusting any measurement; a method that cannot reach zero is not measuring what
+  you think.
+- **The pause lid is a free camera.** `g.state = "paused"` stops `updateGameplay`
+  while the scene still renders, so nothing overwrites `cameraSys.camera` and it
+  can be placed by hand — `cam.position.set(...)` plus `cam.setTarget(...)` frames
+  a roofline or a shadow edge from anywhere, which beats hunting for a vantage by
+  walking the player. Two caveats: `camPos` is a uniform pushed in
+  `updateGameplay`, so it stays at the player's last value and the fog, mist and
+  rim in that frame are computed from the wrong eye — fine for geometry and
+  shadows, wrong for anything about distance. And the HUD does not appear in a
+  canvas grab, so the pause card is invisible to `readPixels` even though a
+  Playwright `screenshot()` shows it.
+- **One vantage per process run when the numbers matter.** Cycling
+  `paused → playing → paused` between vantages lets a frame of gameplay run, and
+  the player moves, falls or gets shoved in it. The same measurement taken as the
+  second of two vantages read 55 runs against 30 for the first — enough to invent
+  a result. Relaunch per vantage.
+- **A "does this surface do X" diff needs a MASK of that surface**, or it is
+  measuring whatever else is on those pixels. Build it by toggling the thing off:
+  grab, `mesh.setEnabled(false)`, grab, and the pixels that changed are its. That
+  is what separates "the grass now takes shadows" from "the ground under the grass
+  always did" — and at a downsampled resolution it does NOT work, because every
+  blade pixel is a blend of grass and ground. Grab at full canvas size.
 - **The ash field is frozen for a pixel diff with `stop()` + `reset()`** on
   `g.atmosphere.system`. That works on `GPUParticleSystem` only because
   `Atmosphere` constructs it with `emitRateControl: true`; Babylon's legacy GPU

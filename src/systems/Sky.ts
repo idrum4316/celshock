@@ -127,6 +127,16 @@ export class Sky {
     domeMat.diffuseColor = Color3.Black();
     domeMat.specularColor = Color3.Black();
     domeMat.disableDepthWrite = true;
+    // **The dome is NOT dithered, and that was measured rather than assumed.**
+    // It looks like the one surface that would need it — the widest, shallowest
+    // ramp in the game, magnified about sevenfold on its way to the screen — but
+    // the ramp is never seen clean. The stars, the galactic band and the halo's
+    // additive bloom are painted over the whole of it, and the cloud decks sit
+    // in front. Measured on a scanline down 360 px of open sky with the moon
+    // behind the camera, grade off: 233 runs of identical 8-bit value without a
+    // dither against 229 with one — the same 1.55 px mean run either way, which
+    // is already broken up. See `shaders/Dither.ts` for the surfaces that DO
+    // band; the fog ramp on a plain cel-shaded wall is six times coarser.
     const dome = MeshBuilder.CreateSphere(
       "sky-dome",
       {

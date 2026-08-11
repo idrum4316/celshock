@@ -131,6 +131,8 @@ src/
                         #   inside ±size/2
     rng.ts              # mulberry32 — the seeded PRNG world-building uses
     MapBuilder.ts       # Builds the map; merges visuals, emits colliders
+    ambientOcclusion.ts # Per-vertex AO, baked from the collider boxes after
+                        #   the merge. Lives in the colour buffer's ALPHA
     BuildingKit.ts      # Facade: shared types + BUILDERS registry
     kit/core.ts         #   Build accumulator (box/wall/guard/flight/...),
                         #   palette, builder contract
@@ -195,6 +197,8 @@ src/
                         #   ink fades per PIXEL instead of per merged mesh
     EmissiveFog.ts      # The same fog as a material plugin on every unlit
                         #   emissive material — windows, flames, tracers
+    Dither.ts           # One LSB of triangular noise, pasted into the three
+                        #   surface shaders. Fixes 8-bit banding in the fog
     WaterShader.ts      # Animated water ShaderMaterial (rotated/warped wave layers)
     GodRays.ts          # Moon shafts: screen-space radial blur
     HorrorPost.ts       # Vignette / grain / aberration / damage flash

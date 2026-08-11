@@ -27,6 +27,7 @@
 import { Material, Mesh, MeshBuilder, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
+import { bakeVertexAo } from "./ambientOcclusion";
 import type { LightingSystem } from "../systems/LightingSystem";
 import { BUILDERS, type BoxSpec, type Structure } from "./BuildingKit";
 import type { EnvironmentSpec } from "./environment";
@@ -496,6 +497,28 @@ export class MapBuilder {
     for (const merged of blocks.finish()) {
       if (!merged.metadata?.noOutline) addOutline(merged, 0.05);
       visuals.push(merged);
+    }
+
+    // Ambient occlusion, and the position in this method is the whole of it.
+    //
+    // AFTER every merge, because `VertexData.merge` throws on a group where
+    // some meshes carry `colors` and some do not, and `mergeByMaterial`
+    // disposes its sources — which is what turns Babylon's attribute-aligning
+    // path off. Baking last cannot hit that.
+    //
+    // BEFORE `markVisual`, which freezes the world matrices the bake needs to
+    // recompute, and before the nav graph, which wants `this.boxes` for its own
+    // reasons and is not affected either way.
+    //
+    // `this.boxes` is complete here — every `collider()` has run — and it is
+    // the whole input besides the terrain. See `world/ambientOcclusion.ts` for
+    // why the result lives in the vertex colour's alpha.
+    const aoStart = performance.now();
+    const aoVerts = bakeVertexAo(visuals, this.boxes, terrain, size);
+    if (import.meta.env.DEV) {
+      console.info(
+        `[ao] ${aoVerts} vertices in ${(performance.now() - aoStart).toFixed(1)} ms`,
+      );
     }
 
     for (const m of visuals) this.markVisual(m);

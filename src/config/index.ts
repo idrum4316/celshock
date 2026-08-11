@@ -26,13 +26,14 @@ import { audio } from "./audio";
 import { graphics, effects } from "./graphics";
 import { minimap, damageIndicator } from "./hud";
 import { lighting } from "./lighting";
-import { map, water, grass } from "./world";
+import { ao, map, water, grass } from "./world";
 import { sky, godRays } from "./sky";
 import { teams } from "./teams";
 
 export { FOG_WALL } from "./fogWall";
 
 export const CONFIG = {
+  ao,
   conquest,
   bots,
   nav,

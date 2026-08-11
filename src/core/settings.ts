@@ -9,13 +9,22 @@
 import { CONFIG } from "../config";
 
 /**
- * One boolean per row on the settings screen.
+ * How much of the display's native resolution to render, as one of
+ * `CONFIG.graphics.renderScales`. Derived from that list so the ladder is
+ * declared exactly once and a value that is not on it cannot be stored.
+ */
+export type RenderScale = (typeof CONFIG.graphics.renderScales)[number];
+
+/**
+ * One row on the settings screen. Mostly booleans; `renderScale` is the first
+ * field that is not, and it is what the note this replaces was warning about.
  *
- * Deliberately flat and all-boolean for now. The screen renders whatever is in
- * its row table, so a non-boolean setting (a slider, an enumeration) means a
- * second control type there rather than a change to this shape — keep that in
- * mind before widening the type: the storage layer below is generic over the
- * keys, not over their types.
+ * **What the widening actually cost**, since the old note guessed at it: not a
+ * second control type on the screen (a toggle turned out to be a two-option
+ * choice, so both render through one path), but the storage layer below, which
+ * really was generic over the keys and not their types. It now carries a codec
+ * per key, and the mapped type over `Settings` is what makes a new field a
+ * compile error until it has one.
  */
 export type Settings = {
   /** The frame-rate readout in the HUD's corner. */
@@ -35,7 +44,41 @@ export type Settings = {
    * the build — only the simulation.
    */
   ragdolls: boolean;
+  /**
+   * How much of the panel's native resolution the scene is drawn at.
+   *
+   * This is the one setting that was silently pinned before it existed. The
+   * engine was built without `adaptToDeviceRatio`, so Babylon's hardware
+   * scaling level stayed 1 and the backing store matched the CSS pixel grid —
+   * which on any 2x display is a QUARTER of the panel's pixels, upscaled by the
+   * compositor, with FXAA smoothing an already-soft image. Nothing in the tree
+   * had ever called `setHardwareScalingLevel`.
+   */
+  renderScale: RenderScale;
 };
+
+/**
+ * The scale a fresh install starts at: the largest rung that draws no more
+ * pixels than the game has always drawn.
+ *
+ * `1 / devicePixelRatio` is today's behaviour expressed on this ladder — CSS
+ * pixels — so on an ordinary 1x display that is 1.0 and nothing changes at all,
+ * and on a 2x display it is 0.5, which is exactly the frame that shipped. The
+ * sharpness is then one keypress away rather than forced on a machine that has
+ * never been measured; `FINDINGS.md` §1 is the reason that distinction matters,
+ * and moving this default wants a real-hardware capture behind it.
+ *
+ * A display past 2x has no rung at or below it, so it takes the lowest one and
+ * comes out slightly sharper than before. That is the right way for the clamp
+ * to fail and it only reaches phones.
+ */
+export function defaultRenderScale(): RenderScale {
+  const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  const rungs = CONFIG.graphics.renderScales;
+  let best: RenderScale = rungs[0];
+  for (const rung of rungs) if (rung <= 1 / dpr && rung > best) best = rung;
+  return best;
+}
 
 /**
  * What a fresh install gets.
@@ -46,12 +89,17 @@ export type Settings = {
  * an instrument, not chrome. The grade is the plain `true` the other two are
  * not: it is three independent terms with no single number that disables it,
  * so deriving would mean inventing a fourth that the shader does not read.
+ *
+ * The scale is derived too, but from the MACHINE rather than from `CONFIG` —
+ * see `defaultRenderScale`. It is therefore the one default that is not the
+ * same on every install, which is the point of it.
  */
 export const SETTING_DEFAULTS: Settings = {
   fpsCounter: false,
   motionBlur: CONFIG.graphics.motionBlur.strength > 0,
   horrorGrade: true,
   ragdolls: CONFIG.bots.death.ragdoll,
+  renderScale: defaultRenderScale(),
 };
 
 /** One key per field, so the fields are independent in the store as well. */
@@ -69,33 +117,79 @@ const KEY_PREFIX = "hollowmere.setting.";
 export function readSettings(): Settings {
   const out = { ...SETTING_DEFAULTS };
   for (const key of Object.keys(out) as (keyof Settings)[]) {
-    const stored = readFlag(key);
-    if (stored !== null) out[key] = stored;
+    const raw = readRaw(key);
+    if (raw === null) continue;
+    // Each codec is free to reject: an unrecognised string leaves the default
+    // in place, which is how a value written by a build with a different ladder
+    // degrades instead of poisoning the setting.
+    const parsed = CODECS[key].read(raw);
+    if (parsed !== null) out[key] = parsed as never;
   }
   return out;
 }
 
-/** Writes every field. Cheap enough to do wholesale on each toggle. */
+/** Writes every field. Cheap enough to do wholesale on each change. */
 export function writeSettings(settings: Settings): void {
   for (const key of Object.keys(settings) as (keyof Settings)[]) {
-    writeFlag(key, settings[key]);
+    writeRaw(key, CODECS[key].write(settings[key] as never));
   }
 }
 
-function readFlag(key: keyof Settings): boolean | null {
+/**
+ * How one field survives a round trip through `localStorage`.
+ *
+ * The store is still one key per field — the invariant this file opens with —
+ * so what a codec owns is only the string in that key, and a field can change
+ * its encoding without touching any other.
+ */
+interface Codec<T> {
+  /** Returns null for anything this build does not recognise. */
+  read(raw: string): T | null;
+  write(value: T): string;
+}
+
+const bool: Codec<boolean> = {
+  read: (raw) => (raw === "1" ? true : raw === "0" ? false : null),
+  write: (value) => (value ? "1" : "0"),
+};
+
+/**
+ * A codec over a fixed list of numbers — the tolerance `readMap` and
+ * `readSight` in [`prefs.ts`](prefs.ts) have for a stored id this build has
+ * never heard of, which is the same problem.
+ */
+function oneOf<T extends number>(allowed: readonly T[]): Codec<T> {
+  return {
+    read: (raw) => allowed.find((v) => String(v) === raw) ?? null,
+    write: (value) => String(value),
+  };
+}
+
+/**
+ * One codec per field. The mapped type is the point: a field added to
+ * `Settings` without an entry here does not compile, so the store can never
+ * silently stop remembering something.
+ */
+const CODECS: { [K in keyof Settings]: Codec<Settings[K]> } = {
+  fpsCounter: bool,
+  motionBlur: bool,
+  horrorGrade: bool,
+  ragdolls: bool,
+  renderScale: oneOf(CONFIG.graphics.renderScales),
+};
+
+function readRaw(key: keyof Settings): string | null {
   try {
-    const raw = window.localStorage.getItem(KEY_PREFIX + key);
-    if (raw === "1") return true;
-    if (raw === "0") return false;
+    return window.localStorage.getItem(KEY_PREFIX + key);
   } catch {
     // Private browsing and file:// both throw here. Defaults are fine.
+    return null;
   }
-  return null;
 }
 
-function writeFlag(key: keyof Settings, value: boolean): void {
+function writeRaw(key: keyof Settings, raw: string): void {
   try {
-    window.localStorage.setItem(KEY_PREFIX + key, value ? "1" : "0");
+    window.localStorage.setItem(KEY_PREFIX + key, raw);
   } catch {
     // Not being able to remember a setting is not worth failing over.
   }

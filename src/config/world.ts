@@ -11,6 +11,39 @@ export const map = {
 } as const;
 
 /**
+ * Baked per-vertex ambient occlusion (`world/ambientOcclusion.ts`). Costs
+ * nothing per frame — it is a vertex attribute written once per map build —
+ * so both numbers are about the LOOK rather than about the budget.
+ */
+export const ao = {
+  /**
+   * How far an occluder reaches, in metres.
+   *
+   * This is the size of the shading, not its strength: at 2.5 m a doorway, the
+   * inside of an arch and the foot of a wall all darken, while a street with a
+   * cottage on the far side does not. Pushing it out starts shading whole
+   * facades from their neighbours, which reads as dirt rather than as form —
+   * and it is the one number here that costs build time, quadratically, since
+   * it decides how many boxes each vertex has to ask.
+   */
+  radius: 2.5,
+  /**
+   * How dark a fully occluded vertex goes, as a fraction of the ambient and
+   * sky-fill terms.
+   *
+   * It multiplies only those two — the key light has a shadow map of its own
+   * and the point lights deliberately ignore occlusion, the same way they
+   * ignore the shadow map, so a lantern in a doorway still lights the doorway.
+   * That is also why this can be as strong as it is: it is a fraction of the
+   * dimmest light in the scene, not of the frame.
+   *
+   * 0 disables the bake entirely, and disables it at the source — no attribute
+   * is written, so every mesh falls back to the unoccluded default.
+   */
+  strength: 0.55,
+} as const;
+
+/**
  * Shallow surface water (the creek at B, the bog at E). Visual only — the
  * planes carry no collider, so wading is free and swimming never comes up.
  * Palette lives in the map's EnvironmentSpec; this is motion and shape.

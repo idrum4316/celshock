@@ -134,6 +134,44 @@ Three rules about that invalidation, all learned the hard way:
   `setOutlineFog` owns its own invalidation for exactly this reason — the first
   cut split it across the caller and got that list wrong.
 
+**A fifth term modifies two of the four, and it arrives as a VERTEX ATTRIBUTE
+rather than a uniform.** `world/ambientOcclusion.ts` bakes per-vertex ambient
+occlusion once per map build, out of the collider boxes `MapBuilder.collider()
+already records plus the terrain under them, and the cel shader multiplies it
+into the flat ambient and the sky fill — **not** the key light, which the shadow
+map already owns, and **not** the point lights, for the same reason those ignore
+the shadow map: a lantern in a doorway has to light the doorway.
+
+Three rules about it, and the first is the one everything else rests on:
+
+- **Occlusion lives in the colour buffer's ALPHA, and 1 means unoccluded.** A
+  mesh with no colour buffer leaves that attrib array disabled, and a disabled
+  generic attrib reads `(0, 0, 0, 1)` — verified in
+  `ThinEngine._bindVertexBuffersAttributes`, which `continue`s past a missing
+  buffer after `unbindAllAttributes()`. Alpha therefore defaults to exactly the
+  neutral value, so the pooled bot rigs, the viewmodel's meshes, the grenades and
+  the death cam's stand-in body are all correct **without carrying a buffer at
+  all** — no define, no branch, and above all no fourth `cel-<variant>-#rrggbb`
+  cache entry for `outlineInkFor`'s regex to learn. RGB defaults to 0, which is
+  not neutral for a multiplier, which is why the green channel is used as a
+  *mask* (1 on baked world geometry) rather than as a second multiplier.
+- **The bake runs AFTER every merge, and cannot be moved earlier.**
+  `VertexData.merge` throws `"Cannot merge vertex data that do not have the same
+  set of attributes"` the moment one mesh in a group carries `colors` and another
+  does not, and `mergeByMaterial`'s `disposeSource = true` is what turns
+  Babylon's attribute-aligning path off. Baking last also makes a positional
+  estimate legitimate: two meshes meeting at a corner are in different merge
+  groups (the merge is per colour), and shading a vertex from where it *is*
+  rather than from what it belongs to is what makes the two sides agree.
+- **`hasVertexAlpha` must stay false.** `setVerticesData` does not set it, and
+  the world is opaque — the alpha here is a lighting term, not a transparency.
+
+The same buffer's green channel gates the cel shader's **albedo weathering**, a
+slow value-noise drift over world position that stops a 48 m merged block
+arriving as one flat tone. It is keyed on position rather than on anything
+per-object because that survives the merge for free — and it is gated because a
+world-keyed term on a *moving* mesh makes it shimmer as it walks.
+
 **Four light terms, not three.** Beside the key light, the flat ambient and the
 point lights there is a *hemispheric* term, `skyLightColor`, applied by `n.y` and
 never gated by the shadow map: full strength on up-facing surfaces, nothing
@@ -156,6 +194,46 @@ axis that multiplies is an axis that costs. A fourth variant means a spec type, 
 to the palette-neutral colour. The translucency term is directional both ways — it
 needs the eye looking into the key light *and* the facet turned away from it — so it
 can only be judged from under the thing, moonward.
+
+**The shadow lookup is FOUR taps, and four is a ceiling rather than a budget.**
+One tap put the depth map's own grid on screen — at 110 m over 2048 texels an
+edge climbs in 5.4 cm steps — so the kernel spans exactly one texel, which is
+the period of that staircase. Anything wider starts producing a real penumbra,
+and a penumbra is the one thing the flat bands cannot have. The 2x2 is rotated
+per pixel: four taps averaged give five values, five values along an edge are
+five contours, and the rotation turns that residue into noise instead. Measured
+as a containment check by collapsing the radius to zero (which makes all four
+taps the same fetch, i.e. the old lookup): **0.33% of the frame differs, peaking
+at 55/255** — a large change on very few pixels, which is the shape of something
+confined to boundaries rather than spread over a penumbra.
+
+**Grass and water sample that same depth map, and they are not cel materials.**
+They reproduce the cel lighting model in their own shaders and went without a
+shadow term entirely, which showed as a cottage's shadow stopping dead at the
+edge of a grass rect and at the waterline. `CelShader` exports the lookup and
+the band function as GLSL strings (`SHADOW_GLSL`, `BAND_GLSL`) so all three
+share one kernel, and `CelMaterialFactory.registerShadowConsumer` /
+`unregisterShadowConsumer` is how a non-cel material joins the three per-frame
+uploads. **Registering is half the contract and unregistering is the other
+half**: grass and water are rebuilt every round, and a material left registered
+after its `dispose` takes uniform writes for the rest of the session. Water
+offsets its shadow sample along the FLAT up-vector rather than the wave normal,
+for the same reason the cel shader offsets along the facet rather than the
+bumped normal — the relief is a fiction, and the shadow must not move with it.
+
+**Every surface shader dithers its own output, and the grade is the wrong place
+for it.** The chain is `hdr = false`, so the scene is quantised the instant it
+lands in FXAA's input target, and the fog and mist ramps are shallow enough to
+cross a quantisation step every few degrees of screen — measured at contours
+nearly **seven pixels wide** on a plain village wall. `shaders/Dither.ts` adds
+one LSB of triangular noise immediately before `gl_FragColor` in the cel, grass
+and water shaders, which takes those contours to ~2 px. It is deliberately *not*
+in `HorrorPost`: that pass is detachable by a player setting, and its grain is
+already a ~10 LSB dither whenever it is attached — so the banding is a
+**grade-off** artefact, and the grade-off frame is the one a pass inside the
+grade cannot reach. The sky dome was the expected customer and measured as not
+needing it (233 runs against 229): stars, the galactic band and the halo are
+painted over the whole ramp, and the cloud decks sit in front.
 
 The one exception is `ShadowSystem`'s `DirectionalLight`, which no material reads:
 it exists only to define the shadow camera for its `ShadowGenerator`. The cel

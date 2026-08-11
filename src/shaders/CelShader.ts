@@ -30,8 +30,10 @@ import {
   StandardMaterial,
   Vector2,
   Vector3,
+  Vector4,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
+import { DITHER_GLSL } from "./Dither";
 import { attachEmissiveFog, setEmissiveFog } from "./EmissiveFog";
 import { refreshOutlineFog, setOutlineFog } from "./OutlineFog";
 // The bone includes self-register in the IncludesShadersStore; import them
@@ -91,11 +93,120 @@ import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
  */
 export const MAX_POINT_LIGHTS = 16;
 
+/**
+ * The hard-band quantizer, shared verbatim by every surface shader in the game.
+ *
+ * It was three identical copies — cel, grass and water — which was harmless
+ * only because nobody had ever changed it. `SHADOW_GLSL` below is the one that
+ * made sharing necessary rather than tidy, and the two travel together: a band
+ * function that disagreed between the three would put a different terminator on
+ * a wall, the grass in front of it and the water beside it.
+ */
+export const BAND_GLSL = `
+// Quantizes a 0..1 diffuse term into hard bands, smoothstepping across each
+// edge so the terminator reads as a hard line without aliasing.
+float band(float ndl, float steps) {
+  float x = ndl * steps;
+  return min((floor(x) + smoothstep(0.35, 0.65, fract(x))) / steps, 1.0);
+}
+`;
+
+/**
+ * The stepped shadow lookup, and the uniforms it reads. Included by the cel,
+ * grass and water fragment shaders so all three sample the SAME depth map with
+ * the SAME kernel.
+ *
+ * Grass and water went without this for as long as they existed, and the
+ * artefact is the loudest continuity break the frame had: the key light is the
+ * moon, so a cottage lays a hard shadow across the ground — and that shadow
+ * stopped dead at the edge of a grass rect and at the waterline, because the
+ * two surfaces standing in the same shadow were the two that could not see it.
+ *
+ * A consumer owes three uniforms (`lightMatrix`, `shadowParams`) and one
+ * sampler (`shadowMap`), and owes REGISTERING with
+ * `CelMaterialFactory.registerShadowConsumer` — the factory pushes all three,
+ * and a material that is never registered samples an unbound texture.
+ */
+export const SHADOW_GLSL = `
+// Stepped directional shadows. lightMatrix is the ShadowGenerator's
+// view*projection (no [0,1] bias baked in — the UV/depth remap below mirrors
+// Babylon's own computeShadow: uv = clip.xy*0.5+0.5, depth = (clip.z+1)*0.5).
+uniform mat4 lightMatrix;
+uniform sampler2D shadowMap;
+// x = depth bias, y = darkness, z = normal offset, w = tap radius in UV
+uniform vec4 shadowParams;
+
+// Hard two-level shadow: lit or not, nothing in between — a soft penumbra
+// would fight the flat bands. The sample point is pushed off the facet along
+// its normal so a flat face never tests against its own depth (acne).
+//
+// The normal passed in is the one to OFFSET along, which is not always the one
+// being lit: it must be the real geometry's. The cel shader hands it the facet
+// normal rather than the bumped one, and water hands it the flat up-vector
+// rather than the wave normal, for the same reason in both cases — the relief
+// is a fiction, and offsetting along a fiction moves the shadow with it.
+//
+// **FOUR taps, and the count is the whole design.** One tap put the shadow map's
+// own texel grid on screen: at 110 m over 2048 texels an edge climbs in 5.4 cm
+// steps, and up close that reads as a staircase rather than as a line. The
+// staircase has a spatial period of exactly one texel, so a kernel whose support
+// covers one period cancels it — and anything WIDER starts producing a real
+// penumbra, which is the thing this shader's flat bands cannot have. The
+// softening is confined to the width of the artefact: a 5.4 cm edge is
+// sub-pixel past about 2 m, so what is left still reads as the hard line the
+// look wants. The cel terminator is band(dot(n, -lightDir), 4.0) and is not
+// touched by any of this.
+//
+// The 2x2 is ROTATED per pixel, which matters as much as the count. Four taps
+// averaged give five possible values, and five values along an edge are five
+// visible contours — a staircase with more steps. Rotating by a hash of the
+// pixel turns that residue into noise, which composes with dither() rather
+// than fighting it.
+//
+// Hardware PCF is not available: this samples a plain depth texture and
+// compares by hand rather than through a comparison sampler, so every tap is a
+// full fetch. That is the other half of why the count stops at four.
+float shadowVisibility(vec3 n, vec3 posW) {
+  vec4 sc4 = lightMatrix * vec4(posW + n * shadowParams.z, 1.0);
+  vec3 sc = sc4.xyz / sc4.w;
+  vec2 uv = sc.xy * 0.5 + 0.5;
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
+  if (sc.z < -1.0 || sc.z > 1.0) return 1.0;
+  float depth = (sc.z + 1.0) * 0.5 - shadowParams.x;
+
+  float a = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453)
+    * 6.2831853;
+  vec2 rot = vec2(cos(a), sin(a)) * shadowParams.w;
+  vec2 perp = vec2(-rot.y, rot.x);
+
+  float lit = step(depth, texture2D(shadowMap, uv + rot).x)
+    + step(depth, texture2D(shadowMap, uv - rot).x)
+    + step(depth, texture2D(shadowMap, uv + perp).x)
+    + step(depth, texture2D(shadowMap, uv - perp).x);
+  // Narrow smoothstep rather than a plain average: the four taps give a 0,
+  // 0.25, 0.5, 0.75, 1 ladder, and this pulls the middle of it back toward a
+  // decision so the edge stays an edge and only its jaggies are dissolved.
+  return mix(shadowParams.y, 1.0, smoothstep(0.25, 0.75, lit * 0.25));
+}
+`;
+
+/** The uniform names `SHADOW_GLSL` declares, for a consumer's uniform list. */
+export const SHADOW_UNIFORM_NAMES = ["lightMatrix", "shadowParams"] as const;
+/** The sampler `SHADOW_GLSL` declares, for a consumer's sampler list. */
+export const SHADOW_SAMPLER_NAMES = ["shadowMap"] as const;
+
 Effect.ShadersStore["celVertexShader"] = `
 precision highp float;
 
 attribute vec3 position;
 attribute vec3 normal;
+// Baked world shading, written by world/ambientOcclusion.ts: alpha is ambient
+// occlusion and green marks a vertex as WORLD geometry. Declared
+// unconditionally and on purpose — a mesh with no colour buffer leaves this
+// attrib array disabled, which reads back as the GL generic default
+// (0, 0, 0, 1): occlusion 1 (none) and mask 0 (not world). Every rig, the
+// viewmodel and every effect mesh is therefore correct without carrying one.
+attribute vec4 color;
 #ifdef CEL_TEXTURED
 attribute vec2 uv;
 #endif
@@ -110,6 +221,7 @@ uniform mat4 viewProjection;
 
 varying vec3 vNormalW;
 varying vec3 vPosW;
+varying vec4 vBaked;
 #ifdef CEL_TEXTURED
 varying vec2 vUv;
 #endif
@@ -122,6 +234,7 @@ void main() {
   vec4 worldPos = finalWorld * vec4(position, 1.0);
   vPosW = worldPos.xyz;
   vNormalW = normalize(mat3(finalWorld) * normal);
+  vBaked = color;
   #ifdef CEL_TEXTURED
   vUv = uv;
   #endif
@@ -137,6 +250,10 @@ precision highp float;
 
 varying vec3 vNormalW;
 varying vec3 vPosW;
+// Baked per-vertex world shading. w is ambient occlusion, 1 = unoccluded;
+// y is 1 on map geometry and 0 on everything else. Both defaults come from
+// the disabled attrib rather than from a uniform — see the vertex stage.
+varying vec4 vBaked;
 
 uniform vec3 lightDir;
 uniform vec3 lightColor;
@@ -169,17 +286,17 @@ uniform vec3 mistColor;
 uniform vec2 mistParams; // x = height falloff, y = strength
 uniform vec3 camPos;
 
+// Albedo weathering: cell size (as 1/metres) and peak-to-peak swing. Uniforms
+// rather than literals so the pair can be judged live against a wall.
+uniform float variationScale;
+uniform float variationAmount;
+
 uniform vec3 pointPos[MAX_POINT_LIGHTS];
 uniform vec3 pointColor[MAX_POINT_LIGHTS]; // rgb premultiplied by intensity
 uniform float pointRange[MAX_POINT_LIGHTS];
 uniform float pointCount;
 
-// Stepped directional shadows. lightMatrix is the ShadowGenerator's
-// view*projection (no [0,1] bias baked in — the UV/depth remap below mirrors
-// Babylon's own computeShadow: uv = clip.xy*0.5+0.5, depth = (clip.z+1)*0.5).
-uniform mat4 lightMatrix;
-uniform sampler2D shadowMap;
-uniform vec3 shadowParams; // x = depth bias, y = darkness, z = normal offset
+${SHADOW_GLSL}
 
 // Toon specular: one hard two-band Blinn highlight from the key light.
 // specColor is premultiplied by intensity — black (the default) is matte.
@@ -199,25 +316,33 @@ vec3 facetNormal() {
   return dot(n, vNormalW) < 0.0 ? -n : n;
 }
 
-// Quantizes a 0..1 diffuse term into hard bands, smoothstepping across each
-// edge so the terminator reads as a hard line without aliasing.
-float band(float ndl, float steps) {
-  float x = ndl * steps;
-  return min((floor(x) + smoothstep(0.35, 0.65, fract(x))) / steps, 1.0);
+${BAND_GLSL}
+${DITHER_GLSL}
+
+// Trilinear value noise over world space, 0..1. Deliberately one octave: this
+// is weathering, not detail — a second octave adds frequencies the palette
+// cannot express and starts reading as texture on a surface that has none.
+float variationHash(vec3 cell) {
+  return fract(sin(dot(cell, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
 }
 
-// Hard two-level shadow: lit or not, nothing in between — a soft penumbra
-// would fight the flat bands. The sample point is pushed off the facet along
-// its normal so a flat face never tests against its own depth (acne).
-float shadowVisibility(vec3 n) {
-  vec4 sc4 = lightMatrix * vec4(vPosW + n * shadowParams.z, 1.0);
-  vec3 sc = sc4.xyz / sc4.w;
-  vec2 uv = sc.xy * 0.5 + 0.5;
-  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
-  if (sc.z < -1.0 || sc.z > 1.0) return 1.0;
-  float depth = (sc.z + 1.0) * 0.5 - shadowParams.x;
-  float lit = step(depth, texture2D(shadowMap, uv).x);
-  return mix(shadowParams.y, 1.0, lit);
+float valueNoise(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  // Smoothstep the interpolant, or the cell boundaries show as creases.
+  f = f * f * (3.0 - 2.0 * f);
+  float n000 = variationHash(i + vec3(0.0, 0.0, 0.0));
+  float n100 = variationHash(i + vec3(1.0, 0.0, 0.0));
+  float n010 = variationHash(i + vec3(0.0, 1.0, 0.0));
+  float n110 = variationHash(i + vec3(1.0, 1.0, 0.0));
+  float n001 = variationHash(i + vec3(0.0, 0.0, 1.0));
+  float n101 = variationHash(i + vec3(1.0, 0.0, 1.0));
+  float n011 = variationHash(i + vec3(0.0, 1.0, 1.0));
+  float n111 = variationHash(i + vec3(1.0, 1.0, 1.0));
+  return mix(
+    mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+    mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y),
+    f.z);
 }
 
 #ifdef CEL_BUMP
@@ -251,7 +376,7 @@ void main() {
   // --- directional key light (4 bands), gated by the stepped shadow ---
   // The shadow's normal-offset uses the true facet normal — the bump relief
   // is fake, and offsetting along it would leak light at stone edges.
-  float shadow = shadowVisibility(n);
+  float shadow = shadowVisibility(n, vPosW);
 
   #ifdef CEL_BUMP
   // From here on the bumped normal drives every lighting term: key bands,
@@ -259,7 +384,21 @@ void main() {
   n = perturbNormal(n);
   #endif
 
-  vec3 light = ambientColor;
+  // Baked ambient occlusion, and it multiplies the two AMBIENT terms only.
+  //
+  // Not the key light: the shadow map already owns what the moon can reach, and
+  // multiplying both would black out the underside of everything. Not the point
+  // lights either, for the same reason those already ignore the shadow map — a
+  // lantern hung in a doorway has to light the doorway, which is exactly the
+  // place this term is darkest. What is left is the flat ambient and the sky
+  // fill, which is the correct answer anyway: occlusion is a statement about
+  // how much of the SKY a surface can see.
+  //
+  // Defaults to 1 on anything with no baked buffer (rigs, viewmodel, effects),
+  // so this line is a no-op for them rather than a special case.
+  float ao = vBaked.w;
+
+  vec3 light = ambientColor * ao;
   light += lightColor * band(max(dot(n, -lightDir), 0.0), 4.0) * shadow;
 
   // Sky fill: the whole dome is a dim source, so anything looking up at it
@@ -267,7 +406,7 @@ void main() {
   // gated by the shadow map — a roof in the moon's shadow still faces the sky.
   // This is what keeps roads, roofs and open ground reading as moonlit while
   // walls and undersides stay black.
-  light += skyLightColor * band(0.5 + 0.5 * n.y, 3.0);
+  light += skyLightColor * band(0.5 + 0.5 * n.y, 3.0) * ao;
 
   // --- point lights (3 bands, smooth inverse-square-ish falloff) ---
   for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
@@ -295,6 +434,31 @@ void main() {
   vec3 base = texture2D(baseColorTex, vPosW.xz * texScale).rgb;
   #else
   vec3 base = baseColor;
+  // Weathering: a slow value drift over world space, so a 48 m merged block
+  // stops being one flat tone. Every wall, roof, plank and rock in the game is
+  // one of about thirty palette hexes, and the merge is per colour — so all 26
+  // cottages are literally the same PLASTER, and a whole block of them arrives
+  // as a single mesh in a single value.
+  //
+  // Keyed on POSITION rather than on anything per-object, which is what makes
+  // it free: no vertex data, no build cost, and it survives the merge by
+  // construction because the merge preserves world positions. It is also the
+  // more useful axis for a village — the artefact is a flat 48 m block, and
+  // what breaks that up is variation across the block rather than between the
+  // buildings in it.
+  //
+  // INTERPOLATED, and that is not a detail. GrassShader gets away with a
+  // floor()-cell hash because a tuft is a quarter of a metre and lands inside
+  // one cell. On a six-metre wall a stepped hash draws a hard vertical seam
+  // through the middle of it with no geometry behind it, which is worse than
+  // the flatness. Value noise costs seven more taps and has no edges.
+  //
+  // Gated by the world mask, because a term keyed on world position applied to
+  // a MOVING mesh makes it shimmer as it walks: a bot's torso would drift in
+  // tone across the map. vBaked.y is 1 on baked map geometry and 0 on the
+  // rigs, the viewmodel and every effect mesh, so this costs them one mix and
+  // changes nothing.
+  base *= mix(1.0, 1.0 + variationAmount * (valueNoise(vPosW * variationScale) - 0.5), vBaked.y);
   #endif
   #endif
   vec3 col = base * light;
@@ -370,7 +534,8 @@ void main() {
   float fog = clamp((dist - fogParams.x) / (fogParams.y - fogParams.x), 0.0, 1.0);
   col = mix(col, fogColor, fog * fog);
 
-  gl_FragColor = vec4(col, 1.0);
+  // Last thing before the write, because the write is the quantiser.
+  gl_FragColor = vec4(dither(col), 1.0);
 }
 `;
 
@@ -439,10 +604,24 @@ export class CelMaterialFactory {
     "pointCount",
     "lightMatrix",
     "shadowParams",
+    "variationScale",
+    "variationAmount",
     "specColor",
     "specShininess",
     "transColor",
   ];
+  /**
+   * Every cel material's vertex attributes.
+   *
+   * `color` is on ALL of them, including the ones nothing ever bakes into. It
+   * has to be: the attribute is declared unconditionally in the vertex shader
+   * (there is no define to gate it, on purpose — see the shader), so leaving it
+   * off a material's list would leave the effect without the location and the
+   * varying would read whatever the driver left there. With it declared and no
+   * buffer bound the attrib array is simply disabled, which is the defined
+   * `(0, 0, 0, 1)` the whole design leans on.
+   */
+  private static readonly ATTRIBUTES = ["position", "normal", "color"];
   /** Every cel material samples the shadow map, whatever its albedo path. */
   private static readonly SAMPLERS = ["shadowMap"];
 
@@ -466,7 +645,7 @@ export class CelMaterialFactory {
   // Shadow-map state, pushed onto every cel material as it is created.
   private shadowMap: BaseTexture | null = null;
   private shadowMatrix = Matrix.Identity();
-  private shadowParams = new Vector3(0.0025, 0.15, 0.06);
+  private shadowParams = new Vector4(0.0025, 0.15, 0.06, 0);
 
   constructor(private scene: Scene) {}
 
@@ -479,7 +658,7 @@ export class CelMaterialFactory {
         this.scene,
         { vertex: "cel", fragment: "cel" },
         {
-          attributes: ["position", "normal"],
+          attributes: [...CelMaterialFactory.ATTRIBUTES],
           uniforms: [...CelMaterialFactory.UNIFORMS],
           samplers: [...CelMaterialFactory.SAMPLERS],
         },
@@ -512,7 +691,7 @@ export class CelMaterialFactory {
         this.scene,
         { vertex: "cel", fragment: "cel" },
         {
-          attributes: ["position", "normal"],
+          attributes: [...CelMaterialFactory.ATTRIBUTES],
           uniforms: [...CelMaterialFactory.UNIFORMS],
           samplers: [...CelMaterialFactory.SAMPLERS],
         },
@@ -552,7 +731,7 @@ export class CelMaterialFactory {
         this.scene,
         { vertex: "cel", fragment: "cel" },
         {
-          attributes: ["position", "normal"],
+          attributes: [...CelMaterialFactory.ATTRIBUTES],
           uniforms: [...CelMaterialFactory.UNIFORMS],
           samplers: [...CelMaterialFactory.SAMPLERS],
         },
@@ -585,7 +764,7 @@ export class CelMaterialFactory {
         this.scene,
         { vertex: "cel", fragment: "cel" },
         {
-          attributes: ["position", "normal", "uv"],
+          attributes: [...CelMaterialFactory.ATTRIBUTES, "uv"],
           uniforms: [...CelMaterialFactory.UNIFORMS],
           samplers: ["baseColorTex", ...CelMaterialFactory.SAMPLERS],
           defines: ["#define CEL_TEXTURED"],
@@ -636,7 +815,7 @@ export class CelMaterialFactory {
         this.scene,
         { vertex: "cel", fragment: "cel" },
         {
-          attributes: ["position", "normal"],
+          attributes: [...CelMaterialFactory.ATTRIBUTES],
           uniforms: [
             ...CelMaterialFactory.UNIFORMS,
             "texScale",
@@ -760,24 +939,72 @@ export class CelMaterialFactory {
   }
 
   /**
+   * Materials that sample the depth map but are not cel materials — the grass
+   * and the water, each of which reproduces the cel lighting model in its own
+   * shader (see `SHADOW_GLSL`).
+   *
+   * They cannot live in `this.cache`: that map is keyed by colour and its
+   * entries are shared, permanent and created on demand, while these are one
+   * per map build and disposed with the map. So they are a second list that
+   * only the three shadow setters walk — the same shape as `specs`, which
+   * holds foreign material references for the same reason.
+   *
+   * **Registering is the consumer's half of the contract and unregistering is
+   * the other half.** Grass and water are rebuilt every round; a material left
+   * here after its `dispose()` takes a `setMatrix` per frame for the rest of
+   * the session.
+   */
+  private readonly shadowConsumers = new Set<ShaderMaterial>();
+
+  /** Adds a non-cel material to the three shadow uploads, and seeds it now. */
+  registerShadowConsumer(mat: ShaderMaterial): void {
+    this.shadowConsumers.add(mat);
+    this.applyShadow(mat);
+  }
+
+  /** Drops a consumer. Call from the owner's `dispose`, without exception. */
+  unregisterShadowConsumer(mat: ShaderMaterial): void {
+    this.shadowConsumers.delete(mat);
+  }
+
+  /** Every material that samples the depth map, cel or not. */
+  private eachShadowReader(fn: (mat: ShaderMaterial) => void): void {
+    this.cache.forEach(fn);
+    this.shadowConsumers.forEach(fn);
+  }
+
+  /**
    * Binds the ShadowSystem's depth map to every cel material. Called once at
    * startup — the texture object is stable even though its contents re-render.
    */
   setShadowMap(map: BaseTexture): void {
     this.shadowMap = map;
-    this.cache.forEach((mat) => mat.setTexture("shadowMap", map));
+    this.eachShadowReader((mat) => mat.setTexture("shadowMap", map));
   }
 
   /** The light's view*projection; re-uploaded when the shadow camera moves. */
   setShadowMatrix(matrix: Matrix): void {
     this.shadowMatrix = matrix;
-    this.cache.forEach((mat) => mat.setMatrix("lightMatrix", matrix));
+    this.eachShadowReader((mat) => mat.setMatrix("lightMatrix", matrix));
   }
 
-  /** Depth bias, in-shadow darkness, facet-normal offset. */
-  setShadowParams(bias: number, darkness: number, normalBias: number): void {
-    this.shadowParams.set(bias, darkness, normalBias);
-    this.cache.forEach((mat) => mat.setVector3("shadowParams", this.shadowParams));
+  /**
+   * Depth bias, in-shadow darkness, facet-normal offset, and the depth map's
+   * size — which is here because the kernel's tap offsets are in UV, and one
+   * texel of UV is `1 / mapSize`. Passing the size rather than the offset keeps
+   * the radius a graphics tunable instead of a number two files agree on.
+   */
+  setShadowParams(
+    bias: number,
+    darkness: number,
+    normalBias: number,
+    mapSize: number,
+  ): void {
+    const radius = CONFIG.graphics.shadows.pcfRadiusTexels / Math.max(1, mapSize);
+    this.shadowParams.set(bias, darkness, normalBias, radius);
+    this.eachShadowReader((mat) =>
+      mat.setVector4("shadowParams", this.shadowParams),
+    );
   }
 
   private applyEnvironment(mat: ShaderMaterial): void {
@@ -790,6 +1017,13 @@ export class CelMaterialFactory {
     mat.setVector2("fogParams", new Vector2(fogState.start, fogState.end));
     mat.setColor3("mistColor", this.mistColor);
     mat.setVector2("mistParams", this.mistParams);
+    // Weathering is a property of the LOOK rather than of the map, so it comes
+    // from CONFIG and not from the environment — but it rides along here
+    // because this is what already runs on every material, on creation and on
+    // every environment change.
+    const variation = CONFIG.graphics.albedoVariation;
+    mat.setFloat("variationScale", 1 / Math.max(0.001, variation.metersPerCell));
+    mat.setFloat("variationAmount", variation.amount);
   }
 
   private applyPointLights(mat: ShaderMaterial): void {
@@ -803,7 +1037,7 @@ export class CelMaterialFactory {
   private applyShadow(mat: ShaderMaterial): void {
     if (this.shadowMap) mat.setTexture("shadowMap", this.shadowMap);
     mat.setMatrix("lightMatrix", this.shadowMatrix);
-    mat.setVector3("shadowParams", this.shadowParams);
+    mat.setVector4("shadowParams", this.shadowParams);
   }
 
   /**

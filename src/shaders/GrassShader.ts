@@ -11,7 +11,14 @@
  */
 import { Effect, Scene, ShaderMaterial, Vector2, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import { MAX_POINT_LIGHTS } from "./CelShader";
+import { DITHER_GLSL } from "./Dither";
+import {
+  BAND_GLSL,
+  MAX_POINT_LIGHTS,
+  SHADOW_GLSL,
+  SHADOW_SAMPLER_NAMES,
+  SHADOW_UNIFORM_NAMES,
+} from "./CelShader";
 // The instance includes self-register in the IncludesShadersStore; import
 // them explicitly so the grass vertex shader's #include<instances...> can
 // never be tree-shaken away (same trick the cel shader uses for bones).
@@ -142,11 +149,9 @@ vec3 facetNormal() {
   return dot(n, vNormalW) < 0.0 ? -n : n;
 }
 
-// Same hard-band quantization as the cel shader.
-float band(float ndl, float steps) {
-  float x = ndl * steps;
-  return min((floor(x) + smoothstep(0.35, 0.65, fract(x))) / steps, 1.0);
-}
+${BAND_GLSL}
+${SHADOW_GLSL}
+${DITHER_GLSL}
 
 void main() {
   vec3 n = facetNormal();
@@ -159,8 +164,13 @@ void main() {
   base *= 0.85 + 0.3 * h;
 
   // --- directional key light (4 bands, matching the cel shader) ---
+  // Gated by the same depth map the wall behind the field is gated by. A blade
+  // is two-sided and facetNormal() flips toward the viewer, so the offset can
+  // point either way — 0.06 m either side of a blade is nothing, and the
+  // alternative (the un-flipped normal) is not available here.
   vec3 light = ambientColor;
-  light += lightColor * band(max(dot(n, -lightDir), 0.0), 4.0);
+  light += lightColor * band(max(dot(n, -lightDir), 0.0), 4.0)
+    * shadowVisibility(n, vPosW);
 
   // --- point lights (3 bands, smooth falloff) ---
   for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
@@ -180,10 +190,22 @@ void main() {
   vec3 over = max(col - 0.75, 0.0);
   col = min(col, vec3(0.75)) + 0.25 * over / (1.0 + over);
 
-  // Hard rim, matching the cel look.
+  // Hard rim, matching the cel look — INCLUDING the cel shader's gate on tilt,
+  // which this went without and should not have. On a near-level surface the
+  // grazing angle a rim keys on is nothing but distance from the eye, so an
+  // ungated rim paints a hard-edged disc of un-rimmed ground locked to the
+  // camera and sliding across the map with the player; docs/rendering.md
+  // argues the whole case against the floor's version of it.
+  //
+  // A standing blade is near-vertical, so level is ~0 and it keeps its rim -
+  // which is right, a blade IS a silhouette. What the gate takes off is the
+  // tuft tops and the blades a combatant has flattened, which are the only
+  // parts of a field that are near-horizontal and the only ones that were
+  // drawing the disc.
   vec3 viewDir = normalize(camPos - vPosW);
   float rim = 1.0 - max(dot(viewDir, n), 0.0);
-  col += base * rimColor * step(0.72, rim);
+  float level = abs(n.y);
+  col += base * rimColor * step(0.72, rim) * (1.0 - smoothstep(0.90, 0.99, level));
 
   // --- atmosphere: identical to the cel shader ---
   float dist = length(vPosW - camPos);
@@ -194,7 +216,8 @@ void main() {
   float fog = clamp((dist - fogParams.x) / (fogParams.y - fogParams.x), 0.0, 1.0);
   col = mix(col, fogColor, fog * fog);
 
-  gl_FragColor = vec4(col, 1.0);
+  // Last thing before the write, because the write is the quantiser.
+  gl_FragColor = vec4(dither(col), 1.0);
 }
 `;
 
@@ -238,7 +261,8 @@ export function createGrassMaterial(scene: Scene, name: string): ShaderMaterial 
     { vertex: "grass", fragment: "grass" },
     {
       attributes: ["position", "normal"],
-      uniforms: [...GRASS_UNIFORMS],
+      uniforms: [...GRASS_UNIFORMS, ...SHADOW_UNIFORM_NAMES],
+      samplers: [...SHADOW_SAMPLER_NAMES],
     },
   );
   mat.backFaceCulling = false;

@@ -122,7 +122,10 @@ export class ShadowSystem {
       map.getCustomRenderList = () => this.cullToWindow(map.renderList ?? []);
     }
     mats.setShadowMap(this.generator.getShadowMap()!);
-    mats.setShadowParams(c.bias, c.darkness, c.normalBias);
+    // The map's size goes with them: the consumer's kernel offsets are in UV,
+    // and a texel of UV is 1 / mapSize. This is the only place that number is
+    // known, so it is handed over rather than restated in the shader.
+    mats.setShadowParams(c.bias, c.darkness, c.normalBias, c.mapSize);
 
     // Blob shadow: a radial-gradient disc, unlit black, depth-write off so it
     // layers over the ground without z-fighting.

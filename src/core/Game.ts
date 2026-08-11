@@ -278,7 +278,21 @@ export class Game {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    this.engine = new Engine(canvas, true, { stencil: true });
+    // **No MSAA, and that is a saving rather than a downgrade.** Asking for it
+    // gave a 4x multisampled DEFAULT framebuffer — but the pipeline runs FXAA,
+    // so every pass of the scene renders into post-process render targets and
+    // the only thing ever drawn to the default framebuffer is the final
+    // full-screen quad. The multisampling was antialiasing one quad's edges, of
+    // which there are none, and paying a resolve every frame and ~30 MB at 720p
+    // (66 MB at 1080p) to do it. FXAA still does the actual antialiasing.
+    //
+    // No stencil either: nothing in `src/` uses one, and there is no
+    // `HighlightLayer` (the effect layer that would).
+    //
+    // `adaptToDeviceRatio` is deliberately still not passed. It would pin the
+    // backing store to the display, and the resolution is a player setting —
+    // `applyRenderScale` owns the scaling level from the first `applySettings`.
+    this.engine = new Engine(canvas, false, {});
     this.scene = new Scene(this.engine);
     this.scene.collisionsEnabled = true;
 
@@ -386,8 +400,11 @@ export class Game {
     this.minimap = new Minimap();
     this.lighting = new LightingSystem();
     this.atmosphere = new Atmosphere(this.scene);
-    this.water = new WaterSystem(this.scene, glow);
-    this.grass = new GrassSystem(this.scene, glow);
+    // `mats` is not for building materials here — both systems own their own
+    // shader. It is the publisher of the shadow map, its matrix and its params,
+    // which both now sample (see `SHADOW_GLSL`).
+    this.water = new WaterSystem(this.scene, glow, this.mats);
+    this.grass = new GrassSystem(this.scene, glow, this.mats);
     this.mapBuilder = new MapBuilder(this.scene, this.mats, this.lighting);
     this.combat = new CombatSystem(this.scene, this.mats);
     this.grenades = new GrenadeSystem(this.scene, this.mats);
@@ -624,14 +641,19 @@ export class Game {
       this.hadPointerLock = locked;
     });
     window.addEventListener("keydown", () => this.sfx.unlock(), { once: true });
-    window.addEventListener("resize", () => this.engine.resize());
+    // Through `applyRenderScale` rather than straight to `engine.resize`,
+    // because `devicePixelRatio` is not a constant: it changes when a window
+    // crosses to a monitor with a different density and when the page is
+    // zoomed, and the scaling level is computed from it. Setting the level
+    // resizes as a side effect, so nothing is lost by going the long way.
+    window.addEventListener("resize", () => this.applyRenderScale());
     // A phone turned on its side reports the rotation before it has finished
     // laying the page out, so the resize that rides along with it can carry
     // the old dimensions — leaving the canvas stretched across a viewport it
     // no longer matches. The second, late resize is the one that lands.
     window.addEventListener("orientationchange", () => {
-      this.engine.resize();
-      window.setTimeout(() => this.engine.resize(), 300);
+      this.applyRenderScale();
+      window.setTimeout(() => this.applyRenderScale(), 300);
     });
 
     // The map editor is a development tool: the whole of src/editor is behind
@@ -670,7 +692,7 @@ export class Game {
     this.loadoutScreen.onClose = () => this.closeLoadout();
     this.player.onCarryChanged = () => this.applyCarry();
     this.overlayScreen.onOpenSettings = () => this.openSettings();
-    this.settingsScreen.onToggle = (key, value) => this.setSetting(key, value);
+    this.settingsScreen.onChange = (key, value) => this.setSetting(key, value);
     this.settingsScreen.onClose = () => this.closeSettings();
     this.overlayScreen.onPauseAction = (action) => {
       // Restart needs nothing put back by hand: `startRound` lifts the lid,
@@ -820,6 +842,7 @@ export class Game {
   /** Pushes every setting at whatever owns it. Called on load and on change. */
   private applySettings(): void {
     this.hud.setFpsVisible(this.settings.fpsCounter);
+    this.applyRenderScale();
     this.setMotionBlurEnabled(this.settings.motionBlur);
     // After the blur, and that is the order rather than a preference: the
     // blur's own toggle takes the grade off and puts it back to keep the
@@ -828,6 +851,25 @@ export class Game {
     // Turning it off drops any body still falling, which is the honest
     // response to "stop doing this" — the tween takes over from the next death.
     this.ragdolls.setEnabled(this.settings.ragdolls);
+  }
+
+  /**
+   * Sizes the backing store from the player's render scale and the display.
+   *
+   * Babylon's scaling level is the RECIPROCAL of the resolution — level 1 means
+   * one backing pixel per CSS pixel, which is what the engine has always run at
+   * because `adaptToDeviceRatio` was never passed. On a 2x panel that is a
+   * quarter of the display's pixels, upscaled by the compositor. The setting is
+   * expressed against the DISPLAY instead (see `CONFIG.graphics.renderScales`),
+   * so `renderScale` 1.0 is the panel's own resolution on every machine and the
+   * default derives back to the old behaviour.
+   *
+   * Read fresh every call rather than cached: this is also the resize handler,
+   * and the density is exactly what a resize can have changed.
+   */
+  private applyRenderScale(): void {
+    const dpr = window.devicePixelRatio || 1;
+    this.engine.setHardwareScalingLevel(1 / (dpr * this.settings.renderScale));
   }
 
   /**
@@ -1278,13 +1320,12 @@ export class Game {
     }
     if (this.input.menuUpPressed) this.settingsScreen.moveRow(-1);
     if (this.input.menuDownPressed) this.settingsScreen.moveRow(1);
-    if (
-      this.input.menuLeftPressed ||
-      this.input.menuRightPressed ||
-      this.input.menuConfirmPressed
-    ) {
-      this.settingsScreen.toggleRow();
-    }
+    // Left/right step and CLAMP; confirm steps forward and WRAPS. With a
+    // boolean these were the same move, and with a ladder on the screen they
+    // stop being — see `SettingsScreen.stepRow`.
+    if (this.input.menuLeftPressed) this.settingsScreen.stepRow(-1, false);
+    if (this.input.menuRightPressed) this.settingsScreen.stepRow(1, false);
+    if (this.input.menuConfirmPressed) this.settingsScreen.stepRow(1, true);
   }
 
   /**

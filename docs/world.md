@@ -95,6 +95,28 @@ ground, never the colour of it. Three consequences:
   is why the editor treats a floor edit as a full rebuild and why `workLight.ts`
   refuses to touch `floorColor` alongside the two rim colours.
 
+**`turf` is in the roster and is not usable as authored, which is worth knowing
+before reaching for it.** It was the one pattern no map had ever selected, so it
+had never been judged from a camera 1.55 m up: its grains run to 22 units of
+radius against `dirt`'s 13, and its albedo spread is 0.84–1.28 of `floorColor`.
+At any tile scale that keeps the repeat invisible across an open valley that puts
+half-metre pale discs under the player's feet — it reads as overlapping scales,
+which is worse than the flat colour it replaces. Hollowmere therefore states
+`dirt`, the pattern Greyfen already ships and so the only one tuned against this
+camera height. Retuning `turf` is a change to a shared pattern and belongs to
+whoever wants a grass valley.
+
+**The finished visuals also carry BAKED AMBIENT OCCLUSION**, written after the
+merge by `src/world/ambientOcclusion.ts` from the collider boxes and the terrain.
+It is a vertex attribute rather than anything the environment can push, so it
+costs nothing per frame and everything at build time (measured: 128k vertices in
+71 ms, against a ~570 ms build). Two consequences for this layer: geometry added
+by a path that emits no `WorldBox` occludes nothing, which is the same blind spot
+navigation has and the same reason; and the editor's per-item rebuild moves a
+mesh without rebaking, so a dragged cottage carries stale occlusion until the
+next full rebuild. See `docs/rendering.md` for why the value lives in the colour
+buffer's alpha.
+
 **The floor is a height field, not a flat plane.** A `Heightfield` in the layout
 feeds a `TerrainField` (`src/world/TerrainField.ts`), the one place the ground's
 height is decided. It used to be the literal `0`, asserted independently in

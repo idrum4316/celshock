@@ -27,7 +27,11 @@ import {
 } from "@babylonjs/core";
 
 import { CONFIG } from "../config";
-import { MAX_POINT_LIGHTS, type PointLightData } from "../shaders/CelShader";
+import {
+  MAX_POINT_LIGHTS,
+  type CelMaterialFactory,
+  type PointLightData,
+} from "../shaders/CelShader";
 import { createWaterMaterial } from "../shaders/WaterShader";
 import type { EnvironmentSpec } from "../world/environment";
 import type { WaterRect } from "../world/MapBuilder";
@@ -66,6 +70,7 @@ export class WaterSystem {
   constructor(
     private scene: Scene,
     private glow: GlowLayer,
+    private mats: CelMaterialFactory,
   ) {}
 
   /**
@@ -149,6 +154,11 @@ export class WaterSystem {
           w.fresnelPower,
         ),
       );
+
+      // The depth map, its matrix and its params come from the factory, which
+      // is the one publisher of all three. Unregistered, the shader would
+      // sample an unbound sampler and the body would sit in permanent shadow.
+      this.mats.registerShadowConsumer(mat);
 
       mesh.material = mat;
       this.bodies.push({ mesh, mat, depth });
@@ -243,6 +253,9 @@ export class WaterSystem {
 
   dispose(): void {
     for (const { mesh, mat, depth } of this.bodies) {
+      // Before the dispose, not after: the factory would otherwise keep writing
+      // three uniforms a frame into a dead material for the rest of the session.
+      this.mats.unregisterShadowConsumer(mat);
       mesh.dispose();
       mat.dispose();
       // Baked against the terrain this body was built on; the next build's is

@@ -280,11 +280,24 @@ draws outside it owes the same fade** from the one environment
 every unlit emissive material. Nothing may describe different weather from the
 wall it hangs in front of.
 
-→ **[`docs/rendering.md`](docs/rendering.md)** — the four light terms, the three
-light flavours and the muzzle-flash budget, the per-pixel/per-mesh fog split and
-`OutlineFog`'s three cache-invalidation rules, the shadow window and its culling,
-the constraints that look like bugs if you undo them (image processing, rendering
-group 1, thick boxes under walked surfaces, coplanar faces), and the painted sky.
+**The world carries a VERTEX COLOUR buffer and its neutral values are the GL
+defaults, not ours.** `world/ambientOcclusion.ts` bakes per-vertex ambient
+occlusion into the buffer's **alpha** and marks world geometry in its **green**,
+because a mesh with no such buffer reads the disabled attrib's `(0, 0, 0, 1)` —
+alpha 1 (unoccluded) and green 0 (not world). That is what lets the rigs, the
+viewmodel and every effect mesh stay correct while carrying nothing, and it is
+why AO is in alpha rather than in a channel that would have needed a fourth cel
+material variant. The bake runs **after every merge**: `VertexData.merge` throws
+outright when one mesh in a group has `colors` and another does not.
+
+→ **[`docs/rendering.md`](docs/rendering.md)** — the four light terms and the
+baked occlusion that modifies two of them, the three light flavours and the
+muzzle-flash budget, the per-pixel/per-mesh fog split and `OutlineFog`'s three
+cache-invalidation rules, the shadow window, its four-tap lookup and the
+registry that lets grass and water share it, why the dither is in the surface
+shaders rather than the grade, the constraints that look like bugs if you undo
+them (image processing, rendering group 1, thick boxes under walked surfaces,
+coplanar faces), and the painted sky.
 
 ### The map is data, not code
 

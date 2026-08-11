@@ -7,7 +7,14 @@
  */
 import { Effect, Scene, ShaderMaterial, Texture, Vector3, Vector4 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import { MAX_POINT_LIGHTS } from "./CelShader";
+import { DITHER_GLSL } from "./Dither";
+import {
+  BAND_GLSL,
+  MAX_POINT_LIGHTS,
+  SHADOW_GLSL,
+  SHADOW_SAMPLER_NAMES,
+  SHADOW_UNIFORM_NAMES,
+} from "./CelShader";
 
 /**
  * Shallow-water surface — the one smooth-shaded material in a faceted world.
@@ -112,11 +119,9 @@ uniform vec3 pointColor[MAX_POINT_LIGHTS]; // rgb premultiplied by intensity
 uniform float pointRange[MAX_POINT_LIGHTS];
 uniform float pointCount;
 
-// Same hard-band quantization as the cel shader.
-float band(float ndl, float steps) {
-  float x = ndl * steps;
-  return min((floor(x) + smoothstep(0.35, 0.65, fract(x))) / steps, 1.0);
-}
+${BAND_GLSL}
+${SHADOW_GLSL}
+${DITHER_GLSL}
 
 // Rotates a uv about the origin. Every tiled layer goes through this: a
 // lattice sampled straight off world X/Z is parallel to the plane's own edges
@@ -165,8 +170,17 @@ void main() {
   vec3 viewDir = normalize(camPos - vPosW);
 
   // --- key light (3 bands) over a fresnel-tipped body colour ---
+  // Gated by the same depth map as the bank it laps against — a jetty standing
+  // in the moon has to lay its shadow ON the water, not stop at the waterline.
+  //
+  // The offset normal is the FLAT up-vector, not n. Every wave here is a
+  // normal-map fiction over a plane that never moves, so offsetting the shadow
+  // sample along the swell would slide the shadow's edge back and forth with
+  // the chop — the water's version of the bump-map problem the cel shader
+  // solves by offsetting along the facet rather than the perturbed normal.
   vec3 light = ambientColor;
-  light += lightColor * band(max(dot(n, -lightDir), 0.0), 3.0);
+  light += lightColor * band(max(dot(n, -lightDir), 0.0), 3.0)
+    * shadowVisibility(vec3(0.0, 1.0, 0.0), vPosW);
 
   float fres = pow(1.0 - max(dot(viewDir, n), 0.0), waveB.w);
   vec3 base = mix(deepColor, shallowColor,
@@ -235,7 +249,8 @@ void main() {
     (viewDist - fogParams.x) / (fogParams.y - fogParams.x), 0.0, 1.0);
   col = mix(col, fogColor, fog * fog);
 
-  gl_FragColor = vec4(col, 1.0);
+  // Last thing before the write, because the write is the quantiser.
+  gl_FragColor = vec4(dither(col), 1.0);
 }
 `;
 
@@ -291,8 +306,8 @@ export function createWaterMaterial(
     { vertex: "water", fragment: "water" },
     {
       attributes: ["position"],
-      uniforms: [...WATER_UNIFORMS],
-      samplers: ["normalTex", "foamTex", "depthTex"],
+      uniforms: [...WATER_UNIFORMS, ...SHADOW_UNIFORM_NAMES],
+      samplers: ["normalTex", "foamTex", "depthTex", ...SHADOW_SAMPLER_NAMES],
     },
   );
   const w = CONFIG.water;

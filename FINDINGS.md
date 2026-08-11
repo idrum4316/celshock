@@ -243,40 +243,44 @@ that matter and drops the 90% of the village that is nowhere near a light.
 
 ---
 
-## 4. A 4× MSAA backbuffer is allocated and resolved for nothing
+## 4. ~~A 4× MSAA backbuffer is allocated and resolved for nothing~~ — FIXED
 
-**Status:** measured, and the reasoning is not in doubt. Untried only because
-it wants a look on real hardware rather than SwiftShader.
+The engine is now `new Engine(canvas, false, {})` and
+`gl.getParameter(gl.SAMPLES)` reads **0** on the default framebuffer, against
+the 4 it used to. The reasoning was never in doubt — FXAA sends every pass of
+the scene into post-process render targets, so the only thing ever drawn to the
+default framebuffer is one full-screen quad, and multisampling it antialiases
+edges that do not exist while costing a resolve every frame and ~30 MB at 720p.
+`stencil` went with it: nothing in `src/` uses one and there is no
+`HighlightLayer`.
 
-`new Engine(canvas, true, { stencil: true })` asks for antialiasing, and
-`gl.getParameter(gl.SAMPLES)` confirms **4** on the default framebuffer. But
-the pipeline runs FXAA, so every pass of the scene renders into post-process
-render targets, and the only thing ever drawn to the default framebuffer is the
-final full-screen quad. The multisampling therefore antialiases one quad's
-edges — of which there are none — while costing a resolve every frame and
-roughly 30 MB at 720p, 66 MB at 1080p.
-
-`antialias: false` should be free frames and free memory, with FXAA still doing
-the actual anti-aliasing. Worth checking whether `stencil` is wanted either;
-nothing in the tree appeared to use it.
+Kept as a heading rather than deleted because the saving is what pays for
+finding 5's render scale, and the two want reading together.
 
 ---
 
 ## 5. The fill-rate budget: four full-screen passes and 18.6k particles
 
-**Status:** counted, not costed. Both are visual features rather than mistakes,
-so this is a note about where a weak GPU's time goes, not a list of fixes.
+**Status:** counted, not costed, and now partly *steerable* — the lever this
+entry asked for exists.
 
-- **Four chained passes at native resolution** — fxaa, godRays, motionBlur,
+- **Four chained passes at the render resolution** — fxaa, godRays, motionBlur,
   horror — plus the glow layer's blur. Finding 2's detach takes that to three
-  for most of a round and the blur is already a player setting. The remaining
-  lever is a resolution scale (`engine.setHardwareScalingLevel`), which the
-  settings screen now exists to host.
+  for most of a round and the blur is already a player setting.
+- **The resolution itself is now a setting** (`Settings.renderScale`, three
+  rungs of the display's native pixels, `Game.applyRenderScale`). Note what the
+  investigation behind it turned up, because it changes what this entry means:
+  the engine was never rendering at native resolution at all. Without
+  `adaptToDeviceRatio` the backing store matched the CSS pixel grid, so on a 2x
+  panel every number here was being paid at a QUARTER of the display's pixels
+  and upscaled by the compositor. The default derives back to exactly that, so
+  nothing has moved yet — but 75% and 100% are now one keypress away, and
+  **that** is the frame cost nobody has measured on real hardware.
 - **The ash field is 18,667 alpha-blended GPU particles** (`getCapacity`, at
   steady state). Simulation is on the GPU and cheap; the overdraw is not.
 
-Neither should be cut by default. If a graphics-quality setting is ever wanted,
-these two are what it should move, in that order.
+Neither of the last two should be cut by default. If a graphics-quality preset
+is ever wanted, these are what it should move, in that order.
 
 ---
 
