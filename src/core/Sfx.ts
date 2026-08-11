@@ -67,6 +67,8 @@ export class Sfx {
   private lx = 0;
   private ly = 0;
   private lz = 0;
+  /** Audio-clock time of the last impact, for that method's own rate limit. */
+  private lastImpact = 0;
 
   unlock(): void {
     if (!this.ctx) {
@@ -225,16 +227,47 @@ export class Sfx {
   }
 
   /**
+   * The headshot. Higher and cleaner than `hit()` and built the opposite way:
+   * where the body hit is a square wave and a noise slice — deliberately
+   * blunt, a thing striking a thing — this is two sines an octave apart with
+   * the upper one late, which has no noise in it at all and so cuts through a
+   * burst of ordinary markers instead of merging into them.
+   *
+   * That separation is the whole job. A headshot at full auto is worth nothing
+   * as feedback if it sounds like the shots either side of it, and the marker
+   * cannot carry it alone: `flashHitmarker` lets a kill outrank a head hit on
+   * screen precisely because the ear is where this read lands.
+   *
+   * Both layers are brief and unsent — a headshot is confirmation, and giving
+   * it a tail would put it in the same space as the report that caused it.
+   */
+  headshot(): void {
+    this.tone(1180, 0.055, "sine", 0.085, 1);
+    this.tone(2360, 0.09, "sine", 0.05, 1, null, { delay: 0.03 });
+    this.burst({ dur: 0.018, vol: 0.06, type: "highpass", freq: 4200, q: 0.7 });
+  }
+
+  /**
    * A round cracking past the player's head. Not a hit and not a hit sound —
    * the supersonic N-wave, which arrives *before* the report of the rifle that
    * fired it and is the only thing that tells you you are being shot at rather
    * than shot near. Wired from `CombatSystem.onNearMiss` for the player only.
    */
-  nearMiss(): void {
+  nearMiss(at: Vector3): void {
     const v = 0.9 + Math.random() * 0.2;
+    // Panned from the point of closest approach, so the crack says WHICH SIDE
+    // as well as "you are being shot at" — which is the difference between a
+    // cue you can act on and one that only raises your pulse. It was mono for
+    // as long as it existed, and it is the most urgent sound in the game.
+    const panner = this.panner(at);
     this.burst({
       dur: 0.02, vol: 0.5, type: "bandpass", freq: 3400 * v, freqEnd: 1100,
-      q: 0.9, send: 0.3,
+      // No propagation delay, and that is the entire point of the N-wave: it
+      // arrives BEFORE the report of the rifle that sent it. The point is
+      // inside 1.9 m (`hitRadius` + `suppressRadius`) anyway, where the delay
+      // would be five milliseconds. Send is small for the same reason — a
+      // crack past your head is direct sound, not the valley answering.
+      q: 0.9, send: 0.15, out: panner,
     });
   }
 
@@ -362,6 +395,71 @@ export class Sfx {
   }
 
   // --- world-space ---
+
+  /**
+   * A round arriving somewhere. Spatialised through exactly the machinery bot
+   * fire uses — panner, propagation delay, air absorption in the filter
+   * frequency, and a reverb send that climbs with distance — because the
+   * world may only describe distance one way, and a wall being hit is as much
+   * a fact about the village as the rifle that hit it.
+   *
+   * **ONE layer, three gates, and all four of those are the voice cap.** This
+   * is the only sound in the game generated at gunfire's rate while mattering
+   * less than gunfire: sixteen bots is ~80 rounds a second and nearly every
+   * one lands. So it is rejected past `impactRange`, rate-limited to ~22 a
+   * second, and refused against a RESERVE rather than against `maxVoices` —
+   * see `CONFIG.audio` for why the reserve is the load-bearing one.
+   *
+   * The three kinds differ only in filter, length and level, which is all the
+   * ear needs: a tick off stone, a duller thud into earth, and a wet slap
+   * into a body. All noise and no oscillator, per this class's own rule —
+   * an impact is the most obviously *struck* thing in the game.
+   */
+  impact(at: Vector3, kind: "flesh" | "ground" | "hard"): void {
+    const a = CONFIG.audio;
+    if (!this.ctx) return;
+    // Against the reserve, and BEFORE any work: the point is to leave voices
+    // standing for the gunshots, not to discover there are none left.
+    if (this.voices >= a.maxVoices - a.impactReserve) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastImpact < a.impactInterval) return;
+    const dist = this.distanceToListener(at);
+    if (dist > a.impactRange) return;
+    const panner = this.panner(at);
+    if (!panner) return;
+    this.lastImpact = now;
+    const far = dist / a.impactRange;
+    // The delay is honest for every round but your own, and that is the case
+    // to keep it for. A bot shooting a wall thirty metres away owes you
+    // `dist/343`; your own round owes you that too, on top of a tracer already
+    // flying at 320 m/s against a real 900 — so your long shots crack a
+    // fraction late. Dropping the term to fix that would break every other
+    // shot in the game, and a late crack reads as distance rather than as a
+    // fault.
+    const delay = dist / a.speedOfSound;
+    const send = a.reverbMix * (0.4 + far * a.reverbDistanceSend);
+    const v = 0.88 + Math.random() * 0.24;
+    const near = 1 - far * 0.5;
+    if (kind === "hard") {
+      this.burst({
+        dur: 0.05, vol: 0.34 * near, type: "bandpass",
+        freq: 2600 * v * (1 - far * 0.4), freqEnd: 900, q: 1.1,
+        delay, out: panner, send,
+      });
+    } else if (kind === "ground") {
+      this.burst({
+        dur: 0.09, vol: 0.3 * near, type: "lowpass",
+        freq: 700 * v * (1 - far * 0.4), freqEnd: 160,
+        delay, out: panner, send,
+      });
+    } else {
+      this.burst({
+        dur: 0.07, vol: 0.26 * near, type: "lowpass",
+        freq: 420 * v, freqEnd: 120, q: 0.8,
+        delay, out: panner, send,
+      });
+    }
+  }
 
   /**
    * A bot's rifle, somewhere out in the village. Two layers, spatialised, and

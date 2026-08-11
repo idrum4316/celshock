@@ -143,13 +143,40 @@ function fireMode(w: (typeof CONFIG.weapons)[WeaponId]): string {
  * semi-automatic (a ceiling on the trigger finger, not a cadence): the value
  * column is 52px and "3/s semi" does not fit in it. The fire mode is on the
  * weapon's own button instead, next to the number it qualifies.
+ *
+ * **Two rows carry fall-off, and both had to.** Damage prints BOTH ends of the
+ * curve, because one number is now a half-truth — the SMG's 18 and the LMG's 24
+ * rank one way in a room and the other way at 40 m. The bar stays keyed to the
+ * close figure, which is the one a weapon is picked to win a room with. A
+ * weapon with no fall-off prints one number, and that is the whole of the DMR's
+ * case made without a sentence.
+ *
+ * Range is `falloffFar`, **not** `range`, and that is a correction rather than
+ * a choice: `range` is where the ray stops, which since fall-off arrived is no
+ * longer the interesting end of the weapon. The DMR's 180 m is mostly spent
+ * past a fog wall at 78, and the SMG's rounds carry to 70 m having stopped
+ * being worth firing at 40. The distance a player can act on is the one where
+ * the damage runs out.
  */
 function weaponStats(id: PrimaryWeaponId): StatRow[] {
   const w = CONFIG.weapons[id];
   const deg = (rad: number) => ((rad * 180) / Math.PI).toFixed(2);
   const rate = sustainedRate(w);
   return [
-    { label: "Damage", value: `${w.damage}`, frac: w.damage / best((x) => x.damage) },
+    {
+      // Both ends of the curve, because one number is now a half-truth: the
+      // SMG's 18 and the LMG's 24 rank one way close and the other way at
+      // 40 m. The bar itself stays keyed to the CLOSE figure — that is the
+      // one a player is choosing a weapon to win a room with — and the value
+      // column says what happens to it. A weapon with no fall-off (the DMR)
+      // prints one number, which is the whole of its case.
+      label: "Damage",
+      value:
+        w.damageFar === w.damage
+          ? `${w.damage}`
+          : `${w.damage}–${w.damageFar}`,
+      frac: w.damage / best((x) => x.damage),
+    },
     {
       label: "Rate",
       value: `${rate % 1 === 0 ? rate : rate.toFixed(1)}/s`,
@@ -165,7 +192,16 @@ function weaponStats(id: PrimaryWeaponId): StatRow[] {
       value: `±${deg(w.spreadAds)}°`,
       frac: least((x) => x.spreadAds) / w.spreadAds,
     },
-    { label: "Range", value: `${w.range} m`, frac: w.range / best((x) => x.range) },
+    {
+      // `falloffFar`, NOT `range`. `range` is where the ray stops, and since
+      // fall-off arrived it is no longer the interesting end of the weapon:
+      // the DMR's 180 m is most of it spent past a fog wall at 78, while the
+      // SMG's rounds carry to 70 m and stopped being worth firing at 40. The
+      // distance a player can act on is the one where the damage runs out.
+      label: "Range",
+      value: `${w.falloffFar} m`,
+      frac: w.falloffFar / best((x) => x.falloffFar),
+    },
     {
       label: "Handling",
       value: `${w.adsSpeedMult.toFixed(2)}×`,

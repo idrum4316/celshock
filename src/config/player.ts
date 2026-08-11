@@ -68,6 +68,55 @@ export const player = {
   regenDelay: 5,
   regenRate: 18,
   /**
+   * The aim kick a hit puts on the player, per point of damage taken.
+   *
+   * Bots have had this since they existed — `bots.combat.flinchTime` slows
+   * them and `flinchKick` knocks their aim off — and the player had nothing
+   * but a vignette and an arc, both of which say "you were hit" without ever
+   * costing the shot you were in the middle of taking. This is the same fact
+   * from the other side.
+   *
+   * A 25-damage bot round asks for 0.0275 rad, which is 1.6 deg up — about
+   * one and a half of your own rifle's springy kick, so it reads as a blow
+   * without taking the fight away. Yaw is half of it and randomly signed: a
+   * round throws a muzzle up far more than it throws it sideways, and a
+   * signed-by-bearing yaw would let a player read the shooter's direction off
+   * their own crosshair, which is what the damage arcs are for.
+   *
+   * A 90-damage grenade asks for 0.099 rad and is caught by `recoil.maxPitch`
+   * (0.17) on the way in, so nothing here needs its own ceiling.
+   */
+  flinchPitchPerDamage: 0.0011,
+  flinchYawPerDamage: 0.0005,
+  /**
+   * Suppression: what rounds cracking past do to the player, and it is
+   * deliberately the smallest version of this feature that still means
+   * something.
+   *
+   * It reaches ONE thing — the aimed hold sway — and nothing else. No blur,
+   * no vignette, no desaturation, no spread penalty. Suppression that
+   * obscures the screen takes information away from a player who is already
+   * losing the exchange, which is the whole reason the mechanic has the
+   * reputation it does; an aimed weapon that gets less steady while rounds go
+   * past is the same pressure made out of something that can be answered —
+   * break the sightline, or crouch, which `camera.aimSway.crouchMult` already
+   * rewards. Hip fire is untouched for free, because the sway itself rides
+   * the ADS blend.
+   *
+   * `suppressPerMiss` saturates at 1 rather than accumulating: being shot at
+   * by three men is being shot at. At 0.35 a single round is a twitch and
+   * sustained fire holds it near the ceiling. At `suppressSwayMult` 0.5 that
+   * ceiling is half again the wander of a standing shot — noticeable on a
+   * scope, barely there down irons, which is the right way round.
+   *
+   * **`suppressSwayMult: 0` disables the feature outright**, and it is the
+   * first knob to reach for if it reads as fighting the player rather than
+   * pressuring them.
+   */
+  suppressPerMiss: 0.35,
+  suppressDecay: 0.6,
+  suppressSwayMult: 0.5,
+  /**
    * Downward ground probe. Replaces the old flat-plane clamp so the chapel
    * terrace, barn ramp, and footbridges are standable.
    */

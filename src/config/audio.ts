@@ -37,6 +37,30 @@ export const audio = {
    * and a close one is mostly crack.
    */
   reverbDistanceSend: 1.6,
+  /**
+   * Rounds arriving. **All three of these are the voice cap**, and they exist
+   * because impacts are the one sound in the game that is generated at the
+   * same rate as gunfire and matters less than it: sixteen bots is ~80 rounds
+   * a second and almost every one lands on something.
+   *
+   * `impactRange` is how far one carries — far shorter than `maxDistance`,
+   * because an impact whose dust you cannot see is not information, and 80 a
+   * second from across the valley would spend the voices on nothing.
+   *
+   * `impactInterval` is the floor between two of them (~22 a second). Past
+   * that the ear cannot separate the transients anyway, so the ones dropped
+   * cost nothing that was being heard.
+   *
+   * `impactReserve` is voices held BACK from impacts, and it is the only
+   * priority scheme in this class. The cap is first-come-first-served and an
+   * impact arrives in the same millisecond as the shot that caused it, so
+   * without a reserve the least important sound in the game can starve the
+   * most important one. Refusing early against `maxVoices - impactReserve` is
+   * the whole of it.
+   */
+  impactRange: 30,
+  impactInterval: 0.045,
+  impactReserve: 6,
 
   /**
    * Footsteps. The player's are triggered by the camera's bob phase rather

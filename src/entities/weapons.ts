@@ -68,7 +68,12 @@ export interface WeaponSetup {
   id: WeaponId;
   name: string;
   short: string;
+  /** What a round does at or inside `falloffNear`. */
   damage: number;
+  /** …and at or beyond `falloffFar`, lerped between the two. */
+  damageFar: number;
+  falloffNear: number;
+  falloffFar: number;
   /** Rounds per second — a ceiling on the trigger when `semiAuto`, and the
    *  rate WITHIN a burst when `burst` > 1. */
   fireRate: number;
@@ -86,6 +91,8 @@ export interface WeaponSetup {
   range: number;
   /** Scales the per-shot aim kick. */
   recoilMult: number;
+  /** Which way the horizontal kick drifts, -1 (left) to +1 (right). */
+  yawBias: number;
   /** Scales both the per-shot spread bloom and its ceiling. */
   bloomMult: number;
   /** Multiplier on the ADS blend rate, alongside the fitted optic's own. */
@@ -114,6 +121,9 @@ export function weaponSetup(id: WeaponId): WeaponSetup {
     name: w.name,
     short: w.short,
     damage: w.damage,
+    damageFar: w.damageFar,
+    falloffNear: w.falloffNear,
+    falloffFar: w.falloffFar,
     fireRate: w.fireRate,
     semiAuto: w.semiAuto,
     burst: w.burst,
@@ -124,6 +134,7 @@ export function weaponSetup(id: WeaponId): WeaponSetup {
     spreadAds: w.spreadAds,
     range: w.range,
     recoilMult: w.recoilMult,
+    yawBias: w.yawBias,
     bloomMult: w.bloomMult,
     adsSpeedMult: w.adsSpeedMult,
     swayMult: w.swayMult,

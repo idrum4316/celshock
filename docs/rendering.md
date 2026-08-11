@@ -367,6 +367,49 @@ wastes slots and flattens the darkness.
   (`buildTavern`, `buildTownhouse`). Coplanar faces within **one** colour group are
   fine — they merge into a single mesh, which is why gable roofs meeting at a ridge are
   not a bug.
+- **An impact disc is lifted off its surface (`effects.discLift`, 0.02 m) and
+  that is not cosmetic.** A quad coplanar with the wall it was thrown from
+  z-fights, and a flickering impact reads as a broken decal rather than as
+  dust. It is the same tie the entry above describes, arriving from the other
+  direction: there the fix was standing one surface proud at build time, here
+  it is offsetting along the pick's own normal at spawn.
+
+## Impacts: the one pooled effect that reads the world
+
+`CombatSystem` throws three pools — tracers, sparks, and the **impact disc**,
+which is the half a sphere could never do. A spark has no orientation; a disc
+lies on the face the round was thrown from, using the surface normal the wall
+pick already computed and used to discard.
+
+What each kind looks like is a table in that file (`IMPACTS`), because art
+constants live with the code that draws them — the two hex colours it replaced
+were literals on the same line. Stone gets the old grey spark plus a small pale
+bloom; earth gets **no spark at all** (dirt does not spark) and a bigger, duller
+disc; flesh gets the spark and **no disc**, because a hit on a body must not put
+dust on the world, and there is no blood anywhere in this game — this is not the
+pass that would introduce it.
+
+Three constraints hold it together, and undoing any of them is silent:
+
+- **`DOUBLESIDE` is geometry, never `backFaceCulling`.** `getEmissive` caches
+  one material per colour and this pool shares those materials with the tracers
+  and the sparks, so a flag flipped here flips for every effect in the game.
+- **The `noGlow` flag only works because `Game` builds `CombatSystem` before
+  its construction-time GlowLayer scan.** Move the construction later and every
+  dust disc blooms like a lamp. The scan is a one-shot loop over
+  `scene.meshes`; anything built after it is eligible forever.
+- **The disc gets its fog fade for free from `mats.getEmissive()`**
+  (`EmissiveFog`), which is the whole reason it is an emissive mesh rather than
+  a hand-rolled material. A dedicated unlit dust shader would owe the fade
+  itself, and the obvious alternative — a particle system — is forbidden
+  outright: `docs/grenades.md` names per-shot effects as exactly what that rule
+  exists for. The ground puff is therefore tuned dim rather than glowing.
+
+**The impact rides the tracer, and so does its sound.** Both are spawned when
+the streak's head arrives rather than when the damage resolved, which is the
+ordering `CombatSystem`'s header calls load-bearing: an impact seen or heard
+before its round gets there is what makes a slowed tracer read as fake. One
+`spawnImpact` raises all three so the picture and the noise cannot drift apart.
 
 ## The sky
 

@@ -161,9 +161,33 @@ budget is the one thing here that does not scale.
   jittered position so bots converge on the *sound*, not the shooter. `Game` calls
   `hearGunshot` for the player's own fire.
 - **Near misses** ride the target loop `CombatSystem.fire` already runs: one extra
-  sphere test at `hitRadius + suppressRadius`, reported via `onNearMiss`.
+  sphere test at `hitRadius + suppressRadius`, reported via `onNearMiss`. It carries
+  the round's point of closest approach as well, which is the same event the
+  player's suppression and their directional crack are built on — the player is
+  suppressed by exactly the thing that suppresses everyone else.
 - **Lost line of sight costs no ray either** — `fire()` already pays for a wall pick,
   and a run of `losBrokenShots` blocked rounds drops the target.
+
+**A bot's round falls off with range, and bots have no head zone.** Both are
+deliberate and they pull in opposite directions, so read them together.
+
+Bots carry no weapon from `CONFIG.weapons` — they fire one flat round — so
+`bots.damageFar`/`falloffNear`/`falloffFar` are the whole of their damage curve.
+It is fitted to the band they actually shoot in rather than to `range`: they
+will not open fire past `engageRange` (55) and back off inside `minEngageRange`
+(6), so a ramp ending at 70 would spend most of itself where nothing is ever
+fired. 25 falling to 17 over 18 → 50 m makes them a four-shot kill inside 18 m,
+five to 38, and six beyond. **This is a real difficulty reduction and the main
+thing to feel-test**; it is also the point, since sixteen bots hitting for 25 at
+any distance mean a crossed square is a coin toss no movement can improve.
+`bots.damageFar: 25` restores the old behaviour exactly.
+
+The head zone runs the other way, and its absence here is load-bearing rather
+than an omission — see [`weapons.md`](weapons.md). Bots aim at `t.eyePos`, the
+very point the zone is centred on, so a head sphere their rounds could reach
+would make every accurate bot shot a headshot. Because the gate is
+`ShotOptions.headMult` and they pass none, the sphere is never even ray-tested
+on their path: sixteen shooters pay nothing for a feature they do not have.
 
 **Cover is baked, never probed** (`world/CoverMap.ts`): one bit per direction per
 surface, 16 directions, two masks — the same reasoning that makes `NavGrid` bake seven

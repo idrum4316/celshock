@@ -87,7 +87,7 @@ src/
     BattleSystem.ts     # Bot pool, AI scheduling, LOS, distance LOD
     ConquestSystem.ts   # Flags, meters, tickets, bleed, spawns, planSquads
     CaptureZoneSystem.ts# Flags drawn in the world: ring, skirt, beacon
-    CombatSystem.ts     # Hitscan + pooled tracers and sparks
+    CombatSystem.ts     # Hitscan, fall-off, the head zone; pooled tracers, sparks, impacts
     GrenadeSystem.ts    # The one thing that isn't hitscan + BlastDust
     RagdollSystem.ts    # The ONLY Havok in the game, entirely optional —
                         #   every refusal falls back to a collapse tween.

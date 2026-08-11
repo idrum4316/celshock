@@ -308,4 +308,24 @@ export const effects = {
    */
   tracerPoolSize: 96,
   sparkPoolSize: 48,
+  /**
+   * The dust disc a round kicks off a surface — the half of an impact the
+   * spark cannot do, because a sphere has no orientation and the whole point
+   * of a disc is that it lies on the face it was thrown from.
+   *
+   * Sized like the spark pool and for the same reason: everyone is hitscan,
+   * so at the worst there is one impact per round from every combatant that
+   * fired. It is smaller than `sparkPoolSize` because two of the three kinds
+   * take a disc and only two take a spark, and shorter-lived than the spark's
+   * 0.18 s would suggest is safe — see `discLife`.
+   */
+  discPoolSize: 40,
+  /** Seconds a disc takes to open out and fade. */
+  discLife: 0.22,
+  /**
+   * Metres the disc is lifted off the surface along its own normal. Not
+   * cosmetic: a quad coplanar with the wall it was thrown from z-fights, and
+   * a flickering impact reads as a broken decal rather than as dust.
+   */
+  discLift: 0.02,
 } as const;

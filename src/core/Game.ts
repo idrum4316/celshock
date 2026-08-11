@@ -573,10 +573,21 @@ export class Game {
     // for them: a bot's report is spatialised and late, but the round itself
     // goes supersonic past the ear first. `suppress` ignores anything that
     // isn't a bot, so both handlers can take every near miss.
-    this.combat.onNearMiss = (near, from) => {
+    // `at` is CombatSystem's scratch vector — `suppress` keeps only `from`
+    // and `nearMiss` reads it inside the call, so nothing outlives it here.
+    this.combat.onNearMiss = (near, from, at) => {
       this.battle.suppress(near, from);
-      if (near === this.player) this.sfx.nearMiss();
+      if (near === this.player) {
+        this.sfx.nearMiss(at);
+        this.player.suppress();
+      }
     };
+    // A round arriving. Routed here rather than called directly for the same
+    // reason the near miss is: `CombatSystem` fires the player's rounds and
+    // all sixteen bots' and has no business knowing what `Sfx` is. Every gate
+    // on this — distance, rate, the voice reserve — is on the far side, with
+    // the budget it protects.
+    this.combat.onImpact = (at, kind) => this.sfx.impact(at, kind);
     this.battle.spawnPointFor = (bot) => this.spawnPointFor(bot.team);
     // Squad orders are planned as a group, so squads can be spread across
     // objectives — or deliberately stacked on the one that decides the round.
@@ -1907,6 +1918,7 @@ export class Game {
         muzzle,
         this.battle.hittablesAgainst(this.player.team),
         this.player.range,
+        this.player.shotOptions,
       );
       // Bots hear the player's rifle the same way they hear each other's. This
       // is the only place the player's own gunfire enters the world, so it is
@@ -1917,11 +1929,23 @@ export class Game {
       // The weapon's own multiplier rides on top of the ADS damping: a
       // 13-round-a-second SMG on the rifle's per-shot kick walks the muzzle
       // off the screen inside half a magazine.
+      // `recoilRamp` is the first-shot multiplier, already resolved to 1 on
+      // the weapons a string means nothing on. The horizontal is no longer
+      // symmetric noise: the weapon's `yawBias` SCALES the random term and
+      // offsets it, so the total stays bounded by `yawPerShot` — every
+      // ceiling documented for `maxYaw` survives — while the drift has a
+      // direction that can be led. A bias of 0 is the old behaviour exactly.
       const rc = CONFIG.recoil;
-      const kickMult = (1 - (1 - rc.adsMult) * blend) * this.player.recoilMult;
+      const kickMult =
+        (1 - (1 - rc.adsMult) * blend) *
+        this.player.recoilMult *
+        this.player.recoilRamp;
+      const bias = this.player.yawBias;
+      const drift =
+        (Math.random() * 2 - 1) * (1 - Math.abs(bias)) + bias;
       this.cameraSys.addRecoil(
         rc.pitchPerShot * kickMult,
-        (Math.random() * 2 - 1) * rc.yawPerShot * kickMult,
+        drift * rc.yawPerShot * kickMult,
       );
       // Cosmetic view punch: FOV spike + shove + jitter on the rendered
       // camera only — the bullets above already left with the clean aim.
@@ -1942,9 +1966,13 @@ export class Game {
       if (shot.target) {
         const killed = shot.killed && shot.target instanceof Bot;
         // Resolved before the marker so a kill gets the red one — the cue to
-        // stop putting rounds into a body that is already going down.
-        this.hud.flashHitmarker(killed);
-        this.sfx.hit();
+        // stop putting rounds into a body that is already going down. A
+        // headshot is the second axis and loses to a kill on the marker,
+        // because "stop shooting" is the more urgent thing to say; it keeps
+        // its own sound either way, which is where the read actually lands.
+        this.hud.flashHitmarker(killed, shot.headshot);
+        if (shot.headshot) this.sfx.headshot();
+        else this.sfx.hit();
         this.input.rumble(
           killed ? haptic.killStrong : haptic.hitStrong,
           killed ? haptic.killWeak : haptic.hitWeak,
@@ -2383,6 +2411,17 @@ export class Game {
       if (dx * dx + dz * dz > 1e-6) {
         this.hud.addDamageDirection(Math.atan2(dx, dz), amount);
       }
+    }
+    // The blow itself, on the aim rather than on the picture. Skipped on the
+    // frame that killed you: `enterDying` hands the camera to `DeathCam` a
+    // few lines below, and a flinch on a body nobody is looking through is
+    // state left behind for the next life to inherit.
+    if (!died) {
+      const pc = CONFIG.player;
+      this.cameraSys.addFlinch(
+        amount * pc.flinchPitchPerDamage,
+        (Math.random() * 2 - 1) * amount * pc.flinchYawPerDamage,
+      );
     }
     this.post.flashDamage();
     this.sfx.playerHurt();

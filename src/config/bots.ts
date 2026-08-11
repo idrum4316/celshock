@@ -27,6 +27,33 @@ export const bots = {
   thinkRate: 5,
   /** 25 per hit against 100 HP = 4 shots to kill, matching the player. */
   damage: 25,
+  /**
+   * The far end of the bot round's fall-off, and the run to it. Bots carry no
+   * weapon from `CONFIG.weapons` — they fire one flat round — so these three
+   * numbers are the whole of their damage curve, the same shape every weapon
+   * in that table now has.
+   *
+   * The run is deliberately fitted to the band bots actually shoot in rather
+   * than to `range`: they will not open fire past `engageRange` (55) and back
+   * off inside `minEngageRange` (6), so a ramp ending at 70 would spend most
+   * of itself where nothing is ever fired. 18 to 50 puts the whole curve
+   * inside the fight, and 17 is a six-shot kill at the far edge of one.
+   *
+   * **This makes the game easier and that is the point.** Sixteen bots that
+   * hit for 25 at any distance mean a crossed square is a coin toss no
+   * movement can improve; the same bots falling to 17 at 50 m mean closing,
+   * breaking a sightline and holding an angle are all worth something.
+   * `damageFar: 25` restores the old behaviour exactly.
+   *
+   * Note the knife edge, which the sidearm shares: 25 x 4 is exactly 100, so
+   * there is no headroom and the first centimetre past `falloffNear` costs a
+   * whole round. Bots are a four-shot kill inside 18 m, five to 38, six
+   * beyond — a clean staircase, but it means anything that moves `damage`
+   * off 25 moves all three treads by metres.
+   */
+  damageFar: 17,
+  falloffNear: 18,
+  falloffFar: 50,
   fireRate: 5.5,
   /**
    * Aim error half-angle (radians), lerped by distance / `engageRange`.

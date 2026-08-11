@@ -61,6 +61,7 @@ import {
 import { ViewModel, VIEWMODEL_GROUP } from "./ViewModel";
 import { TerrainField } from "../world/TerrainField";
 import type { Combatant, Team } from "./Combatant";
+import type { ShotOptions } from "../systems/CombatSystem";
 
 /**
  * One weapon the player is carrying: what it is, and the magazine that stays
@@ -287,6 +288,39 @@ export class Player implements Combatant {
   private throwPending = false;
   /** Extra spread accumulated by sustained fire; bleeds off when not firing. */
   private spreadBloom = 0;
+  /**
+   * Rounds fired in the current string, and seconds since the last one.
+   *
+   * Together they answer one question — is the next round a FIRST round? —
+   * which is what `recoil.firstShotMult` is applied to. They live here beside
+   * `spreadBloom` because they have exactly its lifecycle: raised by a shot,
+   * bled off by time, and dropped by anything that takes the weapon away.
+   *
+   * `sinceShot` starts at the reset window rather than at 0 so the very first
+   * round of a life is a first shot. It is a plain time integral compared
+   * against a time threshold, so nothing here varies with the frame rate.
+   */
+  private stringShots = 0;
+  // Annotated, not inferred: `CONFIG` is `as const`, so the initialiser's type
+  // is the literal 0.35 and every later assignment fails to compile.
+  private sinceShot: number = CONFIG.recoil.stringResetTime;
+  /**
+   * How hard the player is currently being shot at, 0..1. Raised by every
+   * round that cracks past and bled off by time.
+   *
+   * It reaches exactly one thing — the aimed hold sway, through the drive
+   * `update` already pushes at the camera — and that restraint is the design.
+   * Suppression that blurs or desaturates the screen is a mechanic that takes
+   * INFORMATION away from a player who is already losing, and it is the first
+   * thing anyone points at when this feature is disliked. An aimed weapon
+   * getting less steady while rounds go past is the same pressure made out of
+   * something the player can answer: break the sightline, or crouch, which
+   * `aimSway.crouchMult` already rewards.
+   *
+   * Hip fire is untouched for free, because the sway itself rides the ADS
+   * blend. `CONFIG.player.suppressSwayMult` at 0 disables the whole feature.
+   */
+  private suppression = 0;
   /** Weapon punch, 1 at the shot and falling to 0 over `recoil.kickTime`. */
   private weaponKickT = 0;
   /** Muzzle flash star: shown for `gunfeel.flashTime` after each shot. */
@@ -442,6 +476,39 @@ export class Player implements Combatant {
     return this.weapon.damage * this.mods.damageMult;
   }
 
+  /**
+   * The carried weapon's fall-off, as the object `CombatSystem.fire` takes.
+   *
+   * One object, filled in on read rather than rebuilt: a fresh literal per
+   * round is exactly the per-shot allocation the effect pools exist to avoid,
+   * and a field cached on a carry change is a thing to forget on the next one
+   * — the weapon, the mods and the magazine all change from different places.
+   * Deriving it here cannot go stale and costs three writes.
+   *
+   * `mods.damageMult` scales the far end as well as the near one, or a damage
+   * buff would quietly stop applying at range.
+   */
+  get shotOptions(): ShotOptions {
+    const o = this.shotOpts;
+    o.damageFar = this.weapon.damageFar * this.mods.damageMult;
+    o.falloffNear = this.weapon.falloffNear;
+    o.falloffFar = this.weapon.falloffFar;
+    return o;
+  }
+
+  /**
+   * `headMult` is set once and never cleared: the head zone is the PLAYER's,
+   * and this object is the only place in the game that asks for it. Bots fire
+   * through `BOT_SHOT`, which omits the field, so their rounds never test the
+   * sphere at all — see the header of `CombatSystem`.
+   */
+  private readonly shotOpts: ShotOptions = {
+    damageFar: 0,
+    falloffNear: 0,
+    falloffFar: 0,
+    headMult: CONFIG.combat.headshotMult,
+  };
+
   /** Where a round from the carried weapon stops (m). */
   get range(): number {
     return this.weapon.range;
@@ -450,6 +517,50 @@ export class Player implements Combatant {
   /** Scales the per-shot aim kick Game hands the camera. */
   get recoilMult(): number {
     return this.weapon.recoilMult;
+  }
+
+  /**
+   * The whole of `recoil.firstShotMult`, resolved here so the call site reads
+   * one number: what the round about to leave multiplies its kick by.
+   *
+   * **It is 1 on a weapon that is a string of one**, and that exclusion is the
+   * feature rather than an exception to it. The multiplier is about the
+   * difference between a settled weapon and one mid-burst; on the DMR and the
+   * pistol every shot is a first shot, so it would not be texture at all —
+   * just a flat 60% recoil increase wearing feel's clothing, and on the DMR's
+   * 2.2 multiplier that is 5.2 deg on every deliberate scoped round. Their
+   * `recoilMult` already carries the punch a single shot is supposed to have.
+   *
+   * The carbine is `semiAuto` too and is deliberately included: `burst > 1`
+   * means one pull is three rounds that climb as one motion, which is exactly
+   * the thing that has a first round in it.
+   */
+  get recoilRamp(): number {
+    const w = this.weapon;
+    if (w.semiAuto && w.burst === 1) return 1;
+    return this.stringShots === 1 ? CONFIG.recoil.firstShotMult : 1;
+  }
+
+  /** Which way the carried weapon's horizontal kick drifts, -1..+1. */
+  get yawBias(): number {
+    return this.weapon.yawBias;
+  }
+
+  /**
+   * A round cracked past. Wired from `CombatSystem.onNearMiss` through Game,
+   * the same event that already feeds `BattleSystem.suppress` for bots — so
+   * the player is suppressed by exactly the thing that suppresses everyone
+   * else, rather than by a rule of their own.
+   *
+   * It saturates rather than accumulating: being shot at by three men is
+   * being shot at, and a value that could climb with the volume of fire would
+   * make a machine gun a hard counter to aiming at all.
+   */
+  suppress(): void {
+    this.suppression = Math.min(
+      1,
+      this.suppression + CONFIG.player.suppressPerMiss,
+    );
   }
 
   /** How the shot is voiced, and how long the reload's clicks are spread. */
@@ -486,6 +597,11 @@ export class Player implements Combatant {
     this.fireCooldown = 0;
     this.burstLeft = 0;
     this.spreadBloom = 0;
+    // The string belongs to the WEAPON, not to the finger — the same split
+    // `burstLeft` and `triggerHeld` already draw. A gun that has just come
+    // into your hands has not been fired, whatever the last one was doing.
+    this.stringShots = 0;
+    this.sinceShot = CONFIG.recoil.stringResetTime;
     this.ammo = this.magSize;
     this.view.setWeapon(id);
     this.onCarryChanged();
@@ -552,6 +668,12 @@ export class Player implements Combatant {
     this.fireCooldown = 0;
     this.burstLeft = 0;
     this.spreadBloom = 0;
+    // Explicitly, not by relying on the clock: the sidearm's `drawTime` is
+    // 0.34 s against a 0.35 s reset window, so a swap to it would otherwise
+    // land one hundredth of a second inside the old weapon's string and hand
+    // the pistol's first round the rifle's settled kick.
+    this.stringShots = 0;
+    this.sinceShot = CONFIG.recoil.stringResetTime;
     this.view.setWeapon(this.weapon.id);
     this.onCarryChanged();
   }
@@ -611,6 +733,10 @@ export class Player implements Combatant {
     this.burstLeft = 0;
     this.velY = 0;
     this.spreadBloom = 0;
+    this.stringShots = 0;
+    this.sinceShot = CONFIG.recoil.stringResetTime;
+    // A fresh body is not under fire, whatever the last one died in.
+    this.suppression = 0;
     this.weaponKickT = 0;
     this.flashT = 0;
     this.flashRoot.setEnabled(false);
@@ -826,6 +952,14 @@ export class Player implements Combatant {
       0,
       this.spreadBloom - CONFIG.recoil.bloomRecovery * dt,
     );
+    // The string's clock. It is only ever read against `stringResetTime`, so
+    // it is left to run rather than clamped — no shot in the game cares how
+    // long ago the last one was beyond "longer than the window".
+    this.sinceShot += dt;
+    this.suppression = Math.max(
+      0,
+      this.suppression - CONFIG.player.suppressDecay * dt,
+    );
     if (this.reloading) {
       this.reloadT -= dt;
       if (this.reloadT <= 0) {
@@ -891,7 +1025,8 @@ export class Player implements Combatant {
     const sw = CONFIG.camera.aimSway;
     cam.setSwayDrive(
       (1 + (sw.moveMult - 1) * this.moveBlend) *
-        (1 - (1 - sw.crouchMult) * this.crouchBlend),
+        (1 - (1 - sw.crouchMult) * this.crouchBlend) *
+        (1 + CONFIG.player.suppressSwayMult * this.suppression),
     );
 
     // --- footfalls, off that same phase ---
@@ -1019,6 +1154,12 @@ export class Player implements Combatant {
       r.maxBloom * this.weapon.bloomMult,
       this.spreadBloom + r.bloomPerShot * this.weapon.bloomMult,
     );
+    // A weapon quiet long enough for the spring to settle is firing a first
+    // round again. No reload or ADS reset is needed on top: the shortest
+    // reload here is 1.05 s, so the clock has already done it.
+    if (this.sinceShot >= r.stringResetTime) this.stringShots = 0;
+    this.stringShots += 1;
+    this.sinceShot = 0;
     this.weaponKickT = 1;
     // Muzzle flash: a single-frame-scale strobe with a random roll and scale,
     // so full-auto reads as flicker rather than one static sprite.

@@ -1,10 +1,14 @@
 /**
  * config/weapons.ts — the round, and what differs between the guns.
- * Owns: the weapon table (its keys ARE `WeaponId`), recoil, and the gunfeel
- * dressing. Contract: `docs/weapons.md`.
+ * Owns: the weapon table (its keys ARE `WeaponId`), the head zone (`combat`),
+ * recoil, and the gunfeel dressing. Contract: `docs/weapons.md`.
  * Gotcha: every round in the game is hitscan through the same
- * `CombatSystem.fire`; a weapon's `recoilMult`/`bloomMult` SCALE `recoil`
- * rather than restating it.
+ * `CombatSystem.fire`; a weapon's `recoilMult`/`bloomMult`/`yawBias` SCALE
+ * `recoil` rather than restating it.
+ * Gotcha: `damage` is what a round does CLOSE. Every time-to-kill quoted in
+ * this file is the close one — `damageFar` and the two fall-off distances are
+ * the rest of the weapon, and on the carbine they decide a 5x cliff whose
+ * position has to be re-derived rather than assumed.
  */
 
 /**
@@ -22,6 +26,21 @@
  * two and gives you one trigger pull at a time to do it with, the carbine
  * spends three rounds on every pull whether or not it needed them, and the
  * LMG is the one that does not have to stop.
+ *
+ * **Every time-to-kill quoted below is the CLOSE one**, and that is a change
+ * of meaning rather than a caveat. `damage` is what a round does at or inside
+ * `falloffNear`; past `falloffFar` it does `damageFar`, and between the two it
+ * lerps. So a weapon is no longer one number and a cliff at `range` — it is a
+ * shape, and the shape is where the choice between these five actually lives.
+ * `range` is unchanged and still the hard reach; the ramp sits well inside it,
+ * because a round that has stopped hurting is a more interesting fact than a
+ * round that has stopped existing.
+ *
+ * Read down the `damageFar` column and the kit says something it could not say
+ * before: the DMR alone is exempt, the LMG loses damage per second and never a
+ * round, the carbine's burst stops being a kill at a stated distance, and the
+ * SMG falls off hardest and earliest. Two of those are rewards and two are
+ * bills, which is the same balance the close figures strike.
  *
  * The time to kill is deliberately close for the three automatics (rifle 4
  * rounds at 8/s = 0.375 s, SMG 6 at 13/s = 0.385 s, LMG 5 at 10/s = 0.4 s).
@@ -54,6 +73,13 @@ export const weapons = {
     short: "Rifle",
     /** 30 per hit against 100 HP = 4 shots to kill. */
     damage: 30,
+    /**
+     * 22 = 5 shots to kill. The rifle is meant to hold a line across the
+     * valley and still does; the fifth round is what that costs.
+     */
+    damageFar: 22,
+    falloffNear: 25,
+    falloffFar: 70,
     /** Rounds per second. */
     fireRate: 8,
     /**
@@ -86,6 +112,31 @@ export const weapons = {
     range: 120,
     /** Scales `recoil.pitchPerShot`/`yawPerShot`. */
     recoilMult: 1,
+    /**
+     * Which way this weapon pulls, -1 (hard left) to +1 (hard right).
+     *
+     * The horizontal kick used to be symmetric noise, which meant every
+     * weapon's spray was the same shape and NONE of it could be learned —
+     * the only correct response to a random walk is to stop firing. A bias
+     * makes the walk drift, so a burst has a direction you can pre-empt, and
+     * the six weapons stop being one recoil pattern scaled six ways.
+     *
+     * It scales the noise rather than adding to it (`Game`'s call site does
+     * `(rand * (1 - |bias|) + bias) * yawPerShot`), so the total is still
+     * bounded by `yawPerShot` and every ceiling documented for `maxYaw`
+     * survives untouched. 0 is bit-for-bit the old behaviour.
+     *
+     * The rifle is the reference and gets the mildest real bias: a pattern
+     * you notice over a magazine, not one you are fighting from round two.
+     *
+     * **The signs are paired, not scattered.** The rifle, the SMG and the
+     * pistol pull right; the carbine and the LMG pull left. So a rifle with
+     * the sidearm behind it is one hand to learn across the swap, and the
+     * other family is a genuinely different weapon rather than the same one
+     * at a different rate — which is the same thing the kit screen's stat
+     * chart is trying to say, said in the hands instead.
+     */
+    yawBias: 0.35,
     /** Scales `recoil.bloomPerShot` AND `recoil.maxBloom`. */
     bloomMult: 1,
     /** Multiplies `camera.adsBlendSpeed` alongside the optic's own — a
@@ -156,6 +207,34 @@ export const weapons = {
     short: "Carbine",
     /** 34 x 3 = 102 against 100 HP: the burst is the kill, not the round. */
     damage: 34,
+    /**
+     * **The number that matters here is 40 m, and it is not in this table.**
+     *
+     * A burst kills while three rounds make 100, so the weapon's whole
+     * proposition — the fight is over on one trigger pull — expires the
+     * instant the round drops under 33.4, which on this ramp is **39.6 m**.
+     * Past it a landed burst does 99 or less and the follow-up costs the full
+     * `burstCycle`: 0.1 s to kill becomes 0.5 s, a 5x cliff crossed in one
+     * step. That is the climb argument in this entry's header turned into a
+     * distance, and it lands where the header already says the weapon runs
+     * out ("a chest that becomes a head at ~25 m and a miss well past it").
+     *
+     * **Fall-off on a burst weapon quantises, and that is why the ramp is
+     * placed rather than chosen.** Every other weapon here degrades a round
+     * at a time; this one has all three rounds cross the threshold together,
+     * so the ONLY thing these three numbers decide is where the cliff goes.
+     * The drop from 34 to 33.4 is 8% of the ramp's fall, so the breakpoint
+     * sits just past `falloffNear` almost regardless of `falloffFar` — which
+     * means moving `falloffNear` is how you move the cliff, and `damageFar`
+     * barely touches it. An earlier version of this entry ran 20 -> 55 and
+     * put the cliff at 22.9 m while claiming 55 in this very comment.
+     *
+     * So: quote the BREAKPOINT when any of these three move, never
+     * `falloffFar`, and re-derive it rather than assuming it followed.
+     */
+    damageFar: 26,
+    falloffNear: 35,
+    falloffFar: 90,
     /** WITHIN the burst — 0.05 s a round, so three take 0.1 s. */
     fireRate: 20,
     /** One pull, one burst: the trigger has to come up for the next. */
@@ -184,6 +263,13 @@ export const weapons = {
      */
     range: 90,
     recoilMult: 0.8,
+    /**
+     * Strong, and left — the opposite family to the rifle. Three rounds in
+     * 0.1 s cannot be steered, only pre-aimed, so a weak bias would be
+     * indistinguishable from the noise it replaces; the whole value of a
+     * pattern on a burst weapon is that you can lead it before the pull.
+     */
+    yawBias: -0.5,
     /** Blooms through the burst and has the whole cycle to bleed it off. */
     bloomMult: 1.15,
     adsSpeedMult: 1.15,
@@ -214,6 +300,16 @@ export const weapons = {
     short: "SMG",
     /** 18 against 100 HP = 6 shots to kill. */
     damage: 18,
+    /**
+     * The steepest and earliest fall-off in the kit, and the shortest run to
+     * it: 10 is TEN shots to kill, which at 13/s is 0.69 s of a magazine of
+     * 34 spent on one man. "Cannot be trusted past the far side of a street"
+     * was previously true only of the spread; this is the same sentence said
+     * in damage, where a lucky group can't argue with it.
+     */
+    damageFar: 10,
+    falloffNear: 12,
+    falloffFar: 40,
     fireRate: 13,
     semiAuto: false,
     burst: 1,
@@ -225,6 +321,15 @@ export const weapons = {
     /** Past this a round simply stops; the optic on top cannot change it. */
     range: 70,
     recoilMult: 0.55,
+    /**
+     * The strongest in the kit, and the rate is why. Thirteen rounds a second
+     * on the smallest per-shot kick is otherwise indistinguishable from
+     * noise — the individual kicks are too small and too fast to read one at
+     * a time, so only a consistent drift is legible at all. A hard pull is
+     * what turns "spray the SMG" into "lead the SMG", which is the only way
+     * a weapon at this rate can be skilful rather than lucky.
+     */
+    yawBias: 0.6,
     bloomMult: 1.3,
     adsSpeedMult: 1.3,
     hipZ: -0.07,
@@ -263,6 +368,20 @@ export const weapons = {
     short: "DMR",
     /** 50 against 100 HP = 2 shots to kill, at any range it reaches. */
     damage: 50,
+    /**
+     * The one weapon here with no fall-off, and the exemption IS the weapon.
+     * "Two shots to kill, whatever the range and wherever they land" is the
+     * sentence the entry above opens with, and a curve that took the second
+     * round to 49 somewhere down the valley would make it a three-shot rifle
+     * at exactly the distances it exists to be used at.
+     *
+     * Stated as `damageFar` equal to `damage` rather than as an absent field,
+     * so every weapon carries the same three numbers and the lerp needs no
+     * special case: the ramp runs and resolves to 50 at both ends.
+     */
+    damageFar: 50,
+    falloffNear: 40,
+    falloffFar: 120,
     /** A ceiling on the trigger finger, not a cadence — see `semiAuto`. */
     fireRate: 3,
     /** One round per pull. `Player.tryShot` holds the latch. */
@@ -283,6 +402,15 @@ export const weapons = {
      */
     range: 180,
     recoilMult: 2.2,
+    /**
+     * Zero, and it is the one weapon here where that is a decision rather
+     * than a default. One shot at a time is not a pattern — there is no
+     * second round close enough behind the first for a drift to be learned
+     * from — so a bias here would be a fixed error to dial out on every
+     * pull, which is a tax and not a skill. `swayMult` 0.7 exists so this
+     * weapon's single round goes where it is pointed; a bias would spend it.
+     */
+    yawBias: 0,
     bloomMult: 1.5,
     adsSpeedMult: 0.7,
     /** Longer than the rifle, so it sits further out or the muzzle fills the
@@ -343,6 +471,16 @@ export const weapons = {
     short: "LMG",
     /** 24 against 100 HP = 5 shots to kill — the most rounds of anything here. */
     damage: 24,
+    /**
+     * 21 x 5 = 105, so the belt gun loses damage per second across the valley
+     * and never loses a ROUND: five hits kill at 85 m exactly as they do at
+     * 5. That is the same reward `bloomMult` 0.5 is — the weapon that does
+     * not have to stop is the weapon whose fortieth round still counts — and
+     * it is the gentlest curve here on the longest run to it.
+     */
+    damageFar: 21,
+    falloffNear: 30,
+    falloffFar: 85,
     /** 5 rounds at 10/s is 0.4 s: the worst ideal TTK of the three automatics,
      *  by a hair, and on purpose. */
     fireRate: 10,
@@ -368,6 +506,14 @@ export const weapons = {
      * makes a long burst a thing you steer rather than a thing you abandon.
      */
     recoilMult: 0.7,
+    /**
+     * The gentlest bias in the kit beside the DMR's nothing, and it is the
+     * same reward `recoilMult` and `bloomMult` are: a burst you steer rather
+     * than one you abandon has to be steerable on both axes, and seventy-five
+     * rounds of a hard pull is a weapon that ends up pointing at a wall.
+     * Left, so it is not simply the rifle held down for longer.
+     */
+    yawBias: -0.25,
     /** The heart of the weapon — see the header. Half the rifle's ceiling. */
     bloomMult: 0.5,
     /** The slowest thing here into the shoulder. */
@@ -407,6 +553,22 @@ export const weapons = {
     short: "Pistol",
     /** 25 against 100 HP = 4 shots to kill. */
     damage: 25,
+    /**
+     * 15 is seven shots out of an eight-round magazine, which is the honest
+     * end of "across a street, not down the valley" — the range cap says a
+     * round stops at 45 m and this says it stopped meaning anything at 35.
+     *
+     * **`falloffNear` is 15 because 25 x 4 is exactly 100.** The sidearm sits
+     * on a knife edge no other weapon here does: it has no headroom at all,
+     * so the first centimetre past `falloffNear` costs a whole round and the
+     * pistol becomes a five-shot weapon. At 10 that put the four-shot kill
+     * inside a hallway; at 15 it covers a room, which is where the second
+     * slot's whole case — a loaded weapon in 0.34 s — is actually spent.
+     * Anything that moves `damage` off 25 moves this boundary by metres.
+     */
+    damageFar: 15,
+    falloffNear: 15,
+    falloffFar: 35,
     /** A ceiling on the trigger finger, as on the DMR. */
     fireRate: 5.5,
     semiAuto: true,
@@ -420,6 +582,13 @@ export const weapons = {
     /** A pistol's honest reach: across a street, not down the valley. */
     range: 45,
     recoilMult: 1.15,
+    /**
+     * Wrists rather than a shoulder, so a strong pull is honest — and at
+     * 5.5/s semi it is trivially corrected between shots, which is what
+     * makes a strong number safe here and not on the LMG. Right, with the
+     * rifle: the two weapons most loadouts carry together pull the same way.
+     */
+    yawBias: 0.45,
     bloomMult: 1.7,
     /** Nothing else here comes up this fast. */
     adsSpeedMult: 1.6,
@@ -436,14 +605,73 @@ export const weapons = {
 } as const;
 
 /**
+ * What every round does regardless of what fired it: the head zone.
+ *
+ * **The head zone is on the PLAYER's rounds only, and that gate is load-bearing
+ * rather than a difficulty setting.** Bots aim at `t.eyePos` — the same point
+ * this zone is centred on — so a head sphere their rounds could find would make
+ * every accurate bot shot a headshot and halve a tuned time to kill overnight.
+ * `CombatSystem.fire` takes the multiplier from its caller and skips the sphere
+ * test entirely below 1, which is also why sixteen bots pay nothing for a
+ * feature they do not have.
+ */
+export const combat = {
+  /**
+   * Metres about `eyePos`. A bot's eye is 1.55 up, so this spans roughly chin
+   * to crown — the head as a ball, which is all a sphere can honestly be.
+   *
+   * It sits INSIDE the body sphere (`hitRadius` 0.75 about `center`), so it is
+   * never a separate candidate in the nearest-hit search — it could not win
+   * one. It is an upgrade applied to a body hit that already landed, which is
+   * also what makes it one extra sphere test per LANDED round rather than one
+   * per target per shot.
+   */
+  headRadius: 0.22,
+  /**
+   * What a head hit is worth. At 2 the payoffs are legible without being
+   * silly: the rifle and the pistol kill in two, the SMG in three, and the DMR
+   * kills in ONE at any range — which is the reward its `semiAuto`, its 2.2
+   * recoil multiplier and its exemption from fall-off have all been asking for.
+   * It is the only one-shot kill in the game and it costs a scope, a 3/s
+   * ceiling and a 22 cm target.
+   */
+  headshotMult: 2,
+} as const;
+
+/**
  * Recoil. Every shot kicks the aim up and slightly sideways and blooms the
  * spread; both settle back on their own between bursts, so tapping stays
  * accurate while holding the trigger walks the shots off target.
  */
 export const recoil = {
-  /** Aim kick per shot (radians): upward, and random left/right. */
+  /** Aim kick per shot (radians): upward, and left/right about the weapon's bias. */
   pitchPerShot: 0.026,
   yawPerShot: 0.011,
+  /**
+   * What the FIRST round of a string kicks, as a multiple of the rest.
+   *
+   * A weapon that has been sitting still and one that is mid-burst are not the
+   * same weapon, and without this they were: shot 1 and shot 20 kicked
+   * identically, so a burst had a flat ramp instead of a punch that settles.
+   * The punch is also what makes the first round of a tap distinct from a held
+   * trigger, which is the entire reason to tap.
+   *
+   * It applies only where a string means something — `!semiAuto || burst > 1`,
+   * resolved in `Player.recoilRamp`. The DMR and the pistol are strings of one
+   * and every shot would be a first shot; their `recoilMult` (2.2 and 1.15)
+   * already carries the punch, and 1.6x on top of the DMR's would put 5.2 deg
+   * on every deliberate scoped round.
+   */
+  firstShotMult: 1.6,
+  /**
+   * Seconds without firing before the string resets and the next round is a
+   * first one again. Comfortably longer than any automatic's gap (the LMG's
+   * is 0.1 s) and shorter than the carbine's `burstCycle` of 0.4, so a burst
+   * weapon gets the punch on the first round of EVERY burst — which is right
+   * for three rounds that climb as one motion. The DMR's 0.333 s at full rate
+   * sits just inside it, but the DMR is excluded anyway.
+   */
+  stringResetTime: 0.35,
   /** Multiplier while fully aimed down sights — a braced stance kicks less. */
   adsMult: 0.55,
   /**

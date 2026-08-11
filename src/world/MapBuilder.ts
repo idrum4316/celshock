@@ -5,7 +5,10 @@
  * registers fixture lights, builds NavGrid + CoverMap + ObstacleField.
  * Invariants: collider() is the ONLY place colliders are created — invisible,
  * pickable, checkCollisions, metadata.solid === true, never merged — and it
- * records the WorldBox for navigation. Geometry added by any other path is
+ * records the WorldBox for navigation. It sets no `metadata.surface`, and that
+ * absence is meaningful: it is what makes every box read as "hard" to the
+ * impact effects. The terrain floor's clone is the one collider that says
+ * otherwise ("ground"). Geometry added by any other path is
  * invisible to rays AND bots. Colliders must line up with the visuals they
  * stand in for (sparks land on colliders). Visuals must never be pickable or
  * solid. Builders arrive at identity transform; merging then transforming is
@@ -596,7 +599,14 @@ export class MapBuilder {
       // Vertical placement is the ground probe's job and bots never touch the
       // collidable list, so the floor stays out of moveWithCollisions.
       col.checkCollisions = false;
-      col.metadata = { solid: true };
+      // `surface` is the impact channel, and this is the only place in the
+      // world that sets it to anything: the clone IS the heightfield, so it
+      // is the one collider that can honestly say "ground". `collider()`
+      // leaves the field absent on every box it makes, and absent reads as
+      // "hard" — see `ImpactKind` in `systems/CombatSystem.ts`. Splitting the
+      // boxes into stone/timber/metal later is a `surface` argument on
+      // `collider()` and a row in that table; nothing here has to move.
+      col.metadata = { solid: true, surface: "ground" };
       col.freezeWorldMatrix();
       colliders.push(col);
       terrainColliders.push(col);

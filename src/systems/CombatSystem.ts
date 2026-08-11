@@ -5,8 +5,23 @@
  * excluded by the caller's list construction, never by a team check inside.
  * Wall ray filters metadata.solid === true and caps the shot; a target sphere
  * farther than the first solid hit does not count (a bot embedded in a prop is
- * unshootable — movement bugs become combat bugs). Tracers/sparks are
+ * unshootable — movement bugs become combat bugs).
+ * Damage is `damage` at close range falling to `opts.damageFar` past
+ * `opts.falloffFar`, resolved against the distance the impact point already
+ * cost — range is a slope now, and `range` is only where the ray stops.
+ * The HEAD ZONE belongs to whoever passes `opts.headMult` > 1, which today is
+ * the player and only the player: bots aim at `eyePos`, so a head sphere their
+ * rounds could find would make every accurate bot shot a headshot. Below 1 the
+ * sphere is never tested, so the bot path pays nothing for it. It is an
+ * upgrade to a body hit that already landed, never a separate candidate — the
+ * body sphere encloses it and it could not win a nearest-hit search.
+ * Tracers/sparks/impact discs are
  * fixed-size pools: add new effects to a pool, NEVER allocate per shot.
+ * The disc pool is `noGlow`, and that flag only works because `Game` builds
+ * this system BEFORE its construction-time GlowLayer scan. Move the
+ * construction later and every dust disc blooms like a lamp.
+ * `metadata.surface` on the picked mesh chooses the impact; absent means
+ * "hard", which is what every collider but the terrain floor's clone leaves.
  * A tracer is a short streak flown from muzzle to impact over several frames,
  * NOT a muzzle-to-impact beam — the hit is resolved instantly regardless, so
  * the flight is presentation only and must never gate damage. The impact spark
@@ -29,6 +44,14 @@ import type { CelMaterialFactory } from "../shaders/CelShader";
 export interface Hittable {
   center: Vector3;
   hitRadius: number;
+  /**
+   * The eye, which is also the head — `CONFIG.combat.headRadius` about this
+   * point is the head zone. It lives here rather than only on `Combatant`
+   * because the head test is part of resolving a shot, and everything that
+   * reaches this interface already had one: `Player` and `Bot` both declare
+   * it, and every list `fire` is given is built out of `Combatant`s.
+   */
+  eyePos: Vector3;
   invulnerable?: boolean;
   /** `from` is where the shot started, for whoever wants to face the shooter. */
   takeDamage(amount: number, from?: Vector3): boolean;
@@ -39,7 +62,63 @@ export interface ShotResult {
   target: Hittable | null;
   killed: boolean;
   hitWall: boolean;
+  /** The round landed in the head zone. Always false unless `headMult` > 1. */
+  headshot: boolean;
 }
+
+/**
+ * What a shooter's round does that is not the ray — everything a weapon
+ * decides after the geometry has been resolved.
+ *
+ * An options object rather than four more positional parameters: `fire` was
+ * already at seven, and the two call sites pass a STABLE object each (see
+ * `Player.shotOptions`), so this costs no allocation per shot either.
+ */
+export interface ShotOptions {
+  /** Damage at or beyond `falloffFar`; `damage` applies at or inside `falloffNear`. */
+  damageFar: number;
+  falloffNear: number;
+  falloffFar: number;
+  /**
+   * What a hit in the head zone is worth. **Omitted or 1 skips the head test
+   * outright**, and that is the whole of how the zone stays the player's:
+   * bots aim at `eyePos`, so a head sphere they could find would turn every
+   * accurate bot round into a headshot. It also means the sixteen shooters
+   * that do not have the feature never pay a sphere test for it.
+   */
+  headMult?: number;
+}
+
+/**
+ * What a round stopped on, and the only thing that decides how the impact
+ * looks and sounds.
+ *
+ * "hard" is the DEFAULT rather than a value anything writes: `MapBuilder`
+ * marks only the terrain floor's collider clone (`surface: "ground"`), and
+ * every box `collider()` makes leaves the field absent. Adding "wood" or
+ * "metal" is one member here, one row in `IMPACTS`, one arm in `Sfx.impact`
+ * and a `surface` argument on `collider()` — no signature between here and
+ * the world layer moves.
+ */
+export type ImpactKind = "flesh" | "ground" | "hard";
+
+/** How each kind looks: the hot core, the dust disc, and how big it opens. */
+const IMPACTS: Record<
+  ImpactKind,
+  { spark: string | null; disc: string | null; from: number; to: number }
+> = {
+  // A hit on a body gets the spark and NO disc. Flesh does not throw dust on
+  // the world, and the hitmarker plus `Sfx.hit` is where that confirmation
+  // actually lands. There is no blood anywhere in this game and this is not
+  // the pass that introduces it.
+  flesh: { spark: "#ffe680", disc: null, from: 0, to: 0 },
+  // Stone and timber: the original grey spark, plus a small pale bloom of
+  // dust off the face.
+  hard: { spark: "#c8c8c8", disc: "#b9b4ab", from: 0.15, to: 0.5 },
+  // Earth does not spark. It throws more and glows less, so the disc alone,
+  // bigger and duller.
+  ground: { spark: null, disc: "#6b5a44", from: 0.2, to: 0.75 },
+};
 
 interface Tracer {
   mesh: Mesh;
@@ -54,10 +133,24 @@ interface Tracer {
   /** Where the round stopped — `from + dir * dist`, kept for the spark. */
   impact: Vector3;
   /**
-   * The impact spark this round owes, spawned when the streak's head arrives
-   * and nulled so it fires once. Null for a round that stopped on nothing.
+   * The impact this round owes, spawned when the streak's head arrives and
+   * nulled so it fires once. Null for a round that stopped on nothing.
    */
-  sparkColor: string | null;
+  impactKind: ImpactKind | null;
+  /**
+   * The surface normal there, copied at spawn so the streak allocates nothing
+   * in flight. Points up when the pick could not supply one, which is the
+   * right guess for the only surface that answers "ground".
+   */
+  impactNormal: Vector3;
+}
+
+/** One dust disc: a facing quad that opens and fades on the surface. */
+interface Disc {
+  mesh: Mesh;
+  t: number;
+  from: number;
+  to: number;
 }
 
 interface Spark {
@@ -67,6 +160,8 @@ interface Spark {
 
 /** Reused by the tracer update so a live streak costs no allocation. */
 const SCRATCH = new Vector3();
+/** Where a near-missing round came closest, handed to `onNearMiss`. */
+const NEAR_POINT = new Vector3();
 
 /**
  * Hitscan shooting and the transient effects it throws off. Tracers and
@@ -78,6 +173,7 @@ const SCRATCH = new Vector3();
 export class CombatSystem {
   private tracers: Tracer[] = [];
   private sparks: Spark[] = [];
+  private discs: Disc[] = [];
 
   /**
    * Wired by Game: a round passed within `suppressRadius` of `near` without
@@ -86,8 +182,23 @@ export class CombatSystem {
    * A callback rather than a direct call because this system must not know
    * about bots — it fires the player's rounds too, and the player is a
    * perfectly good thing to suppress later.
+   *
+   * `at` is the round's point of CLOSEST APPROACH, which is what a crack past
+   * your ear actually is — not the shooter, and not wherever the round
+   * eventually stopped. It is a shared scratch vector: read it in the
+   * handler, copy it if you mean to keep it.
    */
-  onNearMiss: (near: Hittable, from: Vector3) => void = () => {};
+  onNearMiss: (near: Hittable, from: Vector3, at: Vector3) => void = () => {};
+
+  /**
+   * Wired by Game: a round ARRIVED somewhere, at the moment its streak got
+   * there rather than the moment the damage resolved.
+   *
+   * A callback for exactly the reason `onNearMiss` is one — this system fires
+   * the player's rounds and all sixteen bots' and must not know what `Sfx`
+   * is. `at` is the tracer's own scratch vector: read it, do not keep it.
+   */
+  onImpact: (at: Vector3, kind: ImpactKind) => void = () => {};
 
   constructor(
     private scene: Scene,
@@ -112,7 +223,8 @@ export class CombatSystem {
         head: 0,
         alive: false,
         impact: Vector3.Zero(),
-        sparkColor: null,
+        impactKind: null,
+        impactNormal: Vector3.Up(),
       });
     }
     for (let i = 0; i < fx.sparkPoolSize; i++) {
@@ -125,6 +237,26 @@ export class CombatSystem {
       mesh.isVisible = false;
       mesh.isPickable = false;
       this.sparks.push({ mesh, t: 0 });
+    }
+    for (let i = 0; i < fx.discPoolSize; i++) {
+      // DOUBLESIDE as GEOMETRY, never by touching the material's
+      // `backFaceCulling`: `getEmissive` caches one material per colour and
+      // this pool shares those with the tracers and the sparks, so a flag
+      // flipped here would flip for every effect in the game. A disc is lifted
+      // off its surface and can be looked at from either side of a thin wall.
+      const mesh = MeshBuilder.CreateDisc(
+        `impact${i}`,
+        { radius: 1, tessellation: 8, sideOrientation: Mesh.DOUBLESIDE },
+        scene,
+      );
+      mesh.rotationQuaternion = Quaternion.Identity();
+      mesh.isVisible = false;
+      mesh.isPickable = false;
+      // The GlowLayer scan is construction-time and runs in `Game`'s
+      // constructor AFTER this system is built, so this flag is honoured —
+      // see the header. Without it a brown dust disc blooms like a lamp.
+      mesh.metadata = { noGlow: true };
+      this.discs.push({ mesh, t: 0, from: 0, to: 1 });
     }
   }
 
@@ -140,6 +272,11 @@ export class CombatSystem {
    * out of the config directly. It bounds the wall pick behind `hitWall` and
    * the near-miss sweep as well as the damage, so it is the whole reach of
    * the round, not just where the tracer stops.
+   *
+   * `damage` is what the round does CLOSE. `opts` carries the fall-off, and
+   * it is resolved against the distance this method already had to compute to
+   * place the impact — so range costs the shot nothing extra to know about.
+   * `range` is still the hard reach; the ramp lives inside it.
    */
   fire(
     origin: Vector3,
@@ -149,6 +286,7 @@ export class CombatSystem {
     muzzle: Vector3,
     targets: Hittable[],
     range: number,
+    opts: ShotOptions,
   ): ShotResult {
     const dir = jitterDirection(aimDir, spread);
 
@@ -179,22 +317,73 @@ export class CombatSystem {
         // Only counts in front of the shooter and short of whatever stopped the
         // round — a bullet that buried itself in a wall did not crack past
         // someone standing beyond it.
-        if (near !== null && near < hitDist) this.onNearMiss(target, origin);
+        if (near !== null && near < hitDist) {
+          // Where the round came closest, which is where the crack is. Two
+          // dot products on a branch that has already run a `raySphere`;
+          // nothing on the common path pays for it. `NEAR_POINT` is module
+          // scratch and is handed out rather than copied, so the handler must
+          // read it now — which the one handler does.
+          target.center.subtractToRef(origin, SCRATCH);
+          dir.scaleToRef(Vector3.Dot(SCRATCH, dir), NEAR_POINT);
+          NEAR_POINT.addInPlace(origin);
+          this.onNearMiss(target, origin, NEAR_POINT);
+        }
       }
     }
 
     const hitPoint = origin.add(dir.scale(hitDist));
     let killed = false;
-    if (hitTarget) killed = hitTarget.takeDamage(damage, origin);
+    let headshot = false;
+    if (hitTarget) {
+      // `hitDist` is the target's own entry distance by this point, which is
+      // the number the fall-off wants — the range the round actually flew,
+      // not the range to whatever was behind it.
+      let dealt = falloffDamage(damage, hitDist, opts);
+      // The head zone is an UPGRADE to a body hit, never a candidate of its
+      // own. The body sphere already encloses the head, so a head sphere
+      // entered the nearest-hit search only to lose it — and testing it here
+      // instead costs one sphere per round that LANDED rather than one per
+      // target per shot. The gate is what keeps it off the bot path entirely.
+      const headMult = opts.headMult ?? 1;
+      if (headMult > 1) {
+        const head = raySphere(
+          origin,
+          dir,
+          hitTarget.eyePos,
+          CONFIG.combat.headRadius,
+        );
+        if (head !== null) {
+          headshot = true;
+          dealt *= headMult;
+        }
+      }
+      killed = hitTarget.takeDamage(dealt, origin);
+    }
 
     // The DAMAGE is instant — everyone is hitscan and nothing below may gate
-    // it. The spark is not: it is handed to the tracer and spawned when the
-    // streak's head arrives, so the impact is not seen before the round that
+    // it. The IMPACT is not: it is handed to the tracer and spawned when the
+    // streak's head arrives, so nothing is seen or heard before the round that
     // caused it gets there. At `tracerSpeed` that is up to ~0.4 s at the range
-    // cap, which is exactly how long the tell was.
-    const spark = hitTarget ? "#ffe680" : hitWall ? "#c8c8c8" : null;
-    this.spawnTracer(muzzle, hitPoint, spark);
-    return { target: hitTarget, killed, hitWall };
+    // cap, which is exactly how long the tell was. The sound rides the same
+    // clock as the visual for the same reason.
+    //
+    // The surface comes off the pick this method already paid for. `hard` is
+    // the default and nothing writes it: only the terrain floor's collider
+    // clone says `surface`, so every wall, prop and roof in the village
+    // answers by omission. The NORMAL is fetched only when there is a disc
+    // that will use it — a flesh hit has none, and neither does a round that
+    // stopped on nothing.
+    let kind: ImpactKind | null = null;
+    let normal: Vector3 | null = null;
+    if (hitTarget) {
+      kind = "flesh";
+    } else if (hitWall) {
+      kind =
+        wallPick!.pickedMesh?.metadata?.surface === "ground" ? "ground" : "hard";
+      normal = wallPick!.getNormal(true);
+    }
+    this.spawnTracer(muzzle, hitPoint, kind, normal);
+    return { target: hitTarget, killed, hitWall, headshot };
   }
 
   update(dt: number): void {
@@ -206,9 +395,11 @@ export class CombatSystem {
     for (const tr of this.tracers) {
       if (!tr.alive) continue;
       tr.head += fx.tracerSpeed * dt;
-      if (tr.sparkColor !== null && tr.head >= tr.dist) {
-        this.spawnSpark(tr.impact, tr.sparkColor);
-        tr.sparkColor = null;
+      if (tr.impactKind !== null && tr.head >= tr.dist) {
+        this.spawnImpact(tr.impact, tr.impactNormal, tr.impactKind);
+        // Nulled so it fires once, and it is also what makes the sound and
+        // the visual one event rather than two things that could disagree.
+        tr.impactKind = null;
       }
       const tail = tr.head - fx.tracerLength;
       if (tail >= tr.dist) {
@@ -235,31 +426,54 @@ export class CombatSystem {
       }
     }
 
+    // Dust discs: open out from `from` to `to` and fade as they go. The fade
+    // is the square of the remaining life rather than the life itself, so
+    // most of the disc's visible time is spent near its opening size — dust
+    // thrown off a wall is briefly dense and then mostly gone, and a linear
+    // alpha reads as a solid plate shrinking.
+    for (const d of this.discs) {
+      if (d.t > 0) {
+        d.t -= dt;
+        const k = Math.max(0, d.t / CONFIG.effects.discLife);
+        d.mesh.scaling.setAll(d.from + (1 - k) * (d.to - d.from));
+        d.mesh.visibility = k * k;
+        if (d.t <= 0) d.mesh.isVisible = false;
+      }
+    }
   }
 
   /** Clears transient effects between rounds. */
   clearTransient(): void {
     for (const tr of this.tracers) {
       tr.alive = false;
-      tr.sparkColor = null;
+      tr.impactKind = null;
       tr.mesh.isVisible = false;
     }
     for (const s of this.sparks) {
       s.t = 0;
       s.mesh.isVisible = false;
     }
+    for (const d of this.discs) {
+      d.t = 0;
+      d.mesh.isVisible = false;
+    }
   }
 
   /**
-   * `sparkColor` is the impact this round owes on arrival, or null if it
-   * stopped on nothing. A stolen slot (exhausted pool) drops its pending spark
-   * with the streak it belonged to, which is right: an impact whose tracer was
-   * recycled would pop with nothing visibly arriving.
+   * `kind` is the impact this round owes on arrival, or null if it stopped on
+   * nothing. A stolen slot (exhausted pool) drops its pending impact with the
+   * streak it belonged to, which is right: an impact whose tracer was recycled
+   * would pop with nothing visibly arriving — and would fire a sound with it.
+   *
+   * `normal` is the surface's, or null where there is no disc to orient (a
+   * flesh hit, or a round that stopped on nothing). It is COPIED here rather
+   * than held, so nothing in flight references a Babylon pick result.
    */
   private spawnTracer(
     from: Vector3,
     to: Vector3,
-    sparkColor: string | null,
+    kind: ImpactKind | null,
+    normal: Vector3 | null,
   ): void {
     const tr = this.tracers.find((t) => !t.alive) ?? this.tracers[0];
     const delta = to.subtract(from);
@@ -271,7 +485,11 @@ export class CombatSystem {
     tr.head = 0;
     tr.alive = true;
     tr.impact.copyFrom(to);
-    tr.sparkColor = sparkColor;
+    tr.impactKind = kind;
+    // Up is the right guess where the pick could not supply one: the only
+    // surface that answers "ground" is the valley floor.
+    if (normal) tr.impactNormal.copyFrom(normal);
+    else tr.impactNormal.set(0, 1, 0);
     // The direction is fixed for the whole flight, so this is set once here and
     // only `update` moves the streak along it.
     Quaternion.FromUnitVectorsToRef(
@@ -284,6 +502,51 @@ export class CombatSystem {
     tr.mesh.isVisible = true;
   }
 
+  /**
+   * A round arriving: the hot core, the dust it throws, and the noise of it.
+   *
+   * One entry point for all three so the surface is looked up once and the
+   * sound cannot drift out of step with the picture — they are the same
+   * event, and this is the moment the streak got there rather than the moment
+   * the damage resolved. Whether the sound is actually played is `Sfx`'s
+   * decision, not this system's: it owns the voice budget the sixteen bots
+   * are competing for, and there is nothing useful this side of it could
+   * decide about audibility.
+   */
+  private spawnImpact(pos: Vector3, normal: Vector3, kind: ImpactKind): void {
+    const look = IMPACTS[kind];
+    if (look.spark) this.spawnSpark(pos, look.spark);
+    if (look.disc) this.spawnDisc(pos, normal, look);
+    this.onImpact(pos, kind);
+  }
+
+  private spawnDisc(
+    pos: Vector3,
+    normal: Vector3,
+    look: { disc: string | null; from: number; to: number },
+  ): void {
+    const d = this.discs.find((x) => x.t <= 0) ?? this.discs[0];
+    // Off the surface along its own normal. A coplanar quad z-fights with the
+    // wall it was thrown from, and that reads as a broken decal rather than
+    // as dust — see `effects.discLift`.
+    normal.scaleToRef(CONFIG.effects.discLift, SCRATCH);
+    d.mesh.position.copyFrom(pos).addInPlace(SCRATCH);
+    // A disc is built in the XY plane facing +Z, so its facing is the axis
+    // that has to be turned onto the normal.
+    Quaternion.FromUnitVectorsToRef(
+      Vector3.Forward(),
+      normal,
+      d.mesh.rotationQuaternion!,
+    );
+    d.mesh.material = this.mats.getEmissive(look.disc!);
+    d.from = look.from;
+    d.to = look.to;
+    d.mesh.scaling.setAll(look.from);
+    d.mesh.visibility = 1;
+    d.mesh.isVisible = true;
+    d.t = CONFIG.effects.discLife;
+  }
+
   private spawnSpark(pos: Vector3, colorHex: string): void {
     const s = this.sparks.find((x) => x.t <= 0) ?? this.sparks[0];
     s.mesh.position.copyFrom(pos);
@@ -292,6 +555,21 @@ export class CombatSystem {
     s.mesh.isVisible = true;
     s.t = 0.18;
   }
+}
+
+/**
+ * What a round is still worth after flying `dist` metres.
+ *
+ * Flat inside `falloffNear`, flat again past `falloffFar`, linear between.
+ * A weapon with `damageFar === damage` (the DMR) runs the same arithmetic and
+ * lands on the same number at both ends, which is why the exemption needs no
+ * branch here and no optional field in the table.
+ */
+function falloffDamage(damage: number, dist: number, o: ShotOptions): number {
+  if (dist <= o.falloffNear) return damage;
+  if (dist >= o.falloffFar) return o.damageFar;
+  const t = (dist - o.falloffNear) / (o.falloffFar - o.falloffNear);
+  return damage + (o.damageFar - damage) * t;
 }
 
 /** Ray vs sphere: returns entry distance along the ray, or null on miss. */

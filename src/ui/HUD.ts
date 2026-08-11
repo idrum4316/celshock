@@ -821,10 +821,18 @@ export class HUD {
    * The hit confirmation. A kill is a distinct, redder marker — the standard
    * shooter read, and the one piece of feedback that tells you to stop
    * shooting at a body that is already going down.
+   *
+   * A headshot is a second axis and it LOSES to a kill, deliberately: the two
+   * would otherwise fight over the same four ticks, and of the two things the
+   * marker can say, "this one is going down" is the one that changes what you
+   * do next. The headshot keeps its own sound regardless, which is where that
+   * read actually lands — and a headshot that killed is a kill marker with a
+   * ding on it, which is the correct pair of statements.
    */
-  flashHitmarker(killed = false): void {
+  flashHitmarker(killed = false, headshot = false): void {
     this.hitmarker.classList.remove("hidden");
     this.hitmarker.classList.toggle("kill", killed);
+    this.hitmarker.classList.toggle("head", headshot && !killed);
     this.hitT = 0.12;
   }
 

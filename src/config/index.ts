@@ -15,7 +15,7 @@
 import { conquest } from "./conquest";
 import { bots, nav } from "./bots";
 import { player } from "./player";
-import { weapons, recoil, gunfeel } from "./weapons";
+import { weapons, combat, recoil, gunfeel } from "./weapons";
 import { sights } from "./sights";
 import { viewmodel } from "./viewmodel";
 import { grenade } from "./grenade";
@@ -40,6 +40,7 @@ export const CONFIG = {
   map,
   player,
   weapons,
+  combat,
   recoil,
   gunfeel,
   grenade,

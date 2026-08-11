@@ -371,7 +371,8 @@ placement is the ground probe's job, and bots never touch the collidable list.
 
 ### Mesh metadata is a contract
 
-Four flags, all read elsewhere; new geometry that omits them misbehaves silently:
+Four flags and one value, all read elsewhere; new geometry that omits them
+misbehaves silently:
 
 - `solid: true` — collider proxies only. Unmarked geometry is shot through, seen
   through, and walked through.
@@ -386,6 +387,14 @@ Four flags, all read elsewhere; new geometry that omits them misbehaves silently
   sets, and the moon is not in the valley to be fogged out of.
 - `noShadowCaster: true` — excluded from `ShadowSystem.setCasters()`. Flat receivers
   (ground, roads) need it: casting from them is pure shadow acne.
+- `surface: "ground"` — what a round that stops here kicks up. The odd one out:
+  it is a **value with a default**, not a flag, and **absent means `"hard"`**.
+  `MapBuilder` sets it on exactly one thing — the terrain floor's collider clone
+  — so every wall, prop and roof in the village answers by omission and a new
+  collider needs no thought at all. Read by `CombatSystem` to pick the impact's
+  spark, its dust disc and its sound. Adding `"wood"`/`"metal"` is one member of
+  `ImpactKind`, one row in that file's `IMPACTS` table, one arm in `Sfx.impact`
+  and a `surface` argument on `collider()`; no signature in between moves.
 
 ### Bots: navigation, scaling, perception and squads
 
@@ -496,13 +505,32 @@ the phone-shaped details (fullscreen on the document element, `--ov-scale`, why
 - Recoil only partly springs back: `CONFIG.recoil.recoverFraction` (0.7) returns 70%
   and pushes 30% permanently into the player's own `pitch`/`yaw`, so a magazine held
   down genuinely walks off target. An explicit product decision — a fully-recovering
-  version was rejected.
+  version was rejected. **`CameraSystem.addFlinch` is the one aim kick that is
+  100% springy and must stay that way**: it is what a hit *taken* does, and a
+  hit is not a choice the player made, so a permanent share would ratchet the
+  view skyward over one exchange and make each hit likelier to be followed by
+  another. It shares the recoil spring rather than owning one, for the reason
+  the bob phase has a single integrator.
 - **Every ROUND is hitscan** — player and bots share `CombatSystem.fire()`, which
   takes the shooter's target list (so friendly fire is excluded by construction rather
   than by a team check inside) and the shooter's own `range`, which bounds the wall pick
-  and the near-miss sweep as well as the damage. Tracers and sparks are pooled; add
-  effects to a pool rather than allocating per shot. The grenade is the one deliberate
-  exception.
+  and the near-miss sweep as well as the damage. Tracers, sparks and impact discs are
+  pooled; add effects to a pool rather than allocating per shot. The grenade is the one
+  deliberate exception.
+- **Damage is a slope, not a number**, and `range` is only where the ray stops.
+  `ShotOptions` carries a fall-off band resolved against the distance the impact
+  point already cost, so every weapon (and the bots' one flat round) degrades
+  with distance. Quote a weapon's time to kill as the CLOSE one or say which.
+- **The head zone belongs to the player by CONSTRUCTION, not by a check.**
+  `ShotOptions.headMult` is what turns it on and only `Player.shotOptions` sets
+  it; at 1 or absent the head sphere is never ray-tested at all. That gate is
+  load-bearing rather than a difficulty knob — bots aim at `eyePos`, the very
+  point the zone is centred on, so a head sphere their rounds could find would
+  make every accurate bot shot a headshot. It also means the sixteen shooters
+  without the feature pay nothing for it. The zone is an *upgrade* to a body hit
+  that already landed, never a candidate of its own: the body sphere encloses it
+  and it could not win a nearest-hit search. Fall-off applies first, so a
+  headshot at range is worth less than one up close.
 - TypeScript is strict with `noUnusedLocals`/`noUnusedParameters` — the typecheck
   fails on dead variables.
 - `Bot` holds a small FSM and drives a joint rig built by `SoldierModel` (invisible

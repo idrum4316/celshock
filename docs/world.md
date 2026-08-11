@@ -217,6 +217,21 @@ reads the field directly. The block split is not just for culling: `CameraSystem
 picks every frame and `CombatSystem` every shot, and one map-wide floor mesh would
 defeat bounding-box rejection.
 
+**That clone is also the one collider in the world that says what it is made
+of.** It carries `metadata.surface = "ground"`, which is what a round stopping
+there kicks up — a dull brown dust disc and a lowpassed thud rather than the
+spark and tick a wall gives. Being bypassed by `collider()` is exactly what
+makes this cheap: the clone *is* the heightfield, so it is the one thing that
+can honestly answer the question, and every box `collider()` makes leaves the
+field **absent**, which reads as `"hard"`.
+
+So a new map, a new building or a new prop owes nothing here at all — the
+default is the common case, and the exception is a single line beside the one
+mesh that is genuinely different. Splitting the boxes into stone, timber and
+metal later is a `surface` argument on `collider()` plus a member of
+`ImpactKind`; nothing between the world layer and `CombatSystem` moves, and
+nothing already built has to be revisited.
+
 ## The valley rim
 
 The map's boundary is **four collider boxes and a landform, and they are two

@@ -28,8 +28,20 @@ import type { CoverMap } from "../world/CoverMap";
 import type { FlowField, NavGrid } from "../world/NavGrid";
 import type { GameMap } from "../world/MapBuilder";
 import type { ObstacleField } from "../world/ObstacleField";
-import type { CombatSystem, Hittable } from "./CombatSystem";
+import type { CombatSystem, Hittable, ShotOptions } from "./CombatSystem";
 import type { SquadOrder } from "./ConquestSystem";
+
+/**
+ * Every bot's round, since bots carry no weapon from `CONFIG.weapons` — they
+ * fire one flat round and this is its whole damage curve. A module constant
+ * because it never varies: rebuilding it per shot would allocate sixteen
+ * objects a second in a firefight for three numbers that cannot change.
+ */
+const BOT_SHOT: ShotOptions = {
+  damageFar: CONFIG.bots.damageFar,
+  falloffNear: CONFIG.bots.falloffNear,
+  falloffFar: CONFIG.bots.falloffFar,
+};
 
 /**
  * Owns both teams: a fixed pool of bot rigs, the AI schedule, and the render
@@ -505,6 +517,7 @@ export class BattleSystem {
       muzzle,
       this.hittablesAgainst(bot.team),
       CONFIG.bots.range,
+      BOT_SHOT,
     );
     const at = muzzle.clone();
     this.muzzleFlashes.push(at);

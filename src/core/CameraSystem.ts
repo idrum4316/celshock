@@ -16,6 +16,10 @@
  * idiom — because burst climb must not vary with frame rate. Recoil only
  * partly springs back (CONFIG.recoil.recoverFraction); the rest is pushed into
  * the player's aim permanently — a deliberate product decision, not a bug.
+ * `addFlinch` is the ONE aim kick that is 100% springy, and must stay that
+ * way: a hit is not a choice the player made, so a permanent share would
+ * ratchet the view up over one exchange. It shares the spring rather than
+ * owning one, so it cannot drift against the recoil sitting on top of it.
  * The view punch (FOV spike / camera shove / jitter), the head bob and the
  * landing absorb are pure cosmetics: they are applied only to the rendered
  * camera, never to aimPitch/aimYaw, so bullets and bots never see them.
@@ -290,6 +294,38 @@ export class CameraSystem {
     this.recoilYaw = Math.max(
       -r.maxYaw,
       Math.min(r.maxYaw, this.recoilYaw + yaw * r.recoverFraction),
+    );
+  }
+
+  /**
+   * A hit knocking the aim off. Called once per wound taken.
+   *
+   * It is on `aimPitch`/`aimYaw` rather than on the rendered camera, and that
+   * is the point: a flinch you can shoot straight through is decoration. This
+   * has to move where the rounds go, or being shot at costs nothing but a
+   * vignette.
+   *
+   * **Deliberately not `addRecoil`, and the difference is the whole design.**
+   * That method pushes `1 - recoverFraction` of every kick permanently into
+   * `pitch`/`yaw`, because a magazine you CHOSE to empty should walk off
+   * target. A hit is not a choice. At four bot rounds to a kill, a permanent
+   * share would ratchet the view skyward across a single exchange and make
+   * each hit likelier to be followed by another — a death spiral wearing
+   * feel's clothing. So this is entirely springy.
+   *
+   * It rides the SAME spring rather than bringing its own, which is what
+   * makes it recover on the same true exponential, obey the same
+   * `maxPitch`/`maxYaw` ceilings so a crossfire cannot stack it off the
+   * screen, and clear itself in `reset()` for free. Two springs on one aim
+   * would drift against each other for exactly the reason two bob
+   * integrators would.
+   */
+  addFlinch(pitch: number, yaw: number): void {
+    const r = CONFIG.recoil;
+    this.recoilPitch = Math.min(r.maxPitch, this.recoilPitch + pitch);
+    this.recoilYaw = Math.max(
+      -r.maxYaw,
+      Math.min(r.maxYaw, this.recoilYaw + yaw),
     );
   }
 

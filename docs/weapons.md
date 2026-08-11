@@ -147,6 +147,56 @@ same rate through any optic — a 3.5x scope on hip-fire rates is unusable), and
 viewmodel's zoom compensation is `adsMagReference / mag`. The holo is 1.6, exactly
 the 0.62 rad the camera used before optics were a choice.
 
+## Recoil has a shape, and the shape is learnable
+
+Two terms make the difference between recoil you fight and recoil you learn, and
+neither is a weapon's own number scaled.
+
+**`recoil.firstShotMult` (1.6) is what makes a burst have a punch and a settle
+rather than a flat ramp.** A weapon that has been sitting still and one that is
+mid-string are not the same weapon; without this they were, because shot 1 and
+shot 20 kicked identically. It is also what makes a tap distinct from a held
+trigger, which is the entire reason to tap. `Player` owns the string counter,
+beside `spreadBloom` and with exactly its lifecycle — raised by a shot, bled off
+by `stringResetTime` (0.35 s), and dropped by anything that takes the weapon
+away. **The string belongs to the WEAPON, not to the finger**, the same split
+`burstLeft` and `triggerHeld` already draw, so `completeSwap` clears it
+explicitly: the sidearm's `drawTime` of 0.34 s is a hundredth of a second inside
+the window, and without that line the pistol's first round would inherit the
+rifle's settled kick.
+
+**It does not apply to a weapon that is a string of one**, and the exclusion is
+the feature rather than an exception to it. `Player.recoilRamp` returns 1 when
+`semiAuto && burst === 1`, which is the DMR and the pistol: every shot there is
+a first shot, so the multiplier would not be texture at all — just a flat 60%
+recoil increase wearing feel's clothing, and on the DMR's 2.2 that is 5.2° on
+every deliberate scoped round. Their `recoilMult` already carries the punch a
+single shot is supposed to have. The carbine is `semiAuto` too and is
+deliberately **included**, because `burst > 1` means one pull is three rounds
+climbing as one motion, which is exactly the thing that has a first round in it;
+`burstCycle` 0.4 s exceeds the reset window, so every burst gets the punch.
+
+**Per-weapon `yawBias` (−1..+1) is what makes the horizontal learnable at all.**
+It used to be symmetric noise, and the only correct response to a random walk is
+to stop firing — so every weapon's spray was the same shape at a different rate.
+The bias makes the walk drift. It **scales** the noise rather than adding to it
+(`(rand * (1 − |bias|) + bias) * yawPerShot`), so the total is still bounded by
+`yawPerShot` and every ceiling documented for `maxYaw` survives untouched; 0 is
+bit-for-bit the old behaviour, which is what the DMR is.
+
+The magnitudes track how legible a single kick is. The SMG's **+0.6** is the
+strongest because 13 rounds a second on the smallest per-shot kick is otherwise
+indistinguishable from noise — only a consistent drift is readable at that rate.
+The carbine's **−0.5** is strong because three rounds in 0.1 s cannot be steered,
+only pre-aimed. The LMG's **−0.25** is the gentlest for the same reason its
+`recoilMult` is: seventy-five rounds of a hard pull ends up pointing at a wall.
+
+**The signs are paired, not scattered.** Rifle, SMG and pistol pull right;
+carbine and LMG pull left. So a rifle-plus-sidearm loadout is one hand to learn
+across the swap, and the other family is a genuinely different weapon rather
+than the same one at a different rate — the thing the kit screen's stat chart is
+trying to say, said in the hands instead.
+
 A weapon's numbers scale `CONFIG.recoil` rather than restating it: `recoilMult` and
 `bloomMult` SCALE the per-shot terms, because the shape of recoil belongs to the
 game. `bloomMult` multiplies the *ceiling* as well as the per-shot term — a weapon
@@ -157,6 +207,90 @@ The three automatics are balanced on time to kill, not damage per second: 4 rifl
 rounds at 8/s is 0.375 s, 6 SMG rounds at 13/s is 0.385 s, 5 LMG rounds at 10/s is
 0.4 s. The choice buys how much of the screen a burst covers, how far away it still
 means anything, and how long you may go on firing it.
+
+**Every one of those figures is the CLOSE one, and that is a change of meaning
+rather than a caveat.** A weapon's `damage` is what a round does at or inside
+`falloffNear`; past `falloffFar` it does `damageFar`, and between the two it
+lerps against the distance the round actually flew. `range` is untouched and
+still the hard reach — but a round that has stopped hurting is a more
+interesting fact than a round that has stopped existing, so the ramp lives well
+inside it and `range` is no longer the interesting end of the weapon.
+
+What the second column buys is that the kit can now say something it could not:
+the DMR alone is exempt, the LMG loses damage per second and never a round, the
+carbine's burst stops being a kill at a stated distance, and the SMG falls off
+hardest and earliest. Two rewards and two bills, which is the same balance the
+close figures strike.
+
+- **The rifle** is 4 rounds to **53.1 m** and 5 beyond it — 0.375 s becoming
+  0.5 s at a boundary that sits inside the 78 m fog wall, so it is a distance a
+  player can actually learn.
+- **The LMG's 24 → 21 crosses no round boundary at all** (21 × 5 = 105). Five
+  hits kill at 85 m exactly as they do at 5, and only the sustained figure moves
+  (240 → 210). That is the same reward `bloomMult` 0.5 is, on a third axis.
+- **The DMR has no fall-off**, and the exemption *is* the weapon: "two shots,
+  whatever the range" is the sentence its entry opens with. It is stated as
+  `damageFar` equal to `damage` rather than as an absent field, so every weapon
+  carries the same three numbers and the lerp needs no special case — the same
+  argument `floorSurfaces.ts` makes for `flat` being a real member of its list.
+- **The sidearm and the bots' round sit on a knife edge**, and it is worth
+  knowing about: 25 × 4 is exactly 100, so there is no headroom and the first
+  centimetre past `falloffNear` costs a whole round. Anything that moves either
+  `damage` off 25 moves a boundary by tens of metres.
+
+**Fall-off on the carbine quantises, and that is the one place these numbers are
+placed rather than chosen.** Every other weapon degrades a round at a time; the
+carbine has all three rounds cross the threshold together, so a burst kills
+while the round makes 33.4 and does not the moment it does not — 0.1 s to kill
+becoming 0.5 s, a 5x cliff crossed in one step. The drop from 34 to 33.4 is 8%
+of the ramp's fall, so **the breakpoint sits just past `falloffNear` almost
+regardless of `falloffFar`**: moving `falloffNear` is how you move the cliff and
+`damageFar` barely touches it. It is at **39.6 m**, which is where the weapon's
+own entry already says it runs out. An earlier version ran 20 → 55 and put the
+cliff at 22.9 m while claiming 55 in its own comment, so: **quote the breakpoint
+when any of those three move, never `falloffFar`, and re-derive it rather than
+assuming it followed.**
+
+## The head zone
+
+A round inside `CONFIG.combat.headRadius` (0.22 m) of the target's `eyePos` is
+worth `headshotMult` (2). The rifle and the pistol kill in two, the SMG in
+three, the LMG in three, and **the DMR kills in one at any range** — the only
+one-shot kill in the game, and the reward its `semiAuto`, its 2.2 recoil
+multiplier and its exemption from fall-off have all been asking for. It costs a
+scope, a 3/s ceiling and a 22 cm target.
+
+Three things about it are structural rather than tuning:
+
+- **It is the PLAYER's, by construction rather than by a check.** Bots aim at
+  `t.eyePos` — the point the zone is centred on — so a head sphere their rounds
+  could reach would make every accurate bot shot a headshot and halve a tuned
+  bot TTK overnight. `ShotOptions.headMult` is what turns it on; only
+  `Player.shotOptions` sets it, and at 1 or absent the sphere is **never
+  ray-tested**, so the sixteen shooters without the feature pay nothing for one.
+  A friendly-fire or PvP mode would need one field changed and nothing added.
+- **It is an upgrade to a body hit, never a candidate of its own.** `center` +
+  `hitRadius` 0.75 already encloses the head, so a head sphere entered the
+  nearest-hit search only to lose it; testing it after the body hit resolves
+  costs one sphere per round that LANDED rather than one per target per shot,
+  and it cannot create a hit that the body sphere did not already register. The
+  ~12 cm of crown standing above that sphere stays unhittable exactly as it was
+  — reaching it would be a change to every bot's silhouette smuggled in under a
+  player feature.
+- **Fall-off applies first.** A headshot at 100 m with the rifle is 44, not 60.
+  The head multiplies what the round did, and what the round did is a function
+  of how far it flew.
+
+It works under crouch for free: `center` and `eyePos` ride the one blend, so a
+crouching player's head comes down with the rest of them.
+
+Feedback is split deliberately. `HUD.flashHitmarker` lets a **kill outrank a
+head hit** on screen, because of the two things the marker can say, "this one is
+going down" is the one that changes what you do next — and the two would
+otherwise fight over the same four ticks. The ding (`Sfx.headshot`) plays
+regardless, and that is where the read actually lands: it is two sines with no
+noise in it at all, precisely so it cuts through a burst of ordinary markers
+instead of merging into them.
 
 **The carbine is the third question the trigger can be asked, and `semiAuto` and
 `burst` are why there are three.** `semiAuto` asks whether the trigger has to come

@@ -698,6 +698,15 @@
   height: 11px;
   box-shadow: 0 0 5px rgba(0, 0, 0, 0.95);
 }
+/* A head hit that did not kill: longer ticks in a warm tone, so it reads as
+   "more than a hit" without reading as "stop shooting" — which is what the
+   kill variant above owns, and why HUD.flashHitmarker lets a kill win. The
+   ding is doing most of the work; this is the corroboration. */
+#hitmarker.head i {
+  background: #ffd98a;
+  height: 13px;
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.95);
+}
 
 /* --- damage vignette --- */
 #vignette {
