@@ -185,8 +185,11 @@ src/
       deploy.css
     LoadoutScreen.ts    # Kit screen: two slots, a stat chart derived from
       loadout.css       #   CONFIG.weapons, and the turntable stage
-    SettingsScreen.ts   # Toggles built from a ROW TABLE. Owns no setting —
-      settings.css      #   picks leave through onToggle, return as setValues
+    SettingsScreen.ts   # Controls built from a ROW TABLE — a button group, or
+      settings.css      #   a slider where the ladder is too long for one (the
+                        #   thumb picks an option INDEX, so both are the same
+                        #   choice). Owns no setting: picks leave through
+                        #   onChange and return as setValues
     Minimap.ts          # Corner minimap: flags, friendlies, firing enemies
       minimap.css
   pwa/

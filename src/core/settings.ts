@@ -1,5 +1,6 @@
 /**
- * settings.ts — The player's display settings and where they are remembered.
+ * settings.ts — The player's settings and where they are remembered: what the
+ * game looks like, and how fast it looks around.
  * Owns the `Settings` shape, its defaults and the localStorage round trip;
  * owns nothing that applies them (that is `Game.applySettings`).
  * Invariants: every field is read INDEPENDENTLY, so a key added later cannot
@@ -14,6 +15,13 @@ import { CONFIG } from "../config";
  * declared exactly once and a value that is not on it cannot be stored.
  */
 export type RenderScale = (typeof CONFIG.graphics.renderScales)[number];
+
+/**
+ * A look-sensitivity multiplier, as one of `CONFIG.camera.lookScales`. Derived
+ * from that list for the same reason `RenderScale` is derived from its own: the
+ * ladder is declared once, and a value that is not on it cannot be stored.
+ */
+export type LookScale = (typeof CONFIG.camera.lookScales)[number];
 
 /**
  * One row on the settings screen. Mostly booleans; `renderScale` is the first
@@ -55,6 +63,25 @@ export type Settings = {
    * had ever called `setHardwareScalingLevel`.
    */
   renderScale: RenderScale;
+  /**
+   * Mouse look speed, as a multiplier on `CONFIG.camera.sensX`/`sensY`.
+   *
+   * The first setting that is not about the picture, and the reason the screen
+   * grew a second section. It is a multiplier rather than a rate because the
+   * two axes are a tuned ratio — see `CONFIG.camera.lookScales`.
+   */
+  mouseSensitivity: LookScale;
+  /**
+   * Gamepad look speed, as a multiplier on `CONFIG.camera.stickSensX`/`sensY`.
+   *
+   * Separate from the mouse's because the two devices are not the same setting
+   * wearing two hats: a machine with a pad plugged in has both, and a player
+   * who slows the stick down has said nothing about the mouse. Aim assist is
+   * bounded as a fraction of the player's own turn rate, so this moves that
+   * bound with it (`CameraSystem.stickYawRate`) rather than leaving the assist
+   * able to out-turn a slowed stick.
+   */
+  stickSensitivity: LookScale;
 };
 
 /**
@@ -123,6 +150,10 @@ export const SETTING_DEFAULTS: Settings = {
   horrorGrade: true,
   ragdolls: CONFIG.bots.death.ragdoll,
   renderScale: defaultRenderScale(),
+  // 1 on both, and it is the one default that means "change nothing": the rates
+  // in `CONFIG.camera` are what every other number there was tuned against.
+  mouseSensitivity: 1,
+  stickSensitivity: 1,
 };
 
 /** One key per field, so the fields are independent in the store as well. */
@@ -199,6 +230,8 @@ const CODECS: { [K in keyof Settings]: Codec<Settings[K]> } = {
   horrorGrade: bool,
   ragdolls: bool,
   renderScale: oneOf(CONFIG.graphics.renderScales),
+  mouseSensitivity: oneOf(CONFIG.camera.lookScales),
+  stickSensitivity: oneOf(CONFIG.camera.lookScales),
 };
 
 function readRaw(key: keyof Settings): string | null {

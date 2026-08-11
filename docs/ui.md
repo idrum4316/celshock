@@ -9,8 +9,8 @@ contract for everything under `src/ui/`.
 
 `src/ui/` holds one class per thing on screen, and `HUD` is not where a new one
 goes: `OverlayScreen` owns the four full-screen cards, `DeployScreen` the deploy
-map, `LoadoutScreen` the kit, `SettingsScreen` the toggles, `Minimap` the corner
-map, and `HUD` **only** the gameplay chrome.
+map, `LoadoutScreen` the kit, `SettingsScreen` the settings list, `Minimap` the
+corner map, and `HUD` **only** the gameplay chrome.
 
 **The boot screen is the one piece of interface that is not in this directory**,
 and the exception is what defines it: it covers the stretch before any module
@@ -59,6 +59,44 @@ none. The bar is also **indeterminate**, and honestly so — the work behind bot
 it and the boot screen's is a single uninterruptible call, so there is no
 progress to read even in principle, and an invented percentage always ends up
 stuck at 90 while the real work finishes.
+
+**The settings list is a ROW TABLE, and every row is the same thing: a labelled
+choice over one field of `Settings`.** A toggle is a two-option choice, so Off/On
+and a three-rung resolution ladder go through one renderer, one key handler and
+one hit-testing path. What a longer list changes is only how the cell is DRAWN:
+the control column is fixed, which is ~60 px a button for three options and 10 px
+for sixteen — narrower than one character — so a row can ask for
+`style: "slider"` and be laid along a track instead.
+
+- **The slider is positioned by option INDEX, not by value**, one rung per equal
+  share of the track. That is what keeps it a choice over the same `options` the
+  arrow keys step and the same list a codec validates against: a drag cannot land
+  on a value a keypress could not reach. It also preserves a ladder's spacing —
+  `CONFIG.camera.lookScales` is geometric, so an inch of drag is the same *ratio*
+  of look speed wherever it is taken.
+- **The drag lives on the WINDOW and its geometry is captured at the press**,
+  because `draw` rebuilds `innerHTML` wholesale: the element under the finger is
+  destroyed and replaced the first time the value crosses a rung, and a listener
+  or a pointer capture bound to it dies one rung in. The track's box is measured
+  once — nothing about the row's layout depends on the value — so a drag survives
+  the redraw, leaving the row, and running off the end of the screen.
+- **The thumb's size is declared in CSS and read back off the DOM**, never
+  restated in the script. Both the paint (`left: calc(var(--t) * (100% -
+  var(--thumb)))`) and the hit maths need it, and two copies of that number are
+  two things that drift into a thumb sitting where the value is not. The script
+  writes `--t` and nothing else.
+- **Hover does not move the selection while a slider is held.** The redraw a drag
+  causes lands a fresh row under a pointer that has not moved between rows, and
+  taking the selection from it would walk the highlight onto a slider the player
+  is not dragging.
+
+**A hint says what the value WORKS OUT TO, and that is why hints are computed
+rather than written in the table.** "75%" and "1.25x" are both numbers over
+something the screen never shows — a panel's pixel count, a rate in radians —
+so `hintFor` resolves each against the machine (`1280x800`) or against
+`CONFIG.camera` (`202° per 1000 px`, `160°/s at full stick`). A player comparing
+this game against the shooter they came from is comparing sweeps, not
+multipliers.
 
 **A class on `#hud` belongs to whoever raises it.** `OverlayScreen` sets
 `.overlaid`, `LoadoutScreen` sets `.kitting`, `HUD` sets `.paused`, `.editing` and

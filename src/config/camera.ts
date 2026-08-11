@@ -14,6 +14,40 @@ export const camera = {
   stickSensX: 2.8,
   stickSensY: 1.8,
   /**
+   * The rungs a player's look-sensitivity setting sits on, as MULTIPLIERS over
+   * the four rates above. One ladder, used by both the mouse and the stick
+   * setting (`Settings.mouseSensitivity` / `stickSensitivity`), applied by
+   * `CameraSystem.setLookScale`.
+   *
+   * A multiplier rather than a rate per device, and one number rather than one
+   * per axis, because the pairs above are a TUNED RATIO — the vertical is
+   * deliberately slower than the horizontal on both devices, and a player who
+   * can set the two independently is a player who can lose that ratio without
+   * ever meaning to. Scaling both by one number moves the speed and keeps the
+   * feel; it also means the ADS rates, which are derived from these through the
+   * fitted optic's magnification, follow for free.
+   *
+   * **The spacing is geometric, not linear, because sensitivity is felt as a
+   * RATIO.** A 0.1 step is a tenth at 1.0 and a fortieth at 4.0 — the same
+   * keypress does something at one end of a linear ladder and nothing at the
+   * other. These rungs are ~10% apart through the band players actually settle
+   * in (0.6-2.0) and open up outside it, so the useful part is fine enough to
+   * tune and the whole 12x range still fits in sixteen steps.
+   *
+   * **Sixteen is also a slider's worth**, which is what the settings screen
+   * draws this as: the rungs are its detents, laid one per equal share of the
+   * track, so an inch of drag is the same RATIO of look speed wherever it is
+   * taken and the thumb has room to land where it was aimed. It is already
+   * finer than the 1-10 sliders console shooters ship. A longer ladder would
+   * cost the arrow keys, which step it one rung at a time.
+   *
+   * 1 must be on the ladder: it is the default, and it is the rate every other
+   * number in this file was tuned against.
+   */
+  lookScales: [
+    0.25, 0.35, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2, 2.5, 3,
+  ] as const,
+  /**
    * Eye height, standing. The camera sits here (first person), Player.eyePos
    * reports it, and bot line-of-sight checks against the player use it — one
    * number for all three, so what a bot can see is what you can see.

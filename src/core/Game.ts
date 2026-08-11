@@ -896,6 +896,12 @@ export class Game {
     // Turning it off drops any body still falling, which is the honest
     // response to "stop doing this" — the tween takes over from the next death.
     this.ragdolls.setEnabled(this.settings.ragdolls);
+    // The look speeds go to the camera and stop there: the aim assist reads its
+    // own bound off `stickYawRate`, which already carries the stick's.
+    this.cameraSys.setLookScale(
+      this.settings.mouseSensitivity,
+      this.settings.stickSensitivity,
+    );
   }
 
   /**

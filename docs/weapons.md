@@ -147,6 +147,18 @@ same rate through any optic — a 3.5x scope on hip-fire rates is unusable), and
 viewmodel's zoom compensation is `adsMagReference / mag`. The holo is 1.6, exactly
 the 0.62 rad the camera used before optics were a choice.
 
+**The player's own look-speed setting multiplies the CONFIG rates and nothing
+else** (`CameraSystem.setLookScale`, one multiplier per device, fed from
+`Settings.mouseSensitivity`/`stickSensitivity` by `Game.applySettings`). That is
+the whole of its reach, and it is deliberate: the ADS multipliers, the optic's
+magnification and the aim assist's bound are all expressed *against* those rates,
+so scaling at the source moves the three together and none of them has to know
+the setting exists. **The one place it has to be written out is
+`CameraSystem.stickYawRate`**, because that getter is not a rate the camera uses
+— it is the rate the aim assist bounds itself as a fraction of, and a player who
+has halved their stick speed has halved what "the player always out-turns the
+assist" is measured against.
+
 ## Recoil has a shape, and the shape is learnable
 
 Two terms make the difference between recoil you fight and recoil you learn, and

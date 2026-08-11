@@ -12,6 +12,12 @@
  * optic's alone; only the blend RATE is shared with the weapon, because how
  * fast a sight comes up is a fact about the weight in your hands as well as
  * about the glass on top of it.
+ * The player's look-speed SETTINGS (`setLookScale`, one multiplier per device)
+ * multiply the CONFIG rates and reach nothing else: the ADS multipliers, the
+ * optic's magnification and the aim assist's bound are all expressed against
+ * those rates, so scaling at the source moves all three. `stickYawRate` is the
+ * one place the stick's is written out, because that getter exists for the aim
+ * assist rather than for this camera.
  * Invariants: recoil decay uses true Math.exp(-rate*dt) — NOT the frame-lerp
  * idiom — because burst climb must not vary with frame rate. Recoil only
  * partly springs back (CONFIG.recoil.recoverFraction); the rest is pushed into
@@ -72,6 +78,20 @@ export class CameraSystem {
   private weaponAdsMult = weaponSetup(DEFAULT_WEAPON).adsSpeedMult;
   /** The carried weapon's steadiness in the hands, scaling the hold sway. */
   private weaponSwayMult = weaponSetup(DEFAULT_WEAPON).swayMult;
+
+  /**
+   * The player's own look-speed multipliers, one per device
+   * (`Settings.mouseSensitivity` / `stickSensitivity`), pushed by
+   * `Game.applySettings`. 1 is the shipped rate.
+   *
+   * They multiply the CONFIG rates and nothing else, which is what keeps them
+   * out of everything downstream: the ADS multipliers, the optic's
+   * magnification and the aim assist's bound are all expressed against those
+   * rates, so scaling at the source moves all three together and none of them
+   * has to know this setting exists.
+   */
+  private mouseScale = 1;
+  private stickScale = 1;
 
   /**
    * Head-bob phase, in radians, advanced by travel rather than by time.
@@ -161,6 +181,15 @@ export class CameraSystem {
   }
 
   /**
+   * The player's look-speed settings. Cheap enough to call on every change,
+   * like `setLoadout`; `Game.applySettings` is the only caller.
+   */
+  setLookScale(mouse: number, stick: number): void {
+    this.mouseScale = mouse;
+    this.stickScale = stick;
+  }
+
+  /**
    * Where the weapon is actually pointed: the player's aim, plus recoil, plus
    * the hold sway. Everything downstream — the shot, the aim assist, the
    * damage arcs — reads the aim through here, so the sway is honest by
@@ -192,10 +221,19 @@ export class CameraSystem {
    * down the irons — the assist tuned as an absolute rate was 3.4x the
    * player's own scoped turn rate. Reads the same `adsBlend > 0.5` step
    * `update` applies the multiplier on, so the two cannot disagree.
+   *
+   * The player's own stick setting is in here for the same reason the optic's
+   * multiplier is: a player who has halved their look speed has halved what
+   * "the player always out-turns the assist" is measured against, and an assist
+   * left at the shipped rate would out-turn them.
    */
   get stickYawRate(): number {
     const aiming = this.adsBlend > 0.5;
-    return CONFIG.camera.stickSensX * (aiming ? this.sight.stickMult : 1);
+    return (
+      CONFIG.camera.stickSensX *
+      this.stickScale *
+      (aiming ? this.sight.stickMult : 1)
+    );
   }
 
   /** Yaw-only forward, for movement on the ground plane. Deliberately the
@@ -372,8 +410,10 @@ export class CameraSystem {
 
     // --- look ---
     const aiming = this.adsBlend > 0.5;
-    const mouseMult = aiming ? this.sight.mouseMult : 1;
-    const stickMult = aiming ? this.sight.stickMult : 1;
+    // The player's own setting multiplies the optic's, so ADS stays the same
+    // FRACTION of hip fire whatever look speed they have chosen.
+    const mouseMult = (aiming ? this.sight.mouseMult : 1) * this.mouseScale;
+    const stickMult = (aiming ? this.sight.stickMult : 1) * this.stickScale;
     const assistMult = assist ? assist.stickMult : 1;
     this.yaw += input.mouseLookX * c.sensX * mouseMult;
     this.pitch -= input.mouseLookY * c.sensY * mouseMult;
