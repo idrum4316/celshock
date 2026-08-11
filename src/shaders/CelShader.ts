@@ -49,8 +49,10 @@ import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
  * world-XZ-mapped for ground surfaces like cobblestone roads), and per-theme
  * atmosphere blended in the fragment shader. Ground-textured materials may
  * also carry a matching height map (CEL_BUMP): the facet normal is perturbed
- * by the height slope (surface-gradient bump — no tangents, no UVs), so the
- * light bands ripple across individual cobblestones.
+ * by the height slope, measured from world-space taps a texel apart — never
+ * from screen-space derivatives, which make the relief boil as the player walks
+ * (see perturbNormal) — so the light bands ripple across individual
+ * cobblestones.
  * Outlines are drawn with Babylon's outline renderer (inverted hull).
  *
  * Lighting has four parts, all banded so the toon look survives:
@@ -105,9 +107,32 @@ export const MAX_POINT_LIGHTS = 16;
 export const BAND_GLSL = `
 // Quantizes a 0..1 diffuse term into hard bands, smoothstepping across each
 // edge so the terminator reads as a hard line without aliasing.
+//
+// **The transition is at least one PIXEL wide, and the fixed 0.15 it used to be
+// is only the floor.** A band edge is a hard edge with no geometry behind it,
+// so nothing in the pipe antialiases it: FXAA works on luminance contrast and
+// these are low-contrast interior edges, and there is no MSAA (the only thing
+// drawn to the default framebuffer is FXAA's own quad). That was harmless while
+// the normal driving \`ndl\` was a facet normal — a wall's band index moves a
+// thousandth of a band per pixel and one edge crosses the whole face. It stops
+// being harmless the moment a BUMP map drives it: the relief puts a terminator
+// around every grain, thousands of them per screen, each one aliasing on its
+// own. Measured against a 4x supersampled reference of the same frame, the
+// valley floor's near ground went from 1.8% of pixels off-reference to 10.3%
+// when it gained a height map — and the whole of that difference was here.
+//
+// \`fwidth(x)\` is how fast the band index moves per pixel, so widening the
+// smoothstep to it makes the edge exactly resolvable and no wider. Where the
+// index moves slowly — every wall, roof and flat face in the game — it is below
+// the authored 0.15 and nothing changes at all. Clamped at 0.5 because half a
+// cell either side already spans the whole band: past that the quantization
+// would invert rather than soften, and what it degrades to instead is smooth
+// shading, which is the correct answer for a surface whose bands can no longer
+// be drawn.
 float band(float ndl, float steps) {
   float x = ndl * steps;
-  return min((floor(x) + smoothstep(0.35, 0.65, fract(x))) / steps, 1.0);
+  float w = clamp(fwidth(x), 0.15, 0.5);
+  return min((floor(x) + smoothstep(0.5 - w, 0.5 + w, fract(x))) / steps, 1.0);
 }
 `;
 
@@ -346,22 +371,56 @@ float valueNoise(vec3 p) {
 }
 
 #ifdef CEL_BUMP
-// Bump mapping for the world-XZ ground textures: perturbs the facet normal
-// by the height map's slope, so the quantized light bands ripple across
-// individual stones instead of sliding over one flat plane. This is the
-// surface-gradient formulation (Mikkelsen 2010): it works in whatever space
-// the height map is sampled in — world XZ here — with no tangent frame and
-// no UVs, and dFdx/dFdy are already in use for facetNormal().
+// Bump mapping for the world-XZ ground textures: perturbs the facet normal by
+// the height map's slope, so the quantized light bands ripple across individual
+// stones instead of sliding over one flat plane.
+//
+// **The slope is measured in WORLD space, from taps a texel apart, and it must
+// not be measured in screen space.** The first cut used the surface-gradient
+// formulation (Mikkelsen 2010) off dFdx(h)/dFdy(h), which is the right tool
+// for a UV-mapped normal map on a mesh and the wrong one here, for a reason
+// that only bites once the ground is the whole frame:
+//
+// A screen-space derivative measures how the height changes across ONE PIXEL,
+// so the slope a given patch of ground reports depends on how big a pixel is
+// there — which is a fact about the camera, not about the ground. On a floor
+// seen at a grazing angle a pixel spans several texels along the view
+// direction, so the difference is taken across unrelated grains and comes back
+// as noise; and because the sampling grid slides over the texture as the player
+// walks, that noise is DIFFERENT every frame. The relief boils. It is invisible
+// on the cobbled street this shader was written for — a few square metres, seen
+// from close and steep — and unmissable the moment a map states a
+// floorSurface and 240 m of valley floor gains a height map. Measured against
+// a 4x supersampled reference of the same frame, ground at 3-9 m went from 1.8%
+// of pixels off-reference to 10.3% when the floor gained relief, and every bit
+// of that was this function.
+//
+// Central differences at a fixed WORLD offset have neither problem. The slope
+// at a point is the same however far away the camera is, so nothing boils; each
+// tap is a filtered fetch rather than a difference of one, so the anisotropic
+// sampler does its job; and the relief fades out on its own at distance,
+// because two taps a texel apart converge as the mip chain smooths them. That
+// last part is the whole reason no explicit distance fade is needed here.
+//
+// Three taps rather than four: forward differences off a shared centre. The
+// asymmetry is half a texel of bias in where a grain's slope is reported, which
+// is nothing beside a fetch per ground pixel.
 vec3 perturbNormal(vec3 n) {
   vec2 uv = vPosW.xz * texScale;
-  float h = texture2D(bumpTex, uv).r * bumpScale;
-  vec3 sigmaX = dFdx(vPosW);
-  vec3 sigmaY = dFdy(vPosW);
-  vec3 r1 = cross(sigmaY, n);
-  vec3 r2 = cross(n, sigmaX);
-  float det = dot(sigmaX, r1);
-  vec3 grad = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);
-  return normalize(abs(det) * n - grad);
+  // One texel of the height map. Albedo and height are painted at the same
+  // size (SIZE in world/textures.ts), which is what lets this be a constant.
+  float e = 1.0 / 512.0;
+  float h0 = texture2D(bumpTex, uv).r;
+  float hx = texture2D(bumpTex, uv + vec2(e, 0.0)).r;
+  float hz = texture2D(bumpTex, uv + vec2(0.0, e)).r;
+  // Metres of rise per metre travelled: the tap is e / texScale metres away.
+  float perMetre = bumpScale * texScale / e;
+  vec3 grad = vec3((hx - h0) * perMetre, 0.0, (hz - h0) * perMetre);
+  // Only the part of the gradient lying in the surface tilts it. On the
+  // near-level ground this material is for that is almost all of it, and the
+  // projection is what keeps a sloped road or a pitched deck honest.
+  grad -= n * dot(grad, n);
+  return normalize(n - grad);
 }
 #endif
 

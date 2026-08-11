@@ -165,6 +165,18 @@ Three rules about it, and the first is the one everything else rests on:
   rather than from what it belongs to is what makes the two sides agree.
 - **`hasVertexAlpha` must stay false.** `setVerticesData` does not set it, and
   the world is opaque — the alpha here is a lighting term, not a transparency.
+- **Only a CEL-SHADED mesh may be given the buffer**, and `visuals` is not all
+  cel materials. The cel shader reads a colour buffer as a lighting term;
+  `StandardMaterial` reads it as a *colour* and multiplies its output by it,
+  with `Mesh.useVertexColors` defaulting to true and nothing but the buffer's
+  absence to turn the `VERTEXCOLOR` define off. `mergeByMaterial` emits one mesh
+  per material, so every lit window, brazier flame, ember and sign arrives in
+  `visuals` as a `block<x>,<y>-emissive-#rrggbb` drawn with an unlit emissive
+  `StandardMaterial` — 42 of them on Hollowmere. Baking `rgb = (0, 1, 0)` onto
+  those multiplied each one by pure green, so the village's lanterns and fires
+  rendered as green blobs *inside their own correctly-coloured bloom*, since the
+  `GlowLayer` builds its halo from `material.emissiveColor` and never saw the
+  vertex buffer. `walk` skips anything whose material is not a `ShaderMaterial`.
 
 The same buffer's green channel gates the cel shader's **albedo weathering**, a
 slow value-noise drift over world position that stops a 48 m merged block
@@ -325,6 +337,27 @@ wastes slots and flattens the darkness.
   hit came from.
 - The cobblestone texture is 512² over a 1.5 m tile (`textures.ts`), sized for a
   camera **1.55 m above the street**.
+- **A world-mapped height map's slope is measured in WORLD space, never in
+  screen space**, and a band edge's smoothstep is **at least one pixel wide**.
+  The two are the same artefact seen from both ends and both were exposed by
+  the same change — a map stating a `floorSurface`, which turns 240 m of valley
+  floor into bumped ground where before only a few square metres of cobbled
+  street were. `dFdx(h)` measures the height's change across one PIXEL, so the
+  slope a patch of ground reports depends on how big a pixel is there — a fact
+  about the camera, not the ground — and at a grazing angle it differences
+  unrelated grains and re-noises them every time the player takes a step; the
+  relief boils. Central differences a texel apart are camera-independent, each
+  tap is a filtered fetch the anisotropic sampler can do its job on, and the
+  relief fades out on its own at range because the two taps converge as the mip
+  chain smooths them, so no distance fade is needed. Meanwhile the terminators
+  that relief puts around every grain are hard edges with no geometry behind
+  them, and nothing in the pipe antialiases those — FXAA keys on luminance
+  contrast and there is no MSAA — so `band` widens its smoothstep to `fwidth`
+  wherever the band index moves faster than the authored 0.15 per pixel.
+  Measured against a 4x supersampled reference of the same frame, ground at
+  3–9 m: **1.8% of pixels off-reference before the floor had relief, 10.3%
+  with it, 1.7% with both fixes** — the relief kept, and the whole frame now
+  5.2% against the 5.8% it was before any of this.
 - **Two up-facing surfaces must never share a plane.** The merge is per colour, so a
   floor slab and the plinth under it land in *different* meshes and their draw order is
   arbitrary — a shared top face is a depth-test tie broken per pixel, which strobes as

@@ -139,12 +139,27 @@ const placements: Placement[] = [
   { kind: "templeRuin", x: 80, z: 34 },
   { kind: "stiltHut", x: 30, z: -88, rotY: Math.PI / 2 },
   { kind: "stiltHut", x: 48, z: -90 },
-  { kind: "boardwalk", x: 39, z: -88, rotY: Math.PI / 2, params: { length: 12, railSide: "none" } },
+  // Runs 33..43.2, abutting the east hut's deck rather than lapping 1.8 m over
+  // it — same rule as the channel causeway below, and at 80 m2 of coincident
+  // deck it was the larger of the two overlaps.
+  { kind: "boardwalk", x: 38.1, z: -88, rotY: Math.PI / 2, params: { length: 10.2, railSide: "none" } },
   { kind: "jungleRuin", x: 46, z: -76, rotY: Math.PI, params: { width: 12, depth: 9 } },
   { kind: "trestleBridge", x: 36, z: 15, y: 1.34, rotY: Math.PI / 2 },
+  // The channel causeway, authored as a chain so each length samples its own
+  // ground (see `buildBoardwalk`). **Adjacent decks must ABUT, never overlap.**
+  // A deck is one box placed by its top face, so half a metre of overlap is
+  // half a metre of two boxes occupying the same space — four coincident planes
+  // (both tops at 0.82, both bottoms at 0.18, both sides at x +/-1.2), and a
+  // coincident plane across two meshes is a depth-test tie broken per pixel,
+  // which strobes into a line as you walk. Abutting costs nothing: decks within
+  // `HEIGHT_EPS` merge into one nav surface either way.
+  //
+  // 19..31, 31..43, 43..53.5. The last one's NORTH end is load-bearing — the
+  // stairs at z 54.967 land on it — so the overlap comes out of its length
+  // rather than out of its position.
   { kind: "boardwalk", x: 0, z: 25, y: 1, params: { length: 12, railSide: "none" } },
   { kind: "boardwalk", x: 0, z: 37, y: 1, params: { length: 12, railSide: "none" } },
-  { kind: "boardwalk", x: 0, z: 48, y: 1, params: { length: 11, railSide: "none" } },
+  { kind: "boardwalk", x: 0, z: 48.25, y: 1, params: { length: 10.5, railSide: "none" } },
   { kind: "stiltHut", x: 5.456, z: 31, y: 1, rotY: Math.PI / 2 },
   { kind: "stiltHut", x: -5.447, z: 42, y: 1, rotY: -Math.PI / 2 },
   { kind: "road", x: -102.37, z: 33.852, params: { surface: "dirt", length: 78 } },

@@ -5,6 +5,7 @@
  * and no materials; `MapBuilder` calls it and `CelShader` reads what it wrote.
  * Invariants: AO lives in the colour buffer's ALPHA and 1.0 means UNOCCLUDED
  * (see below — the whole design rests on it), the walk runs AFTER every merge,
+ * only CEL-SHADED meshes are written to (see the guard in `walk`),
  * and `hasVertexAlpha` must stay false. Contract: `docs/rendering.md`.
  *
  * WHY. The renderer had four light terms and no occlusion of any kind, and no
@@ -75,7 +76,7 @@
  * is the honest limit of the technique on geometry this coarse, and tessellating
  * the world to sharpen it would cost far more than the effect is worth.
  */
-import { Mesh, VertexBuffer } from "@babylonjs/core";
+import { Mesh, ShaderMaterial, VertexBuffer } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { halfDepth, slabThickness } from "./boxGeometry";
 import type { WorldBox } from "./MapBuilder";
@@ -248,6 +249,23 @@ export function bakeVertexAo(
   let total = 0;
 
   const walk = (mesh: Mesh): void => {
+    // **Only the cel shader may be given this buffer.** It is a lighting term
+    // dressed as a vertex colour, and the one material in the tree that reads
+    // it as a lighting term is the cel shader; `StandardMaterial` reads a
+    // colour buffer as a COLOUR and multiplies its output by it, with
+    // `Mesh.useVertexColors` defaulting to true and nothing to turn the
+    // VERTEXCOLOR define off but the buffer's absence.
+    //
+    // `visuals` is not all cel materials. `mergeByMaterial` emits one mesh per
+    // material, and every lit window, brazier flame, ember and sign in the map
+    // comes out of it as a `block<x>,<y>-emissive-#rrggbb` drawn with an unlit
+    // emissive `StandardMaterial` — 42 of them on Hollowmere. Writing
+    // `rgb = (0, 1, 0)` onto those multiplied every one of them by pure green:
+    // the village's lanterns and fires rendered as green blobs inside their own
+    // correctly-coloured bloom, since `GlowLayer` builds its halo from
+    // `material.emissiveColor` and never saw the vertex buffer.
+    if (!(mesh.material instanceof ShaderMaterial)) return;
+
     const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
     const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
     if (!positions || !normals) return;

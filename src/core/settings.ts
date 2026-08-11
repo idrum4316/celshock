@@ -58,25 +58,48 @@ export type Settings = {
 };
 
 /**
- * The scale a fresh install starts at: the largest rung that draws no more
- * pixels than the game has always drawn.
+ * The scale a fresh install starts at: the rung NEAREST the resolution the game
+ * has always drawn at.
  *
- * `1 / devicePixelRatio` is today's behaviour expressed on this ladder — CSS
- * pixels — so on an ordinary 1x display that is 1.0 and nothing changes at all,
- * and on a 2x display it is 0.5, which is exactly the frame that shipped. The
- * sharpness is then one keypress away rather than forced on a machine that has
- * never been measured; `FINDINGS.md` §1 is the reason that distinction matters,
- * and moving this default wants a real-hardware capture behind it.
+ * `1 / devicePixelRatio` is the old behaviour expressed on this ladder — the
+ * backing store used to match the CSS pixel grid — so on a 1x display that is
+ * 1.0 and nothing changes at all, and on a 2x display it is 0.5, which is
+ * exactly the frame that shipped. The sharpness is then one keypress away
+ * rather than forced on a machine that has never been measured; `FINDINGS.md`
+ * §1 is the reason that distinction matters.
  *
- * A display past 2x has no rung at or below it, so it takes the lowest one and
- * comes out slightly sharper than before. That is the right way for the clamp
- * to fail and it only reaches phones.
+ * **NEAREST, and it used to be "largest rung at or below", which is a bug on
+ * every fractional-DPI display there is.** `1 / dpr` is only ON this ladder for
+ * dpr 1, 1.333 and 2. Everywhere else, rounding down takes the rung below —
+ * and the gap between rungs is a third of the resolution, so the "safe"
+ * direction is not safe at all. Measured on the display that reported it:
+ * **dpr 1.4406 gives `1/dpr` = 0.694, rounded DOWN to 0.5, for a hardware
+ * scaling level of 1.388 — 52% of the pixel count the game drew before the
+ * setting existed**, upscaled by the browser. Every hard edge in a renderer
+ * with no MSAA gets chunkier and crawls: it reads as lines flickering along the
+ * viewmodel, the interior walls, the stair sides and every place two surfaces
+ * meet, none of which changed. Rounding to the nearest rung bounds the error at
+ * half a rung either way — the same display now takes 0.75, a level of 0.926
+ * and 17% MORE pixels than shipped, which is a cost the player can spend one
+ * keypress undoing, where blur is not.
+ *
+ * The ladder still cannot express `1/dpr` exactly, and that is the honest limit
+ * of a three-rung setting. A fourth rung, or letting the default sit off the
+ * ladder, is what "exactly what shipped, on every machine" would take;
+ * `CONFIG.graphics.renderScales` is where that decision lives.
+ *
+ * A display past 2x has no rung near `1/dpr` either and takes the lowest one,
+ * coming out sharper than before. That is the right way for the clamp to fail
+ * and it only reaches phones — unchanged by this.
  */
 export function defaultRenderScale(): RenderScale {
   const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  const want = 1 / dpr;
   const rungs = CONFIG.graphics.renderScales;
   let best: RenderScale = rungs[0];
-  for (const rung of rungs) if (rung <= 1 / dpr && rung > best) best = rung;
+  for (const rung of rungs) {
+    if (Math.abs(rung - want) < Math.abs(best - want)) best = rung;
+  }
   return best;
 }
 
