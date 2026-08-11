@@ -542,18 +542,33 @@
    The BOX is fixed at the health bar's width and the ticks are laid into
    it from the right, because a strip sized by its contents is a strip
    whose width is the carried weapon's magazine: 24 rounds and 75 rounds
-   would draw two different HUDs. `HUD.setAmmo` writes the two custom
+   would draw two different HUDs. `HUD.setAmmo` writes the three custom
    properties when it rebuilds the row, and the fallbacks here are the
-   authored size — what everything up to 32 rounds still gets. */
+   authored size — what everything up to 32 rounds still gets.
+
+   The box is a COLUMN of rows, and all but the belt have exactly one. The
+   LMG's 75 rounds cannot be read at one row's pitch, so it is built as two,
+   and the second is paid for out of the tick's height rather than the box's:
+   `--pip-h` and the 1px row gap divide the same 13px, so the ammo count and
+   the weapon label under it do not move when the weapon is swapped. The 1px
+   here and `MAG_ROW_GAP` in `HUD.ts` are the same number. */
 #mag-strip {
   position: relative;
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   justify-content: flex-end;
-  gap: var(--pip-gap, 2px);
+  gap: 1px;
   width: 224px;
   height: 13px;
   overflow: hidden;
   transform: skewX(-20deg);
+}
+#mag-strip b {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--pip-gap, 2px);
+  height: var(--pip-h, 13px);
 }
 #mag-strip i {
   display: block;

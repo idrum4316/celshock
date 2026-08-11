@@ -42,6 +42,20 @@ otherwise redraw the right-hand column every time the kit changed. Ticks keep
 their authored 5 px until a magazine is bigger than 32 rounds; the LMG's belt of
 75 is what closes them up.
 
+**Past a 3 px tick the strip takes a second ROW rather than closing up further**,
+because 75 rounds in one row is a 2 px tick behind a 1 px gap — a bar with a
+texture, which is the one thing the strip exists not to be. The threshold is that
+measurement and not a round number, so a future magazine earns the row by being
+unreadable without one; today only the belt qualifies, and the SMG's 34 still
+draws as one row. The second row is paid for out of the tick's HEIGHT, inside the
+same 13 px box, or the ammo count and the weapon label under it would move every
+time the kit changed — the whole point of fixing the box. **The rows are filled
+by COLUMN, not by line**: consecutive rounds are the top and bottom of one
+column, so the lit fraction of the strip is still the fraction of the magazine
+left, which is the reading every one-row weapon gives and the only reason a
+second row is allowed at all. Filled by line, the top row would stay full until
+the belt was half gone.
+
 **One stylesheet per module that writes markup, imported by that module**
 (`HUD.ts`→`hud.css` … `editor/EditorPanel.ts`→`editor/panel.css`); `main.ts`
 imports `base.css` first. Vite bundles them into one hashed stylesheet the built

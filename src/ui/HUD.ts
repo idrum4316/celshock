@@ -122,6 +122,33 @@ function damageArcMarkup(): string {
  */
 const MAG_STRIP_W = 224;
 
+/**
+ * The magazine strip's box height, and the gap between its rows when it has
+ * two. Both must match `#mag-strip` in `hud.css`: the box is the fixed thing —
+ * a strip that grew a row would move the ammo count and the weapon label with
+ * it on every swap — so a second row is paid for out of the tick's HEIGHT.
+ */
+const MAG_STRIP_H = 13;
+const MAG_ROW_GAP = 1;
+
+/**
+ * The narrowest a tick may be drawn. Under about three pixels the gaps close
+ * up faster than the ticks do and the row stops being a count you can read at
+ * a glance — it is a bar, which is what the strip exists not to be.
+ */
+const MIN_PIP_W = 3;
+
+/**
+ * Tick geometry for a row of `perRow` rounds: the pitch is whatever the fixed
+ * box divides into, and both figures keep their authored size (5px tick, 2px
+ * gap) until the row would overflow. Past that they close up together.
+ */
+function pipMetrics(perRow: number): { gap: number; w: number } {
+  const pitch = MAG_STRIP_W / perRow;
+  const gap = Math.min(2, pitch * 0.32);
+  return { gap, w: Math.min(5, pitch - gap) };
+}
+
 /** Signed shortest angle from `a` to `b`, in radians. */
 function angleDelta(a: number, b: number): number {
   let d = (b - a) % (Math.PI * 2);
@@ -599,13 +626,46 @@ export class HUD {
       // the row would overflow (anything up to 32 rounds), so the rifle's
       // strip is untouched; past that they close up together. The SMG's 34
       // came to 236 and now fits the 224 the rest of the column is drawn in.
-      const pitch = MAG_STRIP_W / magSize;
-      const gap = Math.min(2, pitch * 0.32);
+      //
+      // The belt is the one that cannot be squeezed into a single row: 75
+      // rounds is a 2.0px tick behind a 0.96px gap, which is a bar with a
+      // texture rather than a count. It gets a SECOND ROW instead, and the
+      // threshold is that measurement rather than a round number, so a future
+      // magazine earns the row by being unreadable at one. The rows are
+      // explicit rather than `flex-wrap`, because a wrap decides how many fit
+      // from a width this code computed to fit exactly that many — a rounding
+      // error either way and a row breaks a tick early.
+      const rows = pipMetrics(magSize).w < MIN_PIP_W ? 2 : 1;
+      const cols = Math.ceil(magSize / rows);
+      const { gap, w } = pipMetrics(cols);
       this.magStrip.style.setProperty("--pip-gap", `${gap.toFixed(2)}px`);
-      this.magStrip.style.setProperty("--pip-w", `${Math.min(5, pitch - gap).toFixed(2)}px`);
+      this.magStrip.style.setProperty("--pip-w", `${w.toFixed(2)}px`);
+      const rowH = (MAG_STRIP_H - (rows - 1) * MAG_ROW_GAP) / rows;
+      this.magStrip.style.setProperty("--pip-h", `${rowH.toFixed(2)}px`);
+      // Filled by COLUMN, not by line: consecutive rounds are the top and the
+      // bottom of one column, so a column is worth `rows` rounds and the lit
+      // FRACTION of the strip is the fraction of the magazine left — the same
+      // reading as every one-row weapon, which is the only reason a second row
+      // is allowed at all. Filled by line instead, the top row would stay full
+      // until the belt was half gone and the glance would need to know where
+      // the split was.
+      //
+      // The rows are explicit rather than `flex-wrap`, because a wrap decides
+      // how many fit from a width this code computed to fit exactly that many,
+      // and a rounding error either way breaks the row a tick early.
+      const rowEls: HTMLElement[] = [];
+      for (let r = 0; r < rows; r++) {
+        const row = document.createElement("b");
+        this.magStrip.appendChild(row);
+        rowEls.push(row);
+      }
+      // An uneven belt leaves its empty slot at the TOP-LEFT — the corner the
+      // last round to be fired lives furthest from, so the right-hand edge the
+      // eye reads against is a full column all the way down.
+      const blank = rows * cols - magSize;
       for (let i = 0; i < magSize; i++) {
         const tick = document.createElement("i");
-        this.magStrip.appendChild(tick);
+        rowEls[(i + blank) % rows].appendChild(tick);
         this.magTicks.push(tick);
       }
       this.magBuilt = magSize;
