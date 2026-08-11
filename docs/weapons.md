@@ -530,10 +530,16 @@ making the draw as slow as a reload, removes the feature's reason to exist.
   `carriedSight` — the camera's FOV all derived from one sight. A pistol aimed down a
   3.5x scope's FOV is the mismatch the union makes impossible to spell.
 - **`Player.onCarryChanged` is how the rest of the game hears about it.**
-  `Game.applyCarry` pushes the camera's fit and the HUD's caption, and all three
-  things that change the hands — a kit pick, a swap completing, a fresh body coming up
-  with the primary — reach it without remembering to. `applyLoadout` is the kit's own
-  path; the deploy and kit screens keep naming the PRIMARY.
+  `Game.applyCarry` pushes the camera's fit, the HUD's caption and the HUD's stowed
+  row, and all three things that change the hands — a kit pick, a swap completing, a
+  fresh body coming up with the primary — reach it without remembering to.
+  `applyLoadout` is the kit's own path; the deploy and kit screens keep naming the
+  PRIMARY.
+- **The slot that is DOWN is readable too** (`slungWeapon`/`slungSlot`/`slungAmmo`/
+  `slungMagSize`), and nothing about firing depends on it: it exists so the HUD can
+  say the second slot is there at all. A weapon the viewmodel never shows and the
+  ammunition readout never counts is one a player can carry a whole round without
+  finding, which is the sidearm's own failure mode — see [`ui.md`](ui.md).
 - **`hipY` is the sibling of `hipZ`, and the pistol is why it exists.** The hip pose
   is authored around the reference weapon's bore and every long gun carries its bulk
   *above* that line; a pistol hangs below it, hands and all. Measured on 1280x720:

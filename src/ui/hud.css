@@ -1,8 +1,9 @@
 /**
  * hud.css — Everything HUD.ts writes markup for: the gameplay chrome (scrim,
  * killfeed, scoreboard, ticket gauge, flag strip, capture panel, vitals, ammo,
- * crosshair, hitmarker, vignette, damage arcs, messages, toasts, lock hint) and
- * the full-screen overlay screens (menu, round over, pause).
+ * the stowed slot, crosshair, hitmarker, vignette, damage arcs, messages,
+ * toasts, lock hint) and the full-screen overlay screens (menu, round over,
+ * pause).
  * Owns: the .overlaid / .paused / .editing state rules too — HUD sets those
  * classes on #hud, so the rules keyed off them live with it even where they
  * reach an element another screen owns (#hud.paused #deploy).
@@ -521,6 +522,26 @@
   color: rgba(255, 255, 255, 0.45);
 }
 
+/* The ammunition LINE holds both slots: the carried magazine at the right
+   end of it, where the whole column is anchored, and the stowed one at the
+   far left, in the space a two- or three-digit number was already leaving
+   empty. Spread across the same 224px the health bar, the magazine strip
+   and the kit caption are all measured in, so the pair costs the corner no
+   height and no width — the stowed slot is drawn in a hole that was
+   already there.
+
+   `min-width` rather than `width`: the pair is spread across the column's
+   own 224 and the longest primary name is allowed to push the line a few
+   pixels wider instead of squeezing the count, because everything here
+   is anchored to the RIGHT edge and growth simply reaches further into
+   the empty middle of the screen. */
+#hud-right .ammo-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 224px;
+}
 #hud-right .ammo { display: flex; align-items: baseline; gap: 8px; }
 #ammo-mag {
   font-size: 46px;
@@ -600,6 +621,93 @@
 }
 /* An empty pouch dims its own label, so the row stops asking to be read. */
 #hud-right.no-nades .nades .cap { color: rgba(255, 255, 255, 0.24); }
+/* --- the stowed weapon ---
+   The second slot, which nothing else on screen mentions: the viewmodel
+   shows one weapon and the count beside this one counts one magazine, so
+   without it the sidearm exists only for whoever already pressed the key.
+   It shares the ammunition line rather than taking a row of its own —
+   two slots on one line, the carried one shouting at the right end and
+   the slung one murmuring at the left, which is the hierarchy stated as
+   a layout instead of as a caption.
+
+   Three parts, each set to its own weight rather than the group being
+   dimmed as a whole: the KEY is the instruction and is the brightest
+   thing here, the count is the fact you act on, and the name is only
+   there to say which weapon the other two are about. It gets no strip of
+   its own — a second row of ticks beside the magazine's is two
+   instruments competing to be read, and a count is enough for a weapon
+   you are not currently firing. */
+#stowed {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+/* The key that draws it, as a chamfered chip — the same idiom as the
+   killfeed's glyph and the capture panel's letter, and sized to be READ
+   at a glance, since a hint you have to squint at is one nobody follows.
+   Dark on near-white is the strongest pair available on a HUD whose
+   scrim cannot be relied on to be dark. `slot + 1` is the digit, and
+   HUD.setStowedKit is handed it rather than deciding it. */
+#stowed .key {
+  flex: 0 0 auto;
+  min-width: 18px;
+  padding: 3px 0 4px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  text-align: center;
+  color: #0b0d12;
+  background: rgba(255, 255, 255, 0.86);
+  text-shadow: none;
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+  transition: background 0.15s linear;
+}
+/* The least of the three, and the only one that would wrap: at the
+   HUD's letter-spacing "CARBINE" is the widest thing this line ever has
+   to carry, and a caption breaking over two lines would move the count
+   off the ammunition's baseline. */
+#stowed .cap {
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.5);
+}
+#stowed .n {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+#stowed .n b {
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 0.85;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.78);
+}
+#stowed .n em {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.3);
+}
+/* The two states worth raising a voice for, and they are opposites.
+   `dry` is the slung magazine being empty too — the mirror of
+   `#ammo-mag.low`, and it means a swap will not save you. `ready` is
+   there being nothing to fire in your HANDS while there is here, which
+   is the one moment in a round when the second slot is the whole answer.
+
+   `ready` is a HANDOVER, not an alarm, and that is why it is three
+   colour changes and no animation: the carried readout dims itself
+   through a reload (`#hud-right.reloading .ammo` below), so this coming
+   up as that goes down already reads as the corner pointing at the
+   faster option. A pulse on top would be the HUD shouting at the player
+   once per magazine, which is how a cue gets ignored. */
+#stowed.dry .key { background: rgba(255, 90, 79, 0.72); }
+#stowed.dry .n b { color: var(--theirs); }
+#stowed.ready .key { background: var(--hot); }
+#stowed.ready .cap { color: rgba(255, 255, 255, 0.7); }
+#stowed.ready .n b { color: var(--hot); }
 #hud-right .reload-note {
   font-size: 11px;
   font-weight: 800;

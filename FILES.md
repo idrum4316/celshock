@@ -174,8 +174,8 @@ src/
     base.css            #   Reset, canvas, #hud root, and ONLY primitives two
                         #   or more screens share. Imported by main.ts
     HUD.ts/hud.css      # Gameplay chrome ONLY: tickets, flags, capture panel,
-                        #   vitals, ammo, crosshair, killfeed, scoreboard,
-                        #   damage arcs, + .paused/.editing/.dying
+                        #   vitals, ammo, the stowed slot, crosshair, killfeed,
+                        #   scoreboard, damage arcs, + .paused/.editing/.dying
     OverlayScreen.ts    # The three cards — menu, round-over, pause — and the
       overlay.css       #   .overlaid class they raise
     DeployScreen.ts     # Top-down deploy map + the deploy and kit buttons

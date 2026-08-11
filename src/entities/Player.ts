@@ -459,6 +459,41 @@ export class Player implements Combatant {
     return this.view.carriedSight;
   }
 
+  /**
+   * The slot that is NOT in the hands: the weapon a swap would bring up, and
+   * the magazine it kept while it was down.
+   *
+   * Nothing about the weapon being fired depends on it. It exists for the
+   * HUD's stowed row, because the second slot is the one part of the kit a
+   * player can carry a whole round without discovering — the viewmodel shows
+   * one weapon, the ammunition readout counts one magazine, and a slung pistol
+   * with eight rounds in it is only ever announced by the key that draws it.
+   */
+  private get slung(): Holster {
+    return this.slots[this.slot === PRIMARY_SLOT ? SIDEARM_SLOT : PRIMARY_SLOT];
+  }
+
+  get slungWeapon(): WeaponId {
+    return this.slung.setup.id;
+  }
+
+  /**
+   * Which slot it is, which is also which key names it — the digit is
+   * `slot + 1`, and that is the same one fact `drawSlot` and `1`/`2` share.
+   */
+  get slungSlot(): number {
+    return this.slot === PRIMARY_SLOT ? SIDEARM_SLOT : PRIMARY_SLOT;
+  }
+
+  get slungAmmo(): number {
+    return this.slung.ammo;
+  }
+
+  /** The same expression as `magSize`, so both counts are read one way. */
+  get slungMagSize(): number {
+    return this.slung.setup.magSize + this.mods.magBonus;
+  }
+
   /** True while a swap is in flight: the weapon is down and nothing can fire. */
   get swapping(): boolean {
     return this.swapT >= 0;

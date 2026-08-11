@@ -1091,6 +1091,19 @@ export class Game {
     const sight = this.player.carriedSight;
     this.cameraSys.setLoadout(weapon, sight);
     this.hud.setKit(kitLabel(weapon, sight));
+    // …and what is NOT in them, which is the same push for the same reason:
+    // the stowed row names the other slot, so it turns over exactly when this
+    // one does. The short name rather than the full one — it is a caption on a
+    // row that has to stay quieter than the readout above it.
+    this.hud.setStowedKit(
+      CONFIG.weapons[this.player.slungWeapon].short,
+      this.player.slungSlot + 1,
+    );
+    // Its magazine as well, even though `updateHud` pushes that every frame:
+    // this is the only path that runs before the first round and on the way
+    // out of one, and a row reading "PISTOL /" on the deploy screen is worse
+    // than the count it would otherwise be waiting a frame for.
+    this.hud.setStowedAmmo(this.player.slungAmmo, this.player.slungMagSize);
   }
 
   /**
@@ -2257,6 +2270,7 @@ export class Game {
   private updateHud(dt: number, dying = false): void {
     this.hud.setHealth(this.player.health, this.player.maxHealth);
     this.hud.setAmmo(this.player.ammo, this.player.magSize, this.player.reloading);
+    this.hud.setStowedAmmo(this.player.slungAmmo, this.player.slungMagSize);
     this.hud.setGrenades(this.player.grenades, CONFIG.grenade.carried);
     if (!dying) {
       // The crosshair ring IS the live spread: radians at the aim plane,

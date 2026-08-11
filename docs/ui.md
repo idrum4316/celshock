@@ -56,6 +56,48 @@ left, which is the reading every one-row weapon gives and the only reason a
 second row is allowed at all. Filled by line, the top row would stay full until
 the belt was half gone.
 
+**The stowed slot is the only thing on screen that says the second weapon
+exists.** Everything else in the bottom-right corner describes the weapon in
+the hands — the viewmodel shows one gun, the big count counts one magazine, the
+strip is one magazine's ticks — so a player who never pressed the swap key had
+nothing telling them there was a key to press, and a sidearm nobody knows about
+is a sidearm nobody draws when the rifle runs dry. That is the whole of what it
+is for, and it decides how it is drawn.
+
+- **It shares the ammunition LINE rather than taking a row of its own**, at the
+  far left of it, in the space a two- or three-digit number was already leaving
+  empty. The line is spread across the same 224 px as the health bar, the strip
+  and the kit caption, so the second slot costs the corner no height and no
+  width — it is drawn in a hole that was already there. Two slots on one line,
+  the carried magazine shouting at the right end and the slung one murmuring at
+  the left, is the hierarchy stated as a layout instead of as a caption.
+- **Three parts, each at its own weight, and the KEY is the brightest.** The
+  group is not dimmed as a whole: the chip is the instruction and is drawn dark
+  on near-white to be read at a glance (a hint you have to squint at is a hint
+  nobody follows), the count is the fact you act on, and the name is only there
+  to say which weapon the other two are about. It gets **no strip of its own** —
+  a second row of ticks beside the magazine's is two instruments competing to be
+  read, and a count is enough for a weapon you are not firing.
+- **It carries a live count, not a capacity.** Each slot keeps its own magazine
+  ([`weapons.md`](weapons.md)), so what is slung is what you would be swapping
+  *to* — pushed every frame like the carried one, each write skipped while its
+  string has not moved.
+- **Two states raise its voice, and they are opposites.** `dry` is the slung
+  magazine being empty too, the mirror of `#ammo-mag.low`: a swap will not save
+  you. `ready` is there being nothing to fire in your hands (empty *or*
+  reloading) while there is here — the one moment in a round when the second
+  slot is the whole answer, since a draw is a third of a second where a reload
+  is one and a half. **`ready` is a handover, not an alarm**: the carried
+  readout already dims itself through a reload, so the stowed slot coming up as
+  that goes down reads as the corner pointing at the faster option, and it earns
+  no animation on top. Firing the last round starts a reload in the same call,
+  so "empty and not reloading" is a state the HUD would never get a frame of —
+  which is why `ready` counts the reload rather than excluding it.
+- **The name and the key turn over with the hands, through `Game.applyCarry`**
+  — the same push that moves the kit caption, so the two can never disagree
+  about which weapon is which. `Player.slungSlot + 1` is the digit on the chip,
+  which is the same one fact `drawSlot` and the `1`/`2` keys already share.
+
 **One stylesheet per module that writes markup, imported by that module**
 (`HUD.ts`→`hud.css` … `editor/EditorPanel.ts`→`editor/panel.css`); `main.ts`
 imports `base.css` first. Vite bundles them into one hashed stylesheet the built

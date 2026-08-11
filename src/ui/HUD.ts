@@ -1,7 +1,8 @@
 /**
- * HUD.ts — The gameplay chrome, and only that: vitals/ammo/grenades,
- * reinforcement gauge, flag strip, capture-zone panel, crosshair, hitmarker,
- * damage vignette, directional damage arcs, toasts, killfeed, scoreboard.
+ * HUD.ts — The gameplay chrome, and only that: vitals/ammo/grenades, the stowed
+ * slot, reinforcement gauge, flag strip, capture-zone panel, crosshair,
+ * hitmarker, damage vignette, directional damage arcs, toasts, killfeed,
+ * scoreboard.
  * Invariants: Game pushes state every frame (setHealth/setAmmo/setFlags/
  * setCapture/setViewYaw/...) — setting HUD state from anywhere else is
  * overwritten next tick. Pure DOM manipulation; reads ControlPoint data, never
@@ -200,6 +201,23 @@ export class HUD {
   private nadeBuilt = -1;
   private hudRight: HTMLElement;
   private weaponLabel: HTMLElement;
+  /** The stowed weapon's row — the slot key, its name and its magazine. */
+  private stowed: HTMLElement;
+  private stowedParts: {
+    key: HTMLElement;
+    name: HTMLElement;
+    ammo: HTMLElement;
+    cap: HTMLElement;
+  };
+  /** Last written, so a per-frame push writes nothing while nothing moves. */
+  private stowedAmmoText = "";
+  private stowedCapText = "";
+  /**
+   * Whether the carried weapon is empty and not being reloaded — recorded by
+   * `setAmmo` and read by `setStowedAmmo`, which is the one state the stowed
+   * row cannot see for itself and the whole basis of its `ready` cue.
+   */
+  private handsDry = false;
   /** One tick per round in the magazine; rebuilt only when the size changes. */
   private magTicks: HTMLElement[] = [];
   private magBuilt = -1;
@@ -307,8 +325,15 @@ export class HUD {
             <span class="cap">FRAG</span>
             <span id="nade-pips"></span>
           </div>
-          <div class="ammo">
-            <span id="ammo-mag">0</span><span id="ammo-cap"></span>
+          <div class="ammo-row">
+            <div id="stowed">
+              <span class="key"></span>
+              <span class="cap"></span>
+              <span class="n"><b></b><em></em></span>
+            </div>
+            <div class="ammo">
+              <span id="ammo-mag">0</span><span id="ammo-cap"></span>
+            </div>
           </div>
           <div id="mag-strip"></div>
           <div class="cap-row">
@@ -332,6 +357,13 @@ export class HUD {
     this.nadePips = document.getElementById("nade-pips")!;
     this.hudRight = document.getElementById("hud-right")!;
     this.weaponLabel = document.getElementById("weapon-label")!;
+    this.stowed = document.getElementById("stowed")!;
+    this.stowedParts = {
+      key: this.stowed.querySelector(".key") as HTMLElement,
+      name: this.stowed.querySelector(".cap") as HTMLElement,
+      ammo: this.stowed.querySelector(".n b") as HTMLElement,
+      cap: this.stowed.querySelector(".n em") as HTMLElement,
+    };
     this.flagStrip = document.getElementById("flag-strip")!;
     this.crosshair = document.getElementById("crosshair")!;
     this.hitmarker = document.getElementById("hitmarker")!;
@@ -679,6 +711,14 @@ export class HUD {
     this.ammoCap.textContent = `/ ${magSize}`;
     this.ammoMag.classList.toggle("low", !reloading && ammo <= magSize * 0.25);
     this.hudRight.classList.toggle("reloading", reloading);
+    // Read by `setStowedAmmo`, pushed immediately after this one. "Nothing to
+    // fire with" is the whole condition, and a reload counts: firing the last
+    // round starts one in the same call (`Player.tryShot`), so an empty
+    // magazine that is not already being changed is a state the HUD would
+    // never get a frame of — and the reload is the interval that matters
+    // anyway. A draw is a third of a second where a reload is one and a half,
+    // which is the entire argument for carrying the second slot.
+    this.handsDry = ammo <= 0 || reloading;
   }
 
   /**
@@ -943,6 +983,71 @@ export class HUD {
    */
   setKit(label: string): void {
     this.weaponLabel.textContent = label.toUpperCase();
+  }
+
+  /**
+   * What the OTHER slot is holding — the one thing about the kit the rest of
+   * the chrome cannot say. The viewmodel shows one weapon and the ammunition
+   * readout counts one magazine, so a player who never pressed the swap key
+   * had nothing on screen telling them there was a second weapon to press it
+   * for; a sidearm nobody knows about is a sidearm nobody draws when the rifle
+   * runs dry, which is the entire reason it is carried.
+   *
+   * It sits at the far LEFT of the ammunition line, in the space the big
+   * number was already leaving empty, so it costs the corner no height and no
+   * width at all — the two slots read as one line with the carried magazine
+   * shouting at the right end of it and the slung one murmuring at the other.
+   * It is that line's poor relation on purpose: a key chip, a short name and a
+   * plain count against a 46 px number. What is in your hands has to win the
+   * corner; this only has to be findable when you go looking.
+   *
+   * The KEY CHIP is the exception to the dimming and the one thing here that
+   * is drawn to be read first — it is the instruction, and a hint you have to
+   * squint at is a hint nobody follows.
+   *
+   * Pushed when the hands change rather than every frame, like `setKit`: the
+   * slot number and the name only move when a swap completes.
+   */
+  setStowedKit(name: string, key: number): void {
+    this.stowedParts.key.textContent = String(key);
+    this.stowedParts.name.textContent = name.toUpperCase();
+  }
+
+  /**
+   * The slung magazine, pushed every frame like the carried one — it is not
+   * static: a weapon put away half-empty comes back half-empty, so the count
+   * here is what you would be swapping TO rather than what the weapon holds
+   * when full. Each write is skipped when the string has not moved, since at
+   * a steady count that is every frame but the ones just after a swap.
+   *
+   * The two states it raises its voice for are opposites and cannot both be
+   * true. `dry` is the slung magazine being empty as well — a swap will not
+   * save you, so the row says so in the colour the HUD keeps for bad news.
+   * `ready` is the mirror: there is nothing to fire in your hands and there is
+   * here, which is the one moment in a round when the second slot is the whole
+   * answer. It is a HANDOVER rather than an alarm — the carried readout is
+   * already dimming itself through a reload (`#hud-right.reloading .ammo`), so
+   * this coming up as that goes down reads as the corner pointing at the
+   * faster option, and needs no animation to do it.
+   *
+   * `handsDry` is what `setAmmo` recorded, which `Game.updateHud` pushes on
+   * the same frame immediately before this — the ordering is the contract, and
+   * the only other caller (`applyCarry`, outside a round) has no hands to be
+   * dry.
+   */
+  setStowedAmmo(ammo: number, magSize: number): void {
+    const text = String(ammo);
+    if (text !== this.stowedAmmoText) {
+      this.stowedAmmoText = text;
+      this.stowedParts.ammo.textContent = text;
+    }
+    const cap = `/${magSize}`;
+    if (cap !== this.stowedCapText) {
+      this.stowedCapText = cap;
+      this.stowedParts.cap.textContent = cap;
+    }
+    this.stowed.classList.toggle("dry", ammo <= 0);
+    this.stowed.classList.toggle("ready", ammo > 0 && this.handsDry);
   }
 
   setLockHint(visible: boolean): void {
