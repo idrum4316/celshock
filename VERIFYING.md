@@ -14,6 +14,40 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   runs at ~25% of wall clock**. Don't wait for bots to cross a 240 m map — force a
   skirmish by overriding `battle.spawnPointFor`, or drive rules directly with
   `conquest.update(1/60, fakeCombatants)` in a loop.
+- **`page.screenshot()` waits for the load event, so it cannot photograph the
+  boot screen.** Hold the entry chunk back with `page.route` and the shot comes
+  back showing the menu, taken seconds later once the hold expired — the DOM
+  assertions in the same script are correct and the picture disagrees with all
+  of them. `Page.captureScreenshot` over a raw CDP session grabs the frame as it
+  stands.
+- **A DOM assertion cannot prove a PAINT, and anything that covers a freeze
+  needs the second one.** The building card was once booked one
+  `requestAnimationFrame` ahead of the build instead of two, which is early
+  enough to be in the DOM and too early to be on the glass — every markup check
+  passed while the player still watched the old screen freeze. What catches it
+  is a CDP screencast (`Page.startScreencast`, ack each `Page.screencastFrame`)
+  taken across the stall: with the main thread blocked, whatever frame is being
+  held IS what the player sees. Use node-side receipt time to find the stall;
+  `metadata.timestamp` is not a Unix epoch and will not line up with
+  `Date.now()`. The cheaper standing check is to no-op the blocking call and
+  screenshot the moment before it would have run.
+- **To prove something still MOVES under a block, count distinct frames — and
+  hide everything else that animates first.** Replace the blocking call with a
+  spin of a known length, screencast across it, and compare frame payloads:
+  anything that differs moved without the main thread. Hide the other animated
+  elements with an injected `visibility: hidden` before triggering, or the
+  pulsing prompt keeps every frame distinct on its own and the test passes
+  whatever the thing under test does. Frames sampled at the very edges of the
+  block can come from the teardown either side of it and show the card
+  half-dismantled; take the middle 80% and let PNG payload size stand in for
+  "did this frame contain the bright thing" across the lot.
+- **`startRound()` does not build the map — it books it.** The state goes to
+  `loading` and `buildRound()` runs two animation frames later, so a script that
+  calls it and reads the world on the next line gets last round's (or nothing at
+  all). Wait for `state === "deploy"` rather than for the call to return, and
+  time the build around `buildRound` if that is what you are measuring. To hold
+  the building card still for a screenshot, replace `g.buildRound` with a no-op
+  before calling `startRound`.
 - Getting into `playing` takes an indeterminate number of Enter presses (the menu
   gates confirm on `overlayT > 0.5`), so press until `state === "playing"`. A LONG
   PRESS is what registers — `keyboard.press()` can fit the down and up inside one

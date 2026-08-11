@@ -156,9 +156,27 @@ disagree about: the round applies the environment and repaints the sky while the
 editor drives `applyEnvironment` itself so it can toggle its work light, and the
 round alone owns what is about a *fight* — battle, conquest, flag markers, minimap.
 
-`Game`'s state machine is `menu -> deploy -> playing -> dying -> deploy`, with
-`roundover` when a side runs out of tickets. The 3D scene renders in **every**
-state, which is what lets the deploy screen and the menu sit over a live view.
+`Game`'s state machine is `menu -> loading -> deploy -> playing -> dying ->
+deploy`, with `roundover` when a side runs out of tickets. The 3D scene renders
+in **every** state, which is what lets the deploy screen and the menu sit over a
+live view.
+
+**`loading` is the map being built, and the split that creates it is the whole
+feature.** Building one is the better part of a second of synchronous work —
+merges, the occlusion bake, the nav grid — and a browser paints between TASKS,
+never inside one, so a `startRound` that built the map where it stood froze the
+card the player had just confirmed for the entire build and then jumped to the
+deploy screen. Nothing was slow that is not slow now; what was missing was any
+sign the game had heard the button. So `Game.startRound` raises the building
+card and hands the work to `Game.buildRound` **two** `requestAnimationFrame`s
+later, and the count is load-bearing: a frame runs its animation callbacks and
+*then* paints, so a single rAF booked from ordinary task code fires before the
+card has ever been on the glass and the freeze happens under the old screen
+exactly as before. One is enough from inside the render loop, which is where
+the real callers are — the second is what stops that being a property of the
+call site. It is a **STEP, not a lid**: nothing may simulate there (`tick` has
+a deliberately empty arm) because there is no map yet, and `startRound` guards
+on it so a second build can never be queued over a pending one.
 
 **`dying` is the death cam and is a STEP, not a lid** — `updateWorld` runs in full
 underneath it. **`loadout` and `paused` are lids**: each records which state it
@@ -268,9 +286,12 @@ appends it to `#hud`, which is why construction order matters exactly once: `HUD
 writes `#hud.innerHTML` and would wipe anything already there, so it is built
 first. **A class on `#hud` belongs to whoever raises it.** **One stylesheet per
 module that writes markup, imported by that module**, and `index.html` gets no
-interface CSS, ever.
+interface CSS beyond the two things that are on screen while there is no
+interface: the black background, and the boot screen `main.ts` takes down once a
+frame has been drawn (or turns into the "needs WebGL2" message). Nothing that
+reacts to game state may join them.
 
-→ **[`docs/ui.md`](docs/ui.md)** — the three cards and why they are one class, the
+→ **[`docs/ui.md`](docs/ui.md)** — the four cards and why they are one class, the
 menu cursor and the list-shaped screens, why **the pointer deploys only through
 the Deploy button**, the deploy map, the kit turntable that is the real viewmodel
 in a hole in the scrim, and the short-viewport scaling.

@@ -1,6 +1,7 @@
 /**
- * OverlayScreen.ts — The three full-screen cards that stop the game: the main
- * menu, the round-over result, and the pause list.
+ * OverlayScreen.ts — The four full-screen cards that stop the game: the main
+ * menu, the round-over result, the pause list, and the one that stands over a
+ * map being built.
  * Owns: `#overlay` and everything written into it, the pause list's selection,
  * and the `.overlaid` class on `#hud` that hides the gameplay chrome behind a
  * card. A peer of DeployScreen and LoadoutScreen — Game wires its callbacks
@@ -9,15 +10,15 @@
  * Invariants: only one card is up at a time — each `show*` rewrites the whole
  * element — and `hide()` is the single way down from any of them.
  *
- * One class rather than three because the cards are one element, not three
+ * One class rather than four because the cards are one element, not four
  * screens that happen to overlap: they share the shell, the title block, the
  * controls table (which the menu and the pause list drew from two copies of
  * the same loop before this) and, between the menu and the round-over card,
- * the Deploy button. What splitting them would buy is three files that could
+ * the Deploy button. What splitting them would buy is four files that could
  * never be shown together anyway, at the cost of a base class or a duplicated
  * stylesheet. A card that grows its own state — a settings screen with rows to
  * edit, a map picker — has earned a file of its own; a card that is markup and
- * a button has not.
+ * a button has not, and the building card is markup and not even that.
  *
  * Deliberately NOT here: `setPaused`/`setEditing`. Those hide parts of the
  * HUD's own chrome and stay with the HUD, even though a pause is what raises
@@ -147,7 +148,7 @@ export class OverlayScreen {
    * jumped back to Deploy each time would make the row you just left the one
    * place you cannot stay.
    */
-  private card: "none" | "menu" | "roundover" | "pause" = "none";
+  private card: "none" | "menu" | "roundover" | "pause" | "building" = "none";
 
   /** Wired by Game: the player picked a difficulty tier from the menu. */
   onDifficulty: (tier: number) => void = () => {};
@@ -428,6 +429,43 @@ export class OverlayScreen {
       <button class="ov-start"><b>Another round</b><i>Enter &middot; A &middot; Start</i></button>
     `;
     this.bindStart();
+  }
+
+  /**
+   * The card that stands over a map being built.
+   *
+   * It exists because building one is ~0.7 s of merges, an occlusion bake and
+   * a nav grid on a single frame, and until there was something to put up, the
+   * card the player had just confirmed simply froze where it stood and the
+   * deploy screen appeared out of it. A hang and a load look identical; the
+   * only thing that separates them is whether the game said which it was.
+   *
+   * `setOverlaid` for the same reason the menu calls it — what is under this
+   * is either last round's HUD or nothing at all.
+   *
+   * No button, no cursor, no callbacks: this is the one card the player cannot
+   * act on, and it takes itself down (`Game.buildRound` does) rather than
+   * waiting to be dismissed.
+   *
+   * The bar is indeterminate and has to be — the work it covers is one
+   * synchronous call, so there is no progress to read even in principle — and
+   * it is the one thing on any of these cards that must keep moving with the
+   * main thread stopped dead. See `.ov-bar i` in `overlay.css`: that is a
+   * constraint on which CSS properties may animate it, not a style choice.
+   */
+  showBuilding(mapName: string): void {
+    this.root.classList.remove("hidden");
+    this.setOverlaid(true);
+    this.card = "building";
+    this.menuEls.clear();
+    this.root.innerHTML = `
+      <div class="ov-title">
+        <h1 class="building-title">${mapName}</h1>
+        <p class="tagline">Building the valley</p>
+      </div>
+      <p class="prompt">Stand by</p>
+      <div class="ov-bar"><i></i></div>
+    `;
   }
 
   /**

@@ -101,8 +101,18 @@ import { readSettings, writeSettings, type Settings } from "./settings";
 import { Sfx } from "./Sfx";
 
 /**
- * `menu` -> `deploy` -> `playing` -> `dying` -> `deploy`, with `roundover` when
- * one side runs out of tickets.
+ * `menu` -> `loading` -> `deploy` -> `playing` -> `dying` -> `deploy`, with
+ * `roundover` when one side runs out of tickets.
+ *
+ * `loading` is the map being built, and it is a STEP for the same reason
+ * `dying` is: it is a thing the game is doing, not a lid over one. It lasts
+ * exactly one frame of wall clock and an indeterminate amount of it — the
+ * build is ~0.7 s of synchronous work, which is a freeze if nothing says
+ * otherwise (see `startRound`, which is the split that lets the card be drawn
+ * first). It exists as a STATE rather than as a flag because the frame in
+ * between belongs to nobody otherwise: `tick` would keep dispatching to the
+ * menu it just left, and a second confirm in that window would start a second
+ * round on top of the first. Nothing may simulate here — there is no map yet.
  *
  * `dying` is the death cam: the player is down, a body is falling where they
  * stood, and the camera has left the head to watch it. It is a STEP in the
@@ -130,6 +140,7 @@ import { Sfx } from "./Sfx";
  */
 type GameState =
   | "menu"
+  | "loading"
   | "deploy"
   | "playing"
   | "dying"
@@ -1157,6 +1168,14 @@ export class Game {
       case "roundover":
         this.updateMenuCard(dt);
         break;
+      // `loading` deliberately has no arm and must not grow one. There is no
+      // map to simulate against and no input worth taking — the whole reason
+      // it is a state is that the frame between the confirm and the build
+      // belongs to nobody, and anything given to it here is something that
+      // could run twice or run against a map that is half torn down. The
+      // frame still renders (below), which is what draws the card.
+      case "loading":
+        break;
       case "deploy":
         this.updateDeployScreen(dt);
         break;
@@ -1586,6 +1605,12 @@ export class Game {
     // dynamic import unreachable under `vite build`, so Rollup drops the
     // editor chunk entirely rather than emitting an orphan nobody fetches.
     if (!import.meta.env.DEV) return;
+    // A map is mid-build and a `buildRound` is already queued for the next
+    // frame. Opening the editor into that would put a second build behind it
+    // and leave the editor holding a map that the first one had disposed —
+    // the failure `installMap` exists to prevent, arriving by the one door it
+    // does not cover. One frame, and F2 works on the next.
+    if (this.state === "loading") return;
     if (this.editor) {
       // Leaving rebuilds the map from the layout module, so anything edited
       // and not written to disk is gone. Until the editor can save, that is
@@ -1761,7 +1786,44 @@ export class Game {
     this.updateSceneForCamera(dt, this.shadowFocus, null, EMPTY_PUSHERS);
   }
 
+  /**
+   * Puts the building card up and hands the round itself to the next frame.
+   *
+   * The split is the whole point. Everything `buildRound` does is synchronous
+   * and adds up to the better part of a second — merges, the occlusion bake,
+   * the nav grid — and a browser paints between TASKS, not inside one, so
+   * before this the card the player had just confirmed stayed on screen,
+   * frozen, for the entire build and the deploy screen appeared straight out
+   * of it. Nothing was slow that is not slow now; what was missing was any
+   * sign that the game had heard the button. So: raise the card, yield, and
+   * let the freeze happen with something on screen that explains it.
+   *
+   * `requestAnimationFrame` rather than a timeout, because what is owed is a
+   * PAINT and rAF is the only thing that tracks one — and TWO of them, which
+   * is the part that is easy to get wrong and was, once, here. A frame runs
+   * its animation callbacks and THEN paints, so a single rAF booked from
+   * ordinary task code fires before the card it is waiting on has ever been
+   * on the glass: the build blocks, and what stands frozen for the whole
+   * second is the menu, exactly as before the split. Caught on a screencast,
+   * which is the only thing that can see it — every DOM assertion passes,
+   * because the markup is right and it is the compositor that never got a
+   * turn. One rAF *is* enough from inside the render loop, which is where the
+   * real callers are, but that makes correctness a property of the call site
+   * rather than of this method. The second one costs a frame and owes nothing
+   * to anybody's ordering. `main.ts` defers taking the boot screen down the
+   * same way and for the same reason.
+   *
+   * The lids come down HERE rather than in `buildRound` — a kit screen that
+   * stayed up over the building card would be the same lie in a smaller frame.
+   */
   private startRound(): void {
+    // One round at a time. `tick` dispatches nothing in `loading`, so no input
+    // can reach here twice on its own — but the guard is kept LOCAL to the
+    // method that owns the invariant rather than left resting on the three
+    // callers all continuing to be careful. A second build over a queued one
+    // leaves the systems holding a map the first one disposed, which is the
+    // silent failure `installMap` exists to prevent.
+    if (this.state === "loading") return;
     this.overlayScreen.hide();
     // Reachable from the menu, so either lid may still be up over it.
     this.stowKit();
@@ -1769,6 +1831,19 @@ export class Game {
     // Reachable straight from the pause menu ("Restart round"), and harmless
     // from anywhere else.
     this.clearPause();
+    this.state = "loading";
+    this.overlayScreen.showBuilding(this.mapDef.name);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => this.buildRound()),
+    );
+  }
+
+  /**
+   * Builds the map and everything standing on it, then opens the deploy
+   * screen. Always entered from `startRound`, one frame later — see there for
+   * why the two are not one method.
+   */
+  private buildRound(): void {
     // Re-draw skills for the chosen tier. The rig pool is never disposed, so
     // this is the only place the roster's difficulty can change.
     this.battle.setDifficulty(this.difficulty);
@@ -1801,6 +1876,10 @@ export class Game {
     this.losses[0] = this.losses[1] = 0;
     this.playerKills = 0;
     this.playerDeaths = 0;
+    // The building card comes down on the far side of the work it covered, and
+    // with it `.overlaid` — the deploy screen is one of the two that reads the
+    // HUD underneath it rather than hiding it.
+    this.overlayScreen.hide();
     this.enterDeploy(0);
   }
 

@@ -62,6 +62,72 @@
    screen's: those hide the HUD, this one is a header inside a running
    round and has to clear the flag strip along the top of it. */
 #overlay h1.pause-title { font-size: 44px; }
+/* The map's name, not the game's, so it is set at the size a subtitle wants
+   rather than the title's — and in the neutral ink, because nothing has been
+   won or lost yet. The card is on screen for well under a second: anything
+   that animates in would still be arriving when it goes. */
+#overlay h1.building-title {
+  font-size: 44px;
+  color: #fff;
+  text-shadow: 4px 4px 0 #000;
+}
+
+/* The building card's bar, and the one animation in this file that runs while
+   the main thread is DEAD.
+
+   That is the whole design constraint and it is not a detail. Everything this
+   bar covers is one synchronous block — the merges, the occlusion bake, the
+   nav grid — so for its entire life on screen there is no JS running to move
+   it and no frame the main thread can contribute to. What still moves is a CSS
+   animation the compositor can run by itself, and the compositor will only
+   take one whose properties need neither layout nor paint: `transform` and
+   `opacity`, and nothing else. Animate `width`, `left`, or a background
+   position instead and the bar renders perfectly in every test, then stands
+   stock still for the one second it exists for — which is worse than no bar at
+   all, because a frozen progress bar is what a hung program looks like.
+   `will-change` asks for the layer up front, since the animation has to be on
+   the compositor BEFORE the thread blocks; the two frames `Game.startRound`
+   waits are what give it time to get there.
+
+   Deliberately NOT shared with the boot screen's identical-looking bar in
+   `index.html`: that one has to run before this stylesheet exists. Two copies
+   of nine lines is the price of the boot screen being self-contained, and it
+   is the right way round — this file may never be what the other one waits on.
+
+   Indeterminate for the same reason as the boot bar: the work is one
+   uninterruptible call, so there is no progress to read even in principle. */
+#overlay .ov-bar {
+  position: relative;
+  width: 300px;
+  max-width: 60vw;
+  height: 3px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.1);
+}
+#overlay .ov-bar i {
+  position: absolute;
+  /* Explicit, not inherited from the static position — a `text-align` on any
+     ancestor would otherwise decide where the sweep starts, which is how the
+     boot screen's copy of this bar ended up beginning at the centre of its
+     track and running off the end. */
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  background: #35f0ff;
+  box-shadow: 0 0 12px 1px rgba(53, 240, 255, 0.85),
+    0 0 32px rgba(53, 240, 255, 0.4);
+  will-change: transform;
+  animation: ov-sweep 1.15s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+/* 194% is (100 - 34) / 34 — the track measured in the segment's own widths, so
+   it reaches the right edge and turns back rather than running off it. This
+   card is up for about a second: a sweep that spends part of its cycle
+   off-screen would show an empty track for a good fraction of that. */
+@keyframes ov-sweep {
+  from { transform: translateX(0); }
+  to { transform: translateX(194%); }
+}
 #overlay h1.dead { color: var(--theirs); text-shadow: 5px 5px 0 #000; }
 #overlay h1.win { color: var(--good); text-shadow: 5px 5px 0 #000; }
 #overlay .tagline {

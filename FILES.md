@@ -6,9 +6,12 @@ subsystem contracts under [`docs/`](docs/) that it points to carry the rules
 these modules obey; this file is for finding your way to the right one.
 
 ```
-index.html          # The head, and NO interface CSS. The one inline rule is a
-                    #   black background, so a dev reload does not flash white.
-main.ts             # Bootstrap. Imports src/ui/base.css FIRST.
+index.html          # The head, and NO interface CSS beyond the two things shown
+                    #   while there IS no interface: a black background (so a
+                    #   dev reload does not flash white) and the boot screen.
+main.ts             # Bootstrap. Imports src/ui/base.css FIRST. Owns the boot
+                    #   screen: down on the first drawn frame, or the WebGL2
+                    #   failure message.
 public/             # Copied to dist/ VERBATIM — unhashed URLs named by hand
                     #   (manifest.webmanifest, icons/ from `npm run icons`).
 src/
@@ -176,8 +179,8 @@ src/
     HUD.ts/hud.css      # Gameplay chrome ONLY: tickets, flags, capture panel,
                         #   vitals, ammo, the stowed slot, crosshair, killfeed,
                         #   scoreboard, damage arcs, + .paused/.editing/.dying
-    OverlayScreen.ts    # The three cards — menu, round-over, pause — and the
-      overlay.css       #   .overlaid class they raise
+    OverlayScreen.ts    # The four cards — menu, round-over, pause, building —
+      overlay.css       #   and the .overlaid class they raise
     DeployScreen.ts     # Top-down deploy map + the deploy and kit buttons
       deploy.css
     LoadoutScreen.ts    # Kit screen: two slots, a stat chart derived from

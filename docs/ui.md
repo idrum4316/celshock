@@ -8,9 +8,21 @@ contract for everything under `src/ui/`.
 ## The interface is four screens and the chrome
 
 `src/ui/` holds one class per thing on screen, and `HUD` is not where a new one
-goes: `OverlayScreen` owns the three full-screen cards, `DeployScreen` the deploy
+goes: `OverlayScreen` owns the four full-screen cards, `DeployScreen` the deploy
 map, `LoadoutScreen` the kit, `SettingsScreen` the toggles, `Minimap` the corner
 map, and `HUD` **only** the gameplay chrome.
+
+**The boot screen is the one piece of interface that is not in this directory**,
+and the exception is what defines it: it covers the stretch before any module
+has evaluated, so `src/ui/` could not draw it — the bundle it would be drawn by
+is what the player is waiting for. It is markup in `index.html` with its styles
+in that file's `<style>` block, and `main.ts` is the only code that touches it:
+taken down two frames after the `Game` constructor returns, or turned into the
+"needs WebGL2" message when the game cannot start at all. It is self-contained
+by necessity — in DEV `base.css` is injected from JS and has not arrived either,
+so it may not use `--font`, `.frame`, or anything else the interface shares.
+Nothing that reacts to game state may be added to it; that is an interface, and
+it belongs here with a stylesheet of its own.
 
 Each screen builds its own root element and appends it to `#hud`, which is why
 construction order in `Game`'s constructor matters exactly once: `HUD` writes
@@ -18,11 +30,35 @@ construction order in `Game`'s constructor matters exactly once: `HUD` writes
 Stacking is not DOM order — `#overlay` (10) and `#loadout` (11) carry z-indices,
 because a pause can be taken with the deploy map on screen.
 
-**The three cards are one class because they are one element** — they share the
+**The four cards are one class because they are one element** — they share the
 shell, the title block, the controls table and the Deploy button. The bar for a
 screen of its own is *state*: the deploy map has a selection and a canvas, the kit
 screen has two slots and a turntable; a card that is markup plus a button has not
 earned one.
+
+**The building card is the fourth, and it is the only one the player cannot
+act on.** It stands over the ~0.7 s of merges, occlusion bake and nav grid that
+building a map costs, and it exists because a freeze and a load look identical
+from the outside — before it, the card the player had just confirmed simply
+stopped where it stood for the whole build. `Game.startRound` is what actually
+buys it the frame it needs to be drawn in; see the state machine's `loading` in
+[`CLAUDE.md`](../CLAUDE.md), and note that the rule there is **two**
+`requestAnimationFrame`s, not one. It takes itself down at the end of
+`Game.buildRound` rather than waiting to be dismissed.
+
+**Its bar may only be animated with `transform` or `opacity`** — the one place
+in this directory where the choice of animated property is a correctness
+constraint rather than a matter of taste. For the whole life of that card the
+main thread is inside the build, so nothing on it can move unless the
+COMPOSITOR can move it alone, and the compositor only takes an animation that
+needs neither layout nor paint. A bar animated on `width` or `left` renders
+perfectly in every test and then stands still for the one second it exists for,
+which reads as a hung game rather than a loading one. Measured: with a 5 s
+block forced, the bar keeps producing distinct frames throughout and drops
+none. The bar is also **indeterminate**, and honestly so — the work behind both
+it and the boot screen's is a single uninterruptible call, so there is no
+progress to read even in principle, and an invented percentage always ends up
+stuck at 90 while the real work finishes.
 
 **A class on `#hud` belongs to whoever raises it.** `OverlayScreen` sets
 `.overlaid`, `LoadoutScreen` sets `.kitting`, `HUD` sets `.paused`, `.editing` and
@@ -114,10 +150,14 @@ change moved no content-hashed filename. Three rules keep it that way:
 - **A screen's state rules go with whoever sets the class**, not whoever owns the
   element: `#hud.paused #deploy { opacity: 0.18 }` is in `hud.css` because
   `HUD.setPaused` puts `.paused` on, even though `#deploy` is the deploy screen's.
-- **`index.html` gets no interface CSS, ever.** The one inline rule is a black
-  `html, body` background: a production build links the stylesheet render-blocking
-  from the head, but the dev server injects it from JS, leaving one frame of default
-  white — on a night game that reads as a camera flash.
+- **`index.html` gets no interface CSS, ever, with exactly two exceptions**, and
+  both are there because they are what the page shows while there is no
+  interface. The first is a black `html, body` background: a production build
+  links the stylesheet render-blocking from the head, but the dev server injects
+  it from JS, leaving one frame of default white — on a night game that reads as
+  a camera flash. The second is the boot screen's own block, for the same reason
+  one step further along. Neither may grow a rule that styles anything a module
+  writes, and nothing else may be added beside them.
 
 ## Getting into a round
 
