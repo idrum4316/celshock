@@ -67,6 +67,62 @@ parented to the camera and posed in camera space.
   the screen; `viewmodel.scale` shrinks it and `hipPos.z` pushes it out. That pose is
   authored for the rifle's length, so a shorter weapon adds its own `hipZ` or an SMG
   reads as being held at arm's length.
+- **The per-shot kick is a SPRING, and the spring is `Player`'s.** A shot hands
+  it a *velocity* (`recoil.kick.speed`) rather than setting a level, so a round
+  travels, overshoots the carry by ~0.07 on the way home and settles, and a round
+  arriving on a weapon that has not come home adds to what is already there — the
+  carbine's three rounds in 0.1 s reach 1.35 where one reaches 1.00. It replaced
+  a snap-to-1-and-fade, which has an instant attack, a monotone return and
+  nothing on the far side of neutral: a fade rather than a mechanism cycling.
+  Because it goes genuinely negative, every term reading it must invert with it
+  — gating on `> 0` instead of `!== 0` puts a visible corner in the return.
+  - **It is stepped in CLOSED FORM, and the landing absorb's semi-implicit Euler
+    must not be copied onto it.** At 6 Hz, `omega * dt` reaches 1.26 at 30 fps,
+    far outside where that integrator holds: measured, one round peaked at 0.08
+    of its travel at 30 fps, 0.54 at 60 and 0.78 at 120 — recoil growing with the
+    frame rate. `land`'s 2 Hz is inside it and may stay as it is. **Frequency is
+    what decides which you need**, not which file you are in.
+  - **Its reach scales with a COMPRESSED `recoilMult`** (`kick.compress` 0.6 —
+    rifle 1.00, DMR 1.61, SMG 0.70). Before it there was no weapon term at all
+    and every gun moved the model the same distance. Raw `recoilMult` is not an
+    option: 2.2 is a defensible thing to do to an aim in fractions of a degree
+    and an indefensible thing to do to a pose in centimetres.
+  - **The lateral, roll and yaw take the shot's own `kickDrift`**, so the model
+    leans the way the muzzle actually walked rather than picking a direction of
+    its own. `kickRoll` is subtracted against it, because a positive `rot.z`
+    takes the right flank UP (see `reloadRot`) and a weapon walking right has to
+    roll negative to lean into where it is going. Flip it with that convention.
+  - **The off-axis terms are damped by `kick.adsMult` (0.3) and the z travel is
+    not**, and that split is geometry rather than taste. The weapon carries the
+    sight, so anything that rotates or laterally shifts the model while aimed
+    takes the RETICLE off the axis the rounds fly down — the same lie the aimed
+    hold sway is arranged to avoid from the other side. Travel along z moves the
+    sight closer to the eye and leaves the picture centred, which is also what a
+    braced shoulder actually does with a rifle.
+  - **The z travel is not damped, but it IS bounded, and by the near plane
+    rather than by taste.** An aimed sight stands only centimetres off the eye
+    and the travel is *toward* it, so on a magnified optic the two collide: the
+    DMR with the scope drove 4.8 cm into a 7.8 cm stand-off and put the eyepiece
+    2 cm behind `camera.minZ` — the scope going inside your head, and the rifle
+    grazed the same plane at 4.8 cm. `kick.adsClearance` is the floor, and what
+    the travel spends is **scaled** to fit the room rather than clamped at it: a
+    clamp stops the weapon dead partway through the kick and reads as a clunk.
+    The bound is derived from the fitted sight's own `eyeRelief * zoomComp`, the
+    same rule `adsPos` follows, so nothing is authored per combination — and
+    only the prism and the scope ever reach it. Measured over all ten
+    magnified combinations with a burst stacked on the spring, the worst aimed
+    sight distance is **6.2 cm** (the DMR on the prism) against a near plane at
+    5.0, where before the bound that same case sat at **3.8 cm** — 1.2 cm the
+    wrong side of it. **Move `minZ` and `adsClearance` has to follow.**
+  - **That damping made the aimed picture steadier than it has ever been, not
+    less steady.** The kick had no ADS term at all before, which was survivable
+    only because it had no lateral component either — but its `kickPitch` was
+    applied at full, so an aimed shot tipped the sight **0.12 rad (6.9°)** at the
+    peak. It is 0.036 rad (2.1°) now, and the lateral and roll that came with the
+    drift arrive already damped rather than being added on top. Measured at full
+    aim and full kick, the terms are exactly `kickPitch/kickSide/kickRoll/kickYaw
+    × 0.3` and `kickBack × 1`; at rest all twenty-six sight pictures still read
+    zero on the camera axis.
 - **The camera owns the bob phase; the weapon reads it.** Two integrators fed the
   same number drift apart and the weapon would visibly swim against the view.
   `Player` pushes the drive with `cam.setBobDrive()` and passes `cam.bobPhase`
@@ -103,8 +159,19 @@ parented to the camera and posed in camera space.
   same reason**: `velY` is a step function at both ends of a jump, so a give read
   straight off it snapped `airDropMax` to neutral on contact.
 
+**Two things write the camera's roll — the landing absorb and the view punch —
+and they do it through ONE assignment** at the end of `CameraSystem.update`,
+which is what stops the roll becoming whichever of them happened to run last.
+Verified as a sum rather than a replacement: a punch taken with a landing already
+in flight reads `landDip * adsMult * land.roll + punchRoll * shakeRoll * punch`
+to the last digit, and neither term alone. `updateUpVectorFromRotation` covers
+both and must stay on.
+
 The bob and the view punch move the **rendered camera only** — `aimPitch`/`aimYaw`
-never see them, so bullets don't bob.
+never see them, so bullets don't bob. The punch is also the one place a rendered
+angle may be *larger* than the aim's: it decays over `punchTime` (0.09 s) against
+the aim spring's `recovery` (6.5/s), roughly seven times faster, which is what
+lets the view snap harder than the aim does without costing any control.
 
 **The aimed hold sway is the one thing on the camera that is not cosmetic, and it
 has to be.** An aimed weapon wanders — two sines an axis, pitch breathing at
@@ -243,8 +310,41 @@ assist" is measured against.
 
 ## Recoil has a shape, and the shape is learnable
 
-Two terms make the difference between recoil you fight and recoil you learn, and
-neither is a weapon's own number scaled.
+Four terms make the difference between recoil you fight and recoil you learn, and
+none of them is a weapon's own number scaled.
+
+**The kick's DIRECTION rotates as a string runs, and `recoil.pattern` is that.**
+Two envelopes over the counter `firstShotMult` already reads: `pitchSettled`
+(0.8) takes the vertical down across `patternShots` (7) as a muzzle climbs and
+then binds, while `yawStart` (0.3) brings the horizontal up over the same span.
+So the first rounds of any string go nearly straight up — which is what makes a
+tap precise and is the reason to tap — and a held trigger walks off sideways
+about `yawBias`. Before it, the kick was the same vector on shot 1 and shot 20
+and a spray was a straight line with jitter on it; the only shape available was
+magnitude, which can be pulled against but not learned.
+
+**The pair is tuned to leave the total walk alone**, which is what makes it a
+change of shape rather than a nerf. For the rifle's 24 rounds from the hip the
+per-shot multipliers sum to 20.5 against the 24.6 a flat string summed to, and
+`pitchPerShot` went 0.026 → 0.03 to pay for exactly that: **10.6° of climb and
+2.4° of drift**, against 11.0° and 1.6° when every round kicked the same.
+`yawPerShot` went 0.011 → 0.018 to buy the sideways, and `maxYaw` 0.06 → 0.09
+with it, because a ceiling is only meaningful as a number of rounds and the old
+one would have bound after four instead of eight. **All four figures are derived.
+Re-derive them rather than assuming they followed** whenever anything in
+`pattern`, `pitchPerShot`, `yawPerShot` or `firstShotMult` moves.
+
+**Both string-shaped terms share one exclusion**, `Player.stringed` — whether the
+weapon HAS a cycle you can be in the middle of (`!semiAuto || burst > 1`). It has
+to be shared: applied to a string of one, `firstShotMult` is a flat 60% increase
+and the taper is a flat 20% *decrease*, and the decrease is the worse of the two
+because both those weapons' fire rates sit just inside `stringResetTime` (the
+DMR's 0.333 s against 0.35). Only a player firing them as fast as the weapon
+allows would collect it — a discount for spamming a precision weapon, which is
+the opposite of what a rate ceiling is for. Excluded, the DMR and the pistol fire
+shot one every time: full climb, minimum drift, nothing to learn and nothing to
+game. Measured, their envelope is 1.0 on every round of a magazine while the
+rifle's and the carbine's run 1.6, 0.97, 0.93, 0.90, 0.87, 0.83, 0.80, 0.80…
 
 **`recoil.firstShotMult` (1.6) is what makes a burst have a punch and a settle
 rather than a flat ramp.** A weapon that has been sitting still and one that is
@@ -261,14 +361,35 @@ rifle's settled kick.
 
 **It does not apply to a weapon that is a string of one**, and the exclusion is
 the feature rather than an exception to it. `Player.recoilRamp` returns 1 when
-`semiAuto && burst === 1`, which is the DMR and the pistol: every shot there is
+`Player.stringed` is false, which is the DMR and the pistol: every shot there is
 a first shot, so the multiplier would not be texture at all — just a flat 60%
-recoil increase wearing feel's clothing, and on the DMR's 2.2 that is 5.2° on
+recoil increase wearing feel's clothing, and on the DMR's 2.2 that is 6.0° on
 every deliberate scoped round. Their `recoilMult` already carries the punch a
 single shot is supposed to have. The carbine is `semiAuto` too and is
 deliberately **included**, because `burst > 1` means one pull is three rounds
 climbing as one motion, which is exactly the thing that has a first round in it;
 `burstCycle` 0.4 s exceeds the reset window, so every burst gets the punch.
+
+**The stance is the fourth term, and it is the one a player can answer
+immediately.** `adsMult` (0.55) was on its own for a long time; `crouchMult`
+(0.8), `moveMult` (1.25) and `airMult` (1.5) sit beside it now and are blended
+the same way, off the same eased weights `Player` already pushes at the camera
+for the bob and the sway. Crouching bought a tighter group
+(`player.crouchSpreadMult`) and a steadier hold (`aimSway.crouchMult`) and did
+nothing at all about the kick, which made kneeling behind a wall a decision about
+the first round and not about the eighth. The two penalties are the same fact
+from the other side: recoil is absorbed by a body braced against it, and a body
+that is walking or in the air is not braced.
+
+**The whole vector is built in `Player.recoilKick`, and that is where it
+belongs.** Every number in it is the weapon's or the body's, and this file has
+always said the recoil multipliers reach nothing but `Player` — but `Game` used
+to assemble it out of three getters and a random draw of its own, so the weapon's
+kick was described in one file and built in another, and the horizontal was drawn
+a *second* time for the viewmodel. It is one draw now, in `tryShot`, into
+`Player.kickDrift`, read by the aim, by the weapon's lean and by the view punch:
+one round going one way. `Game` wires the result to the camera and does no
+arithmetic on it.
 
 **Per-weapon `yawBias` (−1..+1) is what makes the horizontal learnable at all.**
 It used to be symmetric noise, and the only correct response to a random walk is
@@ -418,7 +539,7 @@ all, so a body killed mid-burst would otherwise owe rounds to the next life.
 finger* rather than a cadence, and the error budget pays for it: a missed rifle
 round costs 0.125 s, a missed DMR round 0.333. Its `recoilMult` of 2.2 is the second
 half of the bill: only 70% of a kick springs back (`recoil.recoverFraction`), so a
-third of a second after a shot ~1.2 deg is still on the aim. That also makes a high
+third of a second after a shot ~1.4 deg is still on the aim. That also makes a high
 `bloomMult` cheap: at any deliberate pace the bloom has bled off before the next
 round leaves.
 
@@ -447,7 +568,7 @@ magazine mean anything: at 0.5 the bloom ceiling is 0.015 against the rifle's
 burst lands where the fourth did. A weapon that bloomed like the rifle would carry
 seventy-five rounds and have nothing to do with the last fifty. `recoilMult` 0.7 is
 the same argument on the other axis: at 10 rounds a second the rifle's own kick is
-0.26 rad/s of climb, and 0.182 is the gentlest in the kit — a burst you steer
+0.24 rad/s of settled climb, and 0.168 is the gentlest in the kit — a burst you steer
 rather than one you abandon.
 
 The trigger latch lives in **`Player.tryShot`, which takes the trigger rather than

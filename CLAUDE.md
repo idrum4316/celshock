@@ -268,12 +268,27 @@ animated without the same split. The gesture is a CANT rather than a lift, and i
 stands: an aimed weapon is on the camera axis, so any reload pose applied there
 puts the receiver across the middle of the screen.
 
+**The weapon punch is a SPRING the shot hands a velocity to, not a level the
+shot sets.** `Player` owns it and `ViewModel` reads it, the same split as the bob
+phase — so a round travels, overshoots the carry on the way home and settles,
+and a round arriving on a weapon that has not come home adds to what is there.
+Its lateral, roll and yaw take the shot's own `kickDrift`, so the model leans the
+way the muzzle actually walked, and its whole reach is scaled by a **compressed**
+`recoilMult` (`kick.compress`) because 2.2 is a defensible thing to do to an aim
+and an indefensible thing to do to a pose in centimetres. **The off-axis terms
+are damped hard while aimed and the longitudinal travel is not**: the weapon
+carries the sight, so anything that rotates or laterally shifts it while aimed
+takes the reticle off the axis the rounds fly down, and a reticle that moves
+where the bullets do not is the failure the aimed hold sway is arranged to avoid
+from the other side.
+
 → **[`docs/weapons.md`](docs/weapons.md)** — the viewmodel's own rendering group
 and pose stack, the bob phase's single integrator, the reload's four beats and
-the magazine that leaves the weapon on them, the two slots and their holsters,
-the five weapons and the three fire modes, how an optic's size and its eye relief
-are one number, and the procedural-model rules (merge per colour; a second merge
-is how a part is let out of the weapon; never scale a part non-uniformly).
+the magazine that leaves the weapon on them, the kick spring and the recoil
+pattern's two envelopes, the two slots and their holsters, the five weapons and
+the three fire modes, how an optic's size and its eye relief are one number, and
+the procedural-model rules (merge per colour; a second merge is how a part is let
+out of the weapon; never scale a part non-uniformly).
 
 ### Grenades
 
@@ -532,9 +547,15 @@ the phone-shaped details (fullscreen on the document element, `--ov-scale`, why
 - `CONFIG` is `as const`, so a field like `bots.engageRange` has a *literal* type.
   `let x = CONFIG.bots.engageRange` then reassigning it fails to compile — annotate
   `let x: number` instead.
-- Smoothing is normally the frame-lerp idiom `Math.min(1, dt * rate)`. Recoil decay
-  in `CameraSystem` deliberately uses true `Math.exp(-rate * dt)`, because it moves
-  where bullets go and burst climb must not vary with frame rate.
+- Smoothing is normally the frame-lerp idiom `Math.min(1, dt * rate)`. **Anything
+  that moves where bullets go, or that a player will read as recoil, is stepped
+  EXACTLY instead** — recoil decay in `CameraSystem` uses true
+  `Math.exp(-rate * dt)` because burst climb must not vary with frame rate, and
+  the viewmodel's kick spring in `Player` is stepped in closed form for the same
+  reason at a stiffness Euler cannot hold (measured: the Euler version peaked at
+  0.08 of its travel at 30 fps, 0.54 at 60 and 0.78 at 120). The landing absorb
+  next door is semi-implicit Euler and may stay that way: at 2 Hz it is inside
+  where that integrator is accurate. Frequency is what decides which you need.
 - Recoil only partly springs back: `CONFIG.recoil.recoverFraction` (0.7) returns 70%
   and pushes 30% permanently into the player's own `pitch`/`yaw`, so a magazine held
   down genuinely walks off target. An explicit product decision — a fully-recovering
@@ -544,6 +565,22 @@ the phone-shaped details (fullscreen on the document element, `--ov-scale`, why
   view skyward over one exchange and make each hit likelier to be followed by
   another. It shares the recoil spring rather than owning one, for the reason
   the bob phase has a single integrator.
+- **A string of shots has a SHAPE, and the shape is two envelopes over one
+  counter.** `CONFIG.recoil.pattern` tapers the vertical toward `pitchSettled`
+  and ramps the horizontal up from `yawStart` across `patternShots`, both keyed
+  to `Player.stringShots` — the counter `firstShotMult` already read. So the
+  kick's *direction* rotates as a string runs and a spray is a hook rather than
+  a line. The pair is tuned to leave the total walk alone (10.6 deg of climb and
+  2.4 deg of drift over the rifle's magazine, against 11.0 and 1.6 when every
+  round kicked the same), and **those two figures are derived — re-derive them
+  rather than assuming they followed** whenever `pattern`, `pitchPerShot`,
+  `yawPerShot` or `firstShotMult` moves.
+- **The recoil vector is built in `Player.recoilKick`, never at the call site.**
+  Every number in it is the weapon's or the body's — `recoilMult`, `yawBias`, the
+  string, the ADS blend and the stance multipliers — and the horizontal is drawn
+  ONCE per shot into `Player.kickDrift` so the aim, the viewmodel's lean and the
+  view punch are all the same round going the same way. `Game` wires the result
+  to the camera and does no arithmetic on it.
 - **Every ROUND is hitscan** — player and bots share `CombatSystem.fire()`, which
   takes the shooter's target list (so friendly fire is excluded by construction rather
   than by a team check inside) and the shooter's own `range`, which bounds the wall pick

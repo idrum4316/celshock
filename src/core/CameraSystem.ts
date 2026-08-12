@@ -26,16 +26,20 @@
  * way: a hit is not a choice the player made, so a permanent share would
  * ratchet the view up over one exchange. It shares the spring rather than
  * owning one, so it cannot drift against the recoil sitting on top of it.
- * The view punch (FOV spike / camera shove / jitter), the head bob and the
- * landing absorb are pure cosmetics: they are applied only to the rendered
- * camera, never to aimPitch/aimYaw, so bullets and bots never see them.
+ * The view punch (FOV spike / camera shove / directed nudge), the head bob and
+ * the landing absorb are pure cosmetics: they are applied only to the rendered
+ * camera, never to aimPitch/aimYaw, so bullets and bots never see them. The
+ * punch's angles are drawn ONCE per shot and held, not re-rolled per frame —
+ * white noise at 8-13 rounds a second is a buzz, not an impact.
  * The aimed hold sway is the ONE exception, and deliberately so: it is part of
  * aimPitch/aimYaw, because the weapon hangs off this camera and a sight
  * picture that drifts while the rounds fly down an undrifted axis is a reticle
  * that lies. See CONFIG.camera.aimSway.
  * The landing absorb is a damped spring this system owns and the viewmodel
  * READS (`landDip`) — one integrator per impact, the same rule as the bob
- * phase. It is also the only thing that writes the camera's roll.
+ * phase. It and the view punch are the only two things that write the camera's
+ * roll, and they do it through ONE assignment at the end of `update`: a second
+ * write site is how a roll becomes whichever contributor happened to run last.
  * Must run before mats.updateCamera()/lighting.update()/sfx.setListener()
  * in Game's frame order.
  */
@@ -117,6 +121,20 @@ export class CameraSystem {
    * Squared before use so the spike is at the impact frame.
    */
   private punchT = 0;
+  /**
+   * The direction this punch is throwing the view, drawn once per shot and
+   * held for its life. Unit-ish: pitch is up-biased, yaw and roll carry the
+   * shot's own drift with noise on top.
+   *
+   * It used to be `Math.random()` re-rolled every frame, and that is why the
+   * amplitudes in `CONFIG.recoil` had to be almost invisible: white noise at
+   * 8-13 rounds a second overlaps into a buzz that reads as a dirty lens
+   * rather than as a weapon going off. One coherent nudge per shot reads as an
+   * impact at roughly twice the amplitude and costs nothing.
+   */
+  private punchPitch = 0;
+  private punchYaw = 0;
+  private punchRoll = 0;
 
   /**
    * The aimed hold sway: this frame's offsets, and the free-running breath
@@ -253,6 +271,12 @@ export class CameraSystem {
     this.recoilPitch = 0;
     this.recoilYaw = 0;
     this.punchT = 0;
+    // All three, not just the roll: `punchT` at 0 already makes them
+    // unreadable, so zeroing one of a set that is written together is a
+    // half-truth for whoever reads this next.
+    this.punchPitch = 0;
+    this.punchYaw = 0;
+    this.punchRoll = 0;
     // The phase deliberately survives a respawn — it is a body breathing, not
     // a round starting, and restarting it would put every life's first aimed
     // shot at the same point of the same wander.
@@ -305,12 +329,27 @@ export class CameraSystem {
   }
 
   /**
-   * Fires the cosmetic view punch; called once per shot. Unlike `addRecoil`
-   * this touches nothing the bullets read — it is FOV, a small backward
-   * shove, and high-frequency jitter on the rendered camera only.
+   * Fires the cosmetic view punch; called once per shot, and once per blast.
+   * Unlike `addRecoil` this touches nothing the bullets read — it is FOV, a
+   * small backward shove, and a directed nudge on the rendered camera only.
+   *
+   * `drift` is the shot's own lateral, -1..+1 (`Player.kickDrift`), or the
+   * bearing a blast arrived from. The punch is biased UP and toward it, with
+   * noise on top, so what the view does is visibly the same event as what the
+   * muzzle did rather than a second one happening at the same moment. The
+   * pitch term is deliberately never negative: a weapon does not push the
+   * shooter's head down.
+   *
+   * The roll is drawn AGAINST the drift, opposing the roll the viewmodel takes
+   * (`recoil.kickRoll`). Rolled the same way the two cancel and the whole
+   * picture tips instead; opposed, the weapon reads as twisting in the hands.
    */
-  addPunch(): void {
+  addPunch(drift = 0): void {
     this.punchT = 1;
+    const d = Math.max(-1, Math.min(1, drift));
+    this.punchPitch = 0.6 + Math.random() * 0.4;
+    this.punchYaw = d * 0.5 + (Math.random() * 2 - 1) * 0.5;
+    this.punchRoll = -d * (0.7 + Math.random() * 0.3);
   }
 
   /**
@@ -527,8 +566,8 @@ export class CameraSystem {
 
     this.camera.position.copyFrom(this.eye);
     if (punch > 0 || nod !== 0) {
-      const shPitch = punch > 0 ? (Math.random() * 2 - 1) * r.shakePitch * punch : 0;
-      const shYaw = punch > 0 ? (Math.random() * 2 - 1) * r.shakeYaw * punch : 0;
+      const shPitch = this.punchPitch * r.shakePitch * punch;
+      const shYaw = this.punchYaw * r.shakeYaw * punch;
       const sp = this.aimPitch + shPitch + nod;
       const sy = this.aimYaw + shYaw;
       const cp = Math.cos(sp);
@@ -542,8 +581,10 @@ export class CameraSystem {
     }
     // Roll goes on AFTER the target: `setTarget` writes yaw and pitch out of
     // the direction and never touches z, so this is the one axis the camera
-    // keeps of its own. It is also the only place anything writes it.
-    this.camera.rotation.z = swing * l.roll;
+    // keeps of its own. It is still the only place anything writes it — two
+    // contributors now, but one assignment, because a second write site is how
+    // a roll ends up being whichever of them ran last.
+    this.camera.rotation.z = swing * l.roll + this.punchRoll * r.shakeRoll * punch;
     this.camera.fov =
       c.fovHip + (this.sight.fovAds - c.fovHip) * t + r.fovPunch * punch;
   }

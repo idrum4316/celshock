@@ -2041,32 +2041,22 @@ export class Game {
       // is the only place the player's own gunfire enters the world, so it is
       // the only place that can say so.
       this.battle.hearGunshot(muzzle, this.player.team);
-      // Recoil: kick the aim up and off to a random side, softened while
-      // braced in ADS. It decays on its own, so the burst climbs and settles.
-      // The weapon's own multiplier rides on top of the ADS damping: a
-      // 13-round-a-second SMG on the rifle's per-shot kick walks the muzzle
-      // off the screen inside half a magazine.
-      // `recoilRamp` is the first-shot multiplier, already resolved to 1 on
-      // the weapons a string means nothing on. The horizontal is no longer
-      // symmetric noise: the weapon's `yawBias` SCALES the random term and
-      // offsets it, so the total stays bounded by `yawPerShot` — every
-      // ceiling documented for `maxYaw` survives — while the drift has a
-      // direction that can be led. A bias of 0 is the old behaviour exactly.
-      const rc = CONFIG.recoil;
-      const kickMult =
-        (1 - (1 - rc.adsMult) * blend) *
-        this.player.recoilMult *
-        this.player.recoilRamp;
-      const bias = this.player.yawBias;
-      const drift =
-        (Math.random() * 2 - 1) * (1 - Math.abs(bias)) + bias;
-      this.cameraSys.addRecoil(
-        rc.pitchPerShot * kickMult,
-        drift * rc.yawPerShot * kickMult,
-      );
-      // Cosmetic view punch: FOV spike + shove + jitter on the rendered
-      // camera only — the bullets above already left with the clean aim.
-      this.cameraSys.addPunch();
+      // Recoil: kick the aim up and off toward the weapon's own bias, softened
+      // braced and stiffened on the move. It decays on its own, so the burst
+      // climbs and settles.
+      //
+      // The vector is built by `Player.recoilKick` and not here: every number
+      // in it is the weapon's, and `docs/weapons.md` has always said the recoil
+      // multipliers reach nothing but `Player`. Wiring it to the camera is this
+      // call site's whole job, which is what a call site in `Game` is for.
+      // Exactly once per shot — it reads the string counter and the drift
+      // `tryShot` just advanced.
+      const kick = this.player.recoilKick(blend);
+      this.cameraSys.addRecoil(kick.pitch, kick.yaw);
+      // Cosmetic view punch: FOV spike + shove + a nudge thrown the way this
+      // round went, on the rendered camera only — the bullets above already
+      // left with the clean aim.
+      this.cameraSys.addPunch(this.player.kickDrift);
       // Muzzle flash: a hard, very short pulse that lights whatever is in
       // front of the player — the main reason to keep shooting in the dark.
       const lc = CONFIG.lighting;
@@ -2652,7 +2642,9 @@ export class Game {
    * same damped spring, and the alternative is a second integrator writing the
    * same offset — the trap the bob phase documents from the other side. It
    * falls off over twice the blast radius, so a grenade you survived at the
-   * edge still registers as one.
+   * edge still registers as one. What it does NOT reuse is the punch's
+   * direction: `addPunch` takes one, so the shove is thrown away from where
+   * the blast actually was rather than being the same nudge every time.
    */
   private onExplosion(at: Vector3): void {
     const lc = CONFIG.lighting;
@@ -2670,7 +2662,14 @@ export class Game {
     const d = Vector3.Distance(at, this.cameraSys.camera.position);
     if (d >= reach) return;
     this.cameraSys.land(g.shakeSpeed * (1 - d / reach));
-    this.cameraSys.addPunch();
+    // Which side it went off, as the punch's drift: the sign of the blast's
+    // bearing across the view. A grenade behind a shoulder throws the view the
+    // other way, which is free here because the punch already takes a
+    // direction for the gun and a pressure wave has one just as much.
+    const right = this.cameraSys.flatRight;
+    const bearing = (at.x - this.cameraSys.camera.position.x) * right.x +
+      (at.z - this.cameraSys.camera.position.z) * right.z;
+    this.cameraSys.addPunch(d > 0.001 ? -bearing / d : 0);
     const haptic = CONFIG.rumble;
     this.input.rumble(haptic.hurtStrong, haptic.hurtWeak, haptic.hurtMs);
   }

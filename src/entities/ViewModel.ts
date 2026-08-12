@@ -44,6 +44,15 @@
  *   hand did not throw, which is the whole reason the arm exists.
  * - Everything else here is cosmetic. It reads the camera; it never writes it,
  *   and it never touches aim, spread or damage.
+ * - The per-shot KICK is a spring displacement Player owns and this only reads
+ *   (`PoseInput.kick`), the same split as `landDip` and `bobPhase`. It goes
+ *   genuinely NEGATIVE as the spring overshoots the carry on the way home, so
+ *   every term reading it must invert with it — gating on `> 0` rather than
+ *   `!== 0` puts a visible corner in the return. Its lateral, roll and yaw take
+ *   `kickDrift` so the model leans the way the muzzle walked, and those three
+ *   plus the pitch are damped by `recoil.kick.adsMult` while the z travel is
+ *   not: the weapon carries the sight, so anything that rotates or laterally
+ *   shifts it while aimed takes the reticle off the axis the rounds fly down.
  * - Meshes render in VIEWMODEL_GROUP with the depth buffer cleared first, so
  *   the weapon is never sliced open by the wall the player is standing
  *   against. Anything else attached to it (Player's muzzle flash) must join
@@ -240,8 +249,21 @@ export interface ViewModelParams {
    * say where in that the arm is. Player owns the clock; this only reads it.
    */
   throwTime: number;
-  /** Per-shot punch, 1 at the shot and squared by the caller. */
+  /**
+   * The weapon punch: how far the weapon is displaced along its kick axes, ~1
+   * at a single round's peak and briefly NEGATIVE as the spring overshoots the
+   * carry on the way home. Read, never integrated here — Player owns the
+   * spring, the same rule `landDip` and `bobPhase` follow.
+   */
   kick: number;
+  /**
+   * Which way the last round walked, -1..+1. The same signed draw the aim kick
+   * is built from (`Player.kickDrift`), so the model leans the way the muzzle
+   * actually went rather than picking its own direction.
+   */
+  kickDrift: number;
+  /** The carried weapon's share of the kick — `Player.kickWeight`. */
+  kickWeight: number;
   /** Smoothed look rates (rad/s) — the weapon trails both. */
   turnRate: number;
   pitchRate: number;
@@ -990,12 +1012,61 @@ export class ViewModel {
     this.off.y += p.landDip * v.landFollow;
     this.rot.x -= p.landDip * v.landPitch;
 
-    // --- per-shot kick: back, up, and nose-high ---
-    if (p.kick > 0.001) {
+    // --- per-shot kick: back, up, nose-high, and over toward the drift ---
+    // `p.kick` is a spring displacement, not a fading level, so it goes briefly
+    // negative on the way home and every term below inverts with it — the
+    // weapon comes back THROUGH the carry and settles from the front, which is
+    // the half of the cycle the old fade could not show. Hence `!== 0` and not
+    // `> 0.001`: the overshoot is real motion and clipping it at zero would put
+    // a visible corner in the return.
+    //
+    // The lateral three take the shot's own drift, so the model leans the way
+    // the muzzle walked. They are damped hard while aimed and the longitudinal
+    // travel is not, and that split is geometry rather than taste: the weapon
+    // carries the sight, so anything that rotates or laterally shifts it while
+    // aimed takes the RETICLE off the axis the rounds fly down and the sight
+    // picture lies. Travel along z leaves the picture centred and costs
+    // nothing, which is also what a braced shoulder actually does with a rifle.
+    if (p.kick !== 0) {
       const r = CONFIG.recoil;
-      this.off.z -= r.kickBack * p.kick;
-      this.off.y += r.kickBack * 0.25 * p.kick;
-      this.rot.x -= r.kickPitch * p.kick;
+      const k = p.kick * p.kickWeight;
+      // Everything that moves the SIGHT off the camera axis rides this; only
+      // the z travel below is exempt. Named for what it does rather than for an
+      // axis, because it covers both a translation and two rotations.
+      const offAxis = k * (1 - (1 - r.kick.adsMult) * t);
+      const side = offAxis * p.kickDrift;
+      // The travel is toward the EYE, and an aimed weapon is already only a few
+      // centimetres from it — so on a magnified optic the kick can drive the
+      // sight through the near plane, which reads as the scope going inside
+      // your head. Worst case is the DMR with the scope: 0.065 x 1.605 x 0.457
+      // is 4.8 cm of travel into a 7.8 cm stand-off, putting the eyepiece at
+      // 3.0 cm against a 5 cm `minZ`. The rifle grazes it at 4.8 cm.
+      //
+      // The bound is DERIVED from the fitted sight rather than authored, the
+      // same rule `adsPos` itself follows, so every optic on every weapon gets
+      // the right answer with nothing per-combination written down. What the
+      // travel spends is SCALED to fit the room rather than clamped to it: a
+      // clamp stops the weapon dead partway through the kick and reads as a
+      // clunk, where a scale keeps the spring's shape and only takes amplitude
+      // off it. It blends in with `t`, so hip fire is untouched.
+      //
+      // The room is measured against `stackPeak`, not against one round: a
+      // burst arrives faster than the spring returns, so the displacement this
+      // is derived for is the biggest a string reaches, not 1.
+      const sightDist = this.sight.eyeRelief * this.sight.zoomComp;
+      const room = Math.max(0, sightDist - r.kick.adsClearance);
+      const authored =
+        r.kickBack * p.kickWeight * this.sight.zoomComp * r.kick.stackPeak;
+      const fit = authored > 1e-6 ? Math.min(1, room / authored) : 1;
+      this.off.z -= r.kickBack * k * (1 + (fit - 1) * t);
+      this.off.y += r.kickBack * 0.25 * offAxis;
+      this.off.x += r.kickSide * side;
+      this.rot.x -= r.kickPitch * offAxis;
+      // Negative against the drift: a positive roll takes the weapon's right
+      // flank UP (see `viewmodel.reloadRot`), so a weapon walking right has to
+      // roll negative to lean into where it is going rather than away from it.
+      this.rot.z -= r.kickRoll * side;
+      this.rot.y += r.kickYaw * side;
     }
 
     // The zoom compensation rides the same blend as the pose, so the weapon

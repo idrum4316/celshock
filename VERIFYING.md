@@ -59,11 +59,31 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   `Object.defineProperty(g.input, "ads", { get: () => true, set: () => {} })` —
   and let `CameraSystem` converge.
 - Recoil/spread measured headless is wrong (fewer frames per shot means less
-  spring-back) — never tune from it.
+  spring-back) — never tune from it. **What headless CAN settle is the
+  arithmetic**, and that is where the recoil pattern is checked:
+  `player.recoilKick(adsBlend)` is a pure function of the string counter, the
+  drift and the stance blends, so zeroing `fireCooldown` between `tryShot`
+  calls drives a whole magazine in one `page.evaluate` and the envelope, the
+  ceilings and the walk come out exact. Write the stance in by hand
+  (`Object.assign(player, { crouchBlend: 1, moveBlend: 0, airBlend: 0 })`) —
+  those are eased in `update` and will not hold otherwise. The viewmodel's kick
+  spring is steppable the same way, and being closed-form it gives the same
+  answer at any `dt`, which is the one recoil number a headless run may be
+  trusted on.
 - `Game.updateGameplay` pushes HUD state every frame, so `hud.setScoreboard(...)`
   by hand is overwritten next tick. Drive the input (`page.keyboard.down("Tab")`).
 - Free a stuck vite port by PID from `ss -tlnp`. Never `pkill -f vite` — it
   matches the calling shell.
+- **Do not edit anything under `src/` while a script is driving the page.** Vite
+  pushes an HMR update, the module graph has no accept handler, and the page
+  does a FULL RELOAD — which drops `window.__celshock` and every
+  `Object.defineProperty` override and `window.__*` helper the script installed.
+  What it looks like is a `TypeError: window.__x is not a function` tens of
+  seconds after the last line that used the same helper successfully. Worse than
+  the crash is the case where it does not crash: readings taken either side of
+  the reload are against DIFFERENT source, silently. At ~2 fps a sweep runs for
+  minutes, which is exactly long enough to be tempted. Finish the run, or copy
+  the tree.
 - The muzzle flash is unhittable at 2 fps (`gunfeel.flashTime` 0.05 s); force it
   with `player.flashRoot.setEnabled(true)`.
 - **Sight alignment is checkable without a picture**, and should be after anything
@@ -82,6 +102,15 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   world-space offset onto a hand-built basis: the camera's own matrix already
   IS the basis, it needs no argument about which yaw to use, and it hands you
   the expected value instead of a pair of numbers that should be zero.
+  - **Waiting three frames is necessary and is not always sufficient — check
+    `view.swayX`/`view.swayYaw` have actually decayed.** The viewmodel's own
+    sway trails the camera's look rates, and the aimed hold sway keeps the
+    camera turning forever, so a reading taken while it is still settling is
+    off by tens of microns. Measured: the first optic sampled after entering a
+    round read **38 µm** of cross-axis error at four frames and **4.8 µm** at
+    forty-four, with `swayX` falling from 1.3e-4 to 1.2e-13 across the same
+    span. Every other optic in the same run was under 10 µm, which is the tell
+    — one outlier that is also the first sample is a transient, not geometry.
   - Projecting by hand still works, but **not through `flatRight`** — that is
     deliberately the un-recoiled and un-swayed yaw (see `camera.aimSway`), so it
     is not perpendicular to `forward` while either is live and a correct sight
@@ -102,6 +131,18 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
     Measured wrong this way, twenty-three of twenty-five optics come back 1–22 mm
     low or high, in a pattern that correlates neatly with the sight and looks
     exactly like a real geometry bug; measured right, all twenty-five are zero.
+  - **The kick's NEAR-PLANE clearance is a second reading off the same node,
+    and it needs the two magnified optics specifically.** The per-shot kick
+    travels the weapon toward the eye, so on the prism and the scope it can
+    drive the sight through `camera.minZ`. Freeze the spring
+    (`Object.defineProperty(g.player, "kickDisp", { get: () => 1.35 })`, the
+    stacked-burst worst case, plus `kickDrift` pinned so the roll is in it too),
+    force ADS, and read the same `sightCenter` z: it must exceed `minZ` for
+    every weapon on both optics. **Do not derive this instead of measuring it.**
+    The bound in `ViewModel` is computed on the weapon NODE's travel while what
+    has to clear the plane is the SIGHT, which the kick's pitch and roll swing
+    by another ~4 mm — derived, the DMR with the prism reads 6.2 cm and
+    measures 3.8.
   **Alignment is not occlusion, and only the second needs a picture**: a sight can
   read a perfect zero and still be looking at the weapon's own stock, which is what
   the DMR's irons did. `optics.ts`'s `ironSightFloor` keeps geometry out of the
