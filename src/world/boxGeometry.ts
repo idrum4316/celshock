@@ -59,23 +59,60 @@ export function topFaceAtLocalZ(box: WorldBox, lz: number): number | null {
   return box.cy + box.h / 2 / cx - lz * (Math.sin(box.rotX) / cx);
 }
 
+/** A point in a box's own XZ frame. */
+export interface LocalXZ {
+  lx: number;
+  lz: number;
+}
+
+/**
+ * Rotates a world XZ point into the box's own frame, into `out`. No extents
+ * test — that is `toLocalXZ`'s job, and the callers that pad the footprint or
+ * ask about it in more than two dimensions do it themselves.
+ *
+ * THE ONE PLACE THE YAW CONVENTION LIVES, and it is here because it had already
+ * been got wrong. The transform is world→local, so it rotates by *minus* rotY;
+ * the inverse — `[[cos, sin], [-sin, cos]]`, which is what `MapBuilder.rotateY`
+ * uses to *place* a collider — reflects the test across the box instead. That
+ * is invisible on anything square and wrong on everything longer than it is
+ * deep, and it is what `MapBuilder.insideCollider` did while carrying a comment
+ * describing the correct convention: scatter's burial rejection was mirrored
+ * around every yaw-rotated building in the game, accepting props inside walls
+ * and refusing them in the open ground beside one.
+ *
+ * Takes an `out` because the two callers that matter run it several million
+ * times per map build.
+ */
+export function rotateToLocalXZ(
+  box: WorldBox,
+  x: number,
+  z: number,
+  out: LocalXZ,
+): LocalXZ {
+  const dx = x - box.cx;
+  const dz = z - box.cz;
+  if (box.rotY === 0) {
+    out.lx = dx;
+    out.lz = dz;
+    return out;
+  }
+  const c = Math.cos(box.rotY);
+  const s = Math.sin(box.rotY);
+  out.lx = dx * c - dz * s;
+  out.lz = dx * s + dz * c;
+  return out;
+}
+
 /**
  * Transforms a world XZ point into the box's local frame, returning null when
  * it falls outside the footprint.
  */
-export function toLocalXZ(
-  box: WorldBox,
-  x: number,
-  z: number,
-): { lx: number; lz: number } | null {
-  const dx = x - box.cx;
-  const dz = z - box.cz;
-  const c = Math.cos(-box.rotY);
-  const s = Math.sin(-box.rotY);
-  const lx = dx * c + dz * s;
-  const lz = -dx * s + dz * c;
-  if (Math.abs(lx) > box.w / 2 || Math.abs(lz) > halfDepth(box)) return null;
-  return { lx, lz };
+export function toLocalXZ(box: WorldBox, x: number, z: number): LocalXZ | null {
+  const out = rotateToLocalXZ(box, x, z, { lx: 0, lz: 0 });
+  if (Math.abs(out.lx) > box.w / 2 || Math.abs(out.lz) > halfDepth(box)) {
+    return null;
+  }
+  return out;
 }
 
 /**

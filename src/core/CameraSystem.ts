@@ -221,14 +221,32 @@ export class CameraSystem {
     return this.yaw + this.recoilYaw + this.swayYaw;
   }
 
-  /** World-space aim direction (through the crosshair). */
-  get forward(): Vector3 {
+  /**
+   * World-space aim direction (through the crosshair), into `out`.
+   *
+   * The `ToRef` form exists because the getter below it is the most-read API in
+   * the frame — the aim assist, the shadow focus, the audio listener and the
+   * camera's own update each take it once per frame, and every one of those
+   * reads used to mint a `Vector3`. This file's own scratch comment three
+   * dozen lines up says it does not allocate per frame; the accessors were the
+   * one place that was not true.
+   *
+   * The plain getters are kept for the per-EVENT callers (a shot, a throw, a
+   * grenade release), where an allocation is free and a scratch would be a trap
+   * — two of them holding the same vector is a bug that reads as correct.
+   */
+  forwardToRef(out: Vector3): Vector3 {
     const cp = Math.cos(this.aimPitch);
-    return new Vector3(
+    return out.set(
       cp * Math.sin(this.aimYaw),
       Math.sin(this.aimPitch),
       cp * Math.cos(this.aimYaw),
     );
+  }
+
+  /** World-space aim direction (through the crosshair). */
+  get forward(): Vector3 {
+    return this.forwardToRef(new Vector3());
   }
 
   /**
@@ -257,11 +275,21 @@ export class CameraSystem {
   /** Yaw-only forward, for movement on the ground plane. Deliberately the
    * un-recoiled yaw: strafing must not swim while the gun is kicking. */
   get flatForward(): Vector3 {
-    return new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    return this.flatForwardToRef(new Vector3());
+  }
+
+  /** As `flatForward`, into `out`. See `forwardToRef` on why both exist. */
+  flatForwardToRef(out: Vector3): Vector3 {
+    return out.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
   }
 
   get flatRight(): Vector3 {
-    return new Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    return this.flatRightToRef(new Vector3());
+  }
+
+  /** As `flatRight`, into `out`. See `forwardToRef` on why both exist. */
+  flatRightToRef(out: Vector3): Vector3 {
+    return out.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
   }
 
   reset(yaw: number): void {

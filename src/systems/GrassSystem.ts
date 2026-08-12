@@ -31,6 +31,8 @@ import {
 } from "../shaders/CelShader";
 import { createGrassMaterial } from "../shaders/GrassShader";
 import type { EnvironmentSpec } from "../world/environment";
+import { type LocalXZ, rotateToLocalXZ } from "../world/boxGeometry";
+import { type BoxIndex, boxesNear, buildBoxIndex } from "../world/boxIndex";
 import type { GrassRect, WorldBox } from "../world/MapBuilder";
 import type { TerrainField } from "../world/TerrainField";
 import { mulberry32 } from "../world/rng";
@@ -272,6 +274,13 @@ export class GrassSystem {
     }
     const data = new Float32Array(total * 16);
 
+    // Bucketed once, then read per tuft. This test used to walk all ~800
+    // collider boxes for each of ~11,000 tufts — nearly nine million box tests
+    // inside the map build the loading card is covering — while the index that
+    // answers it in a handful was being built and thrown away two passes
+    // earlier. No pad: a tuft is a point and the test has no clearance term.
+    const index = buildBoxIndex(boxes, CONFIG.map.size, 0);
+
     const scale = new Vector3();
     const pos = new Vector3();
     const rot = new Quaternion();
@@ -286,7 +295,7 @@ export class GrassSystem {
         // Per tuft, not per rect: a field running over a bank has to follow it,
         // or half of it grows in mid-air and the other half is buried.
         const y = base + terrain.heightAt(x, z);
-        if (insideCollider(x, y, z, boxes)) continue;
+        if (insideCollider(x, y, z, index)) continue;
         scale.set(
           0.7 + rng() * 0.6,
           g.heightMin + rng() * (g.heightMax - g.heightMin),
@@ -303,6 +312,9 @@ export class GrassSystem {
   }
 }
 
+/** Scratch for the box-frame transform below; scatter runs it per tuft per box. */
+const localScratch: LocalXZ = { lx: 0, lz: 0 };
+
 /**
  * True when a tuft at (x, y, z) would grow inside a collider box. A smaller
  * cousin of MapBuilder.insideCollider: no padding (blades are thin, and a
@@ -313,27 +325,38 @@ function insideCollider(
   x: number,
   y: number,
   z: number,
-  boxes: readonly WorldBox[],
+  index: BoxIndex,
 ): boolean {
   const topY = y + CONFIG.grass.heightMax;
-  for (const b of boxes) {
-    // A tilted box (rotX ramps) spans a taller band than its thickness.
-    let halfH = b.h / 2;
-    if (b.rotX !== 0) halfH += (Math.abs(Math.sin(b.rotX)) * b.d) / 2;
-    // The 0.05 tolerance matters: a collider whose top sits within 5 cm of
-    // the tuft's base IS the ground it stands on — a terrace top or a jetty
-    // deck. Without it every tuft standing on one rejects itself.
-    if (topY <= b.cy - halfH + 0.05 || y >= b.cy + halfH - 0.05) continue;
-    let lx = x - b.cx;
-    let lz = z - b.cz;
-    if (b.rotY !== 0) {
-      const c = Math.cos(b.rotY);
-      const s = Math.sin(b.rotY);
-      const rx = lx * c - lz * s;
-      lz = lx * s + lz * c;
-      lx = rx;
+  const near = boxesNear(index, x, z);
+  if (near) {
+    for (const i of near) {
+      if (buries(index.boxes[i], x, y, z, topY)) return true;
     }
-    if (Math.abs(lx) <= b.w / 2 && Math.abs(lz) <= b.d / 2) return true;
+  }
+  // …and the two map-sized boxes the grid refuses. The ridge is one of them,
+  // and a field running up to the valley wall would otherwise grow into it.
+  for (const b of index.oversized) {
+    if (buries(b, x, y, z, topY)) return true;
   }
   return false;
+}
+
+/** One collider box against one candidate tuft. */
+function buries(
+  b: WorldBox,
+  x: number,
+  y: number,
+  z: number,
+  topY: number,
+): boolean {
+  // A tilted box (rotX ramps) spans a taller band than its thickness.
+  let halfH = b.h / 2;
+  if (b.rotX !== 0) halfH += (Math.abs(Math.sin(b.rotX)) * b.d) / 2;
+  // The 0.05 tolerance matters: a collider whose top sits within 5 cm of
+  // the tuft's base IS the ground it stands on — a terrace top or a jetty
+  // deck. Without it every tuft standing on one rejects itself.
+  if (topY <= b.cy - halfH + 0.05 || y >= b.cy + halfH - 0.05) return false;
+  const { lx, lz } = rotateToLocalXZ(b, x, z, localScratch);
+  return Math.abs(lx) <= b.w / 2 && Math.abs(lz) <= b.d / 2;
 }

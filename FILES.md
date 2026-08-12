@@ -24,8 +24,10 @@ src/
     conquest.ts         # Flags, capture meter, tickets, bleed
     bots.ts             # Bot AI + the nav grid (bots, nav)
     player.ts           # Movement, crouch, ground probe, vitals
-    weapons.ts          # The weapon table, recoil, gunfeel (weapons, recoil,
+    weapons.ts          # The weapon table, the round, gunfeel (weapons, combat,
                         #   gunfeel)
+    recoil.ts           # What a shot does to the aim: the per-shot kick, the
+                        #   string's two envelopes, recovery, stance
     sights.ts           # The optic table — its ORDER is the loadout row
     viewmodel.ts        # Where the weapon sits in front of the camera
     grenade.ts          # The throw, bounce, fuse and blast
@@ -37,7 +39,8 @@ src/
                         #   effects)
     hud.ts              # Minimap and damage arcs (minimap, damageIndicator)
     lighting.ts         # The dynamic light budget (uniforms, not Babylon lights)
-    world.ts            # Map extents, water, grass (map, water, grass)
+    world.ts            # Map extents, occlusion, water, grass (map, ao, water,
+                        #   grass)
     sky.ts              # The painted sky and moon shafts (sky, godRays)
     teams.ts            # The two sides; index 0 is the player's
   core/
@@ -106,6 +109,8 @@ src/
                         #   hard requirement and guarantees it
     Sky.ts              # Generated dome, textured moon, fBm cloud decks
     WaterSystem.ts      # Water surfaces from map WaterRects; bakes their bed depth
+    GrassSystem.ts      # Grass fields as one thin-instanced draw; tufts inside a
+                        #   collider are rejected at scatter time
   editor/               # Dev-only map editor (F2). Dynamically imported —
     index.ts            #   never statically imported from anywhere, or it
     EditorCamera.ts     #   lands in the production bundle
@@ -121,6 +126,8 @@ src/
                         #   and mutate all have to agree on
     inspect.ts/params.ts#   Inspector read model + per-kind param table
     sourceScan.ts       #   layout.ts as text: regions, entries, tokens
+    validate.ts         #   Pre-save checks against the layout being emitted
+    navOverlay.ts       #   Draws the nav graph over the scene for authoring
     terrainBrush.ts     #   Terrain mode: hover highlight + sculpt stroke
     serialize.ts/save.ts#   Minimal-diff emit + POST to the dev server
     saveEnvironment.ts  #   environment.ts patched one top-level KEY at a time
@@ -154,7 +161,12 @@ src/
     CoverMap.ts         # Baked per-surface directional cover masks
     boxGeometry.ts      # Analytic WorldBox primitives, shared by NavGrid /
                         #   ObstacleField / CoverMap
-    ObstacleField.ts    # Sub-cell collision push-out for thin props
+    ObstacleField.ts    # Sub-cell collision push-out for thin props, and the
+                        #   bucketed ground query (measured, not yet switched on
+                        #   — see FINDINGS.md 6)
+    boxIndex.ts         # The build-time uniform grid over collider boxes, so
+                        #   scatter placement and the occlusion bake stop
+                        #   walking all of them
     Props.ts            # Scatter props: trees, graves, rubble, braziers,
                         #   boulders, brambles, barrels, and the understory —
                         #   ferns, fallen buttress logs, carved stelae
@@ -207,6 +219,8 @@ src/
     Dither.ts           # One LSB of triangular noise, pasted into the three
                         #   surface shaders. Fixes 8-bit banding in the fog
     WaterShader.ts      # Animated water ShaderMaterial (rotated/warped wave layers)
+    GrassShader.ts      # The blade bend: wind, and combatants pushing through
     GodRays.ts          # Moon shafts: screen-space radial blur
+    MotionBlur.ts       # Camera-rotation smear, reprojected from the aim angles
     HorrorPost.ts       # Vignette / grain / aberration / damage flash
 ```

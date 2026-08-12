@@ -15,6 +15,17 @@ export const bots = {
   perTeam: 8,
   squadSize: 4,
   maxHealth: 100,
+  /**
+   * The body sphere a round is tested against, about `Bot.center`. This is the
+   * number `bots.cover.height` is derived from — the top of the sphere is
+   * `centerHeight + hitRadius` = 0.9 + 0.75 = 1.65 m, and cover baked any lower
+   * leaves a bot visible but unhittable.
+   *
+   * Here rather than as a literal on `Bot` because three separate pieces of
+   * reasoning in this file and in `weapons.ts` are written against its value,
+   * and none of them could read it.
+   */
+  hitRadius: 0.75,
   /** Roughly the player's jog; the advancing sprint stays under theirs. */
   moveSpeed: 4.4,
   /** Sprint multiplier while advancing with no target. */

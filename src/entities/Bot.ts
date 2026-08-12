@@ -192,7 +192,7 @@ export class Bot implements Combatant {
   readonly position = new Vector3();
   readonly eyePos = new Vector3();
   readonly center = new Vector3();
-  hitRadius = 0.75;
+  hitRadius = CONFIG.bots.hitRadius;
 
   target: Combatant | null = null;
 
@@ -1297,7 +1297,17 @@ export class Bot implements Combatant {
     this.rig.root.position.set(this.position.x, this.position.y + c, this.position.z);
     this.rig.root.rotation.y = this.bodyYaw;
     this.center.set(this.position.x, this.position.y + c, this.position.z);
-    this.eyePos.set(this.position.x, this.position.y + 1.55, this.position.z);
+    // `camera.eyeHeight`, not a literal repeat of it. This is the point the
+    // player's own camera sits at, the point bots test line of sight against,
+    // and the point `combat.headRadius` centres the head zone on — one number
+    // doing all three is what makes "what a bot can see is what you can see"
+    // true. Written out here it was a fourth copy that could not be reached by
+    // any of the three comments reasoning about its value.
+    this.eyePos.set(
+      this.position.x,
+      this.position.y + CONFIG.camera.eyeHeight,
+      this.position.z,
+    );
   }
 
   muzzleWorld(): Vector3 {

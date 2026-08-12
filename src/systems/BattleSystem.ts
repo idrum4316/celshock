@@ -45,7 +45,7 @@ const BOT_SHOT: ShotOptions = {
 
 /**
  * Owns both teams: a fixed pool of bot rigs, the AI schedule, and the render
- * LOD that makes thirty-two of them affordable.
+ * LOD that makes sixteen of them affordable.
  *
  * Three decisions carry the frame budget here:
  *
@@ -62,14 +62,23 @@ const BOT_SHOT: ShotOptions = {
  *    `lodFreezeDistance` the pose freezes but the bot keeps walking; past
  *    `lodOutlineDistance` the outline pass is skipped, halving its draw calls.
  *
- * Deliberately *not* here: a spatial hash. With 33 combatants the pairwise
- * separation pass is ~500 distance checks a frame, which is far cheaper than
- * maintaining buckets. Revisit it if the roster grows past ~64.
+ * Deliberately *not* here: a spatial hash. With 17 combatants the pairwise
+ * separation pass is ~256 distance checks a frame, which is far cheaper than
+ * maintaining buckets. Revisit it if the roster grows past ~64 — four times
+ * what it is now, so this has room. (Both figures were written for a 16v16
+ * roster and outlived it; `bots.perTeam` is 8.)
  */
 export class BattleSystem {
   readonly bots: Bot[] = [];
   /** Muzzle positions from this frame, for `Game` to spend its light budget on. */
   readonly muzzleFlashes: Vector3[] = [];
+  /**
+   * Backing store for the above: grown on demand, never shrunk, and handed out
+   * from the start again every frame. `muzzleFlashes` holds references into it,
+   * which is safe only because both are reset together in `update`.
+   */
+  private readonly flashPool: Vector3[] = [];
+  private flashCount = 0;
 
   /** Wired by Game: a bot died. */
   onBotKilled: (bot: Bot, killer: Team) => void = () => {};
@@ -271,7 +280,10 @@ export class BattleSystem {
 
   update(dt: number, cameraPos: Vector3): void {
     if (!this.nav) return;
+    // Both, together: the list holds references into the pool, so releasing one
+    // without the other either leaks slots or hands out live vectors.
     this.muzzleFlashes.length = 0;
+    this.flashCount = 0;
     const b = CONFIG.bots;
 
     // --- respawn ---
@@ -519,7 +531,14 @@ export class BattleSystem {
       CONFIG.bots.range,
       BOT_SHOT,
     );
-    const at = muzzle.clone();
+    // Pooled, not cloned. The clone was needed — `muzzleWorld` hands back a
+    // live node position that walks away with the bot — but it was also the
+    // one allocation left on the bot firing path, in the file whose `BOT_SHOT`
+    // constant exists two hundred lines above precisely to avoid one. The list
+    // is emptied every frame, so a vector per slot is reused for the life of
+    // the round and the high-water mark is the busiest frame's flash count.
+    const at = this.flashPool[this.flashCount++] ??= new Vector3();
+    at.copyFrom(muzzle);
     this.muzzleFlashes.push(at);
     this.onBotFired(bot, at);
     this.hearGunshot(at, bot.team);

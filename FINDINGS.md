@@ -302,11 +302,50 @@ Per frame, in a live round with 16 bots:
 **The ground probe dominates the game's own JS**, and it scales with the map
 rather than with what is on screen: `scene.pickWithRay` with a predicate walks
 all 1,775 meshes and ray-tests all 758 solid colliders. A second identical pick
-has already been removed (see CLAUDE.md on `Player.floorY`). Bounding what is
-left would mean probing the analytic boxes `ObstacleField` already buckets
-instead of the mesh list — cheap in principle, but it has to reproduce
-`topFaceHeight`'s handling of pitched ramps exactly, so it is not a five-minute
-change and nothing is currently broken by it.
+has already been removed (see CLAUDE.md on `Player.floorY`).
+
+### The analytic replacement: written, measured, NOT switched on
+
+`ObstacleField.groundAt` is the bucketed answer this entry asks for — the
+highest collider top face in the band the probe reaches — and `Player.probeGround`
+is still the ray anyway. What settles it is the differential, and it is worth
+recording in full so nobody re-runs it from scratch.
+
+**Sampling the whole map on a half-metre grid at four standing heights is the
+WRONG test and says so loudly**: 1.2% of 914k samples disagree on Hollowmere,
+2.9% on Greyfen. Nearly all of that is an artefact of asking about positions a
+body cannot occupy. Where the probe's origin lands a few millimetres *inside* a
+ramp, `pickWithRay` starts within the mesh, punches through it, and reports the
+UNDERSIDE — 0.347 for a surface at 0.653. The ray is the one lying there.
+
+**The right domain is the nav graph's walkable surfaces** — every (cell, height)
+pair the game says a body can stand on. Over those:
+
+| map | standable samples | disagreements | worst |
+| --- | --- | --- | --- |
+| Hollowmere | 28,106 | 74 (0.26%) | 3.4 m |
+| Greyfen | 23,037 | 42 (0.18%) | 0.59 m |
+
+**The 116 split into two classes running in opposite directions**, which is why
+this is not simply "nearly right":
+
+- At the Hollowmere rim the analytic reports 1.2–3.4 m, the nav graph agrees
+  with it, and the RAY finds nothing at all and falls back to the terrain.
+- Along one Greyfen fence line the analytic reports a surface 0.5 m up that the
+  ray passes straight through to the terrain collider below.
+
+The second class is the blocker, and it is a property of the shared primitive
+rather than of the call site: `topFaceAtLocalZ` extrapolates a box's top-face
+plane across a footprint that `toLocalXZ` bounds with `halfDepth`, which
+INFLATES for anything pitched — `(d/2)cos + (h/2)sin`. A tall thin box tilted a
+few degrees therefore claims ground beside itself. `NavGrid` tolerates that (a
+phantom node is a routing nuisance); a ground probe cannot, because it stands
+the player on air.
+
+**What it is waiting on is a footprint test that bounds the plane by the box's
+real extent rather than its projected one.** Everything else is done: the query
+exists, the buckets are there, and switching `probeGround` over is one line
+against ~2.4 ms a frame.
 
 Two things checked and found *not* to be problems, recorded so nobody
 re-derives them: the point-light arrays are **not** re-uploaded per draw

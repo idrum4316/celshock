@@ -18,9 +18,17 @@
  *
  * Per-frame writes touch text nodes, class flags and CSS custom properties
  * only — never innerHTML. Every element written 60 times a second (the ticket
- * gauge, the flag cells, the magazine strip) is built once and cached;
- * `setScoreboard` is the one markup-rebuilding call left, and it fires on a
- * state change instead.
+ * gauge, the flag cells, the magazine strip) is built once and cached, and
+ * `setScoreboard` is the one markup-rebuilding call left.
+ *
+ * **EVERY SETTER GUARDS ITS OWN WRITE.** `Game.updateHud` pushes the whole
+ * gauge set on every frame — that is the right shape, and it says nothing
+ * about how often the DOM should hear it. Health moves on a hit, tickets a few
+ * times a second, the flag strip on a capture, and the scoreboard's markup only
+ * while Tab is held. So each setter keeps the value it last handed over and
+ * writes only on a difference; `setFps` is the pattern, and the `last*` block
+ * of fields below is the bookkeeping. Adding a setter here without a guard is
+ * adding a style recalculation to every frame of the game.
  */
 import "./hud.css";
 import { CONFIG } from "../config";
@@ -261,6 +269,60 @@ export class HUD {
   private fpsText = "";
   private fpsMsText = "";
   private fpsLowText = "";
+
+  /**
+   * LAST-WRITTEN VALUES FOR THE PER-FRAME GAUGES.
+   *
+   * `Game.updateHud` pushes every one of these on every frame of a live round,
+   * because the HUD is told what the world is rather than asked — which is the
+   * right shape and says nothing about how often the DOM should hear it. Almost
+   * none of them actually change from frame to frame: health moves on a hit,
+   * tickets a few times a second, the flag strip on a capture. Written
+   * unconditionally, the gauges alone were ~75 DOM property writes a frame, of
+   * which two were guarded, and ten of them were whole-`className` assignments
+   * that invalidate style on their node whether or not the string differs.
+   *
+   * `setFps` above is the pattern the rest of the file now follows: keep the
+   * string (or the number) that was last handed to the DOM, and write only when
+   * this frame's differs. The comparison is a few dozen JS compares against a
+   * style recalculation, so it is not close.
+   *
+   * These are values LAST WRITTEN, never a second copy of game state — nothing
+   * reads them but the guard that owns each one, and `reset` clears them all
+   * together so a rebuilt strip cannot inherit a stale "already correct".
+   */
+  private lastHealthWidth = "";
+  private lastHealthLow = false;
+  private lastHealthText = "";
+  /**
+   * Tick bookkeeping only — which ticks in `magTicks` currently read "spent".
+   * Deliberately separate from `lastAmmoText`: on a weapon swap the strip is
+   * rebuilt all-unspent, so this has to be reset to the new magazine's length
+   * while the READOUT beside it is still showing the old weapon's count and
+   * must be written even if the two magazines happen to be equally full.
+   */
+  private lastAmmo = -1;
+  private lastAmmoText = "";
+  private lastAmmoCap = "";
+  private lastAmmoLow = false;
+  private lastReloading = false;
+  private lastGrenades = -1;
+  private lastNoNades = false;
+  private lastTicketTag: [string, string] = ["", ""];
+  private lastTicketNum: [string, string] = ["", ""];
+  private lastTicketWidth: [string, string] = ["", ""];
+  private lastTicketCritical: [boolean, boolean] = [false, false];
+  private lastFlagClass: string[] = [];
+  private lastFlagHeight: string[] = [];
+  private lastFlagFill: string[] = [];
+  private lastCaptureKey = "";
+  private lastCrosshairOpacity = "";
+  private lastCrosshairSpread = "";
+  private lastScoreboardVisible = false;
+  private lastScoreboardKey = "";
+  private lastLockHint = false;
+  private lastStowedDry = false;
+  private lastStowedReady = false;
   /**
    * The frame times behind the 1% low, as a ring — a circular buffer rather
    * than a shifted array because this is written on every frame at up to
@@ -637,14 +699,25 @@ export class HUD {
 
   setHealth(current: number, max: number): void {
     const frac = Math.max(0, current / max);
-    this.healthFill.style.width = `${frac * 100}%`;
+    const width = `${frac * 100}%`;
+    if (width !== this.lastHealthWidth) {
+      this.lastHealthWidth = width;
+      this.healthFill.style.width = width;
+    }
     // The low state is carried on the whole block, not just the fill: the bar
     // goes red, the readout goes red, and both breathe, which is the one thing
     // that has to register without being looked at.
     const low = frac < 0.3;
-    this.healthBar.classList.toggle("low", low);
-    this.healthText.classList.toggle("low", low);
-    this.healthText.textContent = String(Math.ceil(current));
+    if (low !== this.lastHealthLow) {
+      this.lastHealthLow = low;
+      this.healthBar.classList.toggle("low", low);
+      this.healthText.classList.toggle("low", low);
+    }
+    const text = String(Math.ceil(current));
+    if (text !== this.lastHealthText) {
+      this.lastHealthText = text;
+      this.healthText.textContent = text;
+    }
   }
 
   setAmmo(ammo: number, magSize: number, reloading: boolean): void {
@@ -701,16 +774,45 @@ export class HUD {
         this.magTicks.push(tick);
       }
       this.magBuilt = magSize;
+      // A fresh strip is all-unspent, so the "already correct" the guard below
+      // would otherwise inherit is a lie about a different weapon's magazine.
+      this.lastAmmo = this.magTicks.length;
     }
     // One tick per round left in the magazine — the count is legible without
     // reading the number, which is the whole point of a strip.
-    for (let i = 0; i < this.magTicks.length; i++) {
-      this.magTicks[i].classList.toggle("spent", i >= ammo);
+    //
+    // ONLY THE TICKS THAT CROSSED. A shot moves one; a reload moves the whole
+    // strip once. Toggling all of them every frame was O(magSize) DOM writes
+    // for a state that changes on a trigger pull — 75 of them a frame for the
+    // belt, which is the weapon that can least afford it because it is also the
+    // one firing fastest.
+    if (ammo !== this.lastAmmo) {
+      const lo = Math.max(0, Math.min(ammo, this.lastAmmo));
+      const hi = Math.min(this.magTicks.length, Math.max(ammo, this.lastAmmo));
+      for (let i = lo; i < hi; i++) {
+        this.magTicks[i].classList.toggle("spent", i >= ammo);
+      }
+      this.lastAmmo = ammo;
     }
-    this.ammoMag.textContent = String(ammo);
-    this.ammoCap.textContent = `/ ${magSize}`;
-    this.ammoMag.classList.toggle("low", !reloading && ammo <= magSize * 0.25);
-    this.hudRight.classList.toggle("reloading", reloading);
+    const text = String(ammo);
+    if (text !== this.lastAmmoText) {
+      this.lastAmmoText = text;
+      this.ammoMag.textContent = text;
+    }
+    const cap = `/ ${magSize}`;
+    if (cap !== this.lastAmmoCap) {
+      this.lastAmmoCap = cap;
+      this.ammoCap.textContent = cap;
+    }
+    const low = !reloading && ammo <= magSize * 0.25;
+    if (low !== this.lastAmmoLow) {
+      this.lastAmmoLow = low;
+      this.ammoMag.classList.toggle("low", low);
+    }
+    if (reloading !== this.lastReloading) {
+      this.lastReloading = reloading;
+      this.hudRight.classList.toggle("reloading", reloading);
+    }
     // Read by `setStowedAmmo`, pushed immediately after this one. "Nothing to
     // fire with" is the whole condition, and a reload counts: firing the last
     // round starts one in the same call (`Player.tryShot`), so an empty
@@ -741,11 +843,21 @@ export class HUD {
         this.nadeMarks.push(pip);
       }
       this.nadeBuilt = carried;
+      this.lastGrenades = this.nadeMarks.length;
     }
-    for (let i = 0; i < this.nadeMarks.length; i++) {
-      this.nadeMarks[i].classList.toggle("spent", i >= count);
+    if (count !== this.lastGrenades) {
+      const lo = Math.max(0, Math.min(count, this.lastGrenades));
+      const hi = Math.min(this.nadeMarks.length, Math.max(count, this.lastGrenades));
+      for (let i = lo; i < hi; i++) {
+        this.nadeMarks[i].classList.toggle("spent", i >= count);
+      }
+      this.lastGrenades = count;
     }
-    this.hudRight.classList.toggle("no-nades", count <= 0);
+    const none = count <= 0;
+    if (none !== this.lastNoNades) {
+      this.lastNoNades = none;
+      this.hudRight.classList.toggle("no-nades", none);
+    }
   }
 
   /**
@@ -761,10 +873,26 @@ export class HUD {
       const team = order[i];
       const part = this.ticketParts[i];
       const n = tickets[team];
-      part.tag.textContent = names[team].toUpperCase();
-      part.num.textContent = String(n);
-      part.fill.style.width = `${Math.max(0, Math.min(1, n / max)) * 100}%`;
-      part.num.classList.toggle("critical", n / max < 0.15);
+      const tag = names[team].toUpperCase();
+      if (tag !== this.lastTicketTag[i]) {
+        this.lastTicketTag[i] = tag;
+        part.tag.textContent = tag;
+      }
+      const num = String(n);
+      if (num !== this.lastTicketNum[i]) {
+        this.lastTicketNum[i] = num;
+        part.num.textContent = num;
+      }
+      const width = `${Math.max(0, Math.min(1, n / max)) * 100}%`;
+      if (width !== this.lastTicketWidth[i]) {
+        this.lastTicketWidth[i] = width;
+        part.fill.style.width = width;
+      }
+      const critical = n / max < 0.15;
+      if (critical !== this.lastTicketCritical[i]) {
+        this.lastTicketCritical[i] = critical;
+        part.num.classList.toggle("critical", critical);
+      }
     }
   }
 
@@ -787,18 +915,39 @@ export class HUD {
         this.flagStrip.appendChild(wrap);
         return { wrap, fill: wrap.querySelector(".cap-fill") as HTMLElement };
       });
+      // The cells are new, so nothing has been written to them yet.
+      this.lastFlagClass = [];
+      this.lastFlagHeight = [];
+      this.lastFlagFill = [];
     }
     for (let i = 0; i < points.length; i++) {
       const p = points[i];
       const cell = this.flagCells[i];
       const owner =
         p.owner === null ? "neutral" : p.owner === playerTeam ? "mine" : "theirs";
-      cell.wrap.className = `flag ${owner}${p.contested ? " contested" : ""}`;
+      // Guarded harder than the rest: `className =` is an attribute write, so
+      // it invalidates style on the node whether or not the string changed, and
+      // there are two of them per cell across five cells. A flag's owner and
+      // contested state change a handful of times in a round; the meter moves
+      // only while someone is standing in the zone.
+      const cls = `flag ${owner}${p.contested ? " contested" : ""}`;
+      if (cls !== this.lastFlagClass[i]) {
+        this.lastFlagClass[i] = cls;
+        cell.wrap.className = cls;
+      }
       // Meter runs -1..+1; show it as distance from neutral either way.
-      cell.fill.style.height = `${Math.abs(p.meter) * 100}%`;
-      cell.fill.className = `cap-fill ${
+      const height = `${Math.abs(p.meter) * 100}%`;
+      if (height !== this.lastFlagHeight[i]) {
+        this.lastFlagHeight[i] = height;
+        cell.fill.style.height = height;
+      }
+      const fill = `cap-fill ${
         Math.sign(p.meter) === (playerTeam === 0 ? -1 : 1) ? "mine" : "theirs"
       }`;
+      if (fill !== this.lastFlagFill[i]) {
+        this.lastFlagFill[i] = fill;
+        cell.fill.className = fill;
+      }
     }
   }
 
@@ -810,9 +959,20 @@ export class HUD {
    */
   setCapture(status: CaptureStatus | null): void {
     if (!status) {
-      this.capture.classList.add("hidden");
+      if (this.lastCaptureKey !== "") {
+        this.lastCaptureKey = "";
+        this.capture.classList.add("hidden");
+      }
       return;
     }
+    // One key for the whole panel: it is six writes that all move together, and
+    // the progress is already rounded to the percent the bar is drawn in, so
+    // the key changes exactly as often as the panel does.
+    const key = `${status.id}|${status.owner}|${status.contested}|${status.held}|${
+      status.taking
+    }|${status.enemies}|${Math.round(status.progress * 100)}`;
+    if (key === this.lastCaptureKey) return;
+    this.lastCaptureKey = key;
     const parts = this.captureParts;
     // Rewritten wholesale rather than toggled, which is also what clears the
     // `hidden` the null branch above puts back on. `frame` has to be re-stated
@@ -852,9 +1012,21 @@ export class HUD {
    * while the rifle is still moving.
    */
   setCrosshair(adsBlend: number, spreadPx: number): void {
-    this.crosshair.style.opacity = `${Math.max(0, 1 - adsBlend * 1.6)}`;
-    const size = Math.round(Math.max(10, Math.min(90, spreadPx)));
-    this.crosshair.style.setProperty("--sp", `${size}px`);
+    // These two genuinely do move most frames of a live round — the spread
+    // bleeds off after every shot and the blend runs whenever the sight comes
+    // up. They are guarded anyway, because the frames they DON'T move on are
+    // the ones a player spends walking with the trigger off, which is most of
+    // them, and the size is already quantised to the pixel it is drawn at.
+    const opacity = `${Math.max(0, 1 - adsBlend * 1.6)}`;
+    if (opacity !== this.lastCrosshairOpacity) {
+      this.lastCrosshairOpacity = opacity;
+      this.crosshair.style.opacity = opacity;
+    }
+    const size = `${Math.round(Math.max(10, Math.min(90, spreadPx)))}px`;
+    if (size !== this.lastCrosshairSpread) {
+      this.lastCrosshairSpread = size;
+      this.crosshair.style.setProperty("--sp", size);
+    }
   }
 
   /**
@@ -931,8 +1103,31 @@ export class HUD {
       playerDeaths: number;
     },
   ): void {
-    this.scoreboard.classList.toggle("hidden", !visible);
+    if (visible !== this.lastScoreboardVisible) {
+      this.lastScoreboardVisible = visible;
+      this.scoreboard.classList.toggle("hidden", !visible);
+      // Force the rebuild below on the frame it comes up, whatever the numbers
+      // were when it was last down.
+      this.lastScoreboardKey = "";
+    }
     if (!visible || !rows) return;
+    // THE ONE MARKUP REBUILD LEFT IN THE FILE, AND IT IS KEYED.
+    //
+    // Tab is a HELD key, so `Game.updateHud` calls this on every frame the
+    // board is up — and this method used to answer by assigning a twenty-element
+    // template literal to `innerHTML`, tearing down and reparsing the whole
+    // panel sixty times a second for as long as a player looked at it. The
+    // file header has always said this call "fires on a state change instead";
+    // the key is what makes that true rather than aspirational.
+    //
+    // Everything the markup interpolates is in the key, so a ticket ticking
+    // down or a kill landing still redraws on the frame it happens.
+    const key =
+      `${rows.map}|${rows.playerTeam}|${rows.teams}|${rows.tickets}|` +
+      `${rows.flags}|${rows.kills}|${rows.deaths}|` +
+      `${rows.playerKills}|${rows.playerDeaths}`;
+    if (key === this.lastScoreboardKey) return;
+    this.lastScoreboardKey = key;
     const max = CONFIG.conquest.tickets;
     const row = (t: number) => {
       const frac = Math.max(0, Math.min(1, rows.tickets[t] / max));
@@ -1046,11 +1241,21 @@ export class HUD {
       this.stowedCapText = cap;
       this.stowedParts.cap.textContent = cap;
     }
-    this.stowed.classList.toggle("dry", ammo <= 0);
-    this.stowed.classList.toggle("ready", ammo > 0 && this.handsDry);
+    const dry = ammo <= 0;
+    if (dry !== this.lastStowedDry) {
+      this.lastStowedDry = dry;
+      this.stowed.classList.toggle("dry", dry);
+    }
+    const ready = ammo > 0 && this.handsDry;
+    if (ready !== this.lastStowedReady) {
+      this.lastStowedReady = ready;
+      this.stowed.classList.toggle("ready", ready);
+    }
   }
 
   setLockHint(visible: boolean): void {
+    if (visible === this.lastLockHint) return;
+    this.lastLockHint = visible;
     this.lockHint.classList.toggle("hidden", !visible);
   }
 

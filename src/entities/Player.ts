@@ -49,6 +49,7 @@
  * one not thrown.
  */
 import {
+  type AbstractMesh,
   Mesh,
   MeshBuilder,
   type Node,
@@ -58,6 +59,10 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
+
+/** Pick predicate for the dev-only probe cross-check. Hoisted; closes over nothing. */
+const SOLID_ONLY = (m: AbstractMesh): boolean =>
+  !!m.metadata && m.metadata.solid === true;
 import { CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
@@ -70,7 +75,7 @@ import {
   type WeaponId,
   type WeaponSetup,
 } from "./weapons";
-import { ViewModel, VIEWMODEL_GROUP } from "./ViewModel";
+import { ViewModel, VIEWMODEL_GROUP, type ViewModelParams } from "./ViewModel";
 import { TerrainField } from "../world/TerrainField";
 import type { Combatant, Team } from "./Combatant";
 import type { ShotOptions } from "../systems/CombatSystem";
@@ -181,7 +186,7 @@ export class Player implements Combatant {
   /** Body centre and eye line, kept in sync each frame for hitscan and LOS. */
   readonly center = new Vector3();
   readonly eyePos = new Vector3();
-  readonly hitRadius = 0.7;
+  readonly hitRadius = CONFIG.player.hitRadius;
   /**
    * Wired by Game. Bots damage the player straight through `CombatSystem`, so
    * this is how the flash, the sound, and the death handling still happen.
@@ -374,6 +379,34 @@ export class Player implements Combatant {
   private casings: Casing[] = [];
   /** Scratch for casing integration — no per-frame allocation. */
   private readonly casingStep = new Vector3();
+  /**
+   * Scratch for the camera-relative movement basis. Two, because the vector
+   * being built and the one being added into it are live at the same moment.
+   */
+  private readonly moveScratch = new Vector3();
+  private readonly basisScratch = new Vector3();
+  /**
+   * The pose parameters handed to `ViewModel.update`, filled in place each
+   * frame. See the fill site in `animate` for why it is not a literal.
+   */
+  private readonly viewParams: ViewModelParams = {
+    adsBlend: 0,
+    moveBlend: 0,
+    sprintBlend: 0,
+    reloadBlend: 0,
+    reloadPhase: 0,
+    reloading: false,
+    swapBlend: 0,
+    throwTime: -1,
+    kick: 0,
+    kickDrift: 0,
+    kickWeight: 0,
+    turnRate: 0,
+    pitchRate: 0,
+    bobPhase: 0,
+    velY: 0,
+    landDip: 0,
+  };
 
   mods: PlayerMods = { damageMult: 1, speedMult: 1, maxHpBonus: 0, magBonus: 0 };
 
@@ -931,13 +964,47 @@ export class Player implements Combatant {
   }
 
   /**
-   * Height of the surface underfoot, from a short downward ray against the
-   * map's collider proxies.
+   * Height of the surface underfoot: the highest collider top face in the band
+   * the probe reaches, or the terrain where nothing stands over it.
    *
-   * The probe starts a step-height above the feet so a rise reads as a step to
-   * walk up rather than a wall to stop against, and falls back to the valley
-   * floor when it finds nothing — the ground plane always exists, so a miss
-   * means the player is off the map rather than in the void.
+   * The band starts a step-height above the feet so a rise reads as a step to
+   * walk up rather than a wall to stop against, and ends `groundProbeLength`
+   * below that — a roof over your head is outside it and correctly ignored.
+   *
+   * **ANALYTIC, NOT A RAY, AND THAT IS THE POINT.** This was
+   * `scene.pickWithRay` with a `solid` predicate, run every frame: Babylon
+   * walked all ~1,800 meshes in the scene and ray-tested all ~820 colliders to
+   * find the floor. Measured, it was the largest single piece of the game's own
+   * per-frame JS by a factor of five, and it scaled with how big the map was
+   * rather than with anything on screen. Every piece of the replacement already
+   * existed — `ObstacleField` had the boxes bucketed, `boxGeometry` had the
+   * pitch-correct top-face plane, and `NavGrid` was already computing exactly
+   * this at bake time from both.
+   *
+   * The two halves are `max`'d because the floor is the one thing with no box:
+   * a heightfield cannot be stood in for by one, which is the documented
+   * exception to the visual/collider rule. `surfaceAt` rather than `heightAt`
+   * because the ray hits a clone of the floor's own VISUAL vertices — the field
+   * is the smooth thing that floor is cut from, and the two disagree by a few
+   * centimetres on every twisted quad.
+   *
+   * **STILL THE RAY, DELIBERATELY. The analytic form is written and measured
+   * and is NOT switched on** — see `FINDINGS.md`. Over the 51,000 positions the
+   * nav graph says a body can stand on, the two agree on 99.8% and disagree on
+   * 116, and the disagreements run BOTH ways: at the valley rim the analytic
+   * matches the nav graph and the ray is the one that finds nothing, while
+   * along one Greyfen fence line the analytic reports a surface half a metre up
+   * that the ray passes straight through. That second class is the blocker, and
+   * it is a property of the primitive rather than of this call site —
+   * `topFaceAtLocalZ` extrapolates a box's top-face PLANE across a footprint
+   * that `halfDepth` inflates for anything pitched, so a tall thin box tilted a
+   * few degrees claims ground beside itself. `NavGrid` can live with that (a
+   * phantom node is a routing nuisance); a ground probe cannot, because it puts
+   * the player standing on air.
+   *
+   * Turning it on is one line, and it is worth about 2.4 ms a frame — the
+   * largest single piece of the game's own per-frame JS. What it is waiting on
+   * is a footprint test that bounds the plane by the box's REAL extent.
    */
   private probeGround(): number {
     const p = CONFIG.player;
@@ -948,10 +1015,7 @@ export class Player implements Combatant {
       pos.z,
     );
     this.probeRay.length = p.groundProbeLength;
-    const hit = this.scene.pickWithRay(
-      this.probeRay,
-      (m) => !!m.metadata && m.metadata.solid === true,
-    );
+    const hit = this.scene.pickWithRay(this.probeRay, SOLID_ONLY);
     if (hit?.hit && hit.pickedPoint) return hit.pickedPoint.y;
     // A miss means the probe outran the floor — off the map, or falling into
     // something deeper than it reaches. The terrain field is the floor's own
@@ -963,6 +1027,7 @@ export class Player implements Combatant {
   setTerrain(terrain: TerrainField): void {
     this.terrain = terrain;
   }
+
 
   update(dt: number, input: InputManager, cam: CameraSystem): PlayerEvents {
     const p = CONFIG.player;
@@ -1012,13 +1077,15 @@ export class Player implements Combatant {
       (cam.adsBlend > 0.4 ? p.adsMoveMult : 1) *
       (this.sprinting ? p.sprintMult : 1) *
       (1 - (1 - p.crouchMoveMult) * this.crouchBlend);
-    const move = cam.flatForward
-      .scale(input.moveY)
-      .add(cam.flatRight.scale(input.moveX));
+    // Built in scratch: this used to be six `Vector3`s a frame — two basis
+    // vectors, two scales, an add and the final scale — on the one path that
+    // runs on every frame of every round.
+    const move = cam.flatForwardToRef(this.moveScratch).scaleInPlace(input.moveY);
+    move.addInPlace(cam.flatRightToRef(this.basisScratch).scaleInPlace(input.moveX));
     const moveInput = Math.min(1, move.length());
     if (move.lengthSquared() > 1) move.normalize();
     if (move.lengthSquared() > 0.0001) {
-      this.root.moveWithCollisions(move.scale(speed * dt));
+      this.root.moveWithCollisions(move.scaleInPlace(speed * dt));
     }
 
     // --- jump & gravity, against whatever surface is actually underfoot ---
@@ -1237,24 +1304,28 @@ export class Player implements Combatant {
       }
     }
     this.prevBobPhase = cam.bobPhase;
-    this.view.update(dt, {
-      adsBlend: cam.adsBlend,
-      moveBlend: this.moveBlend * (1 - this.airBlend),
-      sprintBlend: this.sprintBlend,
-      reloadBlend: this.reloadBlend,
-      reloadPhase: this.reloadProgress,
-      reloading: this.reloading,
-      swapBlend: this.swapWeight(),
-      throwTime: this.throwT,
-      kick: this.kickDisp,
-      kickDrift: this.kickDrift,
-      kickWeight: this.kickWeight,
-      turnRate: this.turnRate,
-      pitchRate: this.pitchRate,
-      bobPhase: cam.bobPhase,
-      velY: this.velY,
-      landDip: cam.landDip,
-    });
+    // Filled in place rather than rebuilt. `ViewModel.update` is documented as
+    // allocating nothing and holds to it across 200 lines; the sixteen-field
+    // literal that CALLED it was the one allocation on the path. ViewModel
+    // reads the fields and keeps no reference, so one object outlives the call.
+    const v = this.viewParams;
+    v.adsBlend = cam.adsBlend;
+    v.moveBlend = this.moveBlend * (1 - this.airBlend);
+    v.sprintBlend = this.sprintBlend;
+    v.reloadBlend = this.reloadBlend;
+    v.reloadPhase = this.reloadProgress;
+    v.reloading = this.reloading;
+    v.swapBlend = this.swapWeight();
+    v.throwTime = this.throwT;
+    v.kick = this.kickDisp;
+    v.kickDrift = this.kickDrift;
+    v.kickWeight = this.kickWeight;
+    v.turnRate = this.turnRate;
+    v.pitchRate = this.pitchRate;
+    v.bobPhase = cam.bobPhase;
+    v.velY = this.velY;
+    v.landDip = cam.landDip;
+    this.view.update(dt, v);
   }
 
   /**

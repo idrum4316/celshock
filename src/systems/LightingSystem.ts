@@ -153,17 +153,22 @@ export class LightingSystem {
    * Advances flicker/decay and uploads the winning lights to every cel
    * material. Call once per frame, after the camera has been updated.
    */
+  /** One fixture's flicker for this frame. Steady fixtures sit at their base. */
+  private tickFlicker(l: RoomLight): void {
+    l.intensity =
+      l.flicker > 0
+        ? l.baseIntensity * flame(this.t, l.phase, l.flicker)
+        : l.baseIntensity;
+  }
+
   update(dt: number, viewPos: Vector3, mats: CelMaterialFactory): void {
     this.t += dt;
 
-    const tick = (l: RoomLight) => {
-      l.intensity =
-        l.flicker > 0
-          ? l.baseIntensity * flame(this.t, l.phase, l.flicker)
-          : l.baseIntensity;
-    };
-    for (const l of this.lights) tick(l);
-    this.carried.forEach(tick);
+    // Written out twice rather than through a closure defined per frame: this
+    // runs on every frame in every state, and the two shapes it has to walk
+    // (an array and a Map) do not share an iteration protocol worth a lambda.
+    for (const l of this.lights) this.tickFlicker(l);
+    for (const l of this.carried.values()) this.tickFlicker(l);
 
     for (let i = this.transient.length - 1; i >= 0; i--) {
       const f = this.transient[i];
@@ -179,7 +184,7 @@ export class LightingSystem {
 
     this.active.length = 0;
     for (const f of this.transient) this.active.push(f);
-    this.carried.forEach((l) => this.active.push(l));
+    for (const l of this.carried.values()) this.active.push(l);
 
     if (this.lights.length <= MAX_POINT_LIGHTS - this.active.length) {
       for (const l of this.lights) this.active.push(l);

@@ -15,7 +15,8 @@
 import { conquest } from "./conquest";
 import { bots, nav } from "./bots";
 import { player } from "./player";
-import { weapons, combat, recoil, gunfeel } from "./weapons";
+import { weapons, combat, gunfeel } from "./weapons";
+import { recoil } from "./recoil";
 import { sights } from "./sights";
 import { viewmodel } from "./viewmodel";
 import { grenade } from "./grenade";

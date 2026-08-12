@@ -13,6 +13,15 @@
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { InputManager } from "../core/InputManager";
+import type { AbstractMesh } from "@babylonjs/core";
+
+/**
+ * The pick predicate, hoisted to module scope. Written inline it was a fresh
+ * closure on every frame a target was held, for a function that closes over
+ * nothing.
+ */
+const SOLID_ONLY = (m: AbstractMesh): boolean =>
+  !!m.metadata && m.metadata.solid === true;
 
 /**
  * Structural subset of `Hittable` (CombatSystem), declared here so this
@@ -95,6 +104,10 @@ export class AimAssistSystem {
   private prevOrigin = new Vector3();
   private haveHistory = false;
 
+  /** Scratch for the line-of-sight cast — no per-frame allocation. */
+  private readonly losRay = new Ray(new Vector3(), new Vector3(0, 0, 1), 1);
+  private readonly losDir = new Vector3();
+
   constructor(private scene: Scene) {}
 
   /**
@@ -174,12 +187,16 @@ export class AimAssistSystem {
 
     // --- LOS: the same solid-collider pick hitscan uses, so walls win ---
     if (best) {
-      const to = best.center.subtract(origin);
-      const dir = to.scale(1 / bestDist);
-      const wall = this.scene.pickWithRay(
-        new Ray(origin, dir, bestDist),
-        (m) => !!m.metadata && m.metadata.solid === true,
-      );
+      // Ray and direction both reused. Every peer that casts per frame —
+      // `DeathCam`, `GrenadeSystem`, `BattleSystem` — keeps a scratch `Ray` for
+      // this; this one was minting a Ray, two Vector3s and a predicate closure
+      // on every frame a pad player held a target.
+      best.center.subtractToRef(origin, this.losDir);
+      this.losDir.scaleInPlace(1 / bestDist);
+      this.losRay.origin.copyFrom(origin);
+      this.losRay.direction.copyFrom(this.losDir);
+      this.losRay.length = bestDist;
+      const wall = this.scene.pickWithRay(this.losRay, SOLID_ONLY);
       if (wall && wall.hit) best = null;
     }
 

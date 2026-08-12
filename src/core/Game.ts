@@ -226,6 +226,24 @@ export class Game {
   /** Non-null only while the state is "editor". Dev builds only. */
   private editor: EditorSession | null = null;
   /**
+   * Held across `toggleEditor`'s dynamic `import()`, because `this.editor` is
+   * not the latch it looks like: it is not assigned until the session has been
+   * built, which is a map build and a screenful of teardown after the await
+   * returns. Two F2s inside a cold import both got past `if (this.editor)` and
+   * ran the whole opening twice — a second `installMap` disposing the map the
+   * first had just handed to `createEditor`, and the first session leaked with
+   * no reference left to dispose it. Dev builds only, and the window is one
+   * cold load wide, but it is exactly the failure `installMap` exists to stop.
+   */
+  private editorLoading = false;
+
+  /**
+   * Viewport height in CSS pixels, refreshed by `applyRenderScale` — which is
+   * also the resize handler, so it is exactly the moment this can change. Only
+   * the crosshair's spread projection reads it.
+   */
+  private viewportHeight = window.innerHeight;
+  /**
    * The map being played, as the layout/environment pair `src/world/maps.ts`
    * keeps together. The single place either half is named: everything from the
    * round start to the editor session reads it off here, so a second map is a
@@ -287,6 +305,18 @@ export class Game {
   private readonly combatants: Combatant[] = [];
   /** Scratch for the shadow focus point — no per-frame allocation. */
   private readonly shadowFocus = new Vector3();
+  /**
+   * Three scratch aim directions, one per per-frame reader of
+   * `CameraSystem.forward`. Separate rather than shared because the shadow
+   * focus SCALES the vector it is handed: one scratch between them would work
+   * today only because the aim assist happens to read its copy before that
+   * happens, which is a property of two files agreeing rather than of either.
+   */
+  private readonly aimForward = new Vector3();
+  private readonly shadowForward = new Vector3();
+  private readonly listenerForward = new Vector3();
+  /** …and for the carried lamp, which rides a little above the player. */
+  private readonly lampPos = new Vector3();
   /** …and for the kit screen's bench lamp, placed relative to the camera. */
   private readonly kitLampPos = new Vector3();
   /** …and for where a thrown grenade leaves the player's hand. */
@@ -766,7 +796,17 @@ export class Game {
       else if (action === "restart") this.startRound();
       else this.enterMenu();
     };
-    this.deployScreen.onDeploy = (spawn) => this.spawnPlayer(spawn);
+    // Guarded for the same reason `onStart` is, and it is the weaker of the
+    // two: `spawnPlayer` sets the state outright, so a click that arrives from
+    // under a screen raised over the deploy map would drop the player into the
+    // world with that screen still up. The kit and settings scrims both take
+    // pointer events across their whole area today, so nothing currently gets
+    // through — which is a property of two stylesheets rather than of this
+    // wiring, and is not what the guard should rest on.
+    this.deployScreen.onDeploy = (spawn) => {
+      if (this.state !== "deploy") return;
+      this.spawnPlayer(spawn);
+    };
   }
 
 
@@ -940,6 +980,12 @@ export class Game {
   private applyRenderScale(): void {
     const dpr = window.devicePixelRatio || 1;
     this.engine.setHardwareScalingLevel(1 / (dpr * this.settings.renderScale));
+    // The crosshair's spread projection needs the viewport height in CSS
+    // pixels, and this is the one place that can have changed. Read here rather
+    // than in `updateHud` because that read sits BETWEEN two batches of HUD
+    // writes, and a geometry read with style mutations pending is what forces
+    // an early layout — the one shape of layout thrashing the frame path had.
+    this.viewportHeight = window.innerHeight;
   }
 
   /**
@@ -1616,6 +1662,20 @@ export class Game {
   }
 
   /**
+   * A map is mid-build with a `buildRound` already queued for the next frame.
+   *
+   * A method rather than `this.state === "loading"` written out twice, because
+   * `toggleEditor` has to ask it on both sides of an await and TypeScript
+   * carries the first check's narrowing straight through one — it calls the
+   * second comparison dead, which is precisely the assumption the second check
+   * exists to refuse. Behind a call it cannot narrow, so the question stays
+   * askable.
+   */
+  private buildPending(): boolean {
+    return this.state === "loading";
+  }
+
+  /**
    * Enters or leaves the map editor. Dev-only, and the import is dynamic so
    * `src/editor` never reaches a production bundle.
    *
@@ -1635,7 +1695,10 @@ export class Game {
     // and leave the editor holding a map that the first one had disposed —
     // the failure `installMap` exists to prevent, arriving by the one door it
     // does not cover. One frame, and F2 works on the next.
-    if (this.state === "loading") return;
+    if (this.buildPending()) return;
+    // A previous F2 is still waiting on the import. Its `createEditor` has not
+    // run yet, so `this.editor` is still null and would wave this one through.
+    if (this.editorLoading) return;
     if (this.editor) {
       // Leaving rebuilds the map from the layout module, so anything edited
       // and not written to disk is gone. Until the editor can save, that is
@@ -1653,9 +1716,20 @@ export class Game {
       return;
     }
 
-    const { createEditor } = await import("../editor");
-    // A pending F2 while the module loaded, or a round change underneath it.
-    if (this.editor) return;
+    this.editorLoading = true;
+    let createEditor;
+    try {
+      ({ createEditor } = await import("../editor"));
+    } finally {
+      // Cleared before the opening rather than after it: everything below this
+      // point is synchronous, so nothing can interleave with it, and a throw in
+      // the import must not wedge F2 for the rest of the session.
+      this.editorLoading = false;
+    }
+    // Both pre-await guards owe a second look. The import is a task boundary,
+    // so the `loading` state that was clear a moment ago may not be — a round
+    // started underneath would have its build stomped to "editor" here.
+    if (this.buildPending() || this.editor) return;
 
     this.state = "editor";
     const map = this.buildEditorMap();
@@ -2266,7 +2340,7 @@ export class Game {
       dt,
       this.input,
       this.player.eyePos,
-      this.cameraSys.forward,
+      this.cameraSys.forwardToRef(this.aimForward),
       this.cameraSys.aimYaw,
       this.cameraSys.aimPitch,
       this.cameraSys.stickYawRate,
@@ -2279,7 +2353,7 @@ export class Game {
     // window covers what's ahead); outline ink thins with the same camera.
     this.shadowFocus
       .copyFrom(this.player.position)
-      .addInPlace(this.cameraSys.forward.scale(8));
+      .addInPlace(this.cameraSys.forwardToRef(this.shadowForward).scaleInPlace(8));
     this.updateSceneForCamera(dt, this.shadowFocus, this.player, this.combatants);
   }
 
@@ -2321,7 +2395,11 @@ export class Game {
       if (lampIntensity > 0) {
         this.lighting.setCarried(
           "player-lamp",
-          player.position.add(new Vector3(0, lc.lampHeight, 0)),
+          this.lampPos.set(
+            player.position.x,
+            player.position.y + lc.lampHeight,
+            player.position.z,
+          ),
           lc.lampColor,
           lc.lampRange,
           lampIntensity,
@@ -2348,7 +2426,10 @@ export class Game {
       pushers,
     );
     // Same rule as the lights and the fog: this has to follow the camera.
-    this.sfx.setListener(this.cameraSys.camera.position, this.cameraSys.forward);
+    this.sfx.setListener(
+      this.cameraSys.camera.position,
+      this.cameraSys.forwardToRef(this.listenerForward),
+    );
   }
 
   /**
@@ -2374,7 +2455,7 @@ export class Game {
       const spreadPx =
         (Math.tan(this.player.spread(this.cameraSys.adsBlend)) /
           Math.tan(this.cameraSys.camera.fov / 2)) *
-        (window.innerHeight / 2);
+        (this.viewportHeight / 2);
       this.hud.setCrosshair(this.cameraSys.adsBlend, spreadPx);
     }
     // Damage arcs are world-anchored, so they need this frame's aim yaw to be
@@ -2390,17 +2471,25 @@ export class Game {
     // in, and a body on the ground is not standing in one — a panel counting a
     // capture nobody is contributing to is worse than no panel.
     this.hud.setCapture(dying ? null : this.captureStatus());
-    this.hud.setScoreboard(this.input.scoreboard, {
-      map: this.mapDef.name,
-      teams: [CONFIG.teams[0].name, CONFIG.teams[1].name],
-      tickets: this.conquest.tickets,
-      flags: [this.conquest.flagsHeld(0), this.conquest.flagsHeld(1)],
-      kills: this.kills,
-      deaths: this.losses,
-      playerTeam: this.player.team,
-      playerKills: this.playerKills,
-      playerDeaths: this.playerDeaths,
-    });
+    // Assembled only while the board is actually up. The payload is an object
+    // and two arrays, and `flagsHeld` counts the control points twice — all of
+    // it built every frame of every round to be handed to a call that returned
+    // at its first line for all but the seconds a player holds Tab.
+    if (this.input.scoreboard) {
+      this.hud.setScoreboard(true, {
+        map: this.mapDef.name,
+        teams: [CONFIG.teams[0].name, CONFIG.teams[1].name],
+        tickets: this.conquest.tickets,
+        flags: [this.conquest.flagsHeld(0), this.conquest.flagsHeld(1)],
+        kills: this.kills,
+        deaths: this.losses,
+        playerTeam: this.player.team,
+        playerKills: this.playerKills,
+        playerDeaths: this.playerDeaths,
+      });
+    } else {
+      this.hud.setScoreboard(false);
+    }
     this.hud.setLockHint(!this.input.pointerLocked && !this.input.gamepadConnected);
     this.minimap.update(
       dt,

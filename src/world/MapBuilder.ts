@@ -41,6 +41,13 @@ import {
   type RidgeSpec,
   type ScatterSpec,
 } from "./layout";
+import { type LocalXZ, rotateToLocalXZ } from "./boxGeometry";
+import {
+  type BoxIndex,
+  boxesNear,
+  emptyBoxIndex,
+  insertBox,
+} from "./boxIndex";
 import { ridgeSegments } from "./Ridge";
 import { TerrainField, terrainPatches } from "./TerrainField";
 import { NavGrid } from "./NavGrid";
@@ -372,6 +379,23 @@ export class MapBuilder {
   private boxes: WorldBox[] = [];
 
   /**
+   * Scratch for `insideCollider`'s box-frame transform. Reused because scatter
+   * placement runs it a great many times per build.
+   */
+  private readonly localScratch: LocalXZ = { lx: 0, lz: 0 };
+
+  /**
+   * `boxes`, bucketed, so scatter placement can ask which colliders are near a
+   * candidate spot instead of walking all of them. Replaced at the top of every
+   * `build` and fed by `collider()`, so it is never out of step with `boxes`.
+   *
+   * Its `pad` is the largest clearance any scatter region will query with, and
+   * that is computed from the layout rather than guessed — a query wider than
+   * the pad would miss boxes silently, which is the one way this can be wrong.
+   */
+  private boxIndex: BoxIndex = emptyBoxIndex(CONFIG.map.size, 0);
+
+  /**
    * The layout item currently being built, on editor builds only. `collider()`
    * files its box index here so the editor can find one item's boxes again
    * without re-deriving them. Null in the shipped path and between items.
@@ -389,6 +413,11 @@ export class MapBuilder {
     // A view onto the floor's own blocks within `colliders` — see GameMap.
     const terrainColliders: Mesh[] = [];
     this.boxes = [];
+    // Sized to the widest burial test this layout will run. `findSpot` asks
+    // about `(spec.clearance ?? 0.8) * scale`, and `scale` tops out at the
+    // upper end of the spec's own range — so the layout knows the answer before
+    // a single box exists, which is the only moment the index can be told.
+    this.boxIndex = emptyBoxIndex(size, maxScatterClearance(layout));
     // One stream for the whole build, so scatter regions stay reproducible in
     // authored order. Seeding per region would be stabler under editing but
     // would let two regions with the same seed sample identically.
@@ -843,30 +872,70 @@ export class MapBuilder {
     // half-width, so a prop keeps visible daylight around it instead of merely
     // not intersecting.
     const pad = clearance;
-    for (const b of this.boxes) {
-      // A tilted box (rotX ramps) spans a taller band than its thickness.
-      let halfH = b.h / 2;
-      if (b.rotX !== 0) halfH += (Math.abs(Math.sin(b.rotX)) * b.d) / 2;
-      if (topY <= b.cy - halfH + 0.05 || baseY >= b.cy + halfH - 0.05) continue;
-      // XZ overlap, tested in the box's local frame. Rotate the delta by
-      // *minus* rotY — the same convention as boxGeometry's `toLocalXZ`, and
-      // the inverse of the box's own rotation. Rotating the other way reflects
-      // the test across the box, which matters the moment a box is longer than
-      // it is deep; scatter colliders now are.
-      let lx = x - b.cx;
-      let lz = z - b.cz;
-      if (b.rotY !== 0) {
-        const c = Math.cos(b.rotY);
-        const s = Math.sin(b.rotY);
-        const rx = lx * c + lz * s;
-        lz = -lx * s + lz * c;
-        lx = rx;
-      }
-      if (Math.abs(lx) <= b.w / 2 + pad && Math.abs(lz) <= b.d / 2 + pad) {
-        return true;
-      }
+    // The bucketed neighbours, then the two map-sized boxes the grid refuses.
+    // The ridge is in that second list and it is load-bearing here: it is what
+    // stops a prop being planted inside the valley wall.
+    const near = boxesNear(this.boxIndex, x, z);
+    if (
+      near &&
+      this.anyBuries(near, x, z, baseY, topY, pad)
+    ) {
+      return true;
+    }
+    return this.anyBuriesBoxes(this.boxIndex.oversized, x, z, baseY, topY, pad);
+  }
+
+  /** The burial test over indices into `boxIndex.boxes`. */
+  private anyBuries(
+    near: readonly number[],
+    x: number,
+    z: number,
+    baseY: number,
+    topY: number,
+    pad: number,
+  ): boolean {
+    for (const i of near) {
+      if (this.buries(this.boxIndex.boxes[i], x, z, baseY, topY, pad)) return true;
     }
     return false;
+  }
+
+  /** The same, over boxes held directly. */
+  private anyBuriesBoxes(
+    boxes: readonly WorldBox[],
+    x: number,
+    z: number,
+    baseY: number,
+    topY: number,
+    pad: number,
+  ): boolean {
+    for (const b of boxes) {
+      if (this.buries(b, x, z, baseY, topY, pad)) return true;
+    }
+    return false;
+  }
+
+  /** One box against one candidate spot. */
+  private buries(
+    b: WorldBox,
+    x: number,
+    z: number,
+    baseY: number,
+    topY: number,
+    pad: number,
+  ): boolean {
+    // A tilted box (rotX ramps) spans a taller band than its thickness.
+    let halfH = b.h / 2;
+    if (b.rotX !== 0) halfH += (Math.abs(Math.sin(b.rotX)) * b.d) / 2;
+    if (topY <= b.cy - halfH + 0.05 || baseY >= b.cy + halfH - 0.05) return false;
+    // XZ overlap, tested in the box's local frame. The rotation is
+    // `boxGeometry`'s rather than written out here — this call site had it
+    // inverted, which mirrored the whole test across every yaw-rotated box
+    // while carrying a comment describing the convention it was not using.
+    // The extents test stays local because it pads by the placement
+    // clearance, which `toLocalXZ` knows nothing about.
+    const { lx, lz } = rotateToLocalXZ(b, x, z, this.localScratch);
+    return Math.abs(lx) <= b.w / 2 + pad && Math.abs(lz) <= b.d / 2 + pad;
   }
 
   /**
@@ -904,7 +973,7 @@ export class MapBuilder {
     mesh.rotation.set(rotX, rotY, 0);
     this.item?.boxes.push(this.boxes.length);
     this.item?.colliders.push(mesh);
-    this.boxes.push({
+    const world: WorldBox = {
       w: box.w,
       h: box.h,
       d: box.d,
@@ -913,7 +982,12 @@ export class MapBuilder {
       cz: at.z,
       rotX,
       rotY,
-    });
+    };
+    this.boxes.push(world);
+    // The scatter index rides along here because this is the only place a
+    // collider is ever made — the same property that makes `boxes` complete.
+    // Feeding it anywhere else would leave the two able to disagree.
+    insertBox(this.boxIndex, world);
     mesh.isVisible = false;
     mesh.isPickable = true;
     mesh.checkCollisions = true;
@@ -921,6 +995,24 @@ export class MapBuilder {
     mesh.freezeWorldMatrix();
     return mesh;
   }
+}
+
+/**
+ * The widest clearance any of this layout's scatter regions can ask about —
+ * what `boxIndex` has to be padded by so no burial test can miss a box.
+ *
+ * `findSpot` queries with `(spec.clearance ?? 0.8) * scale` where `scale` is
+ * drawn from the spec's own range, so the maximum is over the top of that
+ * range. The `+ 1` is the same slack `findSpot` adds to its neighbour test and
+ * costs nothing here: a wider pad is a slower index, never a wrong one.
+ */
+function maxScatterClearance(layout: MapLayout): number {
+  let max = 0;
+  for (const spec of layout.scatter ?? []) {
+    const maxScale = (spec.scale ?? [1, 1])[1];
+    max = Math.max(max, (spec.clearance ?? 0.8) * maxScale);
+  }
+  return max + 1;
 }
 
 /** Appends a fresh, empty item to an editor list and returns it. */
@@ -1097,10 +1189,25 @@ function mergeByMaterial(meshes: Mesh[], tag: string): Mesh[] {
     if (!merged) continue;
     merged.name = `${tag}-${mat.name}`;
     merged.material = mat;
-    // Emissive groups keep their exemption: the outline shell would otherwise
-    // expand past them and swallow the glow.
-    if (group.some((m) => m.metadata?.noOutline)) {
-      merged.metadata = { ...(merged.metadata ?? {}), noOutline: true };
+    // ALL THREE RENDER-EXEMPTION FLAGS, not just the one that had a caller.
+    // Emissive groups keep `noOutline` — the outline shell would otherwise
+    // expand past them and swallow the glow — and that was the only flag any
+    // builder set, so it was the only one propagated. The metadata contract
+    // treats the set as a set, and a merge that carries one member of it is a
+    // trap laid for whoever first marks a kit mesh `noShadowCaster`: the flag
+    // would vanish here and the mesh would start casting, with nothing to
+    // point at. `solid` is deliberately NOT in the list — a merged VISUAL is
+    // never a collider, and carrying it up would break the one rule the world
+    // layer cannot bend.
+    const flags: ("noOutline" | "noGlow" | "noShadowCaster")[] = [
+      "noOutline",
+      "noGlow",
+      "noShadowCaster",
+    ];
+    for (const flag of flags) {
+      if (group.some((m) => m.metadata?.[flag])) {
+        merged.metadata = { ...(merged.metadata ?? {}), [flag]: true };
+      }
     }
     out.push(merged as Mesh);
   }

@@ -298,8 +298,22 @@ export class ShadowSystem {
         xAxis.z * sx + yAxis.z * sy + dir.z * depth,
       );
       this.generator.getShadowMap()?.resetRefreshCounter();
+      // Inside the guard, where it belongs: this is the branch that just
+      // decided the shadow camera moved, and the matrix is a function of
+      // nothing else. Outside it, every frame paid a `setMatrix` on every cel
+      // material plus the grass and the water to re-hand them a matrix that
+      // had not changed — and the contract line above already claimed
+      // otherwise.
+      //
+      // It is cheap even when it does run, and cheaper than it looks to skip:
+      // `getTransformMatrix` returns a matrix it mutates in place and
+      // `ShaderMaterial.setMatrix` stores the REFERENCE, so what the materials
+      // hold tracks the generator whether or not this line runs again. That is
+      // an implementation detail of Babylon's rather than a promise, which is
+      // why this stays a real re-upload on the frames the window moves instead
+      // of being deleted outright.
+      mats.setShadowMatrix(this.generator.getTransformMatrix());
     }
-    mats.setShadowMatrix(this.generator.getTransformMatrix());
   }
 
   /**

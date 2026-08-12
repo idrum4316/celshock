@@ -10,7 +10,12 @@
  */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import { halfDepth, slabThickness, topFaceAtLocalZ } from "./boxGeometry";
+import {
+  halfDepth,
+  slabThickness,
+  topFaceAtLocalZ,
+  topFaceHeight,
+} from "./boxGeometry";
 import type { WorldBox } from "./MapBuilder";
 
 /**
@@ -112,6 +117,49 @@ export class ObstacleField {
       moved = true;
     }
     return moved;
+  }
+
+  /**
+   * The highest collider top face directly above `floor` and at or below
+   * `ceiling` at `(x, z)`, or null when no box spans that band here.
+   *
+   * THIS IS THE GROUND PROBE'S ANSWER, and it exists to retire a whole-scene
+   * ray pick. `Player.probeGround` ran `scene.pickWithRay` with a `solid`
+   * predicate on every frame: Babylon walked all ~1,800 meshes and ray-tested
+   * all ~820 colliders to answer "what is under my feet", which measured as the
+   * single largest piece of the game's own per-frame JS — five times the next
+   * item, and scaling with how big the map is rather than with what is on
+   * screen. The boxes were already bucketed here, and `NavGrid.rasterize` was
+   * already computing exactly this at bake time from the same primitive.
+   *
+   * The band is closed at both ends because a floor is not the only thing above
+   * a foot: `ceiling` is the probe's own origin (a step-height above the feet,
+   * so a rise reads as a step rather than a wall) and `floor` is as far down as
+   * the probe reaches. A roof overhead is outside the band and correctly
+   * ignored.
+   *
+   * NOT the terrain. The heightfield has no box standing in for it — that is
+   * the one documented exception to the visual/collider rule — so the caller
+   * takes the higher of this and `TerrainField.surfaceAt`. And it is
+   * `surfaceAt`, the floor as DRAWN, rather than `heightAt`, the smooth field
+   * the floor is cut from: what the ray used to hit was a clone of the visual's
+   * own vertices.
+   */
+  groundAt(x: number, z: number, ceiling: number, floor: number): number | null {
+    const cx = this.clampCell(this.toCell(x));
+    const cz = this.clampCell(this.toCell(z));
+    const bucket = this.buckets[cz * this.dim + cx];
+    if (!bucket) return null;
+
+    let best: number | null = null;
+    for (const index of bucket) {
+      const box = this.boxes[index];
+      const top = topFaceHeight(box, x, z);
+      if (top === null) continue;
+      if (top > ceiling || top < floor) continue;
+      if (best === null || top > best) best = top;
+    }
+    return best;
   }
 
   /** One box against one body. Returns true when `out` was corrected. */

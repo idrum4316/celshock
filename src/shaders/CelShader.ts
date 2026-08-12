@@ -495,9 +495,9 @@ void main() {
   vec3 base = baseColor;
   // Weathering: a slow value drift over world space, so a 48 m merged block
   // stops being one flat tone. Every wall, roof, plank and rock in the game is
-  // one of about thirty palette hexes, and the merge is per colour — so all 26
-  // cottages are literally the same PLASTER, and a whole block of them arrives
-  // as a single mesh in a single value.
+  // drawn from a palette of a hundred-odd hexes, and the merge is per colour —
+  // so all 26 cottages are literally the same PLASTER, and a whole block of
+  // them arrives as a single mesh in a single value.
   //
   // Keyed on POSITION rather than on anything per-object, which is what makes
   // it free: no vertex data, no build cost, and it survives the merge by
@@ -515,9 +515,18 @@ void main() {
   // Gated by the world mask, because a term keyed on world position applied to
   // a MOVING mesh makes it shimmer as it walks: a bot's torso would drift in
   // tone across the map. vBaked.y is 1 on baked map geometry and 0 on the
-  // rigs, the viewmodel and every effect mesh, so this costs them one mix and
-  // changes nothing.
-  base *= mix(1.0, 1.0 + variationAmount * (valueNoise(vPosW * variationScale) - 0.5), vBaked.y);
+  // rigs, the viewmodel and every effect mesh.
+  //
+  // A BRANCH, not a mix. GLSL evaluates both arguments of mix(), so the mask
+  // written that way still ran valueNoise — eight variationHash calls, each a
+  // sin/dot/fract — on every pixel of the viewmodel that fills the lower third
+  // of the screen, on every pixel of sixteen bot rigs and every particle, and
+  // then multiplied the result by zero. The branch is uniform across a whole
+  // mesh (the mask is a vertex attribute that is 1 or 0 per model, never in
+  // between), so it is exactly the shape a GPU predicts well.
+  if (vBaked.y > 0.5) {
+    base *= 1.0 + variationAmount * (valueNoise(vPosW * variationScale) - 0.5);
+  }
   #endif
   #endif
   vec3 col = base * light;
@@ -700,6 +709,14 @@ export class CelMaterialFactory {
   private pointColor = new Float32Array(MAX_POINT_LIGHTS * 3);
   private pointRange = new Float32Array(MAX_POINT_LIGHTS);
   private pointCount = 0;
+
+  /**
+   * Last position `updateCamera` walked the cache for. Deliberately not seeded
+   * from the camera: the origin is a position the camera can genuinely be at,
+   * and a first frame that skipped the upload would leave `camPos` at the
+   * shader's own default until something moved.
+   */
+  private readonly lastCamPos = new Vector3(NaN, NaN, NaN);
 
   // Shadow-map state, pushed onto every cel material as it is created.
   private shadowMap: BaseTexture | null = null;
@@ -972,28 +989,77 @@ export class CelMaterialFactory {
   /**
    * Uploads the active dynamic lights (already reduced to the nearest
    * `MAX_POINT_LIGHTS` by the LightingSystem). Called once per frame.
+   *
+   * **The walk is the expensive half, so it is skipped when the packed arrays
+   * come out unchanged.** Every entry here is four setters on every material in
+   * the cache, and a `ShaderMaterial` setter is a linear scan of the 24-name
+   * uniform list before it stores anything.
+   *
+   * **Measured, and it fires far less often than it reads.** Any fixture with
+   * `flicker > 0` has `flame()` rewriting its intensity every frame, so as long
+   * as one lit lamp is among the winning slots — which in a village is most
+   * places a player stands — the arrays genuinely differ and the walk runs in
+   * full. On Hollowmere at a standstill it saved nothing at all. What it does
+   * cover is the rest: an unlit stretch of map, a map with no flickering
+   * fixtures, a menu, a pause. The comparison is ~112 numbers against 172
+   * setter calls, so losing the bet is far cheaper than not taking it.
+   *
+   * What this does NOT save is the GL upload. `setArray3` bypasses Babylon's
+   * own value cache and re-pushes on every material bind regardless, which is
+   * a thing only a uniform buffer can fix.
    */
   setPointLights(lights: PointLightData[]): void {
     const count = Math.min(lights.length, MAX_POINT_LIGHTS);
+    let changed = count !== this.pointCount;
     for (let i = 0; i < count; i++) {
       const l = lights[i];
-      this.pointPos[i * 3] = l.position.x;
-      this.pointPos[i * 3 + 1] = l.position.y;
-      this.pointPos[i * 3 + 2] = l.position.z;
-      this.pointColor[i * 3] = l.color.r * l.intensity;
-      this.pointColor[i * 3 + 1] = l.color.g * l.intensity;
-      this.pointColor[i * 3 + 2] = l.color.b * l.intensity;
+      const b = i * 3;
+      const r = l.color.r * l.intensity;
+      const g = l.color.g * l.intensity;
+      const bl = l.color.b * l.intensity;
+      if (
+        this.pointPos[b] === l.position.x &&
+        this.pointPos[b + 1] === l.position.y &&
+        this.pointPos[b + 2] === l.position.z &&
+        this.pointColor[b] === r &&
+        this.pointColor[b + 1] === g &&
+        this.pointColor[b + 2] === bl &&
+        this.pointRange[i] === l.range
+      ) {
+        continue;
+      }
+      changed = true;
+      this.pointPos[b] = l.position.x;
+      this.pointPos[b + 1] = l.position.y;
+      this.pointPos[b + 2] = l.position.z;
+      this.pointColor[b] = r;
+      this.pointColor[b + 1] = g;
+      this.pointColor[b + 2] = bl;
       this.pointRange[i] = l.range;
     }
     this.pointCount = count;
+    if (!changed) return;
     this.cache.forEach((mat) => this.applyPointLights(mat));
   }
 
-  /** Call once per frame so shader fog/rim track the active camera. */
+  /**
+   * Call once per frame so shader fog/rim track the active camera.
+   *
+   * Guarded on the position for the same reason `setPointLights` is, and unlike
+   * that one it wins cleanly: nothing perturbs a still camera, so a menu, a
+   * pause, the deploy screen and a player standing still all stop re-uploading
+   * `camPos` to 43 materials — measured at 258 setter calls a frame before the
+   * guards and 175 after, on a static Hollowmere view.
+   */
   updateCamera(camPos: Vector3): void {
-    this.cache.forEach((mat) => mat.setVector3("camPos", camPos));
+    if (!camPos.equals(this.lastCamPos)) {
+      this.lastCamPos.copyFrom(camPos);
+      this.cache.forEach((mat) => mat.setVector3("camPos", camPos));
+    }
     // A bake that arrived before Babylon had dynamically imported the outline
     // shaders is still outstanding; this is where it lands. No-op otherwise.
+    // Outside the guard: it is not about the camera, and a bake landing on a
+    // frame the player happened to be standing still for would be dropped.
     refreshOutlineFog(this.scene);
   }
 

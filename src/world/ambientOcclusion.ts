@@ -78,17 +78,27 @@
  */
 import { Mesh, ShaderMaterial, VertexBuffer } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import { halfDepth, slabThickness } from "./boxGeometry";
+import {
+  halfDepth,
+  type LocalXZ,
+  rotateToLocalXZ,
+  slabThickness,
+} from "./boxGeometry";
+import { type BoxIndex, boxesNear, buildBoxIndex } from "./boxIndex";
 import type { WorldBox } from "./MapBuilder";
 import type { TerrainField } from "./TerrainField";
 
+/** Scratch for the box-frame transform; the bake runs it per vertex per box. */
+const localScratch: LocalXZ = { lx: 0, lz: 0 };
+
 /**
- * Bucket edge, metres. Wider than the occlusion radius, so a query reads the
- * nine buckets around a vertex and nothing further can reach it. Same shape as
- * `ObstacleField`'s index, rebuilt here because that one is constructed after
- * this runs and exposes only its own push-out query.
+ * The grid is `boxIndex.ts`'s, whose header carries the reasoning: the pad is
+ * paid at insert, so a query reads ONE bucket and is still complete. Do not
+ * "fix" that into a 3x3 loop — nine times the work for the same answer.
+ *
+ * It is built here rather than shared with `ObstacleField` because that one is
+ * constructed after this runs and exposes only its own push-out query.
  */
-const BUCKET = 4;
 
 /**
  * A box whose closest point lands nearer than this is treated as the vertex's
@@ -102,55 +112,36 @@ const BUCKET = 4;
  */
 const SELF = 0.08;
 
+/**
+ * The shared grid, plus the local half-extents this pass alone needs.
+ *
+ * The bucketing used to live here in full; it is now `boxIndex.ts`, because
+ * `GrassSystem.scatter` and `MapBuilder.findSpot` were asking the same question
+ * by walking all 800 boxes. What stays is the half-extent table, which is
+ * occlusion's own reading of a box (the pitch is folded in rather than rotated
+ * for) and means nothing to the other two.
+ */
 interface Bucketed {
-  boxes: WorldBox[];
+  index: BoxIndex;
   /** Local half-extents, precomputed: the pitch makes these non-obvious. */
   half: { x: number; y: number; z: number }[];
-  cells: (number[] | null)[];
-  dim: number;
-  origin: number;
 }
 
-/**
- * Indexes the collider boxes for the radius query below.
- *
- * The two map-sized boxes — the ground plane's stand-in and the ridge — are
- * dropped exactly as `ObstacleField` drops them: they are boundary, not
- * furniture, and a 200 m box in a 4 m bucket is in every cell on the map.
- */
+/** Indexes the collider boxes for the radius query below. */
 function bucket(boxes: readonly WorldBox[], size: number, radius: number): Bucketed {
-  const dim = Math.ceil(size / BUCKET) + 2;
-  const origin = -size / 2 - BUCKET;
-  const out: Bucketed = {
-    boxes: [],
-    half: [],
-    cells: new Array(dim * dim).fill(null),
-    dim,
-    origin,
-  };
-  const cell = (v: number) =>
-    Math.max(0, Math.min(dim - 1, Math.floor((v - origin) / BUCKET)));
-
-  for (const box of boxes) {
-    if (box.w > 200 || box.d > 200) continue;
-    const index = out.boxes.push(box) - 1;
+  const index = buildBoxIndex(boxes, size, radius);
+  const half = index.boxes.map((box) => {
     // Local half-extents. Depth and height both grow with the pitch: a tilted
     // slab covers more ground than its depth and stands taller than its height,
     // and `boxGeometry` already owns both of those conversions.
     const sin = Math.abs(Math.sin(box.rotX));
-    out.half.push({
+    return {
       x: box.w / 2,
       y: slabThickness(box) / 2 + (box.d / 2) * sin,
       z: halfDepth(box),
-    });
-    const reach = Math.hypot(box.w, box.d) / 2 + radius;
-    for (let cx = cell(box.cx - reach); cx <= cell(box.cx + reach); cx++) {
-      for (let cz = cell(box.cz - reach); cz <= cell(box.cz + reach); cz++) {
-        (out.cells[cz * dim + cx] ??= []).push(index);
-      }
-    }
-  }
-  return out;
+    };
+  });
+  return { index, half };
 }
 
 /**
@@ -174,29 +165,21 @@ function occlusionAt(
 ): number {
   let occ = 0;
 
-  const cx = Math.max(
-    0,
-    Math.min(index.dim - 1, Math.floor((px - index.origin) / BUCKET)),
-  );
-  const cz = Math.max(
-    0,
-    Math.min(index.dim - 1, Math.floor((pz - index.origin) / BUCKET)),
-  );
-  const list = index.cells[cz * index.dim + cx];
+  const list = boxesNear(index.index, px, pz);
   if (list) {
     for (const i of list) {
-      const box = index.boxes[i];
+      const box = index.index.boxes[i];
       const half = index.half[i];
       // Into the box's yaw frame; the pitch is folded into the half-extents
       // above rather than rotated for, because an occlusion estimate does not
       // need a ramp's exact face — only roughly where its bulk is.
-      const dx = px - box.cx;
-      const dz = pz - box.cz;
+      const { lx, lz } = rotateToLocalXZ(box, px, pz, localScratch);
+      const ly = py - box.cy;
+      // Undoing that rotation below needs the same pair, and `rotateToLocalXZ`
+      // owns the sign convention — these are the world→local angles read back,
+      // not a second opinion about which way the box faces.
       const c = Math.cos(-box.rotY);
       const s = Math.sin(-box.rotY);
-      const lx = dx * c + dz * s;
-      const ly = py - box.cy;
-      const lz = -dx * s + dz * c;
 
       const qx = lx - Math.max(-half.x, Math.min(half.x, lx));
       const qy = ly - Math.max(-half.y, Math.min(half.y, ly));

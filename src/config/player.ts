@@ -27,6 +27,17 @@ export const player = {
   height: 1.8,
   radius: 0.45,
   /**
+   * The body sphere every incoming round is tested against, about
+   * `Player.center`. Smaller than the bots' `bots.hitRadius` (0.75) — the one
+   * asymmetry in the hit model, and it is in the player's favour.
+   *
+   * Here rather than as a literal in `Player.ts` because `combat.headRadius`'s
+   * own reasoning is written against it: the head sphere has to sit INSIDE this
+   * one or it becomes a candidate of its own in the nearest-hit search instead
+   * of an upgrade to a body hit that already landed.
+   */
+  hitRadius: 0.7,
+  /**
    * Crouch — held on Ctrl, latched by `C` or the pad's B (see
    * `InputManager.crouch`). It costs speed for a lower profile and a
    * steadier gun. Two numbers do the real work and they must move together:
