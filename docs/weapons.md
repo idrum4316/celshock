@@ -667,6 +667,16 @@ enforces that with a flag; the states that offer the button are the ones that re
 `loadoutPressed`. Every pick applies immediately through `Game.applyLoadout` and
 persists to `localStorage` like the difficulty tier, so confirm just closes.
 
+- **The weapon on the stage is read against a CARD, and the card is in the scene**
+  (`CONFIG.viewmodel.inspect.backdrop`, built by `buildKitBackdrop`). What used to
+  fill the stage was the live map: off the menu that is empty sky and reads as a
+  bench, off the deploy screen it is a lit village at the exact tone of a grey
+  receiver. It cannot be fixed in the stylesheet — the stage is a hole in the
+  scrim precisely because every point of DOM alpha over it is a point off the
+  weapon — so the card hangs *behind* the weapon instead, sized to the frustum
+  from the same fov and aspect that place the weapon. See
+  [`rendering.md`](rendering.md) for the draw-order rules that keep it between
+  the two.
 - **The stat bars are derived from the table**, each weapon's figure against the
   best any weapon has, so a third weapon re-scales the chart instead of dating it.
   Accuracy is the aimed spread *inverted* — a bar that grew with the number would rank

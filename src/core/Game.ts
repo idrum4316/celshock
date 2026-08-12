@@ -59,6 +59,7 @@ import { difficultyNames } from "../entities/BotSkill";
 import type { Combatant, Team } from "../entities/Combatant";
 import { Player } from "../entities/Player";
 import { type SightId } from "../entities/sights";
+import { VIEWMODEL_GROUP } from "../entities/ViewModel";
 import { type PrimaryWeaponId } from "../entities/weapons";
 import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
@@ -369,6 +370,24 @@ export class Game {
     // is not in the valley, and its bounding sphere is a dome radius away, so
     // any distance fade would delete it outright.
     glow.customEmissiveColorSelector = (mesh, _subMesh, material, result) => {
+      // The kit screen hangs a dark card behind the weapon (see
+      // `inspect.backdrop`), and the one thing in the game that card cannot
+      // cover is this: a glow layer is composited over the FINISHED frame, so
+      // a lamp the bench is standing in front of blooms straight through it.
+      // Only what is on the stage may bloom while the stage is up, which
+      // still leaves the reticle and the hot parts of the weapon itself
+      // glowing — exactly what the screen is for. "On the stage" is the
+      // viewmodel's rendering group MINUS the sky, which shares it (see
+      // `Sky`'s constructor) and is picked back out by the same
+      // `infiniteDistance` the fog exemption below turns on: without that
+      // second half the moon hangs its bloom over the bench.
+      if (
+        this.state === "loadout" &&
+        (mesh.renderingGroupId !== VIEWMODEL_GROUP || mesh.infiniteDistance)
+      ) {
+        result.set(0, 0, 0, material.alpha);
+        return;
+      }
       const emissive = (material as StandardMaterial).emissiveColor;
       if (!emissive) {
         const n = glow.neutralColor;

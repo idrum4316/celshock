@@ -305,6 +305,15 @@ and drawn in `VIEWMODEL_GROUP`.
   along with the world. `#loadout`'s scrim stops at the panel column and the stage
   gets a vignette instead; `show()` marks `#hud` so the CSS can hide the menu, the
   deploy map and every gauge while the kit is up.
+- **What the weapon is read against is therefore in the SCENE, not in the
+  stylesheet**, and the vignette's first stop is fully transparent because of it.
+  It used to open at alpha 0.5 over the middle of the stage — where the weapon is
+  — so the frame was drawing the one thing the screen exists to show at half
+  strength, and the map behind it at half strength too, which is a contrast
+  problem the DOM cannot solve from the wrong side of the canvas. The dark card
+  now behind the weapon (`CONFIG.viewmodel.inspect.backdrop`,
+  [`weapons.md`](weapons.md)) is what holds the map down; the vignette is left
+  closing the corners of the bay and nothing else.
 - **The stage's geometry is shared with `CONFIG.viewmodel.inspect`.** The pose is
   placed by back-projecting a SCREEN anchor, and the anchor works out to exactly the
   CSS `--panel` fraction (the stage's centre is `(1+p)/2` across, which in NDC is

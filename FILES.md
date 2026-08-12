@@ -59,7 +59,8 @@ src/
     Player.ts           # Movement, sprint, crouch, jump, weapon state
     ViewModel.ts        # The first-person weapon: carried gun + gloved arms on
                         #   the camera, hip/ADS/sprint/reload, sway, bob, and
-                        #   the kit turntable. Builds every weapon, enables one
+                        #   the kit turntable with the dark card behind it.
+                        #   Builds every weapon, enables one
     weaponKit.ts        # The build accumulator every weapon model is written
                         #   in + WeaponParts and WeaponSights (rail, or fixed),
                         #   and the five colour groups a weapon merges into

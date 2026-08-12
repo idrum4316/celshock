@@ -55,16 +55,22 @@
  *   pose that is not the carried one, and it is the only thing here that may
  *   write `rotationQuaternion`. While one is set Babylon ignores `rotation`
  *   entirely, so `endInspect` clearing it is what lets the carried pose come
- *   back at all.
+ *   back at all. The turntable also owns the CARD behind the weapon — see
+ *   `buildKitBackdrop`, whose whole difficulty is where in the frame it is
+ *   allowed to be drawn — and it goes up and down with the pose, which is
+ *   what keeps it out of every other state in the game.
  */
 import {
   Color3,
+  Constants,
+  DynamicTexture,
   Matrix,
   Mesh,
   MeshBuilder,
   type Node,
   Quaternion,
   Scene,
+  StandardMaterial,
   TransformNode,
   Vector3,
 } from "@babylonjs/core";
@@ -107,6 +113,88 @@ const WEAPON_BUILDERS: Record<WeaponId, WeaponBuilder> = {
   lmg: buildLmg,
   pistol: buildPistol,
 };
+
+/**
+ * The card the kit screen's turntable stands against: one camera-parented
+ * quad, dark, and up only while a weapon is being looked at.
+ *
+ * **Its rendering slot is the whole trick, and there is exactly one that
+ * works.** The card has to cover the world and then be covered by the weapon,
+ * and the two are in different rendering groups — the world in 0, everything
+ * on the camera in `VIEWMODEL_GROUP`. Babylon draws a group's opaque meshes
+ * first and its BLENDED ones last, so a blended mesh in group 0 with the
+ * highest `alphaIndex` in the scene is the last thing drawn before the
+ * viewmodel and the first thing the viewmodel draws over. That is why the card
+ * is a hair transparent (see `inspect.backdrop.alpha`) rather than flatly
+ * opaque: opaque, it would be sorted in among the village.
+ *
+ * The card is a painted flat, not geometry: nothing may collide with it, pick
+ * it, shadow it or bloom it. The one thing it cannot cover is the GLOW LAYER,
+ * which is composited over the finished frame rather than drawn into it —
+ * `Game`'s emissive selector is where that is dealt with.
+ */
+function buildKitBackdrop(scene: Scene): Mesh {
+  const i = CONFIG.viewmodel.inspect;
+  const b = i.backdrop;
+  // Square, because the quad is scaled to the frustum every frame and the
+  // gradient is a soft pool that reads the same however it is stretched.
+  const tex = new DynamicTexture("kitBackdrop", { width: 256, height: 256 }, scene);
+  const ctx = tex.getContext();
+  // The pool is centred where the WEAPON is: the anchor is in NDC, and the
+  // canvas is y-down, which is the one place those two disagree.
+  const cx = ((i.anchorX + 1) / 2) * 256;
+  const cy = ((1 - i.anchorY) / 2) * 256;
+  const pool = ctx.createRadialGradient(cx, cy, 0, cx, cy, 256 * b.poolRadius);
+  pool.addColorStop(0, b.near);
+  pool.addColorStop(1, b.far);
+  ctx.fillStyle = b.far;
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = pool;
+  ctx.fillRect(0, 0, 256, 256);
+  tex.update();
+
+  const mat = new StandardMaterial("kitBackdrop", scene);
+  // Unlit: the card is a painted value, and a lit one would take the bench
+  // lamps that are there to light the weapon.
+  mat.disableLighting = true;
+  mat.diffuseColor = Color3.Black();
+  mat.specularColor = Color3.Black();
+  mat.emissiveTexture = tex;
+  mat.alpha = b.alpha;
+  // Depth is then bent both ways, and both are load-bearing. `ALWAYS` is what
+  // lets the card ignore the world's depth, so a wall the deploy camera is
+  // standing against cannot cut a hole in the bench. Writing depth is how it
+  // covers what its own pass cannot reach: the SKY is in the viewmodel's
+  // rendering group too (`Sky` puts the moon there so the dome cannot drop
+  // it), which draws after this one whatever the sorting says — and a card
+  // that stamps 8 m across the frame fails the moon out of the depth test
+  // while the weapon, a half-metre from the lens, sails through it.
+  //
+  // `forceDepthWrite`, not the absence of `disableDepthWrite`: setting a blend
+  // mode turns depth writing OFF in the engine, so a blended mesh has to ask.
+  mat.forceDepthWrite = true;
+  mat.depthFunction = Constants.ALWAYS;
+  mat.backFaceCulling = false;
+
+  const card = MeshBuilder.CreatePlane("viewmodel_kitBackdrop", { size: 1 }, scene);
+  card.material = mat;
+  // Last of every blended mesh in the scene, and INFINITY is what that takes:
+  // Babylon's default `alphaIndex` is already `Number.MAX_VALUE`, so any
+  // ordinary large number sorts the card in FRONT of the untouched ones and
+  // the capture skirt — a 28 m cylinder the deploy camera is usually inside —
+  // paints its pane of light straight back over the bench.
+  card.alphaIndex = Number.POSITIVE_INFINITY;
+  card.isPickable = false;
+  // Camera-parented, so its bounds are recomputed against a moving frustum —
+  // the same reason the weapon's own meshes skip the cull test.
+  card.alwaysSelectAsActiveMesh = true;
+  // Read by the Game constructor's scan; it is up before that runs. A flat
+  // painted with an emissive texture is exactly what the glow layer would
+  // otherwise bloom, and a bloomed backdrop is a bright wash over the weapon.
+  card.metadata = { noGlow: true, noOutline: true, noShadowCaster: true };
+  card.setEnabled(false);
+  return card;
+}
 
 /** What the weapon needs to know about the player, per frame. */
 export interface ViewModelParams {
@@ -278,6 +366,12 @@ export class ViewModel {
 
   /** Carries the whole pose; every rig hangs off it. */
   private readonly weapon: TransformNode;
+  /**
+   * The kit screen's backdrop — see `buildKitBackdrop`. Sized to the frustum
+   * by `updateInspect`, so it follows the window without knowing anything
+   * about the screen that raised it.
+   */
+  private readonly backdrop: Mesh;
   private readonly rigs = {} as Record<WeaponId, WeaponRig>;
 
   /**
@@ -387,6 +481,9 @@ export class ViewModel {
     this.weapon = new TransformNode("viewmodel", scene);
     this.weapon.parent = camera;
     this.weapon.scaling.setAll(v.scale);
+
+    this.backdrop = buildKitBackdrop(scene);
+    this.backdrop.parent = camera;
 
     // Every weapon is built up front. The cost is a set of merged colour
     // groups per weapon sitting disabled — against a rebuild in the middle of
@@ -670,6 +767,10 @@ export class ViewModel {
     this.inspectPitch = i.basePitch;
     this.weapon.rotationQuaternion = this.spinQ;
     this.inspecting = true;
+    // The card goes up with the weapon and comes down with it, which is what
+    // keeps it out of every other state in the game: there is one way onto the
+    // turntable and one way off it.
+    this.backdrop.setEnabled(true);
     // Nothing here runs `update`, so a throw caught by the kit screen would
     // leave its arm frozen across the turntable for as long as the screen is
     // up — and a reload, a magazine hanging in the air beside the turntable.
@@ -685,6 +786,7 @@ export class ViewModel {
     this.weapon.rotationQuaternion = null;
     this.weapon.scaling.setAll(CONFIG.viewmodel.scale);
     this.inspecting = false;
+    this.backdrop.setEnabled(false);
     this.applyMeshVisibility();
   }
 
@@ -750,6 +852,16 @@ export class ViewModel {
 
     this.weapon.position.copyFrom(this.pos);
     this.weapon.scaling.setAll(v.scale);
+
+    // The card, cut to the frustum at its own distance. Derived every frame
+    // from the same two numbers the weapon is placed with, so a resize, a
+    // rotation into portrait and a camera left zoomed by the last round all
+    // move the two together — and none of them can leave an edge of the world
+    // showing down one side of the stage.
+    const b = i.backdrop;
+    const cardH = 2 * b.dist * Math.tan(p.fovY / 2) * b.margin;
+    this.backdrop.position.set(0, 0, b.dist);
+    this.backdrop.scaling.set(cardH * p.aspect, cardH, 1);
   }
 
   update(dt: number, p: ViewModelParams): void {

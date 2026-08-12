@@ -405,5 +405,50 @@ export const viewmodel = {
     stickRate: 2.6,
     /** Pitch is clamped short of straight up/down; yaw wraps freely. */
     pitchMax: 1.15,
+    /**
+     * The card hung behind the weapon while it is on the stage.
+     *
+     * The stage is a HOLE in the kit screen's scrim — the weapon there is the
+     * live viewmodel on the canvas, and everything the screen draws is DOM
+     * above it — so what filled the hole was whatever the scene happened to be
+     * looking at. Off the main menu that is empty sky and reads as a bench;
+     * off the DEPLOY screen it is a lit village at the exact tone of a grey
+     * receiver, and the weapon the screen exists to show is the one thing on
+     * it you cannot make out. The card is the fix, and it has to be in the
+     * SCENE rather than in the stylesheet for the same reason the stage is a
+     * hole: a panel dark enough to hide the map is a panel that hides the
+     * weapon with it.
+     */
+    backdrop: {
+      /**
+       * Metres ahead of the lens. Free to be anything past the weapon: the
+       * card never writes depth and is drawn before the viewmodel's rendering
+       * group, so the weapon is in front of it whatever the number says — the
+       * distance only decides how much scaling "the whole frustum" takes.
+       */
+      dist: 8,
+      /** Slop past the frustum's corners, so no edge can creep into shot. */
+      margin: 1.04,
+      /**
+       * A hair short of opaque, and the hair is not the point — being BLENDED
+       * is. A blended mesh is drawn in its rendering group's last pass, which
+       * is the only slot in the frame that comes after the world and before
+       * the weapon; an opaque card would be sorted in among the village
+       * instead. What is left of the map at this value is a value or two on a
+       * near-black card, which is to say nothing.
+       */
+      alpha: 0.985,
+      /**
+       * The pool of light behind the weapon and the dark it falls off to,
+       * centred on `anchorX`/`anchorY` — the same point the weapon is placed
+       * at, so the brightest part of the card is always behind the receiver.
+       * Cool, and darker than any weapon in the kit at both ends: the card is
+       * what the weapon is read AGAINST, so nothing on it may compete.
+       */
+      near: "#171e2b",
+      far: "#04060b",
+      /** The pool's radius, as a fraction of the card's width. */
+      poolRadius: 0.55,
+    },
   },
 } as const;

@@ -322,7 +322,22 @@ wastes slots and flattens the darkness.
   bumped one — off the bumped normal, individual setts flick it on and off. It costs
   the rim on the near-horizontal top faces of a rig, which were never silhouettes.
 - Rendering group **1 is the viewmodel's**, for the depth clear Babylon does between
-  groups. Putting world geometry in group 1 makes it draw through everything.
+  groups. Putting world geometry in group 1 makes it draw through everything. The
+  **sky is in it too** (`Sky`'s constructor turns the depth clear back off so the
+  moon still respects a wall), which is why anything reasoning about "what is on
+  the camera" has to separate the two — `infiniteDistance` is the test, and both
+  the glow's fog exemption and the kit screen's use it.
+- **The kit screen's backdrop is the one blended mesh in the game whose DRAW
+  ORDER is load-bearing** (`buildKitBackdrop` in `ViewModel.ts`). It has to cover
+  the world and be covered by the weapon, and the only slot that does both is a
+  blended mesh in group **0** with `alphaIndex` at `Infinity` — Babylon draws a
+  group's blended meshes last, and its default `alphaIndex` is already
+  `Number.MAX_VALUE`, so any ordinary large number sorts the card in front of the
+  capture skirt instead of behind it. `depthFunction: ALWAYS` keeps a near wall
+  from cutting it, `forceDepthWrite` is what stops the sky in group 1 drawing
+  over it, and a **glow layer is composited over the finished frame and so cannot
+  be covered at all** — `Game`'s emissive selector zeroes everything off the stage
+  while the kit is up.
 - **The post-process chain has an order, and a display setting that switches an
   effect off REMOVES its pass** rather than zeroing its uniforms — an attached but idle
   pass still reads and writes the whole frame. The order is FXAA, shafts, motion blur,
