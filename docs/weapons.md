@@ -466,6 +466,19 @@ which belongs to the weapon, goes with the weapon.
   A model's landmarks are `Vector3`s and `ViewModel` moves its own two nodes to
   whichever weapon is carried; Player's flash is parented to one and its brass thrown
   from the other, and neither may hang off a rig that can be switched off underneath.
+- **The flash hangs off the viewmodel but is not one of its meshes, so putting the
+  weapon away has to END it rather than hide it.** `ViewModel.setVisible` walks
+  `meshes` — every weapon's parts and both arms, and the throwing arm with them —
+  and the flash petals are Player's, so the call does not reach them. The clock
+  that retires them is `updateGunfeel`, which is inside `Player.update` and so
+  stops the instant `updateGameplay` does. Nothing may fire while the weapon is
+  stowed, which made this look self-managing; being stowed *part-way through* a
+  flash is the case that was missing, and dying inside the 50 ms of one hung the
+  star — in the viewmodel's depth-cleared group, so over everything — in the middle
+  of the screen for the whole death cam. `Player.applyVisibility` zeroes `flashT`
+  and disables the root whenever the body is hidden, which is the one funnel every
+  caller already goes through. Anything else transient that Player parents to the
+  camera owes the same.
 - **Each weapon carries its own arms.** Where a hand grips is the model's business
   (`WeaponParts.grip`/`support`) and the forearm's geometry is baked along the
   hand-to-elbow line, so an arm cannot be translated onto a shorter gun.

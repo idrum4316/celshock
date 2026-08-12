@@ -1452,10 +1452,23 @@ export class Player implements Combatant {
 
   private applyVisibility(): void {
     this.view.setVisible(!this.bodyHidden || this.inspecting);
-    // Live brass goes with it; the flash handles itself per shot via
-    // flashRoot.setEnabled, and never fires while the weapon is hidden anyway.
-    // Brass is deliberately NOT part of an inspection: it is thrown into the
-    // world, and the world is not what the kit screen is showing.
+    // The flash goes out with the weapon, and it has to be ENDED here rather
+    // than left to retire itself. It hangs off the viewmodel's muzzle node but
+    // is not one of the viewmodel's meshes, so the call above does not reach
+    // it, and the strobe that would switch it off is `updateGunfeel` — which
+    // stops being called the moment the body is put away. A death taken inside
+    // the 50 ms of a shot's flash would otherwise freeze the star mid-strobe
+    // and, because it draws in the viewmodel's depth-cleared group, hang it
+    // over the middle of the screen for the whole death cam. It never *starts*
+    // while the weapon is stowed, which is what made this look self-managing;
+    // being stowed part-way through one is the case that was missing.
+    if (this.bodyHidden) {
+      this.flashT = 0;
+      this.flashRoot.setEnabled(false);
+    }
+    // Live brass goes with it. Brass is deliberately NOT part of an
+    // inspection: it is thrown into the world, and the world is not what the
+    // kit screen is showing.
     for (const c of this.casings) {
       c.mesh.isVisible = c.t > 0 && !this.bodyHidden;
     }
