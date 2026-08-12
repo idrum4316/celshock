@@ -72,16 +72,36 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   `scene.getTransformNodeByName("view_<weapon>_<sight>_sightCenter")
   .getAbsolutePosition()` (all twenty-five of
   `rifle`/`carbine`/`smg`/`dmr`/`lmg` × `reflex`/`iron`/`holo`/`prism`/`scope`, since
-  a weapon change moves the optic too, plus `view_pistol_iron_sightCenter`), subtract `cameraSys.camera.position`
-  (the camera is the CameraSystem's, not a field on `Game`), and project onto
-  `cameraSys.forward` and a right vector built from `cameraSys.aimYaw` — `(cos(aimYaw), 0,
-  -sin(aimYaw))`. **Not `flatRight`**, which is deliberately the un-recoiled and
-  un-swayed yaw (see `camera.aimSway`) and so is not perpendicular to `forward` while either is live;
-  through it a correct sight reads millimetres off. At `adsBlend === 1` both
-  cross-axis components must be **0** and the along-axis one is that sight's
-  `eyeRelief × zoomComp`. Let the weapon settle first — the sway spring decays over
-  several seconds headless and reading through it looks exactly like a misaligned
-  sight; watch `player.view.swayX` fall rather than trusting one sample.
+  a weapon change moves the optic too, plus `view_pistol_iron_sightCenter`) and put it
+  in the CAMERA's frame — `computeWorldMatrix(true)` on both, then transform the
+  point by `cameraSys.camera.getWorldMatrix().clone().invert()` (the camera is the
+  CameraSystem's, not a field on `Game`). At `adsBlend === 1` the answer is
+  `(0, 0, eyeRelief × zoomComp)` for that sight; measured across all
+  twenty-five, the worst cross-axis component is **6 µm**, so anything above a
+  few thousandths of a millimetre is real. Prefer this to projecting the
+  world-space offset onto a hand-built basis: the camera's own matrix already
+  IS the basis, it needs no argument about which yaw to use, and it hands you
+  the expected value instead of a pair of numbers that should be zero.
+  - Projecting by hand still works, but **not through `flatRight`** — that is
+    deliberately the un-recoiled and un-swayed yaw (see `camera.aimSway`), so it
+    is not perpendicular to `forward` while either is live and a correct sight
+    reads millimetres off. Build the right vector from `cameraSys.aimYaw`:
+    `(cos(aimYaw), 0, -sin(aimYaw))`.
+  - **WAIT ON RENDERED FRAMES, NOT ON THE SPRINGS** — this is the one that
+    produces a confident wrong answer. `Game.setWeapon`/`setSight` apply a kit
+    **synchronously and without a swap** (the path is written for the menu,
+    where the gun is already put away), so `applyFit` moves `adsPos` on the spot
+    while `swapT`, `adsBlend`, `swayX` and `swayPitch` are all still carrying the
+    PREVIOUS combination's settled values. A predicate over those is true before
+    a single frame has re-posed anything, and what you then measure is the old
+    weapon's pose against the new weapon's sight node. Count
+    `scene.onAfterRenderObservable` and wait three frames past the fit change; at
+    2 fps that is a real wait, and the tell that you skipped it is
+    `view.weapon.position` reading **identical across combinations** while
+    `view.adsPos` varies. Read the two side by side and they must be equal.
+    Measured wrong this way, twenty-three of twenty-five optics come back 1–22 mm
+    low or high, in a pattern that correlates neatly with the sight and looks
+    exactly like a real geometry bug; measured right, all twenty-five are zero.
   **Alignment is not occlusion, and only the second needs a picture**: a sight can
   read a perfect zero and still be looking at the weapon's own stock, which is what
   the DMR's irons did. `optics.ts`'s `ironSightFloor` keeps geometry out of the
