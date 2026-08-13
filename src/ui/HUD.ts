@@ -288,8 +288,20 @@ export class HUD {
    * style recalculation, so it is not close.
    *
    * These are values LAST WRITTEN, never a second copy of game state — nothing
-   * reads them but the guard that owns each one, and `reset` clears them all
-   * together so a rebuilt strip cannot inherit a stale "already correct".
+   * reads them but the guard that owns each one.
+   *
+   * **INVALIDATION IS LOCAL TO THE REBUILD, and there is deliberately no
+   * central `reset`.** A guard goes stale for exactly one reason: the element
+   * it remembers a write to was replaced under it. The HUD's own markup is
+   * written once in the constructor and never torn down as a whole, so there is
+   * no moment when all of these are stale together for something to clear —
+   * which means the four calls that DO replace their elements each clear their
+   * own guards on the spot, in the same branch that rebuilt them: the magazine
+   * strip on a change of magazine size, the grenade pips on a change of pouch,
+   * the flag cells on a change of flag count, and the scoreboard's key when the
+   * board comes back up. Anything added here that replaces a cached element
+   * owes the same line next to the rebuild, or the new node inherits a previous
+   * one's "already correct" and the first write it needs is the write it skips.
    */
   private lastHealthWidth = "";
   private lastHealthLow = false;
