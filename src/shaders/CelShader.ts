@@ -1024,6 +1024,12 @@ export class CelMaterialFactory {
    * fixtures, a menu, a pause. The comparison is ~112 numbers against 172
    * setter calls, so losing the bet is far cheaper than not taking it.
    *
+   * **The comparison is against `Math.fround` of each input and must stay that
+   * way** — see the loop. Reading a `Float32Array` back and testing it against
+   * the float64 that was stored into it is a mismatch for nearly every real
+   * value, and the guard was silently losing every frame, quiet cases
+   * included, until it narrowed both sides.
+   *
    * What this does NOT save is the GL upload. `setArray3` bypasses Babylon's
    * own value cache and re-pushes on every material bind regardless, which is
    * a thing only a uniform buffer can fix.
@@ -1034,28 +1040,40 @@ export class CelMaterialFactory {
     for (let i = 0; i < count; i++) {
       const l = lights[i];
       const b = i * 3;
-      const r = l.color.r * l.intensity;
-      const g = l.color.g * l.intensity;
-      const bl = l.color.b * l.intensity;
+      // **Narrowed BEFORE the comparison, not just on the way in.** The packed
+      // arrays are `Float32Array`s, so what a store keeps is `Math.fround` of
+      // what it was given, and comparing that back against the float64 the
+      // light still holds is a mismatch for every value not exactly
+      // representable in 32 bits — which is nearly all of them: a colour
+      // channel is byte/255 times an intensity, a fixture's position has been
+      // through a `rotateY`. Without the fround the guard reported "changed"
+      // on essentially every frame and never skipped the walk it exists for.
+      const x = Math.fround(l.position.x);
+      const y = Math.fround(l.position.y);
+      const z = Math.fround(l.position.z);
+      const r = Math.fround(l.color.r * l.intensity);
+      const g = Math.fround(l.color.g * l.intensity);
+      const bl = Math.fround(l.color.b * l.intensity);
+      const range = Math.fround(l.range);
       if (
-        this.pointPos[b] === l.position.x &&
-        this.pointPos[b + 1] === l.position.y &&
-        this.pointPos[b + 2] === l.position.z &&
+        this.pointPos[b] === x &&
+        this.pointPos[b + 1] === y &&
+        this.pointPos[b + 2] === z &&
         this.pointColor[b] === r &&
         this.pointColor[b + 1] === g &&
         this.pointColor[b + 2] === bl &&
-        this.pointRange[i] === l.range
+        this.pointRange[i] === range
       ) {
         continue;
       }
       changed = true;
-      this.pointPos[b] = l.position.x;
-      this.pointPos[b + 1] = l.position.y;
-      this.pointPos[b + 2] = l.position.z;
+      this.pointPos[b] = x;
+      this.pointPos[b + 1] = y;
+      this.pointPos[b + 2] = z;
       this.pointColor[b] = r;
       this.pointColor[b + 1] = g;
       this.pointColor[b + 2] = bl;
-      this.pointRange[i] = l.range;
+      this.pointRange[i] = range;
     }
     this.pointCount = count;
     if (!changed) return;
