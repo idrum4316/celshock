@@ -149,10 +149,6 @@ export class LightingSystem {
     return this.active;
   }
 
-  /**
-   * Advances flicker/decay and uploads the winning lights to every cel
-   * material. Call once per frame, after the camera has been updated.
-   */
   /** One fixture's flicker for this frame. Steady fixtures sit at their base. */
   private tickFlicker(l: RoomLight): void {
     l.intensity =
@@ -161,6 +157,10 @@ export class LightingSystem {
         : l.baseIntensity;
   }
 
+  /**
+   * Advances flicker/decay and uploads the winning lights to every cel
+   * material. Call once per frame, after the camera has been updated.
+   */
   update(dt: number, viewPos: Vector3, mats: CelMaterialFactory): void {
     this.t += dt;
 
