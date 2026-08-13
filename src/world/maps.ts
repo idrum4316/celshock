@@ -14,6 +14,7 @@
  * directly: `Game` holds a `MapDef`, `MapBuilder.build` takes both halves as
  * arguments, and neither special-cases any particular map.
  */
+import type { MapCollision } from "./collision";
 import type { EnvironmentSpec } from "./environment";
 import type { MapLayout } from "./layout";
 import { GreyfenEnvironment } from "./greyfen/environment";
@@ -37,6 +38,17 @@ export interface MapDef {
   name: string;
   layout: MapLayout;
   environment: EnvironmentSpec;
+  /**
+   * The baked collider set, for the multiplayer server — which has no canvas
+   * and so cannot run `MapBuilder` at all (see `world/collision.ts`).
+   *
+   * A LAZY import, and that is the whole reason it is a function. The data is
+   * hundreds of kilobytes per map and the browser has no use for it: a client
+   * builds the real colliders. Behind `import()` Vite splits it into a chunk
+   * nothing in the game ever asks for, so the third half of a map travels with
+   * the other two here without riding along in the bundle.
+   */
+  collision: () => Promise<{ default: MapCollision }>;
 }
 
 export const HOLLOWMERE: MapDef = {
@@ -44,6 +56,7 @@ export const HOLLOWMERE: MapDef = {
   name: "Hollowmere",
   layout: HollowmereLayout,
   environment: HollowmereEnvironment,
+  collision: () => import("./hollowmere/collision"),
 };
 
 /**
@@ -55,6 +68,7 @@ export const GREYFEN: MapDef = {
   name: "Greyfen",
   layout: GreyfenLayout,
   environment: GreyfenEnvironment,
+  collision: () => import("./greyfen/collision"),
 };
 
 /** Every map that can be played, in the order a picker would show them. */
