@@ -1171,6 +1171,36 @@ function rotateY(x: number, y: number, z: number, angle: number): Vector3 {
 }
 
 /**
+ * The render exemptions a merged mesh may carry, and the reason they are part
+ * of the merge KEY rather than something read off a member.
+ *
+ * `noOutline` could have been propagated from any one mesh safely, because it
+ * tracks the MATERIAL: the kit's `glow()` reaches for `getEmissive`, so an
+ * emissive group is unanimous by construction and the group key already
+ * implies the flag. `noGlow` and `noShadowCaster` track a mesh's ROLE, which
+ * is orthogonal to its colour — a flat sheet that must not cast stands in the
+ * same paint as the wall behind it. Reading either off one member would hand
+ * the whole colour group an exemption one mesh asked for, and through
+ * `BlockMerge` that group is every structure within 48 m; requiring unanimity
+ * instead would drop the exemption the one mesh genuinely needed. Both fail
+ * silently. Keying splits a disagreeing group into one merged mesh per
+ * exemption set, which costs a draw call exactly when there is a real
+ * disagreement to represent and nothing at all otherwise.
+ *
+ * `solid` is deliberately NOT in the set — a merged VISUAL is never a
+ * collider, and carrying it up would break the one rule the world layer cannot
+ * bend.
+ */
+const EXEMPTIONS = ["noOutline", "noGlow", "noShadowCaster"] as const;
+
+type Exemption = (typeof EXEMPTIONS)[number];
+
+/** A mesh's exemptions, in a fixed order so the key is stable. */
+function exemptionsOf(mesh: Mesh): Exemption[] {
+  return EXEMPTIONS.filter((flag) => mesh.metadata?.[flag] === true);
+}
+
+/**
  * Collapses a structure's meshes into one per material.
  *
  * This is the whole draw-call budget for the village: a cottage goes from ~20
@@ -1184,50 +1214,59 @@ function rotateY(x: number, y: number, z: number, angle: number): Vector3 {
  * then positions.
  */
 function mergeByMaterial(meshes: Mesh[], tag: string): Mesh[] {
-  const groups = new Map<Material, Mesh[]>();
+  // Material first, then exemption set — see `EXEMPTIONS`. Nested rather than
+  // keyed on a composed string, because two distinct materials are free to
+  // share a name and a merge across them would draw one of them wrong.
+  const groups = new Map<Material, Map<string, Group>>();
   for (const m of meshes) {
     const mat = m.material;
     if (!mat) continue;
-    const group = groups.get(mat);
-    if (group) group.push(m);
-    else groups.set(mat, [m]);
+    let byExemption = groups.get(mat);
+    if (!byExemption) groups.set(mat, (byExemption = new Map()));
+    const flags = exemptionsOf(m);
+    const key = flags.join("-");
+    const group = byExemption.get(key);
+    if (group) group.meshes.push(m);
+    else byExemption.set(key, { flags, meshes: [m] });
   }
 
   const out: Mesh[] = [];
-  for (const [mat, group] of groups) {
-    const merged =
-      group.length === 1
-        ? // A merge of two or more bakes their world matrices; a group of one
-          // has to be baked by hand or the promise above is a lie for exactly
-          // the colours only one mesh uses — and the caller, which positions
-          // and rotates what it gets back, would clobber that mesh's own
-          // transform instead of composing with it.
-          group[0].bakeCurrentTransformIntoVertices()
-        : Mesh.MergeMeshes(group, true, true, undefined, false, false);
-    if (!merged) continue;
-    merged.name = `${tag}-${mat.name}`;
-    merged.material = mat;
-    // ALL THREE RENDER-EXEMPTION FLAGS, not just the one that had a caller.
-    // Emissive groups keep `noOutline` — the outline shell would otherwise
-    // expand past them and swallow the glow — and that was the only flag any
-    // builder set, so it was the only one propagated. The metadata contract
-    // treats the set as a set, and a merge that carries one member of it is a
-    // trap laid for whoever first marks a kit mesh `noShadowCaster`: the flag
-    // would vanish here and the mesh would start casting, with nothing to
-    // point at. `solid` is deliberately NOT in the list — a merged VISUAL is
-    // never a collider, and carrying it up would break the one rule the world
-    // layer cannot bend.
-    const flags: ("noOutline" | "noGlow" | "noShadowCaster")[] = [
-      "noOutline",
-      "noGlow",
-      "noShadowCaster",
-    ];
-    for (const flag of flags) {
-      if (group.some((m) => m.metadata?.[flag])) {
+  for (const [mat, byExemption] of groups) {
+    for (const { flags, meshes: group } of byExemption.values()) {
+      const merged =
+        group.length === 1
+          ? // A merge of two or more bakes their world matrices; a group of one
+            // has to be baked by hand or the promise above is a lie for exactly
+            // the colours only one mesh uses — and the caller, which positions
+            // and rotates what it gets back, would clobber that mesh's own
+            // transform instead of composing with it.
+            group[0].bakeCurrentTransformIntoVertices()
+          : Mesh.MergeMeshes(group, true, true, undefined, false, false);
+      if (!merged) continue;
+      // Suffixed only where a group actually splits, so the common name is the
+      // one the rest of the tree already reads in a profile.
+      merged.name = `${tag}-${mat.name}${flags.map((f) => `-${f}`).join("")}`;
+      merged.material = mat;
+      // From the KEY, not from a member — and this half of it was not a
+      // precaution, it was a live bug. The exemption used to be read back off
+      // the group AFTER the merge, and `MergeMeshes` is called with
+      // `disposeSource = true`, so by then Babylon's `Node.dispose` has set
+      // every source's `metadata` to null and the read came back false for any
+      // group of two or more. Only a group of ONE survived it, because that
+      // path bakes in place and disposes nothing. Measured on Hollowmere: 19
+      // of the map's 42 merged emissive meshes lost `noOutline` here and were
+      // handed an outline shell by the caller — a black ring drawn around
+      // every lantern, flame and sign dense enough to have a neighbour its own
+      // colour. Grouping first means the flags are read while the meshes are
+      // still alive, and the group is unanimous, so the key is what they said.
+      for (const flag of flags) {
         merged.metadata = { ...(merged.metadata ?? {}), [flag]: true };
       }
+      out.push(merged as Mesh);
     }
-    out.push(merged as Mesh);
   }
   return out;
 }
+
+/** One merge group: the meshes, and the exemptions they all agree on. */
+type Group = { flags: Exemption[]; meshes: Mesh[] };

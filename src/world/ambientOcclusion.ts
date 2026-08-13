@@ -241,9 +241,9 @@ export function bakeVertexAo(
     //
     // `visuals` is not all cel materials. `mergeByMaterial` emits one mesh per
     // material, and every lit window, brazier flame, ember and sign in the map
-    // comes out of it as a `block<x>,<y>-emissive-#rrggbb` drawn with an unlit
-    // emissive `StandardMaterial` — 42 of them on Hollowmere. Writing
-    // `rgb = (0, 1, 0)` onto those multiplied every one of them by pure green:
+    // comes out of it as a `block<x>,<y>-emissive-#rrggbb-noOutline` drawn
+    // with an unlit emissive `StandardMaterial` — 42 of them on Hollowmere.
+    // Writing `rgb = (0, 1, 0)` onto those multiplied every one by pure green:
     // the village's lanterns and fires rendered as green blobs inside their own
     // correctly-coloured bloom, since `GlowLayer` builds its halo from
     // `material.emissiveColor` and never saw the vertex buffer.
