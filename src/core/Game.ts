@@ -2146,6 +2146,19 @@ export class Game {
         this.player.range,
         this.player.shotOptions,
       );
+      // Networked: report the round. Everything above stays exactly as it is —
+      // the local resolve is what draws the tracer, flashes the hitmarker and
+      // kicks the weapon, and none of that may wait on a round trip. What it
+      // no longer does is decide anything: in a netplay round the local target
+      // list holds `NetSoldier`s whose `takeDamage` returns false and changes
+      // nothing, so the hitmarker below is a PREDICTION and the server's
+      // `hit` event is the truth.
+      //
+      // `shot.dir` and not `cameraSys.forward`: the spread was rolled inside
+      // `fire`, and the server has to re-resolve this bullet rather than a
+      // differently-jittered one.
+      this.net?.sendShot(this.cameraSys.camera.position, shot.dir, 0);
+
       // Bots hear the player's rifle the same way they hear each other's. This
       // is the only place the player's own gunfire enters the world, so it is
       // the only place that can say so.
@@ -2298,11 +2311,47 @@ export class Game {
       case "roundover":
         this.endRound(event.winner);
         break;
+      // Our own round landed — or, as often, did not. The local hitmarker was
+      // a prediction made against interpolated bodies; this is the authority
+      // re-resolving it against what we were actually looking at. When the two
+      // disagree the server wins, and the extra marker here is the correction.
+      case "hit":
+        if (event.shooter === this.net?.slot) {
+          this.hud.flashHitmarker(event.killed, event.headshot);
+          if (event.headshot) this.sfx.headshot();
+          else this.sfx.hit();
+        }
+        break;
+
+      // We were hit. Health is the server's, so it is assigned rather than
+      // subtracted — a client that decremented its own would drift out of step
+      // with the authority over a firefight and disagree about who is alive.
       case "damage":
+        if (event.victim === this.net?.slot) {
+          this.player.health = event.health;
+          this.netDamageFrom.set(event.from[0], event.from[1], event.from[2]);
+          this.onPlayerDamaged(event.amount, false, this.netDamageFrom);
+        }
+        break;
+
+      // A death, decided elsewhere. `killPlayer` is the local path and must not
+      // run here: it charges a ticket and starts a respawn clock, both of which
+      // the server already owns.
+      case "died":
+        if (event.slot === this.net?.slot) {
+          this.player.health = 0;
+          this.player.alive = false;
+          this.enterDeploy(event.respawnIn);
+        }
+        break;
+
       case "spawn":
         break;
     }
   }
+
+  /** Scratch for a networked damage bearing; never allocated per hit. */
+  private readonly netDamageFrom = new Vector3();
 
   /**
    * The networked half of a frame.

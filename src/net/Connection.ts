@@ -40,6 +40,7 @@ export class Connection {
   private attempts = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private name = "player";
+  private weapon: string | undefined;
   private closedByUs = false;
 
   /**
@@ -65,8 +66,9 @@ export class Connection {
   // Annotated `string`, not inferred: `CONFIG` is `as const`, so the default
   // would narrow the parameter to the literal `"/ws"` and refuse every caller
   // that passes a real URL. The documented gotcha in CLAUDE.md.
-  connect(name: string, url: string = CONFIG.net.url): void {
+  connect(name: string, url: string = CONFIG.net.url, weapon?: string): void {
     this.name = name;
+    this.weapon = weapon;
     this.closedByUs = false;
     this.open(url);
   }
@@ -86,7 +88,12 @@ export class Connection {
     socket.addEventListener("open", () => {
       this.attempts = 0;
       this.setState("open");
-      this.send({ t: "join", version: PROTOCOL_VERSION, name: this.name });
+      this.send({
+        t: "join",
+        version: PROTOCOL_VERSION,
+        name: this.name,
+        weapon: this.weapon,
+      });
     });
 
     socket.addEventListener("message", (ev) => {

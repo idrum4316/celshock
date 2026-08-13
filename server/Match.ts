@@ -11,12 +11,14 @@
  * load, and every recoil, bleed and reload timer in `CONFIG` is written against
  * real seconds.
  */
+import { Vector3 } from "@babylonjs/core";
 import type { WebSocket } from "ws";
 import {
   decode,
   encode,
   PROTOCOL_VERSION,
   SNAPSHOT_HZ,
+  INPUT_HZ,
   TICK_HZ,
   type ClientMessage,
   type EntityState,
@@ -26,6 +28,12 @@ import {
   type Snapshot,
 } from "../src/net/protocol";
 import { CONFIG } from "../src/config";
+import {
+  DEFAULT_WEAPON,
+  isPrimaryWeaponId,
+  weaponSetup,
+  type WeaponSetup,
+} from "../src/entities/weapons";
 import { MAPS } from "../src/world/maps";
 import { HeadlessGame } from "./HeadlessGame";
 import { Roster } from "./Roster";
@@ -51,6 +59,24 @@ const STEP_MS = 1000 / TICK_HZ;
  * the rest of the gap is simply lost.
  */
 const MAX_MOVE_GAP = 0.5;
+
+/**
+ * How far off their own reported aim a claimed shot may leave, as a cosine.
+ *
+ * Generous — about 25 degrees — because it is bounding a lie rather than
+ * measuring accuracy: the client's own spread, the recoil that has not been
+ * reported yet, and a whole `INPUT_HZ` interval of un-uploaded mouse movement
+ * all legitimately live inside it. Tightening it toward the real spread cone
+ * would start refusing honest shots from anyone turning quickly.
+ */
+const SHOT_CONE_COS = Math.cos((25 * Math.PI) / 180);
+
+/** How far a claimed muzzle may be from the shooter's own head, in metres. */
+const MAX_ORIGIN_SLIP = 2;
+
+/** Scratch for shot resolution; reused so a firefight allocates nothing. */
+const SHOT_ORIGIN = new Vector3();
+const SHOT_DIR = new Vector3();
 
 /**
  * Ticks between snapshots. `SNAPSHOT_HZ` divides `TICK_HZ`, so this is exact —
@@ -85,6 +111,19 @@ export class Match {
   /** Last broadcast position per slot, for deriving a player's walk cycle. */
   private readonly lastSeen: ({ x: number; z: number } | undefined)[] = [];
 
+  /**
+   * What each seated player is carrying, resolved from the weapon TABLE.
+   *
+   * The server owns this. A client names a weapon id at join and the id is
+   * validated; the damage, range and fall-off are looked up here and never
+   * cross the wire, because a client that could state its own damage would
+   * state whatever it liked.
+   */
+  private readonly loadouts = new Map<number, WeaponSetup>();
+
+  /** When each slot last fired, for the rate limit. */
+  private readonly lastShot: number[] = [];
+
   constructor(readonly id: string) {
     this.game.onKillEvent = (bot, killer) => {
       this.pending.push({
@@ -98,6 +137,30 @@ export class Match {
       this.pending.push({ e: "captured", point: point.def.id, by });
     this.game.conquest.onNeutralised = (point) =>
       this.pending.push({ e: "neutralised", point: point.def.id });
+    this.game.onPlayerDamaged = (player, amount, from, killed) => {
+      this.pending.push({
+        e: "damage",
+        victim: player.slot,
+        amount,
+        from: from ? [from.x, from.y, from.z] : [0, 0, 0],
+        health: player.health,
+      });
+      if (killed) {
+        this.pending.push({
+          e: "died",
+          slot: player.slot,
+          by: -1,
+          respawnIn: player.respawnT,
+        });
+      }
+    };
+    this.game.onPlayerSpawned = (player, at, yaw) =>
+      this.pending.push({
+        e: "spawn",
+        slot: player.slot,
+        pos: [at.x, at.y, at.z],
+        yaw,
+      });
   }
 
   hasBotSlot(): boolean {
@@ -121,7 +184,7 @@ export class Match {
    * asking "is there room" and this method acting on the answer are two separate
    * moments and a race between them is exactly how a seventeenth player gets in.
    */
-  async admit(socket: WebSocket, name: string): Promise<void> {
+  async admit(socket: WebSocket, name: string, weapon?: string): Promise<void> {
     const id = `p${nextPeerId++}`;
     const slot = this.roster.claim(id, name);
     if (!slot) {
@@ -147,19 +210,18 @@ export class Match {
 
     // The bot in this slot comes off the field and a person takes its place.
     const player = this.game.addPlayer(slot.index, slot.team);
-    // Deployed straight away for now. A deploy screen that lets the player pick
-    // a spawn is phase 7; until then joining puts you in the fight, which is
-    // what makes the phase testable at all.
-    const spawn = this.game.spawnFor(slot.team);
-    if (spawn) {
-      player.spawn(spawn.pos, spawn.yaw);
-      this.pending.push({
-        e: "spawn",
-        slot: slot.index,
-        pos: [spawn.pos.x, spawn.pos.y, spawn.pos.z],
-        yaw: spawn.yaw,
-      });
-    }
+    // Resolved from the weapon table HERE, not taken from the client. An
+    // unknown id, or the sidearm (which the kit screen never offers), falls
+    // back to the default rather than being refused — a client on a newer
+    // build naming a weapon this server has not heard of should still play.
+    this.loadouts.set(
+      slot.index,
+      weaponSetup(weapon && isPrimaryWeaponId(weapon) ? weapon : DEFAULT_WEAPON),
+    );
+    // Not spawned here: a fresh player is dead with a zero timer, which is
+    // exactly the state the reinforcement pass in `HeadlessGame.step` picks up.
+    // Joining and redeploying are the same act and go through the same door.
+    void player;
 
     this.send(peer, {
       t: "welcome",
@@ -187,6 +249,8 @@ export class Match {
   private drop(peer: Peer): void {
     if (!this.peers.delete(peer.id)) return;
     this.game.removePlayer(peer.slot);
+    this.loadouts.delete(peer.slot);
+    delete this.lastShot[peer.slot];
     const slot = this.roster.release(peer.id);
     if (slot) {
       console.log(`[${this.id}] ${peer.name} left; slot ${slot.index} back to a bot`);
@@ -327,10 +391,12 @@ export class Match {
         this.onMove(peer, msg);
         break;
       case "shot":
+        this.onShot(peer, msg);
+        break;
       case "grenade":
       case "deploy":
-        // Phase 5 and 7. Sequence tracking starts now so that a client which is
-        // already sending is not silently ignored while the handlers land.
+        // Phase 7. Sequence tracking starts now so that a client which is
+        // already sending is not silently ignored while the handler lands.
         if ("seq" in msg) peer.seq = Math.max(peer.seq, msg.seq);
         break;
     }
@@ -352,11 +418,28 @@ export class Match {
     // out-of-order arrival is dropped rather than applied backwards.
     if (msg.seq <= player.seq) return;
 
-    // Elapsed CLIENT time since the last accepted sample, clamped. Unclamped,
-    // a client that claims a huge gap buys itself a proportionally huge legal
-    // step, which is the obvious way to dress a teleport as a lag spike.
-    const raw = player.lastTime > 0 ? (msg.time - player.lastTime) / 1000 : 1 / TICK_HZ;
+    // Elapsed CLIENT time since the last sample, clamped. Unclamped, a client
+    // that claims a huge gap buys itself a proportionally huge legal step,
+    // which is the obvious way to dress a teleport as a lag spike.
+    //
+    // The first sample has nothing to measure against, so it is assumed to
+    // cover one INPUT interval — the cadence a client actually sends at.
+    // Assuming a single TICK instead (which this did at first) gives the very
+    // first packet a 16 ms budget it has no way of knowing about.
+    const raw =
+      player.lastTime > 0 ? (msg.time - player.lastTime) / 1000 : 1 / INPUT_HZ;
     const dt = Math.min(Math.max(raw, 1 / TICK_HZ), MAX_MOVE_GAP);
+
+    // The CLOCK advances whether or not the POSITION is accepted, and this is
+    // load-bearing. Updating it only on success means one rejected move leaves
+    // `lastTime` behind forever: every later sample is then measured against
+    // the whole elapsed gap — or, on the very first move, against the
+    // first-sample assumption above — and a player whose opening packet was a
+    // fraction too long is judged against a 16 ms budget for the rest of the
+    // match and can never move again. It presents as movement simply not
+    // working, with corrections streaming, and it cost a debugging session.
+    // Advancing it here is safe because the gap is clamped anyway.
+    player.lastTime = msg.time;
 
     // A dead player reports nothing worth keeping. Their body is wherever they
     // fell and the server owns it until they redeploy.
@@ -378,7 +461,6 @@ export class Match {
     }
 
     player.seq = msg.seq;
-    player.lastTime = msg.time;
     peer.seq = msg.seq;
     player.apply(
       Date.now(),
@@ -411,6 +493,109 @@ export class Match {
     }
     this.lastSeen[slot] = { x, z };
     return moving;
+  }
+
+  /**
+   * A round a client says it fired. The authority decides what it hit.
+   *
+   * Three gates before the ray is even run, in ascending cost:
+   *
+   *   1. **Rate.** A client cannot fire faster than its weapon's own
+   *      `shotInterval`. Without this, "hold the trigger" is a client-side
+   *      opinion and a modified one empties a magazine in a frame.
+   *   2. **Direction.** The round must leave within a cone of where the shooter
+   *      last said it was looking. This is what stops a claimed shot fired
+   *      backwards, through the floor, or at somebody the shooter is not facing.
+   *      It does NOT stop an aimbot — nothing can, since an aimbot is just
+   *      unusually good input — but it bounds the lie to something a real
+   *      player could have aimed at.
+   *   3. **Origin.** The round must start near the shooter's own head. A client
+   *      that could name any origin could shoot from inside your skull.
+   *
+   * Only then is the ray re-run, against every target rewound to what the
+   * shooter was looking at. The client already flashed a hitmarker; this is
+   * where it becomes true or turns out to have been a guess.
+   */
+  private onShot(peer: Peer, msg: Extract<ClientMessage, { t: "shot" }>): void {
+    const player = this.game.players.get(peer.slot);
+    if (!player || !player.alive || !this.game.map) return;
+
+    const weapon = this.loadouts.get(peer.slot);
+    if (!weapon) return;
+
+    // 1. rate
+    const now = Date.now();
+    if (now - (this.lastShot[peer.slot] ?? 0) < weapon.shotInterval * 1000 * 0.9) {
+      return;
+    }
+    this.lastShot[peer.slot] = now;
+
+    // 2. direction
+    const [dx, dy, dz] = msg.dir;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < 1e-6) return;
+    const nx = dx / len;
+    const ny = dy / len;
+    const nz = dz / len;
+    // The shooter's own reported look vector. Yaw is atan2(x, z) and pitch is
+    // negative-for-down, the same convention `CameraSystem` uses.
+    const cp = Math.cos(player.pitch);
+    const lx = Math.sin(player.yaw) * cp;
+    const ly = Math.sin(player.pitch);
+    const lz = Math.cos(player.yaw) * cp;
+    if (nx * lx + ny * ly + nz * lz < SHOT_CONE_COS) return;
+
+    // 3. origin
+    const [ox, oy, oz] = msg.origin;
+    if (
+      Math.hypot(ox - player.eyePos.x, oy - player.eyePos.y, oz - player.eyePos.z) >
+      MAX_ORIGIN_SLIP
+    ) {
+      return;
+    }
+
+    SHOT_ORIGIN.set(ox, oy, oz);
+    SHOT_DIR.set(nx, ny, nz);
+    const result = this.game.resolveShot(
+      player,
+      SHOT_ORIGIN,
+      SHOT_DIR,
+      msg.time,
+      weapon,
+    );
+    if (!result?.target) return;
+
+    const victimSlot = this.slotOf(result.target);
+    this.pending.push({
+      e: "hit",
+      shooter: peer.slot,
+      victim: victimSlot,
+      killed: result.killed,
+      headshot: result.headshot,
+    });
+
+    if (!result.killed) return;
+    // The ticket and the `died` event are NOT charged here. `NetPlayer.takeDamage`
+    // already raised them through `onPlayerDamaged`, and a bot going down
+    // already went through `HeadlessGame.onKill` — both of which fire whoever
+    // pulled the trigger. Repeating them here would charge two reinforcements
+    // for one death, and the round would end in half the time with nothing
+    // obviously wrong.
+    this.pending.push({
+      e: "kill",
+      killer: player.team,
+      victim: victimSlot,
+      headshot: result.headshot,
+    });
+  }
+
+  /** Which roster slot a hit body belongs to, or -1 if it is not on the roster. */
+  private slotOf(target: unknown): number {
+    for (const [slot, player] of this.game.players) {
+      if (player === target) return slot;
+    }
+    const i = this.game.battle.bots.indexOf(target as never);
+    return i;
   }
 
   private broadcastRoster(): void {

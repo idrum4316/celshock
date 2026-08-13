@@ -82,7 +82,7 @@ wss.on("connection", (socket: WebSocket) => {
       // failure there must close the socket rather than leave a client waiting
       // on a welcome that is never coming.
       matchForJoin()
-        .admit(socket, msg.name)
+        .admit(socket, msg.name, msg.weapon)
         .catch((err: unknown) => {
           console.error("admit failed:", err);
           refuse("could not start a match");

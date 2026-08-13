@@ -75,8 +75,13 @@ export class NetSession {
     this.conn.onMessage = (msg) => this.receive(msg);
   }
 
-  connect(name: string, url?: string): void {
-    this.conn.connect(name, url);
+  /**
+   * `weapon` is passed straight through and not kept here: `Connection` holds
+   * it so a RECONNECT re-sends the same loadout, and a second copy in this
+   * class would be one that could disagree with the one actually on the wire.
+   */
+  connect(name: string, url?: string, weapon?: string): void {
+    this.conn.connect(name, url, weapon);
   }
 
   /**
@@ -112,6 +117,30 @@ export class NetSession {
       pitch: local.pitch,
       crouching: local.crouching,
       sprinting: local.sprinting,
+    });
+  }
+
+  /**
+   * Reports a round this client just fired.
+   *
+   * `dir` must be the direction the bullet ACTUALLY flew — spread already
+   * applied — because the server fires with zero spread along it. Sending the
+   * clean aim instead would resolve a different bullet from the one the player
+   * watched leave the barrel.
+   *
+   * `renderTime` is what the shooter was looking at, not now: other bodies are
+   * drawn `interpDelay` in the past, so that is the instant the server has to
+   * rewind them to for the crosshair to have meant anything.
+   */
+  sendShot(origin: Vector3, dir: Vector3, weaponSlot: number): void {
+    if (!this.seated) return;
+    this.conn.send({
+      t: "shot",
+      seq: ++this.seq,
+      time: this.conn.renderTime(),
+      origin: [origin.x, origin.y, origin.z],
+      dir: [dir.x, dir.y, dir.z],
+      slot: weaponSlot,
     });
   }
 

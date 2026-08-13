@@ -151,6 +151,8 @@ export interface Snapshot {
 export type ServerEvent =
   | { e: "kill"; killer: number; victim: number; headshot: boolean }
   | { e: "damage"; victim: number; amount: number; from: Vec3; health: number }
+  | { e: "hit"; shooter: number; victim: number; killed: boolean; headshot: boolean }
+  | { e: "died"; slot: number; by: number; respawnIn: number }
   | { e: "captured"; point: string; by: NetTeam }
   | { e: "neutralised"; point: string }
   | { e: "spawn"; slot: number; pos: Vec3; yaw: number }
@@ -213,6 +215,15 @@ export interface Join {
   t: "join";
   version: number;
   name: string;
+  /**
+   * The primary weapon this client wants to carry.
+   *
+   * The SERVER resolves this to damage and range, and validates it against the
+   * real weapon table before it does — a client that names an unknown weapon,
+   * or the sidearm, gets the default. Damage numbers must never travel on the
+   * wire: a client that could state its own would state whatever it liked.
+   */
+  weapon?: string;
 }
 
 /**
@@ -255,6 +266,16 @@ export interface ShotMessage {
   /** Client render time in ms — what the shooter was looking at. */
   time: number;
   origin: Vec3;
+  /**
+   * The direction the round ACTUALLY flew, spread already applied.
+   *
+   * Not the clean aim: `CombatSystem.fire` jitters internally, and the server
+   * cannot reproduce the client's roll of that dice — so it fires with a spread
+   * of zero along this vector instead, and both sides resolve the same bullet.
+   * The trust that buys is bounded by a cone check against the shooter's last
+   * reported view angles, which is what stops a client claiming a round fired
+   * backwards or through its own feet.
+   */
   dir: Vec3;
   /** Which of the two carried weapons, so the server reads the right damage. */
   slot: number;

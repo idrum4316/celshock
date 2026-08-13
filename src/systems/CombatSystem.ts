@@ -65,6 +65,17 @@ export interface ShotResult {
   hitWall: boolean;
   /** The round landed in the head zone. Always false unless `headMult` > 1. */
   headshot: boolean;
+  /**
+   * The direction the round ACTUALLY flew — the aim with this shot's own
+   * spread already rolled into it.
+   *
+   * Part of the outcome rather than of the request, because the roll happens
+   * in here: `fire` jitters the aim it is given, so the caller cannot know
+   * which bullet it fired until it is told. Multiplayer is what needs it — the
+   * authority has to re-resolve THIS round rather than a differently-jittered
+   * one — but it is a fact about the shot either way.
+   */
+  dir: Vector3;
 }
 
 /**
@@ -381,7 +392,7 @@ export class CombatSystem {
       normal = wallPick!.getNormal(true);
     }
     this.spawnTracer(muzzle, hitPoint, kind, normal);
-    return { target: hitTarget, killed, hitWall, headshot };
+    return { target: hitTarget, killed, hitWall, headshot, dir };
   }
 
   update(dt: number): void {

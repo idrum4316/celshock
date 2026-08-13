@@ -21,14 +21,17 @@ import { Scene, Vector3 } from "@babylonjs/core";
 // The `.js` is required and must stay: `@babylonjs/core` declares no `exports`
 // map, and the null engine is not in the package barrel.
 import { NullEngine } from "@babylonjs/core/Engines/nullEngine.js";
+import { CONFIG } from "../src/config";
 import type { Bot } from "../src/entities/Bot";
 import type { Combatant, Team } from "../src/entities/Combatant";
+import type { WeaponSetup } from "../src/entities/weapons";
 import { BattleSystem } from "../src/systems/BattleSystem";
-import { CombatSystem } from "../src/systems/CombatSystem";
+import { CombatSystem, type ShotResult } from "../src/systems/CombatSystem";
 import { ConquestSystem } from "../src/systems/ConquestSystem";
 import { CelMaterialFactory } from "../src/shaders/CelShader";
 import type { GameMap } from "../src/world/MapBuilder";
 import type { MapDef } from "../src/world/maps";
+import { LagComp } from "./lagComp";
 import { NetPlayer } from "./NetPlayer";
 import { buildServerWorld } from "./world";
 
@@ -43,6 +46,9 @@ export class HeadlessGame {
 
   /** Connected humans, by slot. Sparse — most slots are bots. */
   readonly players = new Map<number, NetPlayer>();
+
+  /** Position history, so a shot resolves against what its shooter saw. */
+  readonly lag = new LagComp();
 
   /** Server tick count since the round started. */
   tick = 0;
@@ -76,6 +82,7 @@ export class HeadlessGame {
     this.battle.setMap(this.map);
     this.battle.reset();
     this.conquest.start(this.map);
+    for (const bot of this.battle.bots) this.lag.track(bot);
     this.tick = 0;
   }
 
@@ -90,12 +97,25 @@ export class HeadlessGame {
     if (!this.map) return false;
     this.tick++;
 
-    // Respawn timers for people. Bots have their own inside `BattleSystem`;
-    // this is the human half, and it must run before conquest counts occupancy
-    // so a player who came back this tick is standing on the flag this tick.
+    // Reinforcements for people. Bots have their own inside `BattleSystem`;
+    // this is the human half, and it runs before conquest counts occupancy so a
+    // player who came back this tick is standing on the flag this tick.
+    //
+    // This is the ONE place a person is put into the world — a fresh join
+    // arrives here as `alive === false, respawnT === 0` and is deployed by the
+    // same line that redeploys a corpse. Spawning from `Match.admit` as well
+    // would be a second door onto the same act, which is how one of them comes
+    // to disagree with the other.
     for (const player of this.players.values()) {
-      if (player.alive || player.respawnT <= 0) continue;
-      player.respawnT -= dt;
+      if (player.alive) continue;
+      if (player.respawnT > 0) {
+        player.respawnT -= dt;
+        continue;
+      }
+      const spawn = this.spawnPointFor(player.team);
+      if (!spawn) continue;
+      player.spawn(spawn.pos, spawn.yaw);
+      this.onPlayerSpawned(player, spawn.pos, spawn.yaw);
     }
 
     // Both kinds of body, in one list. `ConquestSystem` counts occupancy off
@@ -115,6 +135,12 @@ export class HeadlessGame {
     // clients about where that bot is.
     this.battle.update(dt, ORIGIN);
     this.combat.update(dt);
+
+    // AFTER everything has moved, so a frame records the end of a tick and not
+    // the middle of one. Recording first would put every body's history half a
+    // tick ahead of the positions the snapshot on that tick reports, and a
+    // rewind would land between two states that never coexisted.
+    this.lag.record(Date.now());
     return true;
   }
 
@@ -156,6 +182,57 @@ export class HeadlessGame {
   }
 
   /**
+   * A player's round, resolved by the authority.
+   *
+   * The client already fired this locally and flashed a hitmarker at whatever
+   * its own ray found. That marker is a GUESS. This is where it becomes true or
+   * doesn't: the ray is re-run here, against every target rewound to the instant
+   * the shooter was actually looking at, and only this result deals damage.
+   *
+   * `dir` is the direction the round actually flew, spread already applied by
+   * the client — so this fires with a spread of zero. `CombatSystem.fire`
+   * jitters internally, and jittering again here would resolve a different
+   * bullet from the one the player saw leave the barrel. The cost of trusting
+   * the direction is bounded by the cone check in `Match`, which is what stops
+   * a client claiming a shot fired backwards.
+   */
+  resolveShot(
+    shooter: NetPlayer,
+    origin: Vector3,
+    dir: Vector3,
+    renderTime: number,
+    weapon: WeaponSetup,
+  ): ShotResult | null {
+    if (!this.map || !shooter.alive) return null;
+    const targets = this.battle.hittablesAgainst(shooter.team);
+
+    return this.lag.resolve(renderTime, shooter, () =>
+      this.combat.fire(
+        origin,
+        dir,
+        // Zero: the client's direction already carries its own spread.
+        0,
+        weapon.damage,
+        origin,
+        targets,
+        weapon.range,
+        {
+          damageFar: weapon.damageFar,
+          falloffNear: weapon.falloffNear,
+          falloffFar: weapon.falloffFar,
+          // The head zone is the PLAYER's, by construction and not by a check
+          // — see the header of `CombatSystem`. This method only ever resolves
+          // a person's round, so passing it here keeps that true: bots fire
+          // through `BOT_SHOT`, which omits the field, and their rounds never
+          // test the sphere at all. Handing bots a head zone would make every
+          // accurate bot shot a headshot, since they aim at `eyePos`.
+          headMult: CONFIG.combat.headshotMult,
+        },
+      ),
+    );
+  }
+
+  /**
    * Seats a human in a slot, and takes the bot that was there off the field.
    *
    * The bot is benched rather than killed: killing it would charge its team a
@@ -164,7 +241,16 @@ export class HeadlessGame {
    */
   addPlayer(slot: number, team: Team): NetPlayer {
     const player = new NetPlayer(slot, team);
+    // A hit taken by a person needs a ticket charged and an event sent, and
+    // neither is `CombatSystem`'s business — it calls `takeDamage` and reads
+    // only whether that killed. Routed here for the same reason every other
+    // cross-system effect in this file is: the systems never reach each other.
+    player.onDamaged = (amount, from, killed) => {
+      if (killed) this.conquest.registerDeath(player.team);
+      this.onPlayerDamaged(player, amount, from, killed);
+    };
     this.players.set(slot, player);
+    this.lag.track(player);
     this.battle.addHuman(player);
     this.battle.setBenched(this.battle.bots[slot], true);
     return player;
@@ -183,6 +269,7 @@ export class HeadlessGame {
     if (!player) return;
     player.retire();
     this.players.delete(slot);
+    this.lag.untrack(player);
     this.battle.removeHuman(player);
     this.battle.setBenched(this.battle.bots[slot], false);
   }
@@ -207,6 +294,17 @@ export class HeadlessGame {
 
   /** Wired by `Match`: a body went down, for the killfeed. */
   onKillEvent: (bot: Bot, killer: Team) => void = () => {};
+
+  /** Wired by `Match`: a person has been placed in the world. */
+  onPlayerSpawned: (player: NetPlayer, at: Vector3, yaw: number) => void = () => {};
+
+  /** Wired by `Match`: a person took a hit. */
+  onPlayerDamaged: (
+    player: NetPlayer,
+    amount: number,
+    from: Vector3 | undefined,
+    killed: boolean,
+  ) => void = () => {};
 
   /** Kills and losses per team, for the scoreboard. */
   readonly kills: [number, number] = [0, 0];

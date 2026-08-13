@@ -144,19 +144,33 @@ export class NetPlayer implements Combatant {
   }
 
   /**
+   * Wired by `Match`: this player took a hit, for the vignette and the arc.
+   *
+   * A callback rather than a return value because `CombatSystem` calls
+   * `takeDamage` and cares only whether it killed — the whole event, with the
+   * bearing and the remaining health on it, has to leave by another door.
+   */
+  onDamaged: (amount: number, from: Vector3 | undefined, killed: boolean) => void =
+    () => {};
+
+  /**
    * Damage from a bot or another player. The server is the only thing that may
    * call this, and the client is told the outcome.
+   *
+   * `from` is where the round started, which the client turns into the
+   * directional damage arc. Every damage path in the game already passes it.
    */
-  takeDamage(amount: number): boolean {
+  takeDamage(amount: number, from?: Vector3): boolean {
     if (!this.alive) return false;
     this.health -= amount;
-    if (this.health <= 0) {
+    const killed = this.health <= 0;
+    if (killed) {
       this.health = 0;
       this.alive = false;
       this.respawnT = CONFIG.conquest.respawnDelay;
-      return true;
     }
-    return false;
+    this.onDamaged(amount, from, killed);
+    return killed;
   }
 
   spawn(at: Vector3, yaw: number): void {
