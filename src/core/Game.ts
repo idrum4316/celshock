@@ -308,15 +308,21 @@ export class Game {
   /** Scratch for the shadow focus point — no per-frame allocation. */
   private readonly shadowFocus = new Vector3();
   /**
-   * Three scratch aim directions, one per per-frame reader of
+   * Four scratch aim directions, one per per-frame reader of
    * `CameraSystem.forward`. Separate rather than shared because the shadow
    * focus SCALES the vector it is handed: one scratch between them would work
    * today only because the aim assist happens to read its copy before that
    * happens, which is a property of two files agreeing rather than of either.
+   * The kit stage's is its own for the weaker version of the same reason — it
+   * runs in a state where the other three do not, so sharing would rest on
+   * which states are lids rather than on anything this line can hold.
    */
   private readonly aimForward = new Vector3();
   private readonly shadowForward = new Vector3();
   private readonly listenerForward = new Vector3();
+  private readonly kitForward = new Vector3();
+  /** …and the kit stage's flat right, the one per-frame reader of that pair. */
+  private readonly kitRight = new Vector3();
   /** …and for the carried lamp, which rides a little above the player. */
   private readonly lampPos = new Vector3();
   /** …and for the kit screen's bench lamp, placed relative to the camera. */
@@ -1091,8 +1097,10 @@ export class Game {
       this.engine.getAspectRatio(camera),
     );
     const eye = camera.position;
-    const forward = this.cameraSys.forward;
-    const right = this.cameraSys.flatRight;
+    // Into scratches: this is a per-frame path, so the plain getters would
+    // mint two vectors a frame for as long as the screen is up.
+    const forward = this.cameraSys.forwardToRef(this.kitForward);
+    const right = this.cameraSys.flatRightToRef(this.kitRight);
     CONFIG.lighting.kitLamps.forEach((lamp, n) => {
       this.kitLampPos.set(
         eye.x + forward.x * lamp.ahead + right.x * lamp.side,
