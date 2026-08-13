@@ -12,6 +12,8 @@
     "collision": "node scripts/bake-collision.mjs",
     "build:server": "vite build -c vite.server.config.ts",
     "server": "node dist-server/index.js",
+    "simulate": "vite build -c vite.server.config.ts && node dist-server/simulate.js",
+    "parity": "node scripts/check-world-parity.mjs",
     "textures": "node scripts/generate-water-textures.mjs",
     "icons": "node scripts/generate-icons.mjs"
   },

@@ -25,7 +25,7 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   build: {
-    ssr: "server/index.ts",
+    ssr: true,
     outDir: "dist-server",
     emptyOutDir: true,
     target: "node20",
@@ -34,11 +34,20 @@ export default defineConfig({
     // bundled 5 MB server file is otherwise unreadable.
     sourcemap: true,
     rollupOptions: {
+      // Three entries: the server proper, the headless round runner that is the
+      // only way to watch the simulation with nobody connected to it, and the
+      // fingerprint dump that `npm run parity` diffs against a real browser
+      // build.
+      input: {
+        index: "server/index.ts",
+        simulate: "server/simulate.ts",
+        parity: "server/parity.ts",
+      },
       // Runtime dependencies stay external; everything in `src/` and Babylon is
       // bundled so the three resolution problems above are settled at build
       // time rather than at import time.
       external: ["ws", /^node:/],
-      output: { entryFileNames: "index.js" },
+      output: { entryFileNames: "[name].js" },
     },
   },
 });

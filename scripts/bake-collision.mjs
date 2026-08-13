@@ -30,37 +30,14 @@
  * point is to capture what the CLIENT actually builds, and the only way to be
  * sure of that is to let the client build it.
  */
-import { spawn } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { MAPS, root, sourceHash } from "./collision-hash.mjs";
+import { startDevServer } from "./dev-server.mjs";
 
 /** The localStorage key `prefs.ts` remembers the chosen map under. */
 const MAP_KEY = "hollowmere.map";
-
-/** Waits for the dev server to answer, and returns the URL it answered on. */
-async function waitForServer(proc) {
-  const url = await new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("vite did not report a URL within 60 s")),
-      60_000,
-    );
-    const scan = (buf) => {
-      const m = /(http:\/\/localhost:\d+)/.exec(String(buf));
-      if (m) {
-        clearTimeout(timer);
-        resolve(m[1]);
-      }
-    };
-    proc.stdout.on("data", scan);
-    proc.stderr.on("data", scan);
-    proc.on("exit", (code) =>
-      reject(new Error(`vite exited with ${code} before serving`)),
-    );
-  });
-  return url;
-}
 
 /**
  * Builds one map in the browser and hands back its collider boxes.
@@ -97,14 +74,24 @@ async function bakeMap(browser, url, id) {
         g.state === "deploy" ? resolve() : setTimeout(poll, 50);
       poll();
     });
-    // Rounded to the micrometre. These are authored metres run through a few
-    // rotations, so the last bits of a double are float noise, and leaving them
-    // in makes the generated file churn on every run for no change at all.
-    const r = (n) => Math.round(n * 1e6) / 1e6;
+    // FULL PRECISION, deliberately. An earlier version rounded to the
+    // micrometre to keep the generated file tidy, on the reasoning that the low
+    // bits of a double are float noise nobody could observe. They are
+    // observable: the nav grid rasterizes box tops into surface heights and
+    // then compares neighbours against `stepHeight`, so a perturbation of any
+    // size flips whichever comparisons were sitting exactly on a boundary.
+    // Hollowmere is authored on round numbers and is therefore full of exact
+    // ties — micrometre rounding moved 15 cells in and out of the walkable set
+    // and changed the nav graph the server steers bots along. `npm run parity`
+    // is what caught it.
+    //
+    // JS prints the shortest round-trippable form, so authored values like 0.6
+    // still emit as `0.6`; only genuinely irrational results get long, and
+    // those are the ones that must not be touched.
     return g.map.colliderBoxes.map((b) => [
-      r(b.w), r(b.h), r(b.d),
-      r(b.cx), r(b.cy), r(b.cz),
-      r(b.rotX), r(b.rotY),
+      b.w, b.h, b.d,
+      b.cx, b.cy, b.cz,
+      b.rotX, b.rotY,
     ]);
   });
 
@@ -170,24 +157,20 @@ for (const { id, constant } of MAPS) {
   if (ensureStub(id, constant)) console.log(`${id}: wrote empty stub to bootstrap`);
 }
 
-const vite = spawn("npx", ["vite", "--port", "0"], {
-  cwd: root,
-  stdio: ["ignore", "pipe", "pipe"],
-});
+const vite = await startDevServer(root);
+console.log(`dev server on ${vite.url}`);
 
 let browser;
 try {
-  const url = await waitForServer(vite);
-  console.log(`dev server on ${url}`);
   browser = await chromium.launch();
 
   for (const { id, constant } of MAPS) {
-    const boxes = await bakeMap(browser, url, id);
+    const boxes = await bakeMap(browser, vite.url, id);
     const hash = sourceHash(id);
     writeFileSync(outPath(id), emit(id, constant, boxes, hash));
     console.log(`${id}: ${boxes.length} boxes -> ${outPath(id)} (${hash})`);
   }
 } finally {
   await browser?.close();
-  vite.kill();
+  vite.stop();
 }
