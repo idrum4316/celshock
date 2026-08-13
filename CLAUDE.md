@@ -570,9 +570,9 @@ the phone-shaped details (fullscreen on the document element, `--ov-scale`, why
   `CONFIG` from `"…/config"` exactly as before. **A new tunable goes in the
   section module it belongs to, never in `index.ts`** — that file is a spine and
   holds one import per module and nothing else. Most modules export one key;
-  several export two to four (`weapons.ts` is `weapons`/`combat`/`recoil`/
-  `gunfeel`, `world.ts` is `map`/`ao`/`water`/`grass`), which is fine — the rule
-  is one MODULE per subsystem, not one key. `FOG_WALL` is alone in
+  several export two to four (`weapons.ts` is `weapons`/`combat`/`gunfeel`,
+  `world.ts` is `map`/`ao`/`water`/`grass`), which is fine — the rule is one
+  MODULE per subsystem, not one key. `FOG_WALL` is alone in
   `config/fogWall.ts` because `config/bots.ts` reads it, and taking it from
   `index.ts` would be an import cycle.
 - `CONFIG` is `as const`, so a field like `bots.engageRange` has a *literal* type.
