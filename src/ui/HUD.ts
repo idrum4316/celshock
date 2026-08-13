@@ -965,12 +965,32 @@ export class HUD {
       }
       return;
     }
-    // One key for the whole panel: it is six writes that all move together, and
-    // the progress is already rounded to the percent the bar is drawn in, so
-    // the key changes exactly as often as the panel does.
-    const key = `${status.id}|${status.owner}|${status.contested}|${status.held}|${
-      status.taking
-    }|${status.enemies}|${Math.round(status.progress * 100)}`;
+    // A held flag with nobody contesting it has no meter story to tell, so the
+    // panel says so rather than showing a full bar and leaving you to read it.
+    // Worked out BEFORE the key, because the key is built from what is drawn.
+    const pct = Math.round(status.progress * 100);
+    let state: string;
+    if (status.contested) {
+      const n = status.enemies;
+      state = `CONTESTED — ${n} ENEM${n === 1 ? "Y" : "IES"} IN ZONE`;
+    } else if (status.owner === "mine" && status.progress >= 1) {
+      state = "SECURED";
+    } else if (status.taking === "mine") {
+      state = "CAPTURING";
+    } else {
+      state = "LOSING";
+    }
+    // One key for the whole panel: it is six writes that all move together.
+    // **It carries the drawn percent and the drawn WORDS, never the raw
+    // progress or the two fields the words are picked from.** The bar is drawn
+    // in whole percent, so 0.996 and a full 1.0 are one key — and a flag you
+    // already own can sit in that last half-percent, because ownership is only
+    // lost by crossing zero: walk back onto a slipped flag of your own and the
+    // frame it reaches 1.0 changes nothing else in the status. A key holding
+    // the number would swallow that frame and leave CAPTURING on screen over a
+    // secured point. Keyed on the text, the key changes exactly when the panel
+    // does, which is what it is for.
+    const key = `${status.id}|${status.owner}|${status.contested}|${status.held}|${pct}|${state}`;
     if (key === this.lastCaptureKey) return;
     this.lastCaptureKey = key;
     const parts = this.captureParts;
@@ -982,20 +1002,9 @@ export class HUD {
     }`;
     parts.id.textContent = status.id;
     parts.name.textContent = status.name.toUpperCase();
-    parts.fill.style.width = `${Math.round(status.progress * 100)}%`;
+    parts.fill.style.width = `${pct}%`;
     parts.fill.className = `cap-meter-fill ${status.held}`;
-    // A held flag with nobody contesting it has no meter story to tell, so the
-    // panel says so rather than showing a full bar and leaving you to read it.
-    if (status.contested) {
-      const n = status.enemies;
-      parts.state.textContent = `CONTESTED — ${n} ENEM${n === 1 ? "Y" : "IES"} IN ZONE`;
-    } else if (status.owner === "mine" && status.progress >= 1) {
-      parts.state.textContent = "SECURED";
-    } else if (status.taking === "mine") {
-      parts.state.textContent = "CAPTURING";
-    } else {
-      parts.state.textContent = "LOSING";
-    }
+    parts.state.textContent = state;
   }
 
   /**
