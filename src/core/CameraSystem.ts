@@ -40,8 +40,8 @@
  * phase. It and the view punch are the only two things that write the camera's
  * roll, and they do it through ONE assignment at the end of `update`: a second
  * write site is how a roll becomes whichever contributor happened to run last.
- * Must run before mats.updateCamera()/lighting.update()/sfx.setListener()
- * in Game's frame order.
+ * Must run before lighting.update()/sfx.setListener() in Game's frame order,
+ * and before the shader's eye is pushed on the way into the render.
  */
 import { FreeCamera, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";

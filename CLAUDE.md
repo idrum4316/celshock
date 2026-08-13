@@ -242,9 +242,20 @@ underneath takes them too and a click through the backdrop would land on its map
 Deploy button.
 
 `Game.updateGameplay` has a load-bearing order at the end of the frame: camera
-update → `mats.updateCamera()` → carried-light updates → `lighting.update(dt,
-camera.position, mats)` → `sfx.setListener()`. Light slot selection, shader fog and
-audio panning all key off the camera position.
+update → carried-light updates → `lighting.update(dt, camera.position, mats)` →
+`sfx.setListener()`. Light slot selection and audio panning key off the camera
+position, so nothing may move the camera after them.
+
+**The shader's eye is the one camera-derived thing that is NOT in that chain**,
+because it is owed by the states that simulate nothing: `Game.tick` pushes
+`mats.updateCamera()` once per frame in every state, last thing before
+`scene.render()`. The scene renders behind the menu, the building card, the
+deploy screen and the kit turntable, and all four would otherwise be fogged
+against wherever the last *live* frame stood — the origin, before there has been
+one. `updateCamera` guards on the position, so a state with a still camera pays
+one comparison; and because a new material is seeded with that same eye
+(`CelShader.applyCamera`), a map built under the building card comes out of
+`installMap` already correct.
 
 `ConquestSystem.update` runs *before* `BattleSystem.update`, so a bot's think tick
 sees this frame's flag ownership rather than last frame's.

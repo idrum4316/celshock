@@ -301,7 +301,9 @@ export function setOutlineFog(
 /**
  * Retries a bake that arrived before Babylon had imported the outline shaders.
  * A no-op on every frame but the one or two after a fog change, and called from
- * `CelMaterialFactory.updateCamera` so nothing else has to remember it.
+ * `CelMaterialFactory.updateCamera` so nothing else has to remember it — which
+ * is once per frame in every state, so a bake raised under a menu lands there
+ * rather than waiting for a round.
  */
 export function refreshOutlineFog(scene: Scene): void {
   if (wanted) applyWanted(scene);

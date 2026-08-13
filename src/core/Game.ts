@@ -17,7 +17,9 @@
  * State machine: menu -> deploy -> playing (deploy re-entered on each death)
  * -> roundover. The 3D scene renders live behind every state.
  * Load-bearing frame order at the end of updateGameplay: camera update ->
- * mats.updateCamera() -> carried lights -> lighting.update() -> sfx.setListener().
+ * carried lights -> lighting.update() -> sfx.setListener(). The shader's eye
+ * (mats.updateCamera) is NOT in that chain — it is pushed once per frame in
+ * `tick`, because every state renders and only some of them simulate.
  * ConquestSystem.update runs before BattleSystem.update (bots see this frame's
  * flag ownership). Muzzle-flash light budget is spent here
  * (spendMuzzleLightBudget) — new per-bot transient lights need the same
@@ -1062,14 +1064,13 @@ export class Game {
    * Turns the weapon on the kit screen's stage, and keeps it lit while it is
    * there.
    *
-   * The kit screen is the one overlay showing live 3D, so it owes by hand the
-   * two per-frame pushes only `updateGameplay` normally makes. The camera
-   * position is the load-bearing one: the cel shader fogs against `camPos`,
-   * which outside a round is whatever the last gameplay frame left there —
-   * `Vector3.Zero()` before the first one. A kit opened straight off the main
-   * menu would put the weapon a whole map's width from where the shader thinks
-   * the eye is, and fog it out to a flat grey silhouette. The other is the drag
-   * itself, which is read consume-on-read from the screen and mixed with the
+   * The kit screen is the one overlay showing live 3D, so it owes by hand what
+   * only `updateGameplay` normally does. That used to include the shader's eye
+   * — a kit opened straight off the main menu would otherwise put the weapon a
+   * whole map's width from where the shader thought the viewer was, and fog it
+   * out to a flat grey silhouette — but `tick` now pushes that for every state,
+   * and a screen showing live 3D is exactly why it has to. What is left is the
+   * drag, which is read consume-on-read from the screen and mixed with the
    * pad's right stick, so both devices turn the same turntable.
    *
    * The bench lamps are the third thing, and they go through `LightingSystem`
@@ -1089,7 +1090,6 @@ export class Game {
       camera.fov,
       this.engine.getAspectRatio(camera),
     );
-    this.mats.updateCamera(camera.position);
     const eye = camera.position;
     const forward = this.cameraSys.forward;
     const right = this.cameraSys.flatRight;
@@ -1309,6 +1309,20 @@ export class Game {
     // the pass sees no rotation and stays inert — which is what we want in an
     // authoring tool.
     this.motionBlur.update(this.cameraSys.aimYaw, this.cameraSys.aimPitch);
+    // The eye the cel shader fogs and rims against, last of all and in EVERY
+    // state, because every state renders and only some of them simulate. It
+    // used to be pushed from `updateSceneForCamera` and by hand from the kit
+    // screen, which covered the four states that run a camera and left the
+    // scene behind the menu, the building card and the deploy screen fogged
+    // against wherever the last live frame stood — the origin, before there
+    // has been one. That was 8.5 m of error on a fresh boot's first deploy
+    // screen and exactly none anywhere else, and the reason it was only ever
+    // 8.5 m is that nothing currently MOVES the camera in a state that does
+    // not simulate. A deploy screen that flew to an overlook, or a menu that
+    // panned, would have broken it silently and looked like a shader bug. Here
+    // it cannot: `updateCamera` guards on the position, so a still camera in
+    // any state costs one comparison and no walk.
+    this.mats.updateCamera(this.cameraSys.camera.position);
     this.scene.render();
   }
 
@@ -2322,9 +2336,10 @@ export class Game {
    * Camera & rendering support. This tail order is LOAD-BEARING: light slot
    * selection, the shader's fog, and audio panning all key off the camera
    * position, so anything that moves the camera must run before them:
-   * aim assist -> camera update -> mats.updateCamera() -> shadows (window,
-   * blobs, outline thinning) -> carried lights -> lighting.update() ->
-   * water.update() -> grass.update() -> sfx.setListener().
+   * aim assist -> camera update -> shadows (window, blobs, outline thinning)
+   * -> carried lights -> lighting.update() -> water.update() -> grass.update()
+   * -> sfx.setListener(), and then `tick` pushes the shader's eye for every
+   * state on the way into the render.
    * Nothing after this method may move the camera.
    */
   private updateCameraAndLighting(dt: number): void {
@@ -2367,6 +2382,10 @@ export class Game {
    * be rearranged. `player` is null in the editor: it gates exactly the two
    * steps that need a body — blob shadows and the carried shoulder lamp — and
    * gating them in place is what keeps both callers on one ordering.
+   *
+   * The shader's own eye is deliberately NOT here. It is the one thing in this
+   * list a state that simulates nothing still owes, so `tick` pushes it for
+   * every state instead — see the call above `scene.render()`.
    */
   private updateSceneForCamera(
     dt: number,
@@ -2374,7 +2393,6 @@ export class Game {
     player: Player | null,
     pushers: readonly Combatant[],
   ): void {
-    this.mats.updateCamera(this.cameraSys.camera.position);
     this.shadows.update(shadowFocus, this.mats);
     if (player) {
       this.shadows.updateBlobs(
