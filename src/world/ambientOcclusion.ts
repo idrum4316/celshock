@@ -175,11 +175,6 @@ function occlusionAt(
       // need a ramp's exact face — only roughly where its bulk is.
       const { lx, lz } = rotateToLocalXZ(box, px, pz, localScratch);
       const ly = py - box.cy;
-      // Undoing that rotation below needs the same pair, and `rotateToLocalXZ`
-      // owns the sign convention — these are the world→local angles read back,
-      // not a second opinion about which way the box faces.
-      const c = Math.cos(-box.rotY);
-      const s = Math.sin(-box.rotY);
 
       const qx = lx - Math.max(-half.x, Math.min(half.x, lx));
       const qy = ly - Math.max(-half.y, Math.min(half.y, ly));
@@ -187,9 +182,21 @@ function occlusionAt(
       const r = Math.hypot(qx, qy, qz);
       if (r < SELF || r > radius) continue;
 
-      // Back to world for the facing test — only the yaw needs undoing.
-      const wx = qx * c - qz * s;
-      const wz = qx * s + qz * c;
+      // Back to world for the facing test — only the yaw needs undoing, and
+      // `rotateToLocalXZ` owns the sign convention, so this pair is its
+      // world→local angles read back rather than a second opinion about which
+      // way the box faces. Computed HERE rather than beside the transform, and
+      // behind the same yaw test the helper makes: the range refusal above is
+      // the common case, an unrotated box is the common shape, and the bucket
+      // hands this loop every box whose reach the point falls in.
+      let wx = qx;
+      let wz = qz;
+      if (box.rotY !== 0) {
+        const c = Math.cos(-box.rotY);
+        const s = Math.sin(-box.rotY);
+        wx = qx * c - qz * s;
+        wz = qx * s + qz * c;
+      }
       // `q` points from the box's surface OUT to the vertex, so the occluder
       // lies along -q.
       const facing = -(nx * wx + ny * qy + nz * wz) / r;
