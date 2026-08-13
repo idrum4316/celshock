@@ -23,6 +23,14 @@ const PORT = Number(process.env.PORT ?? 8080);
 const matches = new Map<string, Match>();
 
 /**
+ * Monotonic, not `matches.size`. Ids derived from the size are reused as soon
+ * as a match is forgotten, so two different matches in one process could both
+ * be called `m2` — and a client's logs, or a reconnect naming one, would refer
+ * to whichever happened to be alive.
+ */
+let nextMatchId = 1;
+
+/**
  * The match a joining peer should land in.
  *
  * Every match always has sixteen bodies in it, so "is there room" is a question
@@ -34,7 +42,8 @@ function matchForJoin(): Match {
   for (const match of matches.values()) {
     if (match.hasBotSlot()) return match;
   }
-  const match = new Match(`m${matches.size + 1}`);
+  const match = new Match(`m${nextMatchId++}`);
+  match.onRetired = () => matches.delete(match.id);
   matches.set(match.id, match);
   return match;
 }

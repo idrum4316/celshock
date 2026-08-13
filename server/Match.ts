@@ -74,6 +74,15 @@ const SHOT_CONE_COS = Math.cos((25 * Math.PI) / 180);
 /** How far a claimed muzzle may be from the shooter's own head, in metres. */
 const MAX_ORIGIN_SLIP = 2;
 
+/**
+ * How long an empty match keeps its world before throwing it away.
+ *
+ * Long enough that a player who dropped and reconnected rejoins the round they
+ * were in rather than a fresh one; short enough that a public server does not
+ * accumulate abandoned scenes.
+ */
+const IDLE_DISPOSE_MS = 60_000;
+
 /** Scratch for shot resolution; reused so a firefight allocates nothing. */
 const SHOT_ORIGIN = new Vector3();
 const SHOT_DIR = new Vector3();
@@ -195,6 +204,11 @@ export class Match {
 
     const peer: Peer = { id, name, socket, slot: slot.index, seq: 0 };
     this.peers.set(id, peer);
+    // Somebody came back before the world was thrown away.
+    if (this.idleTimer !== null) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
 
     socket.on("message", (raw) => {
       const msg = decode(String(raw)) as ClientMessage | null;
@@ -210,6 +224,11 @@ export class Match {
 
     // The bot in this slot comes off the field and a person takes its place.
     const player = this.game.addPlayer(slot.index, slot.team);
+    // A slot changing hands must not inherit the last occupant's travel. The
+    // walk cycle is derived from how far a body moved between snapshots, so a
+    // stale entry here makes the new arrival's first frame a sprint from
+    // wherever the previous player was standing.
+    delete this.lastSeen[slot.index];
     // Resolved from the weapon table HERE, not taken from the client. An
     // unknown id, or the sidearm (which the kit screen never offers), falls
     // back to the default rather than being refused — a client on a newer
@@ -251,14 +270,34 @@ export class Match {
     this.game.removePlayer(peer.slot);
     this.loadouts.delete(peer.slot);
     delete this.lastShot[peer.slot];
+    delete this.lastSeen[peer.slot];
     const slot = this.roster.release(peer.id);
     if (slot) {
       console.log(`[${this.id}] ${peer.name} left; slot ${slot.index} back to a bot`);
     }
     this.broadcastRoster();
     // Nobody watching: stop burning a core on a fight with no audience. The
-    // world stays built, so the next arrival resumes rather than reloads.
-    if (this.peers.size === 0) this.stop();
+    // world stays built for a while, so somebody rejoining resumes the round
+    // rather than reloading it — but not forever. An idle match holds a scene,
+    // sixteen rigs and a nav graph, and on a public server the matches nobody
+    // came back to would accumulate for the life of the process.
+    if (this.peers.size === 0) {
+      this.stop();
+      this.idleTimer = setTimeout(() => this.retire(), IDLE_DISPOSE_MS);
+    }
+  }
+
+  /** Wired by the registry: this match has gone and should be forgotten. */
+  onRetired: () => void = () => {};
+
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private retire(): void {
+    if (this.peers.size > 0) return;
+    this.idleTimer = null;
+    this.game.dispose();
+    this.onRetired();
+    console.log(`[${this.id}] idle; world disposed`);
   }
 
   private async ensureRunning(): Promise<void> {
