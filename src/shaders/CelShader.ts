@@ -9,7 +9,11 @@
  * recovered in the fragment shader from screen-space derivatives — NEVER call
  * convertToFlatShadedMesh(). Output is display-ready color, which is why
  * pipeline.imageProcessingEnabled must stay false. Materials are cached/shared
- * per color — don't create per-mesh materials. addOutline() skips meshes with
+ * per color — don't create per-mesh materials. A NEW material is seeded with
+ * every piece of shared state on the spot (applyCamera/applyEnvironment/
+ * applyPointLights/applyShadow): the per-frame walks are guarded on change and
+ * skip a still frame entirely, so what a material is born with is what it keeps
+ * until that state next moves. addOutline() skips meshes with
  * metadata.noOutline, tints the ink from the mesh's own cel colour, and
  * registers the mesh for updateOutlineScales() (distance thinning, prunes
  * disposed meshes). Effect meshes use getEmissive() (unlit StandardMaterial).
@@ -711,12 +715,28 @@ export class CelMaterialFactory {
   private pointCount = 0;
 
   /**
-   * Last position `updateCamera` walked the cache for. Deliberately not seeded
-   * from the camera: the origin is a position the camera can genuinely be at,
-   * and a first frame that skipped the upload would leave `camPos` at the
-   * shader's own default until something moved.
+   * The eye every material in the cache is currently holding — both what
+   * `updateCamera` compares against and what a material is BORN with. The two
+   * have to be the same value, and that is the whole of why this field exists
+   * rather than a bare "last position walked".
+   *
+   * `updateCamera` skips the walk when the camera has not moved, so a material
+   * minted during a still frame is a material the walk will not visit again
+   * until something moves — and a still frame is not the rare case: a paused
+   * round, a kit screen, a player standing still and the editor's free-fly
+   * camera resting on its panel are all exactly still, to the bit. Seeded from
+   * anything else, such a material fogs and rims against wherever it was
+   * seeded instead of against the eye; from the origin, and the editor's
+   * floor-colour field repaints the whole terrain in a material that thinks
+   * the viewer is standing in the middle of the map.
+   *
+   * The origin is the seed because the origin is what an unwritten `vec3`
+   * uniform already is, so the invariant "every material in the cache holds
+   * this value" is true before the first frame as well as after it. That is
+   * also why there is no first-upload sentinel: a camera genuinely at the
+   * origin needs no walk, because the cache is already there.
    */
-  private readonly lastCamPos = new Vector3(NaN, NaN, NaN);
+  private readonly camPos = Vector3.Zero();
 
   // Shadow-map state, pushed onto every cel material as it is created.
   private shadowMap: BaseTexture | null = null;
@@ -740,7 +760,7 @@ export class CelMaterialFactory {
         },
       );
       mat.setColor3("baseColor", Color3.FromHexString(hex));
-      mat.setVector3("camPos", Vector3.Zero());
+      this.applyCamera(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -773,7 +793,7 @@ export class CelMaterialFactory {
         },
       );
       mat.setColor3("baseColor", Color3.FromHexString(hex));
-      mat.setVector3("camPos", Vector3.Zero());
+      this.applyCamera(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -813,7 +833,7 @@ export class CelMaterialFactory {
         },
       );
       mat.setColor3("baseColor", Color3.FromHexString(hex));
-      mat.setVector3("camPos", Vector3.Zero());
+      this.applyCamera(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -847,7 +867,7 @@ export class CelMaterialFactory {
         },
       );
       mat.setTexture("baseColorTex", tex);
-      mat.setVector3("camPos", Vector3.Zero());
+      this.applyCamera(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -914,7 +934,7 @@ export class CelMaterialFactory {
         mat.setTexture("bumpTex", bump);
         mat.setFloat("bumpScale", opts.bumpScale ?? 0.1);
       }
-      mat.setVector3("camPos", Vector3.Zero());
+      this.applyCamera(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -1050,11 +1070,16 @@ export class CelMaterialFactory {
    * pause, the deploy screen and a player standing still all stop re-uploading
    * `camPos` to 43 materials — measured at 258 setter calls a frame before the
    * guards and 175 after, on a static Hollowmere view.
+   *
+   * **What pays for the guard is `applyCamera` running on every material as it
+   * is created**, exactly as the environment, the lights and the shadow state
+   * already do. Skipping a walk is only sound while the cache cannot hold a
+   * material the walk has never visited.
    */
   updateCamera(camPos: Vector3): void {
-    if (!camPos.equals(this.lastCamPos)) {
-      this.lastCamPos.copyFrom(camPos);
-      this.cache.forEach((mat) => mat.setVector3("camPos", camPos));
+    if (!camPos.equals(this.camPos)) {
+      this.camPos.copyFrom(camPos);
+      this.cache.forEach((mat) => this.applyCamera(mat));
     }
     // A bake that arrived before Babylon had dynamically imported the outline
     // shaders is still outstanding; this is where it lands. No-op otherwise.
@@ -1149,6 +1174,11 @@ export class CelMaterialFactory {
     const variation = CONFIG.graphics.albedoVariation;
     mat.setFloat("variationScale", 1 / Math.max(0.001, variation.metersPerCell));
     mat.setFloat("variationAmount", variation.amount);
+  }
+
+  /** The eye the shader fogs and rims against. See `camPos` for why on create. */
+  private applyCamera(mat: ShaderMaterial): void {
+    mat.setVector3("camPos", this.camPos);
   }
 
   private applyPointLights(mat: ShaderMaterial): void {
