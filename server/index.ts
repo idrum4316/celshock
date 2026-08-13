@@ -78,7 +78,15 @@ wss.on("connection", (socket: WebSocket) => {
         );
       }
       joined = true;
-      matchForJoin().admit(socket, msg.name);
+      // `admit` builds the world on the first arrival, so it is async. A
+      // failure there must close the socket rather than leave a client waiting
+      // on a welcome that is never coming.
+      matchForJoin()
+        .admit(socket, msg.name)
+        .catch((err: unknown) => {
+          console.error("admit failed:", err);
+          refuse("could not start a match");
+        });
       return;
     }
     // Past the handshake the match owns the peer, including this socket's

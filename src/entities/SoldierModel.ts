@@ -470,6 +470,24 @@ export function buildSoldier(
  * respawned bot in its death pose for the rest of the round, with its position
  * still updating correctly underneath.
  */
+/**
+ * Metres of ground covered per radian... more precisely, the divisor that turns
+ * distance travelled into walk-cycle phase: `phase += distance / STRIDE`.
+ *
+ * It lives here, with the rig the phase poses, because two things advance it
+ * and they must agree. `Bot` integrates it from its own speed; `NetSoldier`
+ * integrates it from the distance an interpolated body actually moved. If the
+ * two used different strides, a bot and a remote human walking side by side at
+ * the same speed would swing their legs at different rates — which is precisely
+ * the tell that would give away which bodies are AI, in a game whose whole
+ * roster design rests on that being invisible.
+ *
+ * Advancing by DISTANCE rather than by time is what makes a footfall a point on
+ * the cycle instead of a timer: something slowed to a walk steps more slowly for
+ * free, and something stopped stops stepping.
+ */
+export const STRIDE = 0.9;
+
 export function resetSoldierPose(rig: SoldierRig): void {
   for (const { node, parent, position } of rig.rest) {
     // A direct assignment, never setParent: setParent preserves the WORLD

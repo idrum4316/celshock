@@ -21,10 +21,24 @@
 /** Protocol version. Bumped on any incompatible change; a mismatch is refused. */
 export const PROTOCOL_VERSION = 1;
 
-/** How often the server steps the simulation. */
-export const TICK_HZ = 30;
+/**
+ * How often the server steps the simulation.
+ *
+ * 60 rather than 30 because every round in this game is hitscan and the
+ * authority re-resolves each one against rewound positions: the rewind can only
+ * be as fine as the history, and 16 ms of granularity is half of 33 ms of
+ * error on a strafing target. It is affordable — `npm run simulate` runs a
+ * sixteen-bot round at roughly a thousand ticks a second on one core, so a live
+ * match at 60 Hz costs a few percent of it.
+ */
+export const TICK_HZ = 60;
 
-/** How often the server broadcasts a snapshot. Must divide `TICK_HZ`. */
+/**
+ * How often the server broadcasts a snapshot. Must DIVIDE `TICK_HZ` — a
+ * fractional ratio makes the broadcast alternate between two tick spacings, and
+ * a client interpolating on the assumption of an even cadence renders that as a
+ * limp.
+ */
 export const SNAPSHOT_HZ = 20;
 
 /** How often a client uploads its own movement. */
@@ -88,10 +102,18 @@ export interface EntityState {
   yaw: number;
   /** Where its feet point, radians — see `Bot`'s yaw/bodyYaw split. */
   bodyYaw: number;
-  /** 0..1, how much of a walk cycle to play. */
+  /** Torso pitch, radians. */
+  pitch: number;
+  /**
+   * 0..1, how much of a walk cycle to play.
+   *
+   * The WEIGHT, not the phase. A client advances its own stride from this, so
+   * the free-running cycle costs no bandwidth and cannot judder when a packet
+   * is late — the leg is somewhere sensible either way.
+   */
   moving: number;
   alive: boolean;
-  /** Death tween progress, 0 while alive. */
+  /** Collapse tween progress, 0 while alive. */
   dead: number;
   /** Set on the tick it fired, for the muzzle flash and the tracer. */
   fired?: boolean;
