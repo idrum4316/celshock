@@ -59,6 +59,8 @@ import { MotionBlur } from "../shaders/MotionBlur";
 import { Bot } from "../entities/Bot";
 import { difficultyNames } from "../entities/BotSkill";
 import type { Combatant, Team } from "../entities/Combatant";
+import { NetSession } from "../net/NetSession";
+import type { ServerEvent } from "../net/protocol";
 import { Player } from "../entities/Player";
 import { type SightId } from "../entities/sights";
 import { VIEWMODEL_GROUP } from "../entities/ViewModel";
@@ -304,6 +306,17 @@ export class Game {
   private settings: Settings = readSettings();
   private settingsFrom: "menu" | "deploy" | "paused" = "menu";
   /** Reused each frame: the player plus every bot, for objective occupancy. */
+  /**
+   * The networked round, or null offline.
+   *
+   * A field and a branch rather than a mode flag threaded through everything:
+   * with no session, every path below runs exactly as it always has, and
+   * nothing in `src/net/` is even constructed. What the branch buys is that the
+   * two authorities — this machine and the server — can never both be running,
+   * which is the failure that would be invisible and unfixable.
+   */
+  private net: NetSession | null = null;
+
   private readonly combatants: Combatant[] = [];
   /** Scratch for the shadow focus point — no per-frame allocation. */
   private readonly shadowFocus = new Vector3();
@@ -2188,6 +2201,11 @@ export class Game {
       if (this.player.reloading) this.sfx.reload(this.player.reloadTime);
     }
 
+    // The networked half of the frame, after the local player has moved and
+    // before anything reads where anybody is. Draws every other body from the
+    // wire and reports this one back.
+    this.updateNet(dt);
+
     if (!this.updateWorld(dt)) return;
 
     this.updateCameraAndLighting(dt);
@@ -2216,7 +2234,113 @@ export class Game {
    * construction rather than by keeping two copies of the sequence in step, the
    * same failure `installMap` exists to prevent one layer down.
    */
+  /**
+   * Joins a networked match. Dev entry point until the lobby lands (phase 8).
+   *
+   * The map is built locally exactly as an offline round builds it — the server
+   * has the same layout and the same baked colliders, so the world both sides
+   * reason about is the same one without a byte of it crossing the wire. What
+   * comes over the wire is only what MOVES.
+   */
+  joinMatch(name: string, url?: string): void {
+    if (this.net) return;
+    const net = new NetSession(this.scene, this.mats);
+    this.net = net;
+
+    // The server placed us. This is the only thing that spawns the local body
+    // in a networked round — there is no local respawn timer, because a
+    // reinforcement is the authority's to spend.
+    net.onSpawn = (pos, yaw) => {
+      this.spawnPlayer({ pos: pos.clone(), yaw });
+    };
+
+    // A rejected position. Small disagreements are eased so an occasional
+    // refusal is not a visible jerk; a large one is a genuine desync and
+    // easing it would mean spending seconds visibly inside a wall.
+    net.onCorrection = (pos, reason) => {
+      const off = Vector3.Distance(this.player.position, pos);
+      if (off > CONFIG.net.correctionSnap) {
+        this.player.placeAt(pos.clone());
+        this.hud.toast(`resynced (${reason})`);
+      } else {
+        this.player.position.copyFrom(pos);
+      }
+    };
+
+    net.onEvent = (event) => this.onNetEvent(event);
+    net.onStateChange = (state) => {
+      if (state === "closed") this.hud.toast("disconnected");
+    };
+
+    this.startRound();
+    net.connect(name, url);
+  }
+
+  /** What a server event does to this client's screen. Presentation only. */
+  private onNetEvent(event: ServerEvent): void {
+    switch (event.e) {
+      case "kill": {
+        const killer = CONFIG.teams[event.killer].name;
+        const victimSlot = this.net?.roster.soldiers[event.victim];
+        const victim = victimSlot ? CONFIG.teams[victimSlot.team].name : "";
+        this.hud.addKill(killer, victim, event.killer === this.player.team);
+        break;
+      }
+      case "captured":
+        this.hud.showMessage(
+          `${event.point.toUpperCase()} CAPTURED BY ${CONFIG.teams[event.by].name.toUpperCase()}`,
+          2.5,
+        );
+        break;
+      case "neutralised":
+        this.hud.toast(`${event.point} — neutralised`);
+        break;
+      case "roundover":
+        this.endRound(event.winner);
+        break;
+      case "damage":
+      case "spawn":
+        break;
+    }
+  }
+
+  /**
+   * The networked half of a frame.
+   *
+   * Called from `updateGameplay` after the local player has moved, so what is
+   * uploaded is this frame's position rather than last frame's, and before
+   * anything reads where the other bodies are.
+   */
+  private updateNet(dt: number): void {
+    if (!this.net) return;
+    this.net.update(
+      dt,
+      {
+        position: this.player.position,
+        yaw: this.cameraSys.aimYaw,
+        pitch: this.cameraSys.aimPitch,
+        crouching: this.player.crouching,
+        sprinting: this.player.sprinting,
+      },
+      this.conquest.points,
+      this.cameraSys.camera.position,
+      this.player.alive,
+    );
+    // The mirrored ticket counts, so the HUD strip reads the server's round
+    // rather than a local `ConquestSystem` that is no longer being stepped.
+    this.conquest.tickets[0] = this.net.tickets[0];
+    this.conquest.tickets[1] = this.net.tickets[1];
+  }
+
   private updateWorld(dt: number): boolean {
+    // A networked round is somebody else's simulation. Everything below this
+    // decides an outcome — who owns a flag, where a bot is going, who died —
+    // and the authority has already decided all of it, so the client draws what
+    // it was told and runs none of it. The bodies, the flags and the tickets
+    // all arrive through `NetSession`, which is stepped from `updateGameplay`
+    // where the local player's own frame is.
+    if (this.net) return true;
+
     // --- objectives ---
     // Runs before the bots so their think tick sees this frame's ownership.
     this.combatants.length = 0;

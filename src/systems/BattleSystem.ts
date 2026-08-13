@@ -17,6 +17,13 @@
  * Game — never import other systems. A bot's grenade leaves the same way
  * (throwGrenadeFor): the ballistics and the pool are GrenadeSystem's, and this
  * file only forwards the bot's ask and its answer.
+ * Non-bot combatants live in `humans` (one offline, up to sixteen on the
+ * server) and must be visible to hittablesAgainst and acquire, or bots shoot
+ * through people. Bots whose roster slot a human has taken are BENCHED: not
+ * respawned, not thought for, not shootable, not drawn — and un-benching drops
+ * them back into the ordinary respawn queue with skill and squad intact, which
+ * is what makes a human joining and leaving symmetrical. Every loop over
+ * `bots` must skip the bench; `Bot` itself knows nothing about any of it.
  */
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -113,7 +120,30 @@ export class BattleSystem {
   private nav: NavGrid | null = null;
   private cover: CoverMap | null = null;
   private obstacles: ObstacleField | null = null;
-  private player: Combatant | null = null;
+  /**
+   * Combatants in the fight that are not bots: the local player offline, and
+   * every connected human on the multiplayer server.
+   *
+   * A list rather than the single `player` field it replaces, because the
+   * server has up to sixteen of them and every place that used to special-case
+   * one — the target list, acquisition — has to see them all or bots shoot
+   * through people.
+   */
+  private readonly humans: Combatant[] = [];
+  /**
+   * Bots whose roster slot a human has taken.
+   *
+   * A bench rather than a flag on `Bot` on purpose: which slots are people is a
+   * fact about the ROSTER, and `Bot` is an AI combatant that has no business
+   * knowing a lobby exists. A benched bot is not respawned, not thought for,
+   * not a target, and not drawn — it is simply not in the fight, and the moment
+   * the human leaves it is back with the same skill and the same squad, because
+   * nothing about it was ever torn down.
+   *
+   * Empty offline, so the single-player path pays one `Set.has` per bot per
+   * frame and behaves exactly as it did.
+   */
+  private readonly benched = new Set<Bot>();
   private thinkCursor = 0;
   /**
    * Live orders per team, indexed by squad. Replanned on their own slow timer
@@ -198,8 +228,54 @@ export class BattleSystem {
     this.obstacles = map.obstacles;
   }
 
+  /**
+   * The one non-bot combatant, offline. Replaces whatever was there, so calling
+   * it twice does not put the player in the fight twice.
+   */
   setPlayer(player: Combatant): void {
-    this.player = player;
+    this.humans.length = 0;
+    this.humans.push(player);
+  }
+
+  /** Adds a human to the fight. The server's path; `setPlayer` is the game's. */
+  addHuman(human: Combatant): void {
+    if (!this.humans.includes(human)) this.humans.push(human);
+  }
+
+  removeHuman(human: Combatant): void {
+    const i = this.humans.indexOf(human);
+    if (i >= 0) this.humans.splice(i, 1);
+  }
+
+  /**
+   * Takes a bot out of the fight because a human has its slot, or puts it back.
+   *
+   * Benching does NOT kill or dispose: the rig, the skill and the squad are all
+   * still there, and un-benching drops the bot back into the ordinary respawn
+   * queue. That is what makes a human joining and leaving symmetrical, and it
+   * is why the roster is always exactly the same size.
+   */
+  setBenched(bot: Bot, benched: boolean): void {
+    if (benched) {
+      this.benched.add(bot);
+      // Taken off the field immediately rather than left to die: a body that
+      // stayed standing where the bot was would be shot at by its own side's
+      // enemies while the human who replaced it spawns somewhere else.
+      bot.alive = false;
+      bot.state = "dead";
+      bot.respawnT = 0;
+      bot.setEnabled(false);
+    } else {
+      this.benched.delete(bot);
+      // Left dead with a zero timer, which is precisely the state the respawn
+      // pass in `update` picks up — so the bot comes back on the next tick
+      // through the ordinary door rather than being placed by hand.
+      bot.respawnT = 0;
+    }
+  }
+
+  isBenched(bot: Bot): boolean {
+    return this.benched.has(bot);
   }
 
   /**
@@ -217,7 +293,7 @@ export class BattleSystem {
     const p = CONFIG.bots.perception;
     const range2 = p.hearRange * p.hearRange;
     for (const bot of this.bots) {
-      if (!bot.alive) continue;
+      if (!bot.alive || this.benched.has(bot)) continue;
       const dx = bot.position.x - at.x;
       const dz = bot.position.z - at.z;
       if (dx * dx + dz * dz > range2) continue;
@@ -267,14 +343,16 @@ export class BattleSystem {
     const out = this.hittableScratch[team];
     out.length = 0;
     for (const bot of this.bots) {
-      if (bot.alive && bot.team !== team) out.push(bot);
+      // A benched bot is not in the fight and must not be shootable: its slot
+      // belongs to a human who is somewhere else entirely.
+      if (bot.alive && bot.team !== team && !this.benched.has(bot)) out.push(bot);
     }
-    // The player must be hittable too — acquire() aims bots at them, so
-    // leaving them out here makes enemy shots fly through the player. The
-    // team check keeps the player out of their own shot's target list
-    // (Game passes player.team for player fire and aim assist).
-    if (this.player && this.player.alive && this.player.team !== team) {
-      out.push(this.player);
+    // Humans must be hittable too — acquire() aims bots at them, so leaving
+    // them out here makes enemy shots fly through people. The team check keeps
+    // a shooter out of their own shot's target list (Game passes player.team
+    // for player fire and aim assist).
+    for (const human of this.humans) {
+      if (human.alive && human.team !== team) out.push(human);
     }
     return out;
   }
@@ -289,6 +367,7 @@ export class BattleSystem {
 
     // --- respawn ---
     for (const bot of this.bots) {
+      if (this.benched.has(bot)) continue;
       if (bot.alive || bot.respawnT > 0) continue;
       const spawn = this.spawnPointFor(bot);
       if (spawn) {
@@ -314,7 +393,10 @@ export class BattleSystem {
     for (let done = 0; done < budget && scanned < this.bots.length; scanned++) {
       const bot = this.bots[this.thinkCursor];
       this.thinkCursor = (this.thinkCursor + 1) % this.bots.length;
-      if (!bot.alive) continue;
+      // Benched skips for the same reason dead does: spending a think slot on a
+      // bot that is not in the fight makes the living think slower than
+      // `thinkRate` advertises.
+      if (!bot.alive || this.benched.has(bot)) continue;
       this.applyOrder(bot);
       bot.think(this.ctx, this.zoneFor(bot));
       done++;
@@ -326,6 +408,7 @@ export class BattleSystem {
     // two copies is how that one came to be pinned to `lodFreezeDistance`.
     const fogEnd = b.lodDisableDistance;
     for (const bot of this.bots) {
+      if (this.benched.has(bot)) continue;
       if (bot.state === "dead" && bot.respawnT <= 0 && !bot.rig.root.isEnabled()) {
         continue;
       }
@@ -371,7 +454,7 @@ export class BattleSystem {
           counts.push(0);
           held.push(this.squadOrders[team][held.length]?.pointId ?? "");
         }
-        if (!bot.alive) continue;
+        if (!bot.alive || this.benched.has(bot)) continue;
         centroids[bot.squad].addInPlace(bot.position);
         counts[bot.squad] += 1;
       }
@@ -436,8 +519,10 @@ export class BattleSystem {
       const d = Vector3.Distance(bot.position, c.position);
       if (d < range && this.inView(bot, c)) candidates.push({ c, d });
     };
-    for (const other of this.bots) consider(other);
-    if (this.player) consider(this.player);
+    for (const other of this.bots) {
+      if (!this.benched.has(other)) consider(other);
+    }
+    for (const human of this.humans) consider(human);
     if (candidates.length === 0) return null;
 
     candidates.sort((a, b) => a.d - b.d);
@@ -568,7 +653,7 @@ export class BattleSystem {
     const min = CONFIG.bots.separation;
     const min2 = min * min;
     for (const other of this.bots) {
-      if (other === bot || !other.alive) continue;
+      if (other === bot || !other.alive || this.benched.has(other)) continue;
       const dx = bot.position.x - other.position.x;
       const dz = bot.position.z - other.position.z;
       const d2 = dx * dx + dz * dz;

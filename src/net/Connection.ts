@@ -62,7 +62,10 @@ export class Connection {
     return this.now() - CONFIG.net.interpDelay * 1000;
   }
 
-  connect(name: string, url = CONFIG.net.url): void {
+  // Annotated `string`, not inferred: `CONFIG` is `as const`, so the default
+  // would narrow the parameter to the literal `"/ws"` and refuse every caller
+  // that passes a real URL. The documented gotcha in CLAUDE.md.
+  connect(name: string, url: string = CONFIG.net.url): void {
     this.name = name;
     this.closedByUs = false;
     this.open(url);

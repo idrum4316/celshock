@@ -25,20 +25,32 @@ import {
   type ServerMessage,
   type Snapshot,
 } from "../src/net/protocol";
+import { CONFIG } from "../src/config";
 import { MAPS } from "../src/world/maps";
 import { HeadlessGame } from "./HeadlessGame";
 import { Roster } from "./Roster";
+import { validateMove } from "./validate";
 
 /** One connected human. */
 interface Peer {
   id: string;
   name: string;
   socket: WebSocket;
+  /** The roster slot this peer holds, which is also its entity id on the wire. */
+  slot: number;
   /** Last input sequence accepted from this peer. */
   seq: number;
 }
 
 const STEP_MS = 1000 / TICK_HZ;
+
+/**
+ * The largest client-reported gap a single movement sample may claim, in
+ * seconds. Longer stalls are legitimate — a backgrounded tab, a GC pause — but
+ * the ground they would buy is not, so the step is validated against this and
+ * the rest of the gap is simply lost.
+ */
+const MAX_MOVE_GAP = 0.5;
 
 /**
  * Ticks between snapshots. `SNAPSHOT_HZ` divides `TICK_HZ`, so this is exact —
@@ -69,6 +81,9 @@ export class Match {
 
   /** Reused so a snapshot allocates nothing per tick beyond its own arrays. */
   private readonly entityScratch: EntityState[] = [];
+
+  /** Last broadcast position per slot, for deriving a player's walk cycle. */
+  private readonly lastSeen: ({ x: number; z: number } | undefined)[] = [];
 
   constructor(readonly id: string) {
     this.game.onKillEvent = (bot, killer) => {
@@ -115,7 +130,7 @@ export class Match {
       return;
     }
 
-    const peer: Peer = { id, name, socket, seq: 0 };
+    const peer: Peer = { id, name, socket, slot: slot.index, seq: 0 };
     this.peers.set(id, peer);
 
     socket.on("message", (raw) => {
@@ -129,6 +144,22 @@ export class Match {
     // world costs a couple of hundred milliseconds and a match nobody has joined
     // has nothing to simulate.
     await this.ensureRunning();
+
+    // The bot in this slot comes off the field and a person takes its place.
+    const player = this.game.addPlayer(slot.index, slot.team);
+    // Deployed straight away for now. A deploy screen that lets the player pick
+    // a spawn is phase 7; until then joining puts you in the fight, which is
+    // what makes the phase testable at all.
+    const spawn = this.game.spawnFor(slot.team);
+    if (spawn) {
+      player.spawn(spawn.pos, spawn.yaw);
+      this.pending.push({
+        e: "spawn",
+        slot: slot.index,
+        pos: [spawn.pos.x, spawn.pos.y, spawn.pos.z],
+        yaw: spawn.yaw,
+      });
+    }
 
     this.send(peer, {
       t: "welcome",
@@ -155,6 +186,7 @@ export class Match {
    */
   private drop(peer: Peer): void {
     if (!this.peers.delete(peer.id)) return;
+    this.game.removePlayer(peer.slot);
     const slot = this.roster.release(peer.id);
     if (slot) {
       console.log(`[${this.id}] ${peer.name} left; slot ${slot.index} back to a bot`);
@@ -225,6 +257,31 @@ export class Match {
     const bots = this.game.battle.bots;
     this.entityScratch.length = 0;
     for (let i = 0; i < bots.length; i++) {
+      // A slot is a person or a bot, and the wire says the same thing either
+      // way — one `EntityState` per slot, in slot order. Clients pool one body
+      // per slot and never learn which is which.
+      const player = this.game.players.get(i);
+      if (player) {
+        this.entityScratch.push({
+          i,
+          p: [player.position.x, player.position.y, player.position.z],
+          yaw: player.yaw,
+          // A human has no separate feet yaw: the first-person body turns as
+          // one. Sending `yaw` for both means a remote player's torso twist
+          // computes to zero, which is right — there is no strafe-walk pose to
+          // reproduce because there was never a rig producing one.
+          bodyYaw: player.yaw,
+          pitch: player.pitch,
+          // Derived from travel rather than reported, so a client cannot lie
+          // about its own animation, and so the walk cycle matches the ground
+          // actually covered — the same rule `NetSoldier` follows on the far
+          // side.
+          moving: this.movingFor(i, player.position.x, player.position.z),
+          alive: player.alive,
+          dead: player.alive ? 0 : 1,
+        });
+        continue;
+      }
       const bot = bots[i];
       this.entityScratch.push({
         i,
@@ -267,14 +324,93 @@ export class Match {
         // Already seated. A second join is a confused client, not an attack.
         break;
       case "move":
+        this.onMove(peer, msg);
+        break;
       case "shot":
       case "grenade":
       case "deploy":
-        // Phase 4 onward. Sequence tracking starts now so that a client which
-        // is already sending is not silently ignored while the handlers land.
+        // Phase 5 and 7. Sequence tracking starts now so that a client which is
+        // already sending is not silently ignored while the handlers land.
         if ("seq" in msg) peer.seq = Math.max(peer.seq, msg.seq);
         break;
     }
+  }
+
+  /**
+   * One reported movement sample: validate it, then keep it or push back.
+   *
+   * The client simulates its own `Player` and tells us where it ended up. This
+   * is the whole of what stops that being a licence to teleport — see
+   * `server/validate.ts` for what is and is not caught, and why the tolerance
+   * leans toward letting a laggy honest player through.
+   */
+  private onMove(peer: Peer, msg: Extract<ClientMessage, { t: "move" }>): void {
+    const player = this.game.players.get(peer.slot);
+    if (!player || !this.game.map) return;
+
+    // Stale or replayed. Sequence numbers are the client's own counter, so an
+    // out-of-order arrival is dropped rather than applied backwards.
+    if (msg.seq <= player.seq) return;
+
+    // Elapsed CLIENT time since the last accepted sample, clamped. Unclamped,
+    // a client that claims a huge gap buys itself a proportionally huge legal
+    // step, which is the obvious way to dress a teleport as a lag spike.
+    const raw = player.lastTime > 0 ? (msg.time - player.lastTime) / 1000 : 1 / TICK_HZ;
+    const dt = Math.min(Math.max(raw, 1 / TICK_HZ), MAX_MOVE_GAP);
+
+    // A dead player reports nothing worth keeping. Their body is wherever they
+    // fell and the server owns it until they redeploy.
+    if (!player.alive) return;
+
+    const [x, y, z] = msg.pos;
+    const verdict = validateMove(this.game.map, player.position, { x, y, z }, dt);
+    if (!verdict.ok) {
+      // Rejected: the authoritative position is unchanged, and the client is
+      // told to come back to it. The sequence sent is the last one ACCEPTED, so
+      // the client knows which of its samples survived.
+      this.send(peer, {
+        t: "correct",
+        pos: [player.position.x, player.position.y, player.position.z],
+        seq: player.seq,
+        reason: verdict.reason!,
+      });
+      return;
+    }
+
+    player.seq = msg.seq;
+    player.lastTime = msg.time;
+    peer.seq = msg.seq;
+    player.apply(
+      Date.now(),
+      x,
+      y,
+      z,
+      msg.yaw,
+      msg.pitch,
+      msg.crouching,
+      msg.sprinting,
+    );
+  }
+
+  /**
+   * How much walk cycle a player should be shown with, from the ground they
+   * covered between snapshots.
+   *
+   * Derived and not reported: an animation flag a client sets is an animation
+   * flag a client can lie about, and a body that slides without moving its legs
+   * is the classic tell. `moveSpeed` is the reference, so a walk reads as a
+   * full stride and a crouch-shuffle as a partial one.
+   */
+  private movingFor(slot: number, x: number, z: number): number {
+    const prev = this.lastSeen[slot];
+    const interval = TICKS_PER_SNAPSHOT / TICK_HZ;
+    let moving = 0;
+    if (prev) {
+      const speed = Math.hypot(x - prev.x, z - prev.z) / interval;
+      moving = Math.min(1, speed / CONFIG.player.moveSpeed);
+    }
+    this.lastSeen[slot] = { x, z };
+    return moving;
   }
 
   private broadcastRoster(): void {

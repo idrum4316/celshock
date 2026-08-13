@@ -29,6 +29,7 @@ import { ConquestSystem } from "../src/systems/ConquestSystem";
 import { CelMaterialFactory } from "../src/shaders/CelShader";
 import type { GameMap } from "../src/world/MapBuilder";
 import type { MapDef } from "../src/world/maps";
+import { NetPlayer } from "./NetPlayer";
 import { buildServerWorld } from "./world";
 
 export class HeadlessGame {
@@ -39,6 +40,9 @@ export class HeadlessGame {
   readonly conquest = new ConquestSystem();
 
   map: GameMap | null = null;
+
+  /** Connected humans, by slot. Sparse — most slots are bots. */
+  readonly players = new Map<number, NetPlayer>();
 
   /** Server tick count since the round started. */
   tick = 0;
@@ -86,8 +90,20 @@ export class HeadlessGame {
     if (!this.map) return false;
     this.tick++;
 
+    // Respawn timers for people. Bots have their own inside `BattleSystem`;
+    // this is the human half, and it must run before conquest counts occupancy
+    // so a player who came back this tick is standing on the flag this tick.
+    for (const player of this.players.values()) {
+      if (player.alive || player.respawnT <= 0) continue;
+      player.respawnT -= dt;
+    }
+
+    // Both kinds of body, in one list. `ConquestSystem` counts occupancy off
+    // this and cannot tell them apart, which is the point — a flag does not
+    // care who is standing on it.
     this.combatants.length = 0;
     this.combatants.push(...this.battle.bots);
+    for (const player of this.players.values()) this.combatants.push(player);
     this.conquest.update(dt, this.combatants);
     if (this.conquest.winner !== null) return false;
 
@@ -137,6 +153,43 @@ export class HeadlessGame {
     // documented contract of this callback — a bot spends nothing on a throw
     // that cannot be made.
     this.battle.throwGrenadeFor = () => false;
+  }
+
+  /**
+   * Seats a human in a slot, and takes the bot that was there off the field.
+   *
+   * The bot is benched rather than killed: killing it would charge its team a
+   * reinforcement for somebody joining the game, which is a ticket the round
+   * should never lose. `BattleSystem.setBenched` owns what that means.
+   */
+  addPlayer(slot: number, team: Team): NetPlayer {
+    const player = new NetPlayer(slot, team);
+    this.players.set(slot, player);
+    this.battle.addHuman(player);
+    this.battle.setBenched(this.battle.bots[slot], true);
+    return player;
+  }
+
+  /**
+   * A human left. The bot in that slot goes back into the fight.
+   *
+   * Also does not charge a ticket, for the mirror of the reason joining does
+   * not: leaving is not dying. The bot rejoins through the ordinary respawn
+   * queue with its skill and squad intact, because benching never tore any of
+   * that down.
+   */
+  removePlayer(slot: number): void {
+    const player = this.players.get(slot);
+    if (!player) return;
+    player.retire();
+    this.players.delete(slot);
+    this.battle.removeHuman(player);
+    this.battle.setBenched(this.battle.bots[slot], false);
+  }
+
+  /** Where a human of `team` should deploy — the same picker the bots use. */
+  spawnFor(team: Team): { pos: Vector3; yaw: number } | null {
+    return this.spawnPointFor(team);
   }
 
   /**
