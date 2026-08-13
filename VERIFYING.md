@@ -265,6 +265,27 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   session on it, since a leaked quaternion or scale shows up there and nowhere
   else.
 
+- **Multiplayer needs a server, and the client reaches it with `?mp`.** Build and
+  start it (`npm run build:server`, then `PORT=8097 node dist-server/index.js`)
+  and load the page as `?mp=ws://localhost:8097/ws`. Three things about driving
+  it that have already cost time. **A test cannot place a player anywhere** —
+  the validator refuses it as a teleport, correctly — so a script that wants two
+  players near each other has to WALK them, and one that dead-reckons from the
+  server's last reported position never advances, because that report lags the
+  sends by up to a snapshot. Track the position locally and take only `y` from
+  the server. **A walker has no ground probe** (the real client runs `Player`'s),
+  so it stops dead at the first rise unless it raises `y` on a `ground`
+  rejection. And **the straight line between two home spawns runs through the
+  village**: walk to the map centre instead, which is the control point every
+  road leads to.
+- **`npm run simulate` is the fastest way to see the rules work at all** — a
+  whole round with no clients and no rendering, in seconds of wall clock. It is
+  not a balance oracle: sixteen bots is not eight bots and eight people.
+- **Assertions about hits are worthless until one lands.** A "shot fired
+  backwards is refused" check passes trivially when nothing is hitting anything,
+  and so does a rate limit. Order them after a passing hit, or they are
+  measuring silence.
+
 To inspect a model in isolation, drop a throwaway `modelviewer.html` + `.ts` at
 the repo root (Vite serves it as a second page) with an `ArcRotateCamera` driven
 by `camera.setPosition`.

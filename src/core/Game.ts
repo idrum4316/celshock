@@ -541,6 +541,7 @@ export class Game {
     this.showMenu();
     // Debug/test handle (used by automated smoke tests).
     (window as unknown as { __celshock: Game }).__celshock = this;
+    this.joinFromUrl();
     this.engine.runRenderLoop(() => this.tick());
   }
 
@@ -2255,6 +2256,22 @@ export class Game {
    * reason about is the same one without a byte of it crossing the wire. What
    * comes over the wire is only what MOVES.
    */
+  /**
+   * Joins from the URL, for a dev build: `?mp` for the same origin, or
+   * `?mp=ws://host:port/ws` to point at a server somewhere else.
+   *
+   * A stopgap and labelled as one. The menu is a list-shaped screen with a
+   * cursor (see `docs/ui.md`) and a Multiplayer row belongs in it; until that
+   * lands this is the honest way in, and it is at least discoverable from the
+   * address bar rather than being a console incantation.
+   */
+  private joinFromUrl(): void {
+    const param = new URLSearchParams(location.search).get("mp");
+    if (param === null) return;
+    const name = new URLSearchParams(location.search).get("name") ?? "player";
+    this.joinMatch(name, param === "" ? undefined : param);
+  }
+
   joinMatch(name: string, url?: string): void {
     if (this.net) return;
     const net = new NetSession(this.scene, this.mats);
@@ -2281,12 +2298,21 @@ export class Game {
     };
 
     net.onEvent = (event) => this.onNetEvent(event);
+
+    // A new round on a new map, same seat. The world is rebuilt LOCALLY from
+    // the same layout the server is using — the map never crosses the wire —
+    // and the server's spawn event puts the body back afterwards.
+    net.onRoundStart = (mapId) => {
+      const index = MAPS.findIndex((m) => m.id === mapId);
+      if (index >= 0) this.setMap(index);
+      this.startRound();
+    };
     net.onStateChange = (state) => {
       if (state === "closed") this.hud.toast("disconnected");
     };
 
     this.startRound();
-    net.connect(name, url);
+    net.connect(name, url, this.weapon);
   }
 
   /** What a server event does to this client's screen. Presentation only. */
@@ -2343,6 +2369,14 @@ export class Game {
           this.player.alive = false;
           this.enterDeploy(event.respawnIn);
         }
+        break;
+
+      // A blast the authority resolved. The light, the noise and the
+      // concussion are `onExplosion`'s, exactly as they are offline — the
+      // difference is only who decided it happened.
+      case "explode":
+        this.netDamageFrom.set(event.at[0], event.at[1], event.at[2]);
+        this.onExplosion(this.netDamageFrom);
         break;
 
       case "spawn":
@@ -2506,6 +2540,13 @@ export class Game {
       return;
     }
     this.player.spendGrenade();
+    // Networked: the authority throws its own copy and owns the blast. The
+    // local one above still flies — it is what the thrower watches arc — but
+    // in a netplay round its `hittablesFor` list is NetSoldiers whose
+    // `takeDamage` does nothing, so it hurts nobody and the server's copy
+    // decides. The pouch is the server's count too; spending here only keeps
+    // the HUD honest.
+    this.net?.sendGrenade(this.grenadeHand, this.cameraSys.forward);
     this.sfx.grenadeThrow();
     // The body's own follow-through, through the spring the landing and the
     // blast concussion already share — one integrator on the eye, never a

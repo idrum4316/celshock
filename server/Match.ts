@@ -71,6 +71,12 @@ const MAX_MOVE_GAP = 0.5;
  */
 const SHOT_CONE_COS = Math.cos((25 * Math.PI) / 180);
 
+/**
+ * The same bound for a thrown grenade, and wider because the throw itself is
+ * not along the aim: `CONFIG.grenade.throwLift` tilts it up before it leaves.
+ */
+const GRENADE_CONE_COS = Math.cos((50 * Math.PI) / 180);
+
 /** How far a claimed muzzle may be from the shooter's own head, in metres. */
 const MAX_ORIGIN_SLIP = 2;
 
@@ -82,6 +88,9 @@ const MAX_ORIGIN_SLIP = 2;
  * accumulate abandoned scenes.
  */
 const IDLE_DISPOSE_MS = 60_000;
+
+/** How long the round-over card stays up before the next map is built. */
+const ROUND_OVER_MS = 8_000;
 
 /** Scratch for shot resolution; reused so a firefight allocates nothing. */
 const SHOT_ORIGIN = new Vector3();
@@ -163,6 +172,8 @@ export class Match {
         });
       }
     };
+    this.game.onExplosion = (at) =>
+      this.pending.push({ e: "explode", at: [at.x, at.y, at.z] });
     this.game.onPlayerSpawned = (player, at, yaw) =>
       this.pending.push({
         e: "spawn",
@@ -341,11 +352,55 @@ export class Match {
     const live = this.game.step(1 / TICK_HZ);
     this.ticks++;
 
-    if (!live && this.game.conquest.winner !== null) {
+    if (!live && this.game.conquest.winner !== null && !this.rotating) {
       this.pending.push({ e: "roundover", winner: this.game.conquest.winner });
-      this.stop();
+      // The round is over but the match is not. Everyone stays seated, the
+      // card goes up on every client, and the next map is built after a pause
+      // — a server that stopped here would leave sixteen people looking at a
+      // frozen world with no way out but reconnecting.
+      this.rotating = true;
+      this.broadcastSnapshot();
+      setTimeout(() => this.rotate(), ROUND_OVER_MS);
+      return;
     }
     if (this.ticks % TICKS_PER_SNAPSHOT === 0) this.broadcastSnapshot();
+  }
+
+  private rotating = false;
+
+  /**
+   * Next map, same people.
+   *
+   * The roster is untouched: who is in which slot is a fact about the MATCH,
+   * not about the round, so a rotation rebuilds the world and restarts the
+   * fight without anybody being re-seated or having to rejoin. Every seated
+   * player is dead with a zero timer afterwards, which is exactly the state
+   * `HeadlessGame.step` deploys them from.
+   */
+  private async rotate(): Promise<void> {
+    const order = MAPS.map((m) => m.id);
+    const next = order[(order.indexOf(this.mapId) + 1) % order.length];
+    this.mapId = next;
+    const def = MAPS.find((m) => m.id === next) ?? MAPS[0];
+
+    await this.game.startRound(def, 1);
+    for (const player of this.game.players.values()) {
+      player.retire();
+      player.respawnT = 0;
+    }
+    // Re-bench, because `startRound` reset the whole bot roster and the bots in
+    // occupied slots would otherwise walk back into a fight somebody is
+    // already standing in.
+    for (const slot of this.roster.slots) {
+      if (slot.occupant.kind === "human") {
+        this.game.battle.setBenched(this.game.battle.bots[slot.index], true);
+      }
+    }
+    this.ticks = 0;
+    this.rotating = false;
+    this.broadcast({ t: "roundstart", mapId: this.mapId, now: Date.now() });
+    this.broadcastRoster();
+    console.log(`[${this.id}] rotated to ${this.mapId}`);
   }
 
   /**
@@ -433,10 +488,14 @@ export class Match {
         this.onShot(peer, msg);
         break;
       case "grenade":
+        this.onGrenade(peer, msg);
+        break;
       case "deploy":
-        // Phase 7. Sequence tracking starts now so that a client which is
-        // already sending is not silently ignored while the handler lands.
-        if ("seq" in msg) peer.seq = Math.max(peer.seq, msg.seq);
+        // Not implemented, and deliberately inert rather than half-wired.
+        // Reinforcements arrive through `HeadlessGame.step`, which is the one
+        // door a person enters the world by; letting a client CHOOSE its spawn
+        // means offering it a validated list first, and an unvalidated
+        // `spawn` index is a request to be placed anywhere on the map.
         break;
     }
   }
@@ -626,6 +685,48 @@ export class Match {
       victim: victimSlot,
       headshot: result.headshot,
     });
+  }
+
+  /**
+   * A grenade a client says it threw.
+   *
+   * Gated like a shot, minus the rate limit — a player carries
+   * `CONFIG.grenade.carried` of them and the pouch is refilled only by death,
+   * so the ammunition IS the limit. The pouch is the server's count, not the
+   * client's: a client that tracked its own would throw as many as it liked.
+   */
+  private onGrenade(peer: Peer, msg: Extract<ClientMessage, { t: "grenade" }>): void {
+    const player = this.game.players.get(peer.slot);
+    if (!player || !player.alive) return;
+    if (player.grenades <= 0) return;
+
+    const [dx, dy, dz] = msg.dir;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < 1e-6) return;
+    const nx = dx / len, ny = dy / len, nz = dz / len;
+    const cp = Math.cos(player.pitch);
+    const lx = Math.sin(player.yaw) * cp;
+    const ly = Math.sin(player.pitch);
+    const lz = Math.cos(player.yaw) * cp;
+    // A grenade leaves along a lifted version of the aim, so the cone has to be
+    // wider than a bullet's — `throwLift` tilts it up before it is thrown.
+    if (nx * lx + ny * ly + nz * lz < GRENADE_CONE_COS) return;
+
+    const [ox, oy, oz] = msg.origin;
+    if (
+      Math.hypot(ox - player.eyePos.x, oy - player.eyePos.y, oz - player.eyePos.z) >
+      MAX_ORIGIN_SLIP
+    ) {
+      return;
+    }
+
+    SHOT_ORIGIN.set(ox, oy, oz);
+    SHOT_DIR.set(nx, ny, nz);
+    // Spent only if the arm accepts it — the pool refuses rather than stealing
+    // a live slot, and a refused throw must cost nothing.
+    if (this.game.grenades.throwAlong(SHOT_ORIGIN, SHOT_DIR, player.team, false)) {
+      player.grenades--;
+    }
   }
 
   /** Which roster slot a hit body belongs to, or -1 if it is not on the roster. */

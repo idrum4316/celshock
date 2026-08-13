@@ -76,12 +76,22 @@ const _normal = new Vector3();
 const _tangent = new Vector3();
 const _launch = new Vector3();
 
+/** Construction-time choices. Today: whether this instance can draw. */
+export interface GrenadeOptions {
+  /**
+   * Build the blast dust. Default true; the multiplayer server passes false
+   * because a NullEngine has neither a canvas nor WebGL2, and the dust needs
+   * both. Nothing about where a grenade goes or what it hurts depends on it.
+   */
+  dust?: boolean;
+}
+
 export class GrenadeSystem {
   private grenades: Grenade[] = [];
   private blasts: Blast[] = [];
   private embers: Ember[] = [];
   /** The dust half of a blast — see `BlastDust`. */
-  private dust: BlastDust;
+  private dust: BlastDust | null;
   /** Reused by the flight and the line-of-sight tests alike. */
   private readonly ray = new Ray(new Vector3(), new Vector3(0, -1, 0), 1);
   /** The map's floor, as a backstop under the collider proxies. */
@@ -117,9 +127,18 @@ export class GrenadeSystem {
   constructor(
     private scene: Scene,
     mats: CelMaterialFactory,
+    opts?: GrenadeOptions,
   ) {
     const g = CONFIG.grenade;
-    this.dust = new BlastDust(scene);
+    // The dust is the one part of this system that cannot exist without GL:
+    // it builds a `DynamicTexture` (which needs a canvas) and a
+    // `GPUParticleSystem` (which needs WebGL2), and under Babylon's NullEngine
+    // the first of those throws `OffscreenCanvas is not defined` before the
+    // constructor returns. The multiplayer server runs the BALLISTICS — where a
+    // grenade lands and who it hurts is a rule, not a picture — so it asks for
+    // the system without the dust. Everything else here is spheres and
+    // materials, which are inert without a renderer and cost nothing to keep.
+    this.dust = opts?.dust === false ? null : new BlastDust(scene);
     const body = mats.get("#3f4a33");
     const pipMat = mats.getEmissive("#ff5a4f");
     const fireMat = mats.getEmissive("#ffb45a");
@@ -206,7 +225,7 @@ export class GrenadeSystem {
    * against.
    */
   setEnvironment(env: EnvironmentSpec): void {
-    this.dust.setEnvironment(env);
+    this.dust?.setEnvironment(env);
   }
 
   /**
@@ -444,7 +463,7 @@ export class GrenadeSystem {
 
     // The dust goes up with the flash and outlives it by a second — the
     // fireball is the event and the cloud is what the event left behind.
-    this.dust.burst(at);
+    this.dust?.burst(at);
 
     // Embers, thrown out of the blast on an even-ish spread rather than a
     // random one — a handful of random directions clumps, and a clump reads as
@@ -469,7 +488,7 @@ export class GrenadeSystem {
 
   private updateEffects(dt: number): void {
     const g = CONFIG.grenade;
-    this.dust.update(dt);
+    this.dust?.update(dt);
     for (const b of this.blasts) {
       if (b.t <= 0) continue;
       b.t -= dt;
@@ -518,7 +537,7 @@ export class GrenadeSystem {
       e.t = 0;
       e.mesh.isVisible = false;
     }
-    this.dust.reset();
+    this.dust?.reset();
   }
 }
 

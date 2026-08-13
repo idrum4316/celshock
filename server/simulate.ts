@@ -27,6 +27,8 @@ async function runRound(mapId: string, difficulty: number) {
 
   const game = new HeadlessGame();
   const captures: string[] = [];
+  let blasts = 0;
+  game.onExplosion = () => blasts++;
   game.conquest.onCaptured = (point, by) =>
     captures.push(`${point.def.id}->${by}`);
 
@@ -55,6 +57,7 @@ async function runRound(mapId: string, difficulty: number) {
     kills: [...game.kills] as [number, number],
     losses: [...game.losses] as [number, number],
     captures: captures.length,
+    blasts,
     flagsHeld: [game.conquest.flagsHeld(0), game.conquest.flagsHeld(1)] as [number, number],
   };
   game.dispose();
@@ -77,6 +80,7 @@ for (let i = 0; i < Number(rounds); i++) {
       `  losses:  ${r.losses[0]} / ${r.losses[1]}`,
       `  flags held at the end: ${r.flagsHeld[0]} / ${r.flagsHeld[1]}`,
       `  flag captures during the round: ${r.captures}`,
+      `  grenades detonated: ${r.blasts}`,
     ].join("\n"),
   );
 }

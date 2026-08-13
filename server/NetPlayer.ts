@@ -55,6 +55,15 @@ export class NetPlayer implements Combatant {
   /** Seconds until this player may deploy again. */
   respawnT = 0;
 
+  /**
+   * Grenades left. The SERVER's count, not the client's.
+   *
+   * There is no resupply in this game — the pouch is refilled by death and
+   * nothing else — so this is the whole of the limit, and a client that kept
+   * its own would throw as many as it liked.
+   */
+  grenades: number = CONFIG.grenade.carried;
+
   /** Ring of past positions, oldest first. Read by the hit rewind in phase 5. */
   private readonly traces: Trace[] = [];
 
@@ -175,6 +184,8 @@ export class NetPlayer implements Combatant {
 
   spawn(at: Vector3, yaw: number): void {
     this.health = CONFIG.player.maxHealth;
+    // Death is the only resupply. See the field's note.
+    this.grenades = CONFIG.grenade.carried;
     this.alive = true;
     this.crouching = false;
     this.sprinting = false;

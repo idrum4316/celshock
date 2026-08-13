@@ -57,6 +57,8 @@ export class NetSession {
   onEvent: (event: ServerEvent) => void = () => {};
   /** Wired by Game: the connection came up or went away. */
   onStateChange: (state: ConnectionState) => void = () => {};
+  /** Wired by Game: a new round has begun on this map. */
+  onRoundStart: (mapId: string) => void = () => {};
 
   /**
    * The live control points, kept as a field because a snapshot arrives on a
@@ -144,6 +146,25 @@ export class NetSession {
     });
   }
 
+  /**
+   * Reports a grenade this client just threw.
+   *
+   * `dir` is the aim, not the launch vector: `GrenadeSystem.throwAlong` applies
+   * `CONFIG.grenade.throwLift` itself, so both sides tilt the same aim by the
+   * same amount and get the same arc. Sending the already-lifted vector would
+   * have the server lift it twice.
+   */
+  sendGrenade(origin: Vector3, dir: Vector3): void {
+    if (!this.seated) return;
+    this.conn.send({
+      t: "grenade",
+      seq: ++this.seq,
+      time: this.conn.renderTime(),
+      origin: [origin.x, origin.y, origin.z],
+      dir: [dir.x, dir.y, dir.z],
+    });
+  }
+
   /** Mirrored ticket counts, for the HUD. */
   get tickets(): readonly [number, number] {
     return this.roster.tickets;
@@ -156,6 +177,14 @@ export class NetSession {
         this.team = msg.team;
         this.mapId = msg.mapId;
         this.seated = true;
+        break;
+
+      // A new round on a new map, same seat. Only the map changes here; the
+      // slot and team deliberately do not, because a rotation does not re-seat
+      // anybody.
+      case "roundstart":
+        this.mapId = msg.mapId;
+        this.onRoundStart(msg.mapId);
         break;
 
       case "roster":

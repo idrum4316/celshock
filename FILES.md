@@ -5,6 +5,25 @@ The module map, one line per file, stating what it owns. Split out of
 subsystem contracts under [`docs/`](docs/) that it points to carry the rules
 these modules obey; this file is for finding your way to the right one.
 
+server/               # The authoritative match server. Node, NullEngine, no
+  index.ts            #   rendering and no canvas — see server/README.md.
+                      #   Process entry: health endpoint, ws listener, match
+                      #   registry. Owns no game rules
+  Match.ts            #   One match: fixed-step loop, snapshots, the gates on
+                      #   what a client may claim, round rotation
+  Roster.ts           #   The sixteen slots, team balance, human<->bot handover
+  HeadlessGame.ts     #   The simulation: the server's answer to core/Game.ts,
+                      #   wired by the same rules
+  NetPlayer.ts        #   A connected human as the simulation sees one — the
+                      #   only position anything on the server trusts
+  world.ts            #   Rebuilds the solid world from the baked boxes: the
+                      #   collider half of MapBuilder and nothing else
+  lagComp.ts          #   Position history + the rewind around a shot. `resolve`
+                      #   takes a callback so the restore cannot be skipped
+  validate.ts         #   Is a reported step physically possible? speed, ground,
+                      #   solid — and nothing else
+  simulate.ts         #   `npm run simulate`: a whole round, headless, no clients
+  parity.ts           #   Fingerprint dump for `npm run parity`
 ```
 index.html          # The head, and NO interface CSS beyond the two things shown
                     #   while there IS no interface: a black background (so a
@@ -180,15 +199,23 @@ src/
     environment.ts      # EnvironmentSpec + applyEnvironment
     maps.ts             # MapDef + the MAPS registry. The only EXISTING file a
                         #   new map has to touch (plus vite.config's WRITABLE)
+    collision.ts        # MapCollision: the shape of a baked collider set, and
+                        #   the tuple->WorldBox expansion the server rebuilds
+                        #   from. Names no map; reached via MapDef.collision,
+                        #   which is a LAZY import so the client never ships it
+    fingerprint.ts      # A comparable summary of a built world — the nav graph,
+                        #   not the boxes. What `npm run parity` diffs
     hollowmere/layout.ts      # A MAP — every placement, flag and spawn
     hollowmere/heights.ts     # GENERATED floor heights (editor terrain mode)
     hollowmere/environment.ts # Palette, fog, mist, particles — night
+    hollowmere/collision.ts   # GENERATED collider boxes (`npm run collision`)
     greyfen/layout.ts         # The second map, being built: the jungle manor
                               #   on C, a stilt-hut settlement and a temple on
                               #   the other flags, and the trestle over the river
     greyfen/heights.ts        # GENERATED floor heights — a Y-shaped river,
                               #   wadeable everywhere (banks grade at 0.22)
     greyfen/environment.ts    # Palette, fog, sun, sky — overcast dawn
+    greyfen/collision.ts      # GENERATED collider boxes (`npm run collision`)
   ui/                   # One .css beside each module that writes markup
     base.css            #   Reset, canvas, #hud root, and ONLY primitives two
                         #   or more screens share. Imported by main.ts
@@ -208,6 +235,18 @@ src/
                         #   onChange and return as setValues
     Minimap.ts          # Corner minimap: flags, friendlies, firing enemies
       minimap.css
+  net/                # Multiplayer, client side. Nothing here is constructed
+    protocol.ts       #   in an offline round.
+                      #   The wire format — the ONLY module the server also
+                      #   imports. Pure types + the rates both ends must agree
+                      #   on. No Babylon, no DOM, no CONFIG
+    Connection.ts     #   Socket lifetime, reconnect, and the server-clock
+                      #   offset every interpolated body is drawn against
+    NetSession.ts     #   One networked round: the seam between Game and the
+                      #   wire. Game gains a field and a branch, not a protocol
+    NetRoster.ts      #   The pool of NetSoldiers + mirrored flags/tickets.
+                      #   The client's stand-in for BattleSystem: same job on
+                      #   screen, none of the job underneath
   pwa/
     register.ts         # SW registration + the touch fullscreen gesture.
                         #   Knows nothing about the game

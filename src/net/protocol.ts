@@ -153,6 +153,7 @@ export type ServerEvent =
   | { e: "damage"; victim: number; amount: number; from: Vec3; health: number }
   | { e: "hit"; shooter: number; victim: number; killed: boolean; headshot: boolean }
   | { e: "died"; slot: number; by: number; respawnIn: number }
+  | { e: "explode"; at: Vec3 }
   | { e: "captured"; point: string; by: NetTeam }
   | { e: "neutralised"; point: string }
   | { e: "spawn"; slot: number; pos: Vec3; yaw: number }
@@ -174,6 +175,21 @@ export interface Welcome {
 export interface RosterMessage {
   t: "roster";
   slots: SlotState[];
+}
+
+/**
+ * A new round has started on this map, with the same people in the same slots.
+ *
+ * Distinct from `welcome` on purpose. An earlier draft broadcast a `welcome`
+ * with `slot: -1` to announce a rotation, which every client would have taken
+ * literally — `NetSession` assigns its own slot straight out of that field, so
+ * one message meant to say "new map" would have told sixteen clients they no
+ * longer had a body.
+ */
+export interface RoundStart {
+  t: "roundstart";
+  mapId: string;
+  now: number;
 }
 
 /**
@@ -203,6 +219,7 @@ export interface Rejected {
 
 export type ServerMessage =
   | Welcome
+  | RoundStart
   | RosterMessage
   | Snapshot
   | EventsMessage

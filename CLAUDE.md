@@ -22,6 +22,7 @@ substitute: read the companion before changing that subsystem.
 | [`docs/bots.md`](docs/bots.md) | navigation, perception, cover, squads, bot cost |
 | [`docs/deaths.md`](docs/deaths.md) | ragdolls, Havok, the death cam |
 | [`docs/pwa.md`](docs/pwa.md) | `public/`, `src/pwa/`, the service worker |
+| [`docs/multiplayer.md`](docs/multiplayer.md) | anything under `server/` or `src/net/`, the roster, the collision bake |
 
 Three more companions carry what is looked up rather than reasoned about:
 
@@ -560,6 +561,42 @@ screen keeps the `start_url` it installed with. The service worker is a
 the `no-cache` requirement, cache-first and what it costs a returning player, and
 the phone-shaped details (fullscreen on the document element, `--ov-scale`, why
 `#loadout` is excluded from it).
+
+### Multiplayer: the server is the authority, and a slot is a slot
+
+A dedicated Node process runs the real simulation under Babylon's **NullEngine**
+— bots, flags, tickets and damage — and clients render it. There is no host
+client. A shooter's hitmarker is a **guess**: the round is reported, every target
+is rewound to what the shooter was looking at, and `CombatSystem.fire` runs again
+on the server, which is the only thing that deals damage. Movement is the
+exception and is client-simulated, then validated for speed, ground and solids;
+that trade is argued in the contract.
+
+**The roster is sixteen slots, built once, never resized.** A match starts with
+one person in it and every unfilled slot is a bot; a human joining BENCHES the
+bot in their slot, and leaving un-benches it. Benching is not killing — joining
+and leaving must never charge a team a reinforcement. The bench lives in
+`BattleSystem` as a `Set<Bot>`, never as a flag on `Bot`, and every loop over the
+roster there must skip it. **A slot index IS a bot index**, because `Roster` and
+`BattleSystem` lay their sixteen out in the same order.
+
+On the client a bot and a remote human are the SAME object (`NetSoldier`), and
+the client is never told which is which — that is what makes "start without a
+full lobby" and "hand a leaver's slot back to a bot" one mechanism instead of
+two.
+
+**The server cannot run `MapBuilder`**: it has no canvas, so `DynamicTexture`
+throws. It rebuilds the solid world from the generated
+`src/world/<map>/collision.ts` and picks against it with the same
+`SOLID_ONLY` ray the client uses. `npm run parity` proves the two agree and
+should be run after anything touching the world layer; `npm run build` refuses a
+bake older than its layout.
+
+→ **[`docs/multiplayer.md`](docs/multiplayer.md)** — the authority model and
+what it deliberately does not defend against, the roster and the bench, the
+interpolation clock and the sign error that is easy to make in it, the rewind
+and why `resolve` takes a callback, what may never cross the wire, and the list
+of what is not built yet.
 
 ## Conventions
 

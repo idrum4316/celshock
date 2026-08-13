@@ -22,12 +22,13 @@ import { Scene, Vector3 } from "@babylonjs/core";
 // map, and the null engine is not in the package barrel.
 import { NullEngine } from "@babylonjs/core/Engines/nullEngine.js";
 import { CONFIG } from "../src/config";
-import type { Bot } from "../src/entities/Bot";
+import { Bot } from "../src/entities/Bot";
 import type { Combatant, Team } from "../src/entities/Combatant";
 import type { WeaponSetup } from "../src/entities/weapons";
 import { BattleSystem } from "../src/systems/BattleSystem";
 import { CombatSystem, type ShotResult } from "../src/systems/CombatSystem";
 import { ConquestSystem } from "../src/systems/ConquestSystem";
+import { GrenadeSystem } from "../src/systems/GrenadeSystem";
 import { CelMaterialFactory } from "../src/shaders/CelShader";
 import type { GameMap } from "../src/world/MapBuilder";
 import type { MapDef } from "../src/world/maps";
@@ -41,6 +42,7 @@ export class HeadlessGame {
   readonly combat: CombatSystem;
   readonly battle: BattleSystem;
   readonly conquest = new ConquestSystem();
+  readonly grenades: GrenadeSystem;
 
   map: GameMap | null = null;
 
@@ -64,6 +66,10 @@ export class HeadlessGame {
     // the two files read the same way.
     this.combat = new CombatSystem(this.scene, this.mats);
     this.battle = new BattleSystem(this.scene, this.mats, this.combat);
+    // Ballistics without the picture. Where a grenade lands and who it hurts
+    // is a rule and belongs here; the dust needs a canvas and WebGL2 and does
+    // not exist on this side — see `GrenadeOptions`.
+    this.grenades = new GrenadeSystem(this.scene, this.mats, { dust: false });
     this.wire();
   }
 
@@ -82,6 +88,10 @@ export class HeadlessGame {
     this.battle.setMap(this.map);
     this.battle.reset();
     this.conquest.start(this.map);
+    // The floor is the backstop under the collider proxies — without it a
+    // grenade that misses every box falls forever.
+    this.grenades.setTerrain(this.map.terrain);
+    this.grenades.reset();
     for (const bot of this.battle.bots) this.lag.track(bot);
     this.tick = 0;
   }
@@ -135,6 +145,10 @@ export class HeadlessGame {
     // clients about where that bot is.
     this.battle.update(dt, ORIGIN);
     this.combat.update(dt);
+    // After the bots, so a grenade thrown on this frame's think tick flies on
+    // this frame rather than sitting in the thrower's hand until the next —
+    // the same order `Game.updateWorld` uses.
+    this.grenades.update(dt);
 
     // AFTER everything has moved, so a frame records the end of a tick and not
     // the middle of one. Recording first would put every body's history half a
@@ -175,10 +189,22 @@ export class HeadlessGame {
       if (!p || p.def.id !== bot.objective) return "none";
       return bot.defending && p.owner === bot.team ? "hold" : "contest";
     };
-    // Grenades are phase 7. Until then the arm refuses every ask, which is the
-    // documented contract of this callback — a bot spends nothing on a throw
-    // that cannot be made.
-    this.battle.throwGrenadeFor = () => false;
+    // A bot asking for a grenade on a position. The arm has the last word: a
+    // solve it cannot make returns false and the bot spends nothing.
+    this.battle.throwGrenadeFor = (from, at, team) =>
+      this.grenades.throwAt(from, at, team, false);
+    // A blast resolves against the THROWER's target list, the same way a bullet
+    // does, so friendly fire is excluded by construction here too and this
+    // system never learns what a team is.
+    this.grenades.hittablesFor = (team) => this.battle.hittablesAgainst(team);
+    this.grenades.onExploded = (at) => this.onExplosion(at);
+    this.grenades.onBlastHit = (victim, thrower, _byPlayer, killed) => {
+      // A person's damage already left through `NetPlayer.onDamaged`, which
+      // `takeDamage` raised before this callback ran — the same split the
+      // client makes, where `onPlayerDamaged` has already handled the player by
+      // the time this fires. Only bots are this handler's business.
+      if (killed && victim instanceof Bot) this.onKill(victim, thrower);
+    };
   }
 
   /**
@@ -297,6 +323,9 @@ export class HeadlessGame {
 
   /** Wired by `Match`: a person has been placed in the world. */
   onPlayerSpawned: (player: NetPlayer, at: Vector3, yaw: number) => void = () => {};
+
+  /** Wired by `Match`: a grenade went off here. */
+  onExplosion: (at: Vector3) => void = () => {};
 
   /** Wired by `Match`: a person took a hit. */
   onPlayerDamaged: (

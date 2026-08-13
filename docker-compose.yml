@@ -1,0 +1,46 @@
+# docker-compose.yml — the game and the match server it can be played against.
+#
+#   docker compose up --build
+#   open http://localhost:8080          single player
+#   open http://localhost:8080/?mp      multiplayer
+#
+# Two containers out of one Dockerfile. `web` is nginx serving the bundle and
+# proxying `/ws`; `match-server` is the authoritative simulation. Nothing in the
+# game knows the difference — the client opens a socket on its own origin, and
+# nginx is what decides where that lands.
+#
+# The single-player game does not need `match-server` at all. Bring up `web`
+# alone and it plays exactly as it always has; the socket simply never opens.
+
+services:
+  web:
+    build:
+      context: .
+      target: web
+    ports:
+      - "8080:80"
+    depends_on:
+      - match-server
+    restart: unless-stopped
+
+  match-server:
+    build:
+      context: .
+      target: server
+    # Deliberately NOT published. The only route in is nginx's `/ws` proxy, so
+    # the simulation is not reachable from outside the compose network — which
+    # matters because it is the thing that decides who is alive.
+    expose:
+      - "8080"
+    environment:
+      # One match server, one process. Scaling is more than a replica count:
+      # matches live in memory, so two replicas behind one proxy would put
+      # players who joined "the same" match into two different worlds. A shared
+      # matchmaker is what that needs, and it is not built.
+      PORT: 8080
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
