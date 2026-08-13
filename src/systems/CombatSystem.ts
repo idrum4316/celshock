@@ -39,6 +39,7 @@ import {
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
+import { SOLID_ONLY } from "../world/solid";
 
 /** Anything a hitscan shot can damage. */
 export interface Hittable {
@@ -292,10 +293,7 @@ export class CombatSystem {
 
     // Wall/prop/floor hit distance caps the shot.
     const ray = new Ray(origin, dir, range);
-    const wallPick = this.scene.pickWithRay(
-      ray,
-      (m) => !!m.metadata && m.metadata.solid === true,
-    );
+    const wallPick = this.scene.pickWithRay(ray, SOLID_ONLY);
     let hitDist = wallPick && wallPick.hit ? wallPick.distance : range;
     const hitWall = !!(wallPick && wallPick.hit);
 

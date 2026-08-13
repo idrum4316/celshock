@@ -28,6 +28,7 @@ import type { CoverMap } from "../world/CoverMap";
 import type { FlowField, NavGrid } from "../world/NavGrid";
 import type { GameMap } from "../world/MapBuilder";
 import type { ObstacleField } from "../world/ObstacleField";
+import { SOLID_ONLY } from "../world/solid";
 import type { CombatSystem, Hittable, ShotOptions } from "./CombatSystem";
 import type { SquadOrder } from "./ConquestSystem";
 
@@ -498,10 +499,7 @@ export class BattleSystem {
     this.ray.origin.copyFrom(from);
     this.ray.direction.set(dx / len, dy / len, dz / len);
     this.ray.length = len;
-    const hit = this.scene.pickWithRay(
-      this.ray,
-      (m) => !!m.metadata && m.metadata.solid === true,
-    );
+    const hit = this.scene.pickWithRay(this.ray, SOLID_ONLY);
     return !hit?.hit;
   }
 

@@ -20,6 +20,7 @@ import type { EnvironmentSpec } from "../world/environment";
 import { CONFORMS_TO_TERRAIN } from "../world/BuildingKit";
 import type { MapLayout } from "../world/layout";
 import type { GameMap } from "../world/MapBuilder";
+import { SOLID_ONLY } from "../world/solid";
 import { EditorCamera } from "./EditorCamera";
 import type { FieldValue } from "./fields";
 import { EditorGizmos } from "./gizmos";
@@ -454,7 +455,7 @@ export class EditorSession {
     const hit = scene.pick(
       canvas.clientWidth / 2,
       canvas.clientHeight / 2,
-      (m) => m.metadata?.solid === true,
+      SOLID_ONLY,
     );
 
     let at: Vector3;

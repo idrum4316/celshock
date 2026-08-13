@@ -142,6 +142,9 @@ src/
                         #   inside ±size/2
     rng.ts              # mulberry32 — the seeded PRNG world-building uses
     MapBuilder.ts       # Builds the map; merges visuals, emits colliders
+    solid.ts            # SOLID_ONLY — the one pick predicate every ray test in
+                        #   the game filters with; the read side of the flag
+                        #   MapBuilder writes
     ambientOcclusion.ts # Per-vertex AO, baked from the collider boxes after
                         #   the merge. Lives in the colour buffer's ALPHA
     BuildingKit.ts      # Facade: shared types + BUILDERS registry

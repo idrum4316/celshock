@@ -48,6 +48,7 @@ import {
   type SoldierRig,
 } from "../entities/SoldierModel";
 import type { CelMaterialFactory } from "../shaders/CelShader";
+import { SOLID_ONLY } from "../world/solid";
 
 /**
  * The player's stand-in, as the ragdoll pool wants it.
@@ -322,10 +323,7 @@ export class DeathCam {
     this.ray.length = len;
     // The same filter every ray in this game uses: collider proxies only, so
     // the corpse's own meshes — and every other visual — are transparent to it.
-    const hit = this.scene.pickWithRay(
-      this.ray,
-      (m) => !!m.metadata && m.metadata.solid === true,
-    );
+    const hit = this.scene.pickWithRay(this.ray, SOLID_ONLY);
     if (!hit || !hit.hit) return;
     const allow = Math.max(c.minDistance, hit.distance - c.wallMargin);
     if (allow >= len) return;

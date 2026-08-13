@@ -13,15 +13,7 @@
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { InputManager } from "../core/InputManager";
-import type { AbstractMesh } from "@babylonjs/core";
-
-/**
- * The pick predicate, hoisted to module scope. Written inline it was a fresh
- * closure on every frame a target was held, for a function that closes over
- * nothing.
- */
-const SOLID_ONLY = (m: AbstractMesh): boolean =>
-  !!m.metadata && m.metadata.solid === true;
+import { SOLID_ONLY } from "../world/solid";
 
 /**
  * Structural subset of `Hittable` (CombatSystem), declared here so this

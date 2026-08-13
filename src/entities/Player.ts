@@ -49,7 +49,6 @@
  * one not thrown.
  */
 import {
-  type AbstractMesh,
   Mesh,
   MeshBuilder,
   type Node,
@@ -59,10 +58,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-
-/** Pick predicate for the dev-only probe cross-check. Hoisted; closes over nothing. */
-const SOLID_ONLY = (m: AbstractMesh): boolean =>
-  !!m.metadata && m.metadata.solid === true;
+import { SOLID_ONLY } from "../world/solid";
 import { CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
@@ -964,47 +960,45 @@ export class Player implements Combatant {
   }
 
   /**
-   * Height of the surface underfoot: the highest collider top face in the band
-   * the probe reaches, or the terrain where nothing stands over it.
+   * Height of the surface underfoot: the first `solid` thing the downward ray
+   * finds, or the terrain field where it finds nothing at all.
    *
-   * The band starts a step-height above the feet so a rise reads as a step to
-   * walk up rather than a wall to stop against, and ends `groundProbeLength`
-   * below that — a roof over your head is outside it and correctly ignored.
+   * The ray starts a step-height above the feet so a rise reads as a step to
+   * walk up rather than a wall to stop against, and runs `groundProbeLength`
+   * from there — a roof over your head is behind the origin and never tested.
+   * A miss means it outran the floor (off the map, or a drop deeper than it
+   * reaches), and `TerrainField` is the floor's own answer for that case.
    *
-   * **ANALYTIC, NOT A RAY, AND THAT IS THE POINT.** This was
-   * `scene.pickWithRay` with a `solid` predicate, run every frame: Babylon
-   * walked all ~1,800 meshes in the scene and ray-tested all ~820 colliders to
-   * find the floor. Measured, it was the largest single piece of the game's own
-   * per-frame JS by a factor of five, and it scaled with how big the map was
-   * rather than with anything on screen. Every piece of the replacement already
-   * existed — `ObstacleField` had the boxes bucketed, `boxGeometry` had the
-   * pitch-correct top-face plane, and `NavGrid` was already computing exactly
-   * this at bake time from both.
+   * **THIS IS THE MOST EXPENSIVE THING THE GAME DOES PER FRAME, AND IT IS
+   * DELIBERATELY STILL HERE.** `scene.pickWithRay` with a `solid` predicate
+   * walks all ~1,800 meshes in the scene and ray-tests all ~820 colliders to
+   * find the floor. Measured, it is the largest single piece of the game's own
+   * per-frame JS by a factor of five — about 2.4 ms — and it scales with how
+   * big the map is rather than with anything on screen. `Player.floorY` exists
+   * because of that: a second caller casting an identical ray would double it.
    *
-   * The two halves are `max`'d because the floor is the one thing with no box:
-   * a heightfield cannot be stood in for by one, which is the documented
-   * exception to the visual/collider rule. `surfaceAt` rather than `heightAt`
-   * because the ray hits a clone of the floor's own VISUAL vertices — the field
-   * is the smooth thing that floor is cut from, and the two disagree by a few
-   * centimetres on every twisted quad.
+   * The replacement is WRITTEN and NOT SWITCHED ON. `ObstacleField.groundAt` is
+   * the bucketed analytic answer, and turning it on is one line — this call
+   * `max`'d against `terrain.surfaceAt`, since the heightfield is the one floor
+   * with no box standing in for it, and `surfaceAt` rather than the `heightAt`
+   * used below because what the ray hits is a clone of the floor's own VISUAL
+   * vertices, which the smooth field disagrees with by centimetres on every
+   * twisted quad.
    *
-   * **STILL THE RAY, DELIBERATELY. The analytic form is written and measured
-   * and is NOT switched on** — see `FINDINGS.md`. Over the 51,000 positions the
-   * nav graph says a body can stand on, the two agree on 99.8% and disagree on
-   * 116, and the disagreements run BOTH ways: at the valley rim the analytic
-   * matches the nav graph and the ray is the one that finds nothing, while
-   * along one Greyfen fence line the analytic reports a surface half a metre up
-   * that the ray passes straight through. That second class is the blocker, and
-   * it is a property of the primitive rather than of this call site —
-   * `topFaceAtLocalZ` extrapolates a box's top-face PLANE across a footprint
-   * that `halfDepth` inflates for anything pitched, so a tall thin box tilted a
-   * few degrees claims ground beside itself. `NavGrid` can live with that (a
-   * phantom node is a routing nuisance); a ground probe cannot, because it puts
-   * the player standing on air.
-   *
-   * Turning it on is one line, and it is worth about 2.4 ms a frame — the
-   * largest single piece of the game's own per-frame JS. What it is waiting on
-   * is a footprint test that bounds the plane by the box's REAL extent.
+   * What stops it is measured too. Over the 51,000 positions the nav graph says
+   * a body can stand on, the two agree on 99.8% and disagree on 116 running
+   * BOTH ways: at the valley rim the analytic matches the nav graph and the ray
+   * is the one that finds nothing, while along one Greyfen fence line the
+   * analytic reports a surface half a metre up that the ray passes straight
+   * through. That second class is the blocker, and it is a property of the
+   * primitive rather than of this call site — `topFaceAtLocalZ` extrapolates a
+   * box's top-face PLANE across a footprint that `halfDepth` inflates for
+   * anything pitched, so a tall thin box tilted a few degrees claims ground
+   * beside itself. `NavGrid` can live with that (a phantom node is a routing
+   * nuisance); a ground probe cannot, because it puts the player standing on
+   * air. It waits on a footprint test bounded by the box's REAL extent.
+   * `FINDINGS.md` 6 carries the numbers; `groundAt`'s own header carries the
+   * fix.
    */
   private probeGround(): number {
     const p = CONFIG.player;

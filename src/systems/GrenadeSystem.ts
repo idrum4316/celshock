@@ -38,6 +38,7 @@ import type { Team } from "../entities/Combatant";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
 import type { EnvironmentSpec } from "../world/environment";
 import { TerrainField } from "../world/TerrainField";
+import { SOLID_ONLY } from "../world/solid";
 import type { Hittable } from "./CombatSystem";
 
 /** One grenade in flight (or resting with its fuse running). */
@@ -321,10 +322,7 @@ export class GrenadeSystem {
         this.ray.origin.copyFrom(n.mesh.position);
         this.ray.direction.copyFrom(_step).scaleInPlace(1 / travel);
         this.ray.length = travel + g.radius;
-        const hit = this.scene.pickWithRay(
-          this.ray,
-          (m) => !!m.metadata && m.metadata.solid === true,
-        );
+        const hit = this.scene.pickWithRay(this.ray, SOLID_ONLY);
         const normal = hit?.hit && hit.pickedPoint ? hit.getNormal(true) : null;
         if (hit?.pickedPoint && normal) {
           _normal.copyFrom(normal);
@@ -432,10 +430,7 @@ export class GrenadeSystem {
     this.ray.origin.copyFrom(from);
     this.ray.direction.set(dx / len, dy / len, dz / len);
     this.ray.length = len;
-    const hit = this.scene.pickWithRay(
-      this.ray,
-      (m) => !!m.metadata && m.metadata.solid === true,
-    );
+    const hit = this.scene.pickWithRay(this.ray, SOLID_ONLY);
     return !hit?.hit;
   }
 
