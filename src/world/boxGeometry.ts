@@ -1,8 +1,11 @@
 /**
  * boxGeometry.ts — The analytic WorldBox primitives, and nothing else.
  * Owns: the box-frame transform, the top-face plane, the slab span, and the
- * XZ segment test. Pure functions, no Babylon, no state, no allocation beyond
- * the two small results that say so in their signature.
+ * XZ segment test. Pure functions, no Babylon, no allocation beyond the two
+ * small results that say so in their signature — and a rejection says `null`,
+ * so it must not allocate either. The one piece of state is `LOCAL`, the
+ * private scratch that keeps the footprint test off the allocator; it never
+ * escapes a call.
  *
  * Why this exists as a shared file rather than a helper in each caller: the
  * top-face plane is sign-sensitive and was written out independently in
@@ -104,25 +107,42 @@ export function rotateToLocalXZ(
 }
 
 /**
+ * The scratch behind the footprint test, and the module's one piece of state.
+ * A test has to rotate before it can answer, so writing the rotation into the
+ * caller's result would put an allocation on the REJECTING path — which is the
+ * overwhelming majority, because every caller sweeps a rectangle sized to the
+ * box's reach and asks about a footprint several times smaller inside it.
+ * Nothing may hold this across a call: `toLocalXZ` copies out of it and
+ * `topFaceHeight` reads one field and drops it.
+ */
+const LOCAL: LocalXZ = { lx: 0, lz: 0 };
+
+/** Rotates into `LOCAL` and answers whether the point is inside the footprint. */
+function intoFootprint(box: WorldBox, x: number, z: number): boolean {
+  rotateToLocalXZ(box, x, z, LOCAL);
+  return Math.abs(LOCAL.lx) <= box.w / 2 && Math.abs(LOCAL.lz) <= halfDepth(box);
+}
+
+/**
  * Transforms a world XZ point into the box's local frame, returning null when
- * it falls outside the footprint.
+ * it falls outside the footprint. Allocates its result only once that has
+ * passed.
  */
 export function toLocalXZ(box: WorldBox, x: number, z: number): LocalXZ | null {
-  const out = rotateToLocalXZ(box, x, z, { lx: 0, lz: 0 });
-  if (Math.abs(out.lx) > box.w / 2 || Math.abs(out.lz) > halfDepth(box)) {
-    return null;
-  }
-  return out;
+  if (!intoFootprint(box, x, z)) return null;
+  return { lx: LOCAL.lx, lz: LOCAL.lz };
 }
 
 /**
  * Height of the box's top face above `(x, z)` in world space, or null when that
- * is outside the box's footprint.
+ * is outside the box's footprint. Allocates on neither path — it wants one
+ * number out of the local point, so it reads the scratch rather than going
+ * through `toLocalXZ` for a result it would drop. This is the query the nav
+ * bake runs per cell per box.
  */
 export function topFaceHeight(box: WorldBox, x: number, z: number): number | null {
-  const local = toLocalXZ(box, x, z);
-  if (!local) return null;
-  return topFaceAtLocalZ(box, local.lz);
+  if (!intoFootprint(box, x, z)) return null;
+  return topFaceAtLocalZ(box, LOCAL.lz);
 }
 
 /** The vertical slab a box occupies above `(x, z)`, or null outside it. */
