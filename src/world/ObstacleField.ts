@@ -5,13 +5,16 @@
  * Invariants: the push-out is a PREFERENCE, never a veto — callers (Bot) keep
  * the overlapping position if the pushed-clear one isn't walkable; frozen is
  * worse than clipping. HEADROOM and CONFIG.nav.stepHeight must stay in sync
- * with NavGrid. Height tests use box planes (boxGeometry.ts, shared with
- * NavGrid) so ramps push correctly.
+ * with NavGrid. Height tests use box planes and the box frame is entered
+ * through `rotateToLocalXZ` (boxGeometry.ts, shared with NavGrid) so ramps push
+ * correctly and a rotated box is not pushed out of backwards.
  */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import {
   halfDepth,
+  type LocalXZ,
+  rotateToLocalXZ,
   slabThickness,
   topFaceAtLocalZ,
   topFaceHeight,
@@ -61,6 +64,8 @@ export class ObstacleField {
   /** Box indices per bucket, `null` where nothing overlaps. */
   private readonly buckets: (number[] | null)[];
   private readonly boxes: WorldBox[] = [];
+  /** Scratch for the box-frame transform; `push` runs it per bot per box per step. */
+  private readonly localScratch: LocalXZ = { lx: 0, lz: 0 };
 
   constructor(size: number, boxes: WorldBox[]) {
     this.dim = Math.ceil(size / BUCKET) + 2;
@@ -164,15 +169,13 @@ export class ObstacleField {
 
   /** One box against one body. Returns true when `out` was corrected. */
   private push(box: WorldBox, y: number, radius: number, out: Vector3): boolean {
-    // Into the box's frame, inline rather than via `toLocalXZ`: this runs per
-    // bot per step and needs `lx`/`lz` even for a point outside the footprint,
-    // which is exactly the case that helper allocates a result to reject.
-    const c = Math.cos(-box.rotY);
-    const s = Math.sin(-box.rotY);
-    const dx = out.x - box.cx;
-    const dz = out.z - box.cz;
-    const lx = dx * c + dz * s;
-    const lz = -dx * s + dz * c;
+    // Into the box's frame through the shared transform rather than a private
+    // copy of the yaw convention — that convention has already been got wrong
+    // once, and a push resolved in a mirrored frame would shove a bot the wrong
+    // way out of every rotated wall. Through `rotateToLocalXZ` rather than
+    // `toLocalXZ` because this needs `lx`/`lz` even for a point outside the
+    // footprint, which is exactly the case that helper answers with a bare null.
+    const { lx, lz } = rotateToLocalXZ(box, out.x, out.z, this.localScratch);
     const hw = box.w / 2;
     const hd = halfDepth(box);
 
@@ -223,7 +226,13 @@ export class ObstacleField {
       }
     }
 
-    // Back to world. `-rotY` was used above, so the inverse is `+rotY`.
+    // Back to world. `rotateToLocalXZ` owns the sign convention — these are its
+    // world→local angles read back to be undone, not a second opinion about
+    // which way the box faces. Computed HERE rather than beside the transform
+    // because every refusal above leaves without them, and most calls refuse:
+    // a box is usually steppable, duckable, or simply out of reach.
+    const c = Math.cos(-box.rotY);
+    const s = Math.sin(-box.rotY);
     out.x = box.cx + nx * c - nz * s;
     out.z = box.cz + nx * s + nz * c;
     return true;
