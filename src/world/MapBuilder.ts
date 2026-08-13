@@ -715,7 +715,7 @@ export class MapBuilder {
   ): void {
     const build = SCATTER_BUILDERS[spec.prop];
     const light = SCATTER_LIGHTS[spec.prop];
-    const [minS, maxS] = spec.scale ?? [1, 1];
+    const [minS, maxS] = scatterScale(spec);
     const placed: { x: number; z: number; r: number }[] = [];
     const parts: Mesh[] = [];
     // A disc has no orientation, so this is zero for every circular region —
@@ -867,7 +867,7 @@ export class MapBuilder {
     // The prop's visual reach, not its collider height: a lantern flame or a
     // spray of branches buried in a wall looks broken even though nothing
     // solid overlaps.
-    const topY = baseY + PROP_BODIES[spec.prop].visualTop * (spec.scale?.[1] ?? 1);
+    const topY = baseY + PROP_BODIES[spec.prop].visualTop * scatterScale(spec)[1];
     // Padded by the placement clearance rather than by the prop's own
     // half-width, so a prop keeps visible daylight around it instead of merely
     // not intersecting.
@@ -998,6 +998,25 @@ export class MapBuilder {
 }
 
 /**
+ * A scatter spec's scale range as a genuine `[min, max]`, whichever order it
+ * was authored in.
+ *
+ * `spec.scale` is an interval, and nothing enforces which end is written
+ * first: `scatterRegion` lerps between the two entries and reads the same
+ * interval either way, and the editor writes the pair through two independent
+ * number fields (`scale min` / `scale max` in `inspect.ts`) that can be left
+ * crossed. Every reader that wants the TOP of the range has to sort for it —
+ * taking `[1]` on faith is silently wrong on a descending pair, and both of
+ * the readers below fail in the quiet direction: an under-padded `boxIndex`
+ * misses boxes rather than reporting them (the failure its header names), and
+ * an under-reaching `topY` clears a prop the wall would have buried.
+ */
+function scatterScale(spec: ScatterSpec): [number, number] {
+  const [a, b] = spec.scale ?? [1, 1];
+  return a <= b ? [a, b] : [b, a];
+}
+
+/**
  * The widest clearance any of this layout's scatter regions can ask about —
  * what `boxIndex` has to be padded by so no burial test can miss a box.
  *
@@ -1009,8 +1028,7 @@ export class MapBuilder {
 function maxScatterClearance(layout: MapLayout): number {
   let max = 0;
   for (const spec of layout.scatter ?? []) {
-    const maxScale = (spec.scale ?? [1, 1])[1];
-    max = Math.max(max, (spec.clearance ?? 0.8) * maxScale);
+    max = Math.max(max, (spec.clearance ?? 0.8) * scatterScale(spec)[1]);
   }
   return max + 1;
 }
