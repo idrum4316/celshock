@@ -128,6 +128,11 @@ export class ObstacleField {
    * The highest collider top face directly above `floor` and at or below
    * `ceiling` at `(x, z)`, or null when no box spans that band here.
    *
+   * **NOTHING CALLS THIS YET, AND THAT IS ON PURPOSE.** It is written and
+   * measured against the ray it replaces, and it is one line from being switched
+   * on; what it waits for is below, and FINDINGS 6 carries the numbers. Do not
+   * delete it as dead code, and do not wire it up without reading that entry.
+   *
    * THIS IS THE GROUND PROBE'S ANSWER, and it exists to retire a whole-scene
    * ray pick. `Player.probeGround` ran `scene.pickWithRay` with a `solid`
    * predicate on every frame: Babylon walked all ~1,800 meshes and ray-tested
@@ -149,6 +154,22 @@ export class ObstacleField {
    * `surfaceAt`, the floor as DRAWN, rather than `heightAt`, the smooth field
    * the floor is cut from: what the ray used to hit was a clone of the visual's
    * own vertices.
+   *
+   * ## What it is waiting on
+   *
+   * Over the nav graph's own walkable surfaces — the only honest domain, since
+   * sweeping the map on a grid asks about positions a body cannot occupy and the
+   * RAY is the one that lies there — this and `pickWithRay` agree on 99.8% of
+   * 51k standable positions. The 116 that differ run both ways, and one class is
+   * a blocker: along a fence line the analytic claims a surface half a metre up
+   * that the ray passes straight through. That is the shared primitive rather
+   * than this query. `topFaceAtLocalZ` extrapolates a box's top-face plane
+   * across a footprint `halfDepth` INFLATES for anything pitched, so a tall thin
+   * box tilted a few degrees claims ground beside itself. `NavGrid` lives with
+   * that — a phantom node is a routing nuisance — and a ground probe cannot,
+   * because it stands the player on air. **The fix is a footprint test bounded
+   * by the box's real extent rather than its projected one**, and it belongs in
+   * `boxGeometry`, where `NavGrid` gets it too.
    */
   groundAt(x: number, z: number, ceiling: number, floor: number): number | null {
     const cx = this.clampCell(this.toCell(x));
