@@ -233,6 +233,17 @@ only way in.
   (`OverlayScreen.card`). `showMenu` is called again on every difficulty change and on
   the way back from the kit and settings screens; a cursor that jumped home each time
   would make the row you just left the one place you cannot stay.
+- **There is a SECOND cursor, and the pause list and the round-over card share
+  it** (`OverlayScreen.actions`, `moveActionSelection` / `activateAction`). Those
+  two are the same thing — a short column of buttons, one action apiece — where
+  the menu's rows are settings, so left and right have to mean something on one
+  and nothing on the other and `activateMenu` has a row-by-row answer where
+  these have one thunk each. It owns the selection and NOT the press: each card
+  binds its own, and the pause list's ordinary CLICKS are load-bearing, because
+  `Game`'s document-level `pointerdown` asks for the pointer lock whenever the
+  state is `playing` and a Resume that changed state on the down edge would have
+  that same gesture take the lock outright, behind the deferred and retried path
+  `updatePendingLock` exists to be.
 
 **The LEFT STICK drives all of it, and holding a direction repeats.** It is the
 left stick alone (the right one turns the kit turntable), read raw against
@@ -273,6 +284,21 @@ a target, and "click, press Enter, or press Start" made a pad player work out wh
 was theirs. It now carries the mouse and the finger by itself. It is also where the
 menu's cursor starts, keeping Enter and A meaning "start the round" the moment the
 title appears.
+
+**The round-over card's other button is `Main menu`**, and it is there because a
+finished match was once the one place in the game with no way back to the title:
+the map, the difficulty and the kit are all chosen on the menu, so a player who
+wanted any of them had to reload the page. It goes through `Game.enterMenu`, the
+same abandon-the-round path the pause list's "Quit to menu" takes, which is only
+safe to reach from here because everything in it is idempotent — `endRound` has
+already stopped the death cam, hidden the minimap and reset the battle by the
+time the card is on screen. `B` / Backspace leaves as well, which is what that
+key means on every other screen with a way out, and it is gated on the card's
+own `overlayT` like the confirm: B is the pad's crouch toggle, and a player
+flipping it as the last ticket runs out must not skip past their own result.
+**The two are deliberately not equals** — another round on the same map is what
+most of this card's visitors want, so it keeps the filled Deploy button and the
+cursor's home, and leaving is the outlined alternative under it.
 
 **That button is why the deploy screen's confirm is `menuConfirmPressed`.** It
 changes state on the down edge, which puts the `deploy` branch in front of the very

@@ -2,11 +2,12 @@
  * OverlayScreen.ts — The four full-screen cards that stop the game: the main
  * menu, the round-over result, the pause list, and the one that stands over a
  * map being built.
- * Owns: `#overlay` and everything written into it, the pause list's selection,
- * and the `.overlaid` class on `#hud` that hides the gameplay chrome behind a
- * card. A peer of DeployScreen and LoadoutScreen — Game wires its callbacks
- * (`onStart`, `onDifficulty`, `onOpenLoadout`, `onPauseAction`) and drives its
- * selection, and it knows nothing about game state beyond what it is handed.
+ * Owns: `#overlay` and everything written into it, the action cursor the pause
+ * list and the round-over card share, and the `.overlaid` class on `#hud` that
+ * hides the gameplay chrome behind a card. A peer of DeployScreen and
+ * LoadoutScreen — Game wires its callbacks (`onStart`, `onMainMenu`,
+ * `onDifficulty`, `onOpenLoadout`, `onPauseAction`) and drives its selection,
+ * and it knows nothing about game state beyond what it is handed.
  * Invariants: only one card is up at a time — each `show*` rewrites the whole
  * element — and `hide()` is the single way down from any of them.
  *
@@ -127,11 +128,46 @@ const MENU_ITEMS: readonly MenuItem[] = [
  */
 const MENU_DEFAULT = MENU_ITEMS.indexOf("start");
 
+/**
+ * One button a card's cursor can rest on, and what firing it does.
+ *
+ * The `fire` thunk rather than a data attribute read back off the element,
+ * because the two cards that carry a list answer to different callbacks and a
+ * single `data-action` string would have to name both of their vocabularies.
+ */
+interface ActionItem {
+  el: HTMLElement;
+  fire: () => void;
+}
+
 export class OverlayScreen {
   private root: HTMLElement;
-  /** Live only while the pause card is up — the buttons die with its markup. */
-  private pauseButtons: HTMLElement[] = [];
-  private pauseIndex = 0;
+  /**
+   * The cursor over a card's action buttons — the pause list's four and the
+   * round-over card's two.
+   *
+   * One list for both, because they are the same thing: a short column of
+   * buttons, one action apiece, stepped by up/down and fired by A. The MENU's
+   * cursor is deliberately NOT folded in with them — its rows are settings
+   * rather than actions, so left and right have to mean something there and
+   * nothing here, and `activateMenu` has a row-by-row answer where these have
+   * one thunk each.
+   *
+   * It owns the SELECTION and nothing else: each card still binds its own
+   * press, because they do not agree on the edge and must not be made to. The
+   * pause list takes ordinary CLICKS, and that is load-bearing — `Game`'s
+   * document-level `pointerdown` requests the pointer lock whenever the state
+   * is `playing`, so a Resume that changed state on the down edge would have
+   * the very same gesture ask for the lock outright, behind the deferred,
+   * retried path `updatePendingLock` exists to be. The round-over pair change
+   * state on POINTERDOWN like the menu's Deploy, which is safe for the reason
+   * that is not: the state they move to is `loading`.
+   *
+   * Live only while one of those cards is up — the buttons die with the markup
+   * they are written into.
+   */
+  private actions: ActionItem[] = [];
+  private actionIndex = 0;
   /** Live only while the menu card is up, for the same reason. */
   private menuEls = new Map<MenuItem, HTMLElement>();
   private menuIndex = MENU_DEFAULT;
@@ -160,6 +196,13 @@ export class OverlayScreen {
   onOpenSettings: () => void = () => {};
   /** Wired by Game: the player asked to start a round. */
   onStart: () => void = () => {};
+  /**
+   * Wired by Game: the player asked to leave the finished round for the title
+   * screen. The round-over card's only other way out, and the reason that card
+   * grew a cursor at all — before it, the one thing you could do with a
+   * finished match was play the same map again.
+   */
+  onMainMenu: () => void = () => {};
   /** Wired by Game: the player picked something from the pause list. */
   onPauseAction: (action: PauseAction) => void = () => {};
 
@@ -201,6 +244,23 @@ export class OverlayScreen {
         </div>
         ${rows}
       </div>`;
+  }
+
+  /**
+   * The line that says how a list-shaped card is driven, under its actions.
+   *
+   * Shared by the menu and the round-over card for the same reason the
+   * controls table is: it is the same sentence about the same two inputs, and
+   * two copies of it are two things to forget when the navigation changes. It
+   * names the stick first — the d-pad was always answered and the stick was
+   * not, and the stick is the half a pad player reaches for.
+   */
+  private navHint(): string {
+    return `
+      <p class="ov-nav">
+        <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick / D-pad</kbd> move</span>
+        <span><kbd>Enter</kbd><kbd class="pad">A</kbd> select</span>
+      </p>`;
   }
 
   /**
@@ -279,10 +339,7 @@ export class OverlayScreen {
         </div>
       </div>
       <button class="ov-start" data-menu="start"><b>Deploy</b><i>Enter &middot; A &middot; Start</i></button>
-      <p class="ov-nav">
-        <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick / D-pad</kbd> move</span>
-        <span><kbd>Enter</kbd><kbd class="pad">A</kbd> select</span>
-      </p>
+      ${this.navHint()}
       ${this.controlsTable()}
     `;
     this.root
@@ -295,7 +352,7 @@ export class OverlayScreen {
     });
     // The cursor's row is collected from the markup rather than kept in step
     // by hand, so a row added above only has to name itself in `MENU_ITEMS`.
-    this.menuEls.clear();
+    this.clearCursors();
     this.root.querySelectorAll<HTMLElement>("[data-menu]").forEach((el) => {
       const item = el.dataset.menu as MenuItem;
       this.menuEls.set(item, el);
@@ -406,6 +463,21 @@ export class OverlayScreen {
     });
   }
 
+  /**
+   * The result card, and the two things a finished match can become.
+   *
+   * It is a LIST, like every other screen here. It used to be a result and one
+   * button, which quietly made a round-over the one place in the game with no
+   * way back to the title: the map, the difficulty and the kit are all chosen
+   * on the menu, so a player who wanted any of them had to reload the page.
+   * The two are deliberately not equals — another round on the same map is
+   * what most of this card's visitors want, so it keeps the filled Deploy
+   * button and the cursor, and leaving is the outlined alternative under it.
+   *
+   * `B` / Backspace also leaves, which is what that key means on every other
+   * screen in this directory, and the caption says so. `Game` owns that one:
+   * the card cannot see a key.
+   */
   showRoundOver(
     winnerName: string,
     playerWon: boolean,
@@ -416,7 +488,7 @@ export class OverlayScreen {
     this.root.classList.remove("hidden");
     this.setOverlaid(true);
     this.card = "roundover";
-    this.menuEls.clear();
+    this.clearCursors();
     this.root.innerHTML = `
       <div class="ov-title">
         <h1 class="${playerWon ? "win" : "dead"}">${playerWon ? "VICTORY" : "DEFEAT"}</h1>
@@ -426,9 +498,24 @@ export class OverlayScreen {
         <span class="lbl">REINFORCEMENTS REMAINING</span>
         <span class="vals"><b>${tickets0}</b><i>/</i><b>${tickets1}</b></span>
       </div>
-      <button class="ov-start"><b>Another round</b><i>Enter &middot; A &middot; Start</i></button>
+      <div class="ov-actions">
+        <button class="ov-start"><b>Another round</b><i>Enter &middot; A &middot; Start</i></button>
+        <button class="ov-quit"><b>Main menu</b><i>Backspace &middot; B</i></button>
+      </div>
+      ${this.navHint()}
     `;
     this.bindStart();
+    const quit = this.root.querySelector<HTMLElement>("button.ov-quit");
+    // POINTERDOWN, the edge `bindStart` uses beside it — the two halves of one
+    // choice must not answer on two different edges.
+    if (quit) quit.onpointerdown = () => this.onMainMenu();
+    const start = this.root.querySelector<HTMLElement>("button.ov-start");
+    if (start && quit) {
+      this.bindActions([
+        { el: start, fire: () => this.onStart() },
+        { el: quit, fire: () => this.onMainMenu() },
+      ]);
+    }
   }
 
   /**
@@ -457,7 +544,7 @@ export class OverlayScreen {
     this.root.classList.remove("hidden");
     this.setOverlaid(true);
     this.card = "building";
-    this.menuEls.clear();
+    this.clearCursors();
     this.root.innerHTML = `
       <div class="ov-title">
         <h1 class="building-title">${mapName}</h1>
@@ -478,7 +565,7 @@ export class OverlayScreen {
    * are worth reading. `#hud.paused` — which the HUD raises, not this — takes
    * away only the things that would be lying.
    *
-   * The action list is the one part of the overlay that takes pointer events,
+   * The action list is the one part of this card that takes pointer events,
    * the same carve-out the difficulty row gets. Selection is a class on a
    * button that already exists rather than a re-render, so arrowing down the
    * list does not restart the prompt's animation or drop the hover state.
@@ -486,7 +573,7 @@ export class OverlayScreen {
   showPause(): void {
     this.root.classList.remove("hidden");
     this.card = "pause";
-    this.menuEls.clear();
+    this.clearCursors();
     const items = PAUSE_ITEMS.map(
       ([action, label]) =>
         `<button class="pact" data-action="${action}">${label}</button>`,
@@ -500,45 +587,68 @@ export class OverlayScreen {
       ${this.controlsTable()}
       <p class="prompt">Esc &middot; Start &middot; B to resume</p>
     `;
-    this.pauseButtons = [];
-    this.root
-      .querySelectorAll<HTMLElement>("button.pact")
-      .forEach((btn, i) => {
-        btn.onclick = () => this.onPauseAction(btn.dataset.action as PauseAction);
-        // Hovering moves the keyboard selection with it, so the highlighted
-        // item and the one a click is about to fire can never disagree.
-        btn.onmouseenter = () => this.setPauseSelection(i);
-        this.pauseButtons.push(btn);
-      });
-    this.setPauseSelection(0);
+    const buttons: ActionItem[] = [];
+    this.root.querySelectorAll<HTMLElement>("button.pact").forEach((btn) => {
+      const action = btn.dataset.action as PauseAction;
+      // CLICK, not pointerdown, and see `actions` for why that is a rule here
+      // rather than a habit: Resume changes the state to `playing`, and the
+      // document listener that would see the same press wants a pointer lock.
+      btn.onclick = () => this.onPauseAction(action);
+      buttons.push({ el: btn, fire: () => this.onPauseAction(action) });
+    });
+    this.bindActions(buttons);
   }
 
-  /** Steps the pause selection, wrapping at both ends. */
-  movePauseSelection(delta: number): void {
-    const n = this.pauseButtons.length;
+  /**
+   * Puts a card's buttons under the cursor and lights the first.
+   *
+   * Hovering moves the selection with the mouse, so the highlighted button and
+   * the one Enter is about to fire can never disagree — the rule the menu, the
+   * kit screen's slots and the settings rows all keep.
+   */
+  private bindActions(items: ActionItem[]): void {
+    this.actions = items;
+    items.forEach(({ el }, i) => {
+      el.onmouseenter = () => this.setActionSelection(i);
+    });
+    this.setActionSelection(0);
+  }
+
+  /** Steps the action cursor, wrapping at both ends. */
+  moveActionSelection(delta: number): void {
+    const n = this.actions.length;
     if (n === 0) return;
-    this.setPauseSelection((this.pauseIndex + delta + n) % n);
+    this.setActionSelection((this.actionIndex + delta + n) % n);
   }
 
-  /** Fires the selected pause item — Enter / gamepad A. */
-  activatePause(): void {
-    const btn = this.pauseButtons[this.pauseIndex];
-    if (btn) this.onPauseAction(btn.dataset.action as PauseAction);
+  /** Fires the action the cursor is on — Enter / gamepad A. */
+  activateAction(): void {
+    this.actions[this.actionIndex]?.fire();
   }
 
-  private setPauseSelection(i: number): void {
-    this.pauseIndex = i;
-    this.pauseButtons.forEach((b, k) => b.classList.toggle("on", k === i));
+  private setActionSelection(i: number): void {
+    this.actionIndex = i;
+    this.actions.forEach(({ el }, k) => el.classList.toggle("sel", k === i));
   }
 
-  /** Takes whichever card is up back down. The single way off all three. */
+  /**
+   * Forgets both cursors, because the elements they point at are about to stop
+   * existing — every `show*` rewrites the whole card and `hide` throws it away.
+   * A stale entry here is a `classList.toggle` on a detached node, which is
+   * silent, and a `fire` thunk a key could still reach.
+   */
+  private clearCursors(): void {
+    this.menuEls.clear();
+    this.actions = [];
+    this.actionIndex = 0;
+  }
+
+  /** Takes whichever card is up back down. The single way off all four. */
   hide(): void {
     this.root.classList.add("hidden");
     this.setOverlaid(false);
     // The buttons live in the card's markup, so they die with it.
-    this.pauseButtons = [];
-    this.pauseIndex = 0;
-    this.menuEls.clear();
+    this.clearCursors();
     this.card = "none";
   }
 

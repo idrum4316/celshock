@@ -54,6 +54,23 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   ~0.5 s frame gap, leaving the key set empty on every `input.update()`. A long
   wait after getting in gets the player killed (state drops to `deploy`, pose
   freezes) — override `player.takeDamage` to stand still.
+- **A scripted arrow key steps a menu an UNPREDICTABLE number of rows, because a
+  held direction repeats.** `menuRepeatDelay` is 0.42 s and `menuRepeatInterval`
+  is 0.14 s against a ~0.5 s frame, so every frame after the first is another
+  step and the press has to straddle a frame to be seen at all — there is no
+  hold length that reliably gives exactly one. Count the steps (wrap
+  `overlayScreen.moveActionSelection`, keeping the pristine method off the
+  instance so a second wrap does not double-count) and assert the INDEX against
+  `steps % rows`; then put the cursor on the row you actually want to fire by
+  calling that same method from the page, which is what `Game` does anyway.
+- **The pointer stays where the last click left it, and hovering a button MOVES
+  the cursor** — that is the rule every list-shaped screen keeps. So a card
+  raised under a parked pointer comes up with whatever row landed under it
+  selected, and the next Enter fires *that*. It cost a debugging session on the
+  round-over card: a test that clicked `Main menu`, went back, and raised the
+  card again found the cursor on `Main menu` rather than on `Another round`,
+  which looks exactly like a broken default. `page.mouse.move(4, 4)` before
+  raising any card.
 - Assigning `input.ads` or `cameraSys.adsBlend` does not stick;
   `InputManager.update()` rewrites the flag every tick. Redefine instead —
   `Object.defineProperty(g.input, "ads", { get: () => true, set: () => {} })` —
