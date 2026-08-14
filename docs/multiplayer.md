@@ -148,6 +148,27 @@ on. The shot's `dir` is the direction the round *actually* flew, spread already
 applied, because `CombatSystem.fire` jitters internally and the server has to
 re-resolve that bullet rather than a differently jittered one.
 
+**Health REGENERATES on the server, and the client predicts the curve.** Regen
+is a rule about a number the authority owns, so `NetPlayer.regen` runs it off the
+same `regenDelay` and `regenRate` `Player.update` uses offline — a networked
+round whose pool never refilled would be precisely the respawn queue
+`config/player.ts` calls that rule load-bearing against, with the twist that only
+the multiplayer half of the game had it. Nothing on the wire announces a healed
+point: a `damage` event is the only message carrying a health at all, and it is
+enough, because a hit is the only thing that can put the client's copy out by
+more than a trip's worth of regen. So the client arms its own lock from that
+event — `Player.applyServerHealth` is the assignment and the lock together — and
+runs the identical curve locally. The drift that leaves is one round trip of
+healing and it is on the CLIENT's side: a player may briefly believe they have
+less health than the authority says, never more.
+
+**Assigning that health without the lock is the bug the method exists for.** The
+client healed straight back to full underneath a server that had never healed it
+at all, so the HUD read 100 while the authority held 75 — and nothing looked
+wrong until the next round landed and knocked the bar down to where it had
+always been. A health that only ever *falls* to the truth is the shape of this
+failure, and the cause is a client running half of a two-part rule.
+
 **A position on the wire is the FEET**, and the whole of a body is built up from
 it on the far side: the validator asks what is solid at that height, `NetPlayer`
 raises the eye and the hit sphere off it, and `NetSoldier` stands a rig on it.

@@ -64,6 +64,14 @@ export class NetPlayer implements Combatant {
    */
   grenades: number = CONFIG.grenade.carried;
 
+  /**
+   * Counts down from `regenDelay` after each hit; regen resumes at zero. The
+   * server's copy of `Player.regenLockT`, and it has to exist here because the
+   * authority owns the health: regen is a rule about the number, and a rule
+   * about the number belongs wherever the number is decided.
+   */
+  private regenLockT = 0;
+
   /** Ring of past positions, oldest first. Read by the hit rewind in phase 5. */
   private readonly traces: Trace[] = [];
 
@@ -179,6 +187,7 @@ export class NetPlayer implements Combatant {
   takeDamage(amount: number, from?: Vector3): boolean {
     if (!this.alive) return false;
     this.health -= amount;
+    this.regenLockT = CONFIG.player.regenDelay;
     const killed = this.health <= 0;
     if (killed) {
       this.health = 0;
@@ -189,8 +198,34 @@ export class NetPlayer implements Combatant {
     return killed;
   }
 
+  /**
+   * Heals back toward full once the lock a hit armed has run out — the same
+   * Battlefield-style rule `Player.update` runs offline, off the same two
+   * numbers, because a networked round that never refilled a health pool
+   * would be the respawn queue `config/player.ts` calls the rule load-bearing
+   * against, with the added twist that only the multiplayer half of the game
+   * had it.
+   *
+   * Nothing on the wire announces it. The client predicts the identical curve
+   * from the lock its own `damage` event armed, and the health on the NEXT
+   * such event is the correction — so the two agree to within whatever regen
+   * the trip took, and the client is the one that is behind. That direction is
+   * the safe one: a player may briefly believe they have less health than the
+   * authority says, never more.
+   */
+  regen(dt: number): void {
+    if (!this.alive) return;
+    this.regenLockT = Math.max(0, this.regenLockT - dt);
+    if (this.regenLockT > 0 || this.health >= CONFIG.player.maxHealth) return;
+    this.health = Math.min(
+      CONFIG.player.maxHealth,
+      this.health + CONFIG.player.regenRate * dt,
+    );
+  }
+
   spawn(at: Vector3, yaw: number): void {
     this.health = CONFIG.player.maxHealth;
+    this.regenLockT = 0;
     // Death is the only resupply. See the field's note.
     this.grenades = CONFIG.grenade.carried;
     this.alive = true;

@@ -2527,9 +2527,13 @@ export class Game {
       // We were hit. Health is the server's, so it is assigned rather than
       // subtracted — a client that decremented its own would drift out of step
       // with the authority over a firefight and disagree about who is alive.
+      // `applyServerHealth` also arms the regen lock, which is the half of the
+      // hit that never crosses the wire: the server holds the health down for
+      // `regenDelay` and then heals it back, and the client runs the identical
+      // curve locally rather than being told about every point of it.
       case "damage":
         if (event.victim === this.net?.slot) {
-          this.player.health = event.health;
+          this.player.applyServerHealth(event.health);
           this.netDamageFrom.set(event.from[0], event.from[1], event.from[2]);
           this.onPlayerDamaged(event.amount, false, this.netDamageFrom);
         }

@@ -576,7 +576,11 @@ client. A shooter's hitmarker is a **guess**: the round is reported, every targe
 is rewound to what the shooter was looking at, and `CombatSystem.fire` runs again
 on the server, which is the only thing that deals damage. Movement is the
 exception and is client-simulated, then validated for speed, ground and solids;
-that trade is argued in the contract.
+that trade is argued in the contract. **Health regeneration is the second
+exception**: the authority heals the pool and nothing on the wire says so, so the
+client predicts the same curve from the lock a `damage` event arms — assign that
+event's health without the lock and the client heals back to full underneath a
+server that never healed it.
 
 **The roster is sixteen slots, built once, never resized.** A match starts with
 one person in it and every unfilled slot is a bot; a human joining BENCHES the

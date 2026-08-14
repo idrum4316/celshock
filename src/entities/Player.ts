@@ -1667,6 +1667,28 @@ export class Player implements Combatant {
   }
 
   /**
+   * The networked half of `takeDamage`: health the authority decided, plus the
+   * regen lock that came with it.
+   *
+   * A multiplayer round assigns health rather than subtracting it, for the
+   * reason `Game.onNetEvent` gives — but the LOCK is the other half of the same
+   * event and the client still has to arm it, because regen is PREDICTED here.
+   * Nothing on the wire carries a health except a hit, so a client that took
+   * the number without the lock healed straight back to full over the next few
+   * seconds off a server that had never healed it, and the lie held until the
+   * next round landed and knocked it back down to what it had always been.
+   *
+   * Everything else a hit does — the vignette, the arc, the flinch — is
+   * `Game`'s and stays there; the callback is deliberately NOT raised, because
+   * the authority already told `Game` what happened and this is only the
+   * bookkeeping that goes with it.
+   */
+  applyServerHealth(health: number): void {
+    this.health = health;
+    this.regenLockT = CONFIG.player.regenDelay;
+  }
+
+  /**
    * Shows/hides everything the player renders — which in first person is the
    * viewmodel and its brass, nothing else. Hidden outside gameplay: the menu
    * and deploy screen sit over a live view of the world, and the editor flies

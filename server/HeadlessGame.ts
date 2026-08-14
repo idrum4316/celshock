@@ -117,7 +117,14 @@ export class HeadlessGame {
     // would be a second door onto the same act, which is how one of them comes
     // to disagree with the other.
     for (const player of this.players.values()) {
-      if (player.alive) continue;
+      // A living one only ages its regen lock. Bots do not regenerate and never
+      // have — the pool that has to refill is a person's, because a person is
+      // the one combatant a round cannot afford to send back to a spawn queue
+      // at half health.
+      if (player.alive) {
+        player.regen(dt);
+        continue;
+      }
       if (player.respawnT > 0) {
         player.respawnT -= dt;
         continue;
