@@ -642,13 +642,35 @@ export class Match {
         this.onGrenade(peer, msg);
         break;
       case "deploy":
-        // Not implemented, and deliberately inert rather than half-wired.
-        // Reinforcements arrive through `HeadlessGame.step`, which is the one
-        // door a person enters the world by; letting a client CHOOSE its spawn
-        // means offering it a validated list first, and an unvalidated
-        // `spawn` index is a request to be placed anywhere on the map.
+        this.onDeploy(peer, msg);
         break;
     }
+  }
+
+  /**
+   * A player asking to come back in, and where.
+   *
+   * All this does is RECORD the ask. The simulation spends it — see the
+   * reinforcement pass in `HeadlessGame.step` — because when a person may
+   * deploy is the reinforcement clock's answer and where they land is
+   * conquest's, and neither of those questions is a transport's business.
+   *
+   * The index is checked for shape here and for MEANING there: `decode` returns
+   * parsed JSON asserted to a `ClientMessage`, so the static type is a claim
+   * about a well-behaved client and nothing more, and the `deployAt` lookup on
+   * the far side is what refuses a spawn this team may not use.
+   *
+   * A living player asking is a confused client rather than an attack — a
+   * queued request would deploy them out of a firefight the moment they next
+   * died, which is a worse answer than nothing — and a second ask from a dead
+   * one replaces the first, because it is the same player changing their mind
+   * in front of a screen that is still up.
+   */
+  private onDeploy(peer: Peer, msg: Extract<ClientMessage, { t: "deploy" }>): void {
+    const player = this.game.players.get(peer.slot);
+    if (!player || player.alive) return;
+    if (!Number.isInteger(msg.spawn)) return;
+    player.deployRequest = msg.spawn;
   }
 
   /**

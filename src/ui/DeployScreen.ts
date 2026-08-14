@@ -5,7 +5,11 @@
  * selection is confirmed.
  * Invariants: CSS contract — #hud is pointer-events:none and this overlay
  * opts back in; don't break that or gameplay clicks die. Re-checks map/
- * conquest readiness every update; the 3D scene renders live behind it.
+ * conquest readiness every update; the 3D scene renders live behind it. The
+ * offer is derived from flag ownership and changes UNDER the cursor, so the
+ * highlight is held by identity (`selectedSpawn`) and never as an index. What
+ * `onDeploy` means is the caller's: offline Game deploys, in a netplay round it
+ * sends a request and `setPending` is how this screen says so.
  */
 import "./deploy.css";
 import { CONFIG } from "../config";
@@ -48,9 +52,24 @@ export class DeployScreen {
   private team: Team = 0;
   private options: SpawnPointDef[] = [];
   private selected = 0;
+  /**
+   * The spawn the highlight is ON, as an object rather than as a position in
+   * the list.
+   *
+   * The list is derived from flag ownership and re-derived every frame, so in a
+   * networked round it changes UNDER the cursor: a flag falling two hundred
+   * metres away removes a row, everything below it shifts up, and a carried
+   * index quietly becomes a different place — which the player then deploys to
+   * with their hand already on Enter. Identity is what keeps the highlight on
+   * what it was put on; when that spawn stops being offered the highlight falls
+   * back to the home gatehouse, which is the one row that can never disappear.
+   */
+  private selectedSpawn: SpawnPointDef | null = null;
   /** Screen-space hit targets, rebuilt every draw. */
   private hotspots: { x: number; y: number; r: number; index: number }[] = [];
   private ready = false;
+  /** The spawn a networked deploy has been requested at, until it is granted. */
+  private pendingLabel: string | null = null;
 
   constructor() {
     this.root = document.createElement("div");
@@ -118,8 +137,29 @@ export class DeployScreen {
     this.conquest = conquest;
     this.team = team;
     this.selected = 0;
+    this.selectedSpawn = null;
     this.ready = false;
+    this.pendingLabel = null;
     this.root.classList.remove("hidden");
+  }
+
+  /**
+   * Says that the deploy has been ASKED FOR and not yet granted — the networked
+   * case, where confirming sends a request and the authority answers a round
+   * trip later by putting the body in the world.
+   *
+   * The caption it raises names the spawn that was requested rather than the
+   * one under the cursor, and stays up while the cursor moves: the two can
+   * differ, because a player may keep looking around after confirming, and a
+   * line that followed the highlight would claim they were deploying somewhere
+   * they had not asked for. Confirming again replaces both.
+   *
+   * Nothing else changes. The Deploy button stays live on purpose — a re-confirm
+   * is a new request, which is the whole of what a player can do about a server
+   * that has not answered yet.
+   */
+  setPending(): void {
+    this.pendingLabel = this.spawnLabel(this.options[this.selected]);
   }
 
   hide(): void {
@@ -134,7 +174,12 @@ export class DeployScreen {
   update(remaining: number): void {
     if (!this.map || !this.conquest) return;
     this.options = this.conquest.deployOptions(this.team);
-    if (this.selected >= this.options.length) this.selected = 0;
+    // Re-found by identity, not carried as an index — see `selectedSpawn`. A
+    // spawn that has stopped being offered drops the highlight to the home
+    // spawn rather than onto whatever inherited its row.
+    const at = this.selectedSpawn ? this.options.indexOf(this.selectedSpawn) : -1;
+    this.selected = at >= 0 ? at : 0;
+    this.selectedSpawn = this.options[this.selected] ?? null;
     this.ready = remaining <= 0;
 
     const name = this.spawnLabel(this.options[this.selected]);
@@ -142,9 +187,15 @@ export class DeployScreen {
     // on the map because a marker highlighted 300 px away is not a label, and
     // stepping through spawns with a d-pad is exactly the case where nothing
     // else tells you what you just moved onto.
-    this.statusEl.textContent = this.ready
-      ? `READY TO DEPLOY  —  ${name}`
-      : `REINFORCEMENTS IN ${Math.ceil(remaining)}  —  ${name}`;
+    //
+    // A pending request outranks both: it is the one state in which this screen
+    // is waiting on somebody else, and a line reading READY while the player has
+    // already pressed the button says nothing happened.
+    this.statusEl.textContent = this.pendingLabel
+      ? `DEPLOYING  —  ${this.pendingLabel}`
+      : this.ready
+        ? `READY TO DEPLOY  —  ${name}`
+        : `REINFORCEMENTS IN ${Math.ceil(remaining)}  —  ${name}`;
     this.statusEl.classList.toggle("ready", this.ready);
     // `confirm()` is a no-op until the wait is over, so the button must not
     // look live before then — a control that answers nothing is worse than one
@@ -168,6 +219,7 @@ export class DeployScreen {
     const n = this.options.length;
     if (n === 0) return;
     this.selected = (this.selected + delta + n) % n;
+    this.selectedSpawn = this.options[this.selected];
   }
 
   /** Deploys at the current selection. Used by the keyboard/gamepad confirm. */
@@ -193,6 +245,7 @@ export class DeployScreen {
       const dy = h.y - y;
       if (dx * dx + dy * dy < h.r * h.r) {
         this.selected = h.index;
+        this.selectedSpawn = this.options[this.selected];
         this.update(this.ready ? 0 : 1);
         if (this.ready) this.confirm();
         return;

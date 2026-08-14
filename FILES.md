@@ -228,8 +228,9 @@ src/
     OverlayScreen.ts    # The four cards — menu, round-over, pause, building —
       overlay.css       #   and the .overlaid class they raise. The menu is a
                         #   LIST: MENU_ITEMS is the cursor's whole world
-    DeployScreen.ts     # Top-down deploy map + the deploy and kit buttons
-      deploy.css
+    DeployScreen.ts     # Top-down deploy map + the deploy and kit buttons. The
+      deploy.css        #   offer is live, so the highlight is held by IDENTITY;
+                        #   in a netplay round a confirm is a REQUEST and says so
     LoadoutScreen.ts    # Kit screen: two slots, a stat chart derived from
       loadout.css       #   CONFIG.weapons, and the turntable stage
     SettingsScreen.ts   # Controls built from a ROW TABLE — a button group, or

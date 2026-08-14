@@ -128,6 +128,15 @@ import { Sfx } from "./Sfx";
  * stops everything. It ends on its own clock, and the deploy screen it opens
  * subtracts the time already spent, so a life costs what it always did.
  *
+ * `deploy` simulates nothing and never may — offline the world is genuinely
+ * held while the map is up. In a NETPLAY round it is the one state outside the
+ * fight that still steps the netplay half of a frame (`updateNetWorld`), which
+ * is not the same thing: the authority has not paused, and everything this
+ * screen shows — the flags its offer is derived from, the tickets on the strip
+ * under it, the bodies moving behind it — arrives from a frame. It is also the
+ * state a player LEAVES by asking rather than by acting: `onDeploy` sends a
+ * request and the server's own spawn event is what puts them in the world.
+ *
  * `paused` is the other side state, and unlike the rest it remembers where it
  * came from (`pausedFrom`): a pause is a lid over `playing`, `dying` or
  * `deploy`, and resuming puts the state back exactly as it was rather than
@@ -884,6 +893,19 @@ export class Game {
     // wiring, and is not what the guard should rest on.
     this.deployScreen.onDeploy = (spawn) => {
       if (this.state !== "deploy") return;
+      // In a netplay round this is a REQUEST and not a deployment. The
+      // authority owns the body: it decides whether that spawn is still one
+      // this team may use and when the reinforcement clock allows it, and the
+      // `spawn` event it answers with is what actually puts the player in the
+      // world — through the same `spawnPlayer` this line calls offline. Putting
+      // them there here as well would be the client deciding an outcome, and
+      // the outcome it would decide is the one thing on this screen the server
+      // cannot afford to have a second opinion about: where somebody is.
+      if (this.net) {
+        this.net.sendDeploy(this.conquest.spawnIndex(spawn));
+        this.deployScreen.setPending();
+        return;
+      }
       this.spawnPlayer(spawn);
     };
   }
@@ -1525,6 +1547,26 @@ export class Game {
       return;
     }
     this.respawnT -= dt;
+    // The round carries on without us, and this is the screen that reads it.
+    // The map below is drawn from `conquest.points`, which the wire keeps
+    // current — but the bodies behind the card, the tickets on the strip and
+    // the effects this client owns are all stepped from a frame, and this
+    // state's frame is the only one they get while a player is choosing.
+    //
+    // The two HUD pushes are `updateGameplay`'s, made here because the deploy
+    // screen is one of the two overlays that deliberately does NOT hide the
+    // gauges under it: a flag falling while you pick where to drop in changes
+    // both, and a strip that only refreshes once you are back in the world
+    // spends the whole of that decision showing the round you died in.
+    if (this.net) {
+      this.updateNetWorld(dt);
+      this.hud.setTickets(
+        [CONFIG.teams[0].name, CONFIG.teams[1].name],
+        this.conquest.tickets,
+        this.player.team,
+      );
+      this.hud.setFlags(this.conquest.points, this.player.team);
+    }
     // Stepped before the redraw, so the marker and the status line move on
     // the frame the key was pressed. Both axes step the same list — the
     // spawns are a handful of points scattered over a map rather than a
@@ -2504,13 +2546,33 @@ export class Game {
     // the build has nothing on screen to correct and is read straight off the
     // session by `buildRound`, which is what the `loading` test defers to. The
     // team not having changed is the ordinary case — every first joiner, and
-    // every reconnect that lands back on the same side — and it returns rather
-    // than repainting, because re-showing the deploy screen would throw away
-    // the spawn the player is in the middle of choosing.
+    // every reconnect that lands back on the same side — and it repaints
+    // nothing there, because re-showing the deploy screen would throw away the
+    // spawn the player is in the middle of choosing.
     net.onSeated = (team) => {
       if (this.state === "loading" || !this.map) return;
-      if (team === this.player.team) return;
-      this.applyPlayerTeam(team, this.map);
+      if (team !== this.player.team) this.applyPlayerTeam(team, this.map);
+      // A seat is a body the authority is holding until it is ASKED for, and
+      // this callback is raised again on every reconnect — where the client is
+      // usually in the middle of the round it thinks it is still playing. Its
+      // old slot is gone, the new one is dead with a zero clock, and every
+      // movement sample it sends from here on is dropped as "a dead player
+      // reports nothing worth keeping": it would walk the map as a ghost that
+      // nobody can see, be hit by nothing, and hit nothing back.
+      //
+      // So the screen that asks goes back up. After the team above, so the
+      // spawns it offers belong to the new seat.
+      //
+      // `deploy` is deliberately not in this list: that screen is already up
+      // and asking, and re-showing it would reset a selection the player is in
+      // the middle of making — the same reason `applyPlayerTeam` re-shows it
+      // only when the side has actually changed. A request made before the
+      // reconnect is not lost with the socket either: `NetSession` holds it
+      // until the authority answers with a spawn, and re-sends it on the seat
+      // that answers.
+      if (this.state === "playing" || this.state === "dying") {
+        this.enterDeploy(0);
+      }
     };
 
     net.onEvent = (event) => this.onNetEvent(event);
@@ -2826,12 +2888,52 @@ export class Game {
       },
       this.conquest.points,
       this.cameraSys.camera.position,
-      this.player.alive,
+      // Only a player who is actually IN the round reports where they are. The
+      // health flag alone is not that question any more, now that this runs
+      // under the deploy screen too: a round opens with a live `Player` that
+      // has never been placed, so a bare `alive` would upload the last round's
+      // position — or the origin — on behalf of a body the authority holds as
+      // dead and has not deployed yet. The server drops those samples anyway
+      // (`onMove` returns on a dead player), which is exactly why the client
+      // should not be sending them.
+      this.state === "playing" && this.player.alive,
     );
     // The mirrored ticket counts, so the HUD strip reads the server's round
     // rather than a local `ConquestSystem` that is no longer being stepped.
     this.conquest.tickets[0] = this.net.tickets[0];
     this.conquest.tickets[1] = this.net.tickets[1];
+  }
+
+  /**
+   * The half of a netplay frame that is this client's rather than the
+   * authority's: everybody else's bodies, and the effects nobody else advances.
+   *
+   * One method because it has two callers that must never drift apart —
+   * `updateWorld` for the states that are IN the round, and the deploy screen
+   * for the one state that is not. A player waiting to come back is watching a
+   * fight that has not stopped for them, and this screen is a live view of it
+   * with a top-down map of the flags over the top; left unstepped, sixteen
+   * bodies stand frozen behind the card and then snap to wherever they really
+   * are on the frame the player deploys.
+   *
+   * `RagdollSystem` is in here for a reason sharper than symmetry: `updateNet`
+   * is what raises an interpolated death, and a death raised while the pool is
+   * not being stepped is a corpse that takes a rig, parents its joints to
+   * proxies nothing writes, and hangs in the air for the rest of the round.
+   * Stepping the roster without stepping the pool is not half the feature, it
+   * is a haunting.
+   *
+   * This is still not simulation and may never become it. Nothing here decides
+   * an outcome, which is what keeps it callable from a state that owns none —
+   * and it stays out of `paused` and `menu` for the reason it belongs in
+   * `deploy`: those two are a round that is not running, and this is a round
+   * running without you.
+   */
+  private updateNetWorld(dt: number): void {
+    this.updateNet(dt);
+    this.combat.update(dt);
+    this.grenades.update(dt);
+    this.ragdolls.update(dt);
   }
 
   private updateWorld(dt: number): boolean {
@@ -2862,15 +2964,7 @@ export class Game {
     // still the first thing after the local player has been simulated and
     // before anything reads where anybody is.
     if (this.net) {
-      this.updateNet(dt);
-      this.combat.update(dt);
-      this.grenades.update(dt);
-      // The pool is stepped in a networked round exactly as it is offline, and
-      // for the same reason it is stepped HERE rather than from `scene.animate`
-      // — this is the one call site that a pause, the deploy screen and the
-      // menu do not reach. What differs is only who decided a body should fall:
-      // offline it is `registerBotKill`, here it is the wire.
-      this.ragdolls.update(dt);
+      this.updateNetWorld(dt);
       return true;
     }
 

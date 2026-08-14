@@ -16,6 +16,13 @@
  * team 0 then team 1, `BattleSystem` builds its pool the same way, and both are
  * sized from `CONFIG.bots.perTeam`. That is what makes benching a bot for a
  * human a single array index rather than a mapping that can disagree.
+ *
+ * A person enters the world through the reinforcement pass in `step` and
+ * nowhere else, and only once they have both waited out the clock and ASKED:
+ * `Match` records the ask on `NetPlayer.deployRequest` and this class is what
+ * spends it, against `ConquestSystem.deployAt` rather than against the index
+ * itself. That pair is the whole of spawn selection on this side — see
+ * `docs/multiplayer.md`.
  */
 import { Scene, Vector3 } from "@babylonjs/core";
 // The `.js` is required and must stay: `@babylonjs/core` declares no `exports`
@@ -116,6 +123,14 @@ export class HeadlessGame {
     // same line that redeploys a corpse. Spawning from `Match.admit` as well
     // would be a second door onto the same act, which is how one of them comes
     // to disagree with the other.
+    //
+    // It takes TWO facts, not one: the clock has to have run out and the player
+    // has to have asked. A person chooses where they come back in — that is the
+    // deploy screen, and it is as much of the game in a match as it is offline
+    // — so an unasked player is simply not deployed, however long they stand
+    // there. Nothing here times them out into the world: a player looking at
+    // the map is doing the thing the screen is for, and the alternative is
+    // yanking them out of it mid-decision.
     for (const player of this.players.values()) {
       // A living one only ages its regen lock. Bots do not regenerate and never
       // have — the pool that has to refill is a person's, because a person is
@@ -129,8 +144,16 @@ export class HeadlessGame {
         player.respawnT -= dt;
         continue;
       }
-      const spawn = this.spawnPointFor(player.team);
+      // A request that arrived before the clock ran out is KEPT and spent here,
+      // rather than refused for being early. The two clocks are a round trip
+      // apart and the client's is the one the player watches, so a confirm on
+      // the frame it reaches zero legitimately lands a little ahead of this
+      // one; refusing it would drop the deploy of every honest player whose
+      // ping is worse than their patience.
+      if (player.deployRequest === null) continue;
+      const spawn = this.spawnPointFor(player.team, player.deployRequest);
       if (!spawn) continue;
+      player.deployRequest = null;
       player.spawn(spawn.pos, spawn.yaw);
       this.onPlayerSpawned(player, spawn.pos, spawn.yaw);
     }
@@ -377,9 +400,23 @@ export class HeadlessGame {
    * on one point is as bad here as it is on the client. `Math.random()` is
    * correct on this side of the wire: the server decides where people appear
    * and tells them, so there is nothing for a client to reproduce.
+   *
+   * `requested` is a person's pick off their deploy screen, and it is the only
+   * thing here a client has any say in. It is not trusted: `deployAt` answers
+   * with the spawn only if it is one this team may use at this instant, so a
+   * request naming the enemy gatehouse, a flag lost while the message was in
+   * flight, or an index that is not a spawn at all falls through to the pick
+   * the bots get. A refusal is silent and costs the player their position
+   * rather than their reinforcement — they asked to come back, and coming back
+   * is not the part a client is asking permission for.
    */
-  private spawnPointFor(team: Team): { pos: Vector3; yaw: number } | null {
-    const pick = this.conquest.spawnFor(team);
+  private spawnPointFor(
+    team: Team,
+    requested?: number | null,
+  ): { pos: Vector3; yaw: number } | null {
+    const pick =
+      (requested != null ? this.conquest.deployAt(team, requested) : null) ??
+      this.conquest.spawnFor(team);
     if (!pick) return null;
     return {
       pos: pick.pos.add(

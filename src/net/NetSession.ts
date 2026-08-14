@@ -174,6 +174,44 @@ export class NetSession {
   }
 
   /**
+   * Asks to be deployed at one of the map's spawns.
+   *
+   * `spawn` is an index into `GameMap.spawns` — see `DeployMessage` for why it
+   * is that and not an index into the list the screen is showing. This is an
+   * ASK and the only one in the protocol that moves the local body: the server
+   * decides whether the position is still one this team may use, when the
+   * reinforcement clock allows it, and answers with a `spawn` event. Nothing
+   * here puts the player in the world.
+   *
+   * The request STANDS until the authority answers it with a spawn, and that is
+   * what makes it survive a socket. `joinMatch` books the local round before
+   * the socket is open, so the deploy screen can be up and confirmable before
+   * the welcome lands; and a reconnect re-seats this client into a fresh body
+   * that is dead until it asks. In both cases the player has already pressed
+   * the button, and a request dropped on the floor leaves them looking at a
+   * screen that answered once and then wanted pressing again for no reason they
+   * could see.
+   */
+  sendDeploy(spawn: number): void {
+    this.pendingDeploy = spawn;
+    this.flushDeploy();
+  }
+
+  /**
+   * The deploy request the authority has not answered yet, or null.
+   *
+   * Cleared by the `spawn` event rather than by the send, which is what makes
+   * it a standing request rather than a fire-and-forget: an unanswered one is
+   * re-sent on the next welcome.
+   */
+  private pendingDeploy: number | null = null;
+
+  private flushDeploy(): void {
+    if (!this.seated || this.pendingDeploy === null) return;
+    this.conn.send({ t: "deploy", spawn: this.pendingDeploy });
+  }
+
+  /**
    * Reports a grenade this client just threw.
    *
    * `dir` is the aim, not the launch vector: `GrenadeSystem.throwAlong` applies
@@ -210,6 +248,10 @@ export class NetSession {
         // reconnect to aim at. See `Connection.pinMatch` for why a retry that
         // re-sent the ORIGINAL join would be a bug.
         this.conn.pinMatch(msg.matchId);
+        // A deploy confirmed before the welcome arrived. Sent now rather than
+        // forgotten — the player has already asked, and the seat is what they
+        // were waiting on.
+        this.flushDeploy();
         // Last, so that whatever `Game` does with the team is done against a
         // session that is already fully seated. A reconnect comes through here
         // a second time and can land in a slot on the OTHER team, which is why
@@ -238,6 +280,10 @@ export class NetSession {
           // Our own spawn is the one event that moves the local body, so it is
           // routed rather than merely shown.
           if (e.e === "spawn" && e.slot === this.slot) {
+            // The answer to whatever we asked for, so there is nothing left
+            // standing. Cleared before the callback, which is the one that
+            // hides the screen that made the request.
+            this.pendingDeploy = null;
             this.scratch.set(e.pos[0], e.pos[1], e.pos[2]);
             this.onSpawn(this.scratch, e.yaw);
           }

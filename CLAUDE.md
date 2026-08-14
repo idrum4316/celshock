@@ -602,6 +602,19 @@ the client is never told which is which — that is what makes "start without a
 full lobby" and "hand a leaver's slot back to a bot" one mechanism instead of
 two.
 
+**Coming into the world is an ASK, and nothing on the client may place a body.**
+A person picks their spawn in a match exactly as offline, and the deploy screen
+sends `deploy` rather than deploying: the authority puts them there, and does it
+only once they have BOTH waited out the reinforcement clock and asked, with no
+timeout into the world in either direction. What crosses the wire is an index
+into the MAP's spawn table and never into the offer, which is derived from flag
+ownership and renumbers as the round moves; `ConquestSystem.deployAt` is the
+authority's half and refuses anything that team may not use *now*, falling
+through to the pick a bot would get rather than leaving anybody dead. The one
+state outside a round that still steps the netplay frame is this screen
+(`Game.updateNetWorld`), because the flags it offers, the tickets under it and
+the bodies behind it all arrive from a frame.
+
 **A death is decided there and drawn here, and the ragdoll is on the DRAWN
 side.** A corpse decides nothing — not navigation, not cover, not hit detection
 — so `RagdollSystem` is stepped in a netplay round exactly as `CombatSystem` and

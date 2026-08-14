@@ -279,6 +279,36 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   rejection. And **the straight line between two home spawns runs through the
   village**: walk to the map centre instead, which is the control point every
   road leads to.
+- **`?mp` no longer lands you in the world — it lands you on the deploy
+  screen.** A netplay round deploys nobody unasked, so a script that waits for
+  `state === "playing"` after joining waits forever. Confirm first
+  (`g.deployScreen.confirm()`), optionally after steering the pick
+  (`g.deployScreen.selected` / `selectedSpawn`, which is the list's identity and
+  has to move with it), and the state changes when the SERVER's spawn event
+  lands rather than on the call. Client-side clocks are the ones the ~2 fps
+  budget wrecks: the local reinforcement countdown takes ~80 s of wall clock to
+  run out, so force `g.respawnT = 0` rather than waiting for it. The server's
+  clock is real and is the one that actually gates the deploy.
+- **The whole of spawn selection is testable without a browser, and two of the
+  three ways are faster than one.** `dist-server/assets/HeadlessGame-*.js`
+  exports the simulation (`H`) and the world chunk exports `MAPS`/`CONFIG`
+  (`M`/`C`), so a scratch `.mjs` can `addPlayer`, set `deployRequest`, step at
+  `1/60` and assert on the clock in milliseconds of wall time — including
+  `takeDamage(999)` for a death the rules actually dealt. A raw `ws` client
+  covers the protocol half (join, refuse, fall back) with no rendering at all.
+  Keep the browser for what only it has: the screen, the offer and the state
+  machine. Note that a scratch script outside the repo cannot `import "ws"` or
+  `"playwright"` by name — resolve them by absolute path into `node_modules`.
+- **A stationary body at a REAR flag is not killed, and that reads exactly like
+  a broken death path.** Four minutes at the chapel spawn drew nothing; the
+  square kills one in about forty seconds, which `does-a-human-die`-style
+  stepping of a `HeadlessGame` will tell you in three. Bots do engage a person
+  — check where you parked before believing anything else.
+- **`page.waitForFunction(fn, { timeout })` silently uses the DEFAULT 30 s.**
+  The second parameter is the argument passed INTO the page function; options
+  are third. Every wait written that way expires in thirty seconds however large
+  the number reads, which turns "the bots never killed us" and "the round never
+  ended" into confident, wrong conclusions about the game.
 - **To stage a remote body's death, seize its sample buffer with a FUTURE
   timestamp.** `NetSoldier.receive` drops anything not newer than its newest
   sample and `bracket` clamps below its oldest, so one sample at

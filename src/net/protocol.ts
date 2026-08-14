@@ -18,8 +18,17 @@
  * `encode`/`decode` and to nothing that calls them.
  */
 
-/** Protocol version. Bumped on any incompatible change; a mismatch is refused. */
-export const PROTOCOL_VERSION = 2;
+/**
+ * Protocol version. Bumped on any incompatible change; a mismatch is refused.
+ *
+ * 3 is spawn selection. It is a version bump rather than a silent addition
+ * because the change is to who ACTS FIRST: a version-3 server deploys a person
+ * only once they have asked, so a version-2 client — which never sends
+ * `deploy` — would sit dead in a live match forever, alive on its own screen
+ * and absent from everyone else's. Refusing it at the handshake turns that into
+ * a sentence the lobby can print.
+ */
+export const PROTOCOL_VERSION = 3;
 
 /**
  * The longest display name a client may claim, in characters.
@@ -438,9 +447,26 @@ export interface GrenadeMessage {
   dir: Vec3;
 }
 
+/**
+ * Where this client would like to come back in.
+ *
+ * Sent when the player confirms a spawn on the deploy screen, and it is the
+ * only thing that puts a person into the world: the authority holds a dead
+ * player at the end of their reinforcement wait until one of these arrives.
+ *
+ * `spawn` is an index into the MAP's own spawn table — `GameMap.spawns`, the
+ * layout module both sides build from — and never into the list the deploy
+ * screen happens to be showing. That list is derived from flag ownership and
+ * changes as the round does, so an index into it means one thing on the client
+ * and another on the server the moment a flag falls between the two. An index
+ * into the layout is a name that cannot drift, and the server still validates
+ * it against what it would offer that team RIGHT NOW — a spawn behind a flag
+ * this player's side no longer holds is refused and the authority picks
+ * instead, exactly as it does for a bot.
+ */
 export interface DeployMessage {
   t: "deploy";
-  /** Index into the spawn options the server offered. */
+  /** Index into `GameMap.spawns` — see above; not an index into the offer. */
   spawn: number;
 }
 

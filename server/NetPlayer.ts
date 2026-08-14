@@ -56,6 +56,24 @@ export class NetPlayer implements Combatant {
   respawnT = 0;
 
   /**
+   * The spawn this player has asked to come back at — an index into the map's
+   * own spawn table — or null while they have asked for nothing.
+   *
+   * A person is deployed only once this is set, which is the whole of spawn
+   * selection on this side: the reinforcement clock says WHEN and this says
+   * WHERE, and neither is enough alone. It is a request and not a placement —
+   * `HeadlessGame` resolves it against what the team may actually use at the
+   * moment it acts, so an index naming a flag that fell while the message was
+   * in flight costs the player nothing but the position they picked.
+   *
+   * Written by `Match` from a client message after the shape check, exactly as
+   * `seq` and `lastTime` are, and read nowhere else in this class. Cleared when
+   * it is spent and on `retire`, because a map rotation renumbers the table it
+   * indexes into.
+   */
+  deployRequest: number | null = null;
+
+  /**
    * Collapse tween progress, 0 while alive and 1 once fully down — the same
    * quantity `Bot.deathProgress` reports, riding the same snapshot field, so a
    * client draws a person going down exactly as it draws a bot and still cannot
@@ -262,5 +280,9 @@ export class NetPlayer implements Combatant {
   retire(): void {
     this.alive = false;
     this.traces.length = 0;
+    // A rotation retires everybody and then builds a different map. The request
+    // is an index into the OLD map's spawn table, so carrying it across would
+    // deploy the player at whatever happens to be in that slot on the new one.
+    this.deployRequest = null;
   }
 }

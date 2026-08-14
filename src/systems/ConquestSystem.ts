@@ -223,6 +223,37 @@ export class ConquestSystem {
     return [...this.homeSpawnsFor(team).slice(0, 1), ...this.flagSpawnsFor(team)];
   }
 
+  /**
+   * Which spawn this is, as a number that means the same thing on both sides of
+   * a wire: its index in the MAP's spawn table.
+   *
+   * The deploy screen's own list is not that number. It is derived from flag
+   * ownership and re-derived every frame, so its indices renumber whenever a
+   * flag changes hands — and a client naming a position by one of them would be
+   * naming a different position from the one it drew whenever the server's
+   * round had moved on. The map's table is a module constant that both ends
+   * build from, so an index into it is a name.
+   */
+  spawnIndex(spawn: SpawnPointDef): number {
+    return this.spawns.indexOf(spawn);
+  }
+
+  /**
+   * The spawn at `index`, but only if this team may deploy there right now.
+   *
+   * The authority's half of `spawnIndex`. Everything a player is allowed to ask
+   * for is in `deployOptions`, so the check is that the named spawn is in it —
+   * which refuses the enemy's gatehouse and the flag that fell while the
+   * request was in the air with the same line, and needs no rule of its own for
+   * either. `null` means "pick for them" rather than "refuse them": the player
+   * asked to come back, and where is the authority's answer.
+   */
+  deployAt(team: Team, index: number): SpawnPointDef | null {
+    const spawn = this.spawns[index];
+    if (!spawn) return null;
+    return this.deployOptions(team).includes(spawn) ? spawn : null;
+  }
+
   pointById(id: string): ControlPoint | undefined {
     return this.points.find((p) => p.def.id === id);
   }

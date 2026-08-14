@@ -118,6 +118,82 @@ Two consequences to preserve:
   collapsing, and it takes the ragdoll's fallback with it, since a corpse the
   pool declines has nothing else left to play.
 
+## Coming into the world is an ASK, and it is the only one
+
+A person chooses where they drop in, in a match exactly as offline: the deploy
+screen is the same screen, offering the same list, and the difference is only
+who acts on the choice. The client sends `deploy` and the authority puts the
+body somewhere; **nothing on the client may place it.** That is the same rule
+the rest of this document argues for a bullet, applied to the one question a
+shooter cannot afford two opinions about — where somebody is.
+
+**A person is deployed only when they have BOTH waited and asked.** The
+reinforcement clock in `HeadlessGame.step` says when and `NetPlayer.deployRequest`
+says where, and neither is enough alone. There is deliberately no timeout into
+the world: a player looking at the map is doing the thing the screen is for, and
+the alternative is yanking them out of it mid-decision. A slot whose person is
+still choosing is simply a slot with nobody on the field — which is what it was
+while they were dead anyway.
+
+**The index on the wire is into the MAP's spawn table, not into the offer.**
+The offer — `ConquestSystem.deployOptions` — is derived from flag ownership and
+re-derived every frame, so its indices renumber the moment a flag changes hands
+and the same number means two different places on two machines a round trip
+apart. `GameMap.spawns` is the layout module both sides build from and never
+moves. `spawnIndex` is the client's half and `deployAt` is the authority's, and
+the authority's half is the check: a spawn is honoured only if it is in the list
+that team would be offered *now*. The enemy's gatehouse, a flag lost while the
+message was in flight and an index that is not a spawn at all are all refused by
+that one lookup.
+
+**A refusal costs the position and never the reinforcement.** `spawnPointFor`
+falls through to the pick a bot would get, because the player asked to come back
+and coming back is not the part they are asking permission for. A refusal that
+left them dead would be a client desync — a list a tick out of date — punished
+as though it were a cheat.
+
+**The request stands until it is answered, on both sides.** `NetSession` holds
+it and re-sends on the next welcome, because the two moments a client is seated
+without being in the world are exactly the two where a dropped request strands
+somebody: a confirm made before the welcome lands (the local round is booked
+before the socket opens), and a reconnect, which seats this client into a fresh
+body that is dead until it asks. The server holds an EARLY ask rather than
+refusing it, for the mirror reason: the client's countdown is the one the player
+watches and it legitimately reaches zero a trip ahead of the server's.
+
+**A reconnect puts the deploy screen back up, over whatever was on it.**
+`Game`'s `onSeated` does that from `playing` and `dying` — the client's old slot
+is gone, its new one is dead, and every movement sample it sends is dropped as
+"a dead player reports nothing worth keeping", so a client that carried on
+playing would be a ghost nobody can see or shoot. It deliberately does NOT do it
+from `deploy`, where the screen is already up and re-showing it would reset a
+selection the player is in the middle of making.
+
+**The deploy screen keeps its place by IDENTITY.** Its list is live in a
+netplay round — a flag falling two hundred metres away removes a row — so a
+carried index would quietly become a different position under a hand already on
+Enter. This is the same rule the lobby follows, arrived at from the other
+direction.
+
+**`PROTOCOL_VERSION` is 3 for this**, and it earns the bump: the change is to
+who acts first, so a version-2 client against a version-3 server would sit dead
+in a live match forever, alive on its own screen and absent from everyone
+else's. Refused at the handshake, it is a sentence the lobby prints instead.
+
+**The deploy screen is the one state outside the round that still steps the
+netplay frame.** `Game.updateNetWorld` is called from `updateDeployScreen` as
+well as from `updateWorld`, because a player waiting to come back is watching a
+fight that has not stopped for them: unstepped, sixteen bodies stand frozen
+behind the card and snap on the frame they deploy, the ticket strip under it
+shows the round they died in, and the flags the offer is derived from never
+arrive at all before the first deploy — so a player joining a match in progress
+is offered their home spawn and nothing else. `RagdollSystem` is in that method
+for a sharper reason than symmetry: `updateNet` is what raises an interpolated
+death, and a death raised while the pool is not stepped is a corpse that takes a
+rig and hangs in the air for the rest of the round. It stays out of `paused` and
+`menu` for the reason it belongs in `deploy` — those two are a round that is not
+running, and this is a round running without you.
+
 ## A death, on the side that only watches
 
 The authority decides who died and has already charged the ticket, written the
@@ -482,22 +558,14 @@ Stated so nobody assumes otherwise:
   text entry anywhere in it: a focused input has to be kept from feeding the
   game's own key handling, and neither that nor a pad path exists. `Game.playerName`
   is where it lands.
-- **A round you join is a round you are already in.** `joinMatch` books the
-  local round immediately, so the deploy screen can be up before the welcome
-  arrives. `NetSession.seated` gates the uploads, so nothing is reported until
-  the server has answered — but a player who deploys inside that window is in
-  the world before the authority knows where. Widening with latency, and closed
-  properly by spawn selection below.
-- **Spawn selection.** Reinforcements arrive through `HeadlessGame.step`. The
-  `deploy` message is accepted and deliberately inert: letting a client choose
-  means offering it a validated list first, and an unvalidated index is a
-  request to be placed anywhere on the map.
 - **In-flight grenade replication.** The blast is authoritative and every client
   sees it; the projectile arcing toward them is not yet replicated, so a grenade
   currently arrives as an explosion.
 - **Reconnect into your own slot.** A dropped player rejoins as a new peer and
-  takes whatever slot is free. The match keeps its world for a minute, so the
-  round survives; the seat is not reserved.
+  takes whatever slot is free — on either team, and into a body that is dead
+  until it asks, which is why the deploy screen goes back up on a re-seat. The
+  match keeps its world for a minute, so the round survives; the seat is not
+  reserved, and neither is the position you were standing in.
 - **More than one match server process.** Matches live in memory, so two
   replicas behind one proxy put players who joined "the same" match into two
   different worlds — and each would serve its own half of `/matches` as though
