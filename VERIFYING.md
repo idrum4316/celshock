@@ -279,6 +279,22 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   rejection. And **the straight line between two home spawns runs through the
   village**: walk to the map centre instead, which is the control point every
   road leads to.
+- **To stage a remote body's death, seize its sample buffer with a FUTURE
+  timestamp.** `NetSoldier.receive` drops anything not newer than its newest
+  sample and `bracket` clamps below its oldest, so one sample at
+  `Date.now() + 1e9` both freezes the slot against the live stream and becomes
+  the pose. Put the body where you want it alive, call `s.update(t)` to place
+  the rig, then `s.samples.length = 0` and push a single dead sample at `t + 1`
+  — the roster's own `alive` edge does the rest, so what is under test is the
+  real wiring rather than a hand-called `spawn`. The timestamp must beat the
+  SERVER's clock (`snap.now` is `Date.now()` on its box, ~1.7e12): a round
+  number like `1e12` is *below* it, every real sample keeps landing, and the
+  body simply walks away while the test reports nothing ragdolled.
+- **A ragdoll refused in a netplay round is usually the fog gate, not the fix.**
+  `bots.death.maxDistance` is `FOG_WALL` (78 m) and a client sitting at its home
+  spawn is further than that from every death in the village — so a run can
+  report a dozen death edges, all correctly armed, and zero corpses. Assert on
+  the edge count and the offer separately, or stage the body near the camera.
 - **Restart the match server between runs, and do not trust a hang.** Matches
   outlive the client that made them by a minute (`IDLE_DISPOSE_MS`), so a script
   run three times leaves three worlds simulating at 60 Hz on the box that is

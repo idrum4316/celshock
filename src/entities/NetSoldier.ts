@@ -32,6 +32,7 @@ import {
   buildSoldier,
   resetSoldierPose,
   STRIDE,
+  type RagdollSubject,
   type SoldierRig,
 } from "./SoldierModel";
 
@@ -64,13 +65,32 @@ function lerpAngle(a: number, b: number, t: number): number {
   return a + wrapAngle(b - a) * t;
 }
 
-export class NetSoldier implements Combatant {
+export class NetSoldier implements Combatant, RagdollSubject {
   readonly rig: SoldierRig;
   readonly position = new Vector3();
   readonly eyePos = new Vector3();
   readonly center = new Vector3();
   hitRadius = CONFIG.bots.hitRadius;
   alive = false;
+
+  /**
+   * The killing blow, kept for the pool. Both are armed by the server's `kill`
+   * event and spent when the INTERPOLATED death arrives, which is a fraction of
+   * a second later — the event is real time and the body is drawn
+   * `interpDelay` behind it. Nothing else on this object is allowed that gap,
+   * which is why they are a pair of plain fields rather than another sample
+   * channel: they describe an instant that has already been decided, not a
+   * state to be blended toward.
+   *
+   * An unarmed death is still a death. `RagdollSystem.applyImpulse` reads a
+   * zero-length direction as "straight up", so the body falls over instead of
+   * being thrown — which is what a corpse whose `kill` event was lost should
+   * look like, and never a body that fails to fall.
+   */
+  readonly deathFrom = new Vector3();
+  deathDamage = 0;
+  /** Set by `RagdollSystem` for as long as it owns the joints. See `update`. */
+  ragdolling = false;
 
   /**
    * Which roster slot this draws. Fixed for the life of the pool entry — the
@@ -144,6 +164,28 @@ export class NetSoldier implements Combatant {
     if (this.samples.length === 0) return;
 
     const [a, b, blend] = this.bracket(renderTime);
+
+    // Taken before the guard below, and deliberately: `alive` is the pool's own
+    // self-defence — a slot whose subject has come back to life releases it on
+    // the next step rather than re-parenting a living body's joints for the
+    // rest of the round. Stop maintaining it here and that guard can never
+    // fire, because the samples are the only thing that knows.
+    this.alive = b.alive;
+
+    // While the pool owns this rig it owns the joints AND the root, and it
+    // poses through proxy nodes the solver writes. Everything below is a second
+    // writer on the same nodes — the trap `Bot.update` stands aside from in its
+    // own dead branch, for the same reason and with the same one-line answer.
+    //
+    // `hasPosition` goes with it so the frame the rig comes back reports no
+    // travel: `position` froze where the body died and the respawn is somewhere
+    // else entirely, and the difference between the two would otherwise be
+    // spent on the walk cycle in a single frame.
+    if (this.ragdolling) {
+      this.hasPosition = false;
+      return;
+    }
+
     const x = a.x + (b.x - a.x) * blend;
     const y = a.y + (b.y - a.y) * blend;
     const z = a.z + (b.z - a.z) * blend;
@@ -153,7 +195,6 @@ export class NetSoldier implements Combatant {
     const moving = a.moving + (b.moving - a.moving) * blend;
     const dead = a.dead + (b.dead - a.dead) * blend;
 
-    this.alive = b.alive;
     // Ground distance covered since the last frame, for the walk cycle. Taken
     // before `position` is overwritten, and horizontal only — a body walking
     // down a slope is not taking longer strides.
@@ -252,7 +293,13 @@ export class NetSoldier implements Combatant {
   reset(): void {
     this.samples.length = 0;
     this.walkPhase = 0;
+    this.hasPosition = false;
     this.alive = false;
+    this.deathDamage = 0;
+    // Belt to `RagdollSystem.release`'s braces, exactly as `Bot.spawn` clears
+    // it: a rig handed back late must never come up with a live body still
+    // claiming its joints.
+    this.ragdolling = false;
     resetSoldierPose(this.rig);
     this.setEnabled(false);
   }

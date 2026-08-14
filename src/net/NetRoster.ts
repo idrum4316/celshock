@@ -33,6 +33,35 @@ export class NetRoster {
   /** The slot the local player owns, or -1 while spectating. */
   localSlot = -1;
 
+  /**
+   * Wired by `Game`: this body just went down, and may be offered to the
+   * ragdoll pool. The counterpart of `BattleSystem.onBotKilled`, and it says
+   * strictly less: a death here is news that ALREADY happened, so there is no
+   * killer, no ticket and no score on it — the authority spent all three
+   * before this client heard about it. What is left is the body falling over,
+   * which is this side's alone.
+   *
+   * Raised off the INTERPOLATED death rather than off the `kill` event, and
+   * that is the whole reason it is here instead of in `Game.onNetEvent`. The
+   * event arrives in real time and the body is drawn `interpDelay` behind it,
+   * so spawning from the event throws a corpse a tenth of a second before the
+   * round that killed it appears to land. It is also the only signal that
+   * cannot be missed: every death is in the snapshot stream by construction,
+   * whereas an event is a message that a reconnect can drop.
+   */
+  onDeath: (soldier: NetSoldier) => void = () => {};
+
+  /**
+   * Wired by `Game`: this body is somebody else's again — it respawned, or its
+   * slot changed hands — and any corpse the pool is still holding for it has to
+   * be handed back before the rig is posed from the wire once more.
+   *
+   * Fires on bodies the pool never took, which is most of them. Retiring one of
+   * those is a documented no-op, and that is what lets this be a plain edge
+   * rather than a question asked of the pool every frame.
+   */
+  onRetire: (soldier: NetSoldier) => void = () => {};
+
   constructor(scene: Scene, mats: CelMaterialFactory) {
     for (let team = 0; team < 2; team++) {
       const spec = CONFIG.teams[team];
@@ -66,7 +95,12 @@ export class NetRoster {
       const soldier = this.soldiers[slot.index];
       if (!soldier) continue;
       soldier.team = slot.team;
-      if (slot.index === localSlot) soldier.reset();
+      if (slot.index !== localSlot) continue;
+      // `reset` restores the rig itself, so a corpse the pool is still holding
+      // has to be given back FIRST — otherwise the slot runs its clock out over
+      // a rig that has already been put away and sinks it on the way.
+      this.onRetire(soldier);
+      soldier.reset();
     }
   }
 
@@ -108,12 +142,27 @@ export class NetRoster {
     const b = CONFIG.bots;
     for (const soldier of this.soldiers) {
       if (soldier.slot === this.localSlot) continue;
+      // The two edges the ragdoll pool cares about, read either side of the one
+      // call that can move them. A body is drawn from the wire, so "it died" is
+      // a value changing rather than an event arriving, and this is the only
+      // place both readings exist.
+      const was = soldier.alive;
       soldier.update(renderTime);
+      if (was !== soldier.alive) {
+        if (soldier.alive) this.onRetire(soldier);
+        else this.onDeath(soldier);
+      }
       const d = Vector3.Distance(soldier.position, cameraPos);
       if (d > b.lodDisableDistance) {
         soldier.setEnabled(false);
         continue;
       }
+      // A corpse under physics is re-shown here for the same reason
+      // `BattleSystem` re-shows a dead bot every frame inside the fog: the
+      // branch above hides whatever walks out of range, and a body that came
+      // back into it has no other way home. `NetSoldier.update` cannot do it —
+      // it stands aside entirely while the pool owns the rig.
+      if (soldier.ragdolling) soldier.setEnabled(true);
       soldier.setOutlines(d < b.lodOutlineDistance);
     }
   }

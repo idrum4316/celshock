@@ -205,7 +205,29 @@ export interface Snapshot {
  * cleared on acknowledgement.
  */
 export type ServerEvent =
-  | { e: "kill"; killer: number; victim: number; headshot: boolean }
+  /**
+   * A body went down, whoever it belonged to and whoever put it there.
+   *
+   * `from` and `amount` are the killing blow's origin and size — the same pair
+   * `damage` carries, and for the same reason on the far side: they are what a
+   * client throws the corpse with. Without them every death would be a body
+   * lifted straight up, because a zero-length direction is all
+   * `RagdollSystem.applyImpulse` would have to work from. They are on the KILL
+   * rather than on the snapshot because a death is an instant and a snapshot is
+   * a state — sending a bearing every tick for the one tick it matters is the
+   * trade this event type exists to avoid.
+   *
+   * Raised exactly once per death, for a bot and a person alike. `Match` is
+   * where the two paths converge and where that "exactly once" is argued.
+   */
+  | {
+      e: "kill";
+      killer: number;
+      victim: number;
+      headshot: boolean;
+      from: Vec3;
+      amount: number;
+    }
   | { e: "damage"; victim: number; amount: number; from: Vec3; health: number }
   | { e: "hit"; shooter: number; victim: number; killed: boolean; headshot: boolean }
   | { e: "died"; slot: number; by: number; respawnIn: number }

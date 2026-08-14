@@ -239,7 +239,7 @@ export class HeadlessGame {
     if (!this.map || !shooter.alive) return null;
     const targets = this.battle.hittablesAgainst(shooter.team);
 
-    return this.lag.resolve(renderTime, shooter, () =>
+    const result = this.lag.resolve(renderTime, shooter, () =>
       this.combat.fire(
         origin,
         dir,
@@ -263,6 +263,23 @@ export class HeadlessGame {
         },
       ),
     );
+
+    // A bot this round put down is charged HERE, and it is the only path that
+    // could. `BattleSystem.onBotKilled` fires for a bot shot by another bot and
+    // the grenade handler fires for a blast; a person's rifle reaches
+    // `CombatSystem.fire` through this method and touches neither, so without
+    // this line the eight bots a human kills in a round cost their team nothing
+    // and the only thing draining tickets is the flag bleed — the same failure
+    // `wire` describes one door along, arriving through the one door it does
+    // not cover. It is also what raises the `kill` event those deaths need, so
+    // a bot a person shoots gets a killfeed line and a corpse to throw.
+    //
+    // The client's `Game` charges the same kill in the same place for the same
+    // reason, one line after its own `combat.fire` — see `registerBotKill`.
+    if (result?.killed && result.target instanceof Bot) {
+      this.onKill(result.target, shooter.team, result.headshot);
+    }
+    return result;
   }
 
   /**
@@ -318,15 +335,22 @@ export class HeadlessGame {
    * `Match` wires `onKill` to turn this into a killfeed event for the clients;
    * this class does not know what a client is.
    */
-  private onKill(bot: Bot, killer: Team): void {
+  private onKill(bot: Bot, killer: Team, headshot = false): void {
     this.conquest.registerDeath(bot.team);
     this.kills[killer] += 1;
     this.losses[bot.team] += 1;
-    this.onKillEvent(bot, killer);
+    this.onKillEvent(bot, killer, headshot);
   }
 
-  /** Wired by `Match`: a body went down, for the killfeed. */
-  onKillEvent: (bot: Bot, killer: Team) => void = () => {};
+  /**
+   * Wired by `Match`: a body went down, for the killfeed and for the corpse.
+   *
+   * `headshot` defaults false and is true only where the resolving path knows
+   * it — a person's round through `resolveShot`. A bot's rifle never tests the
+   * head zone at all (see the `headMult` note there), so false is the answer
+   * rather than a missing one, and a blast has no such zone to hit.
+   */
+  onKillEvent: (bot: Bot, killer: Team, headshot: boolean) => void = () => {};
 
   /** Wired by `Match`: a person has been placed in the world. */
   onPlayerSpawned: (player: NetPlayer, at: Vector3, yaw: number) => void = () => {};

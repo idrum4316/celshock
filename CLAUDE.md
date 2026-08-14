@@ -595,6 +595,14 @@ the client is never told which is which — that is what makes "start without a
 full lobby" and "hand a leaver's slot back to a bot" one mechanism instead of
 two.
 
+**A death is decided there and drawn here, and the ragdoll is on the DRAWN
+side.** A corpse decides nothing — not navigation, not cover, not hit detection
+— so `RagdollSystem` is stepped in a netplay round exactly as `CombatSystem` and
+`GrenadeSystem` are, and reading it as simulation is what left multiplayer with
+no ragdolls at all. The body is offered on the INTERPOLATED death rather than on
+the `kill` event, because the event is real time and the body is drawn
+`interpDelay` behind it; the event's job is to carry the blow that throws it.
+
 **The match registry in `server/index.ts` IS the lobby, and needs nothing
 central to check in with** — matches live in that one process's memory, so the
 list it serves on `GET /matches` is authoritative for itself. A master server is
@@ -617,8 +625,9 @@ bake older than its layout.
 → **[`docs/multiplayer.md`](docs/multiplayer.md)** — the authority model and
 what it deliberately does not defend against, the roster and the bench, the
 interpolation clock and the sign error that is easy to make in it, the rewind
-and why `resolve` takes a callback, what may never cross the wire, and the list
-of what is not built yet.
+and why `resolve` takes a callback, what a death owes on each side and the one
+`kill` event per body that carries it, what may never cross the wire, and the
+list of what is not built yet.
 
 ## Conventions
 

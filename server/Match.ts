@@ -178,12 +178,19 @@ export class Match {
   private readonly lastShot: number[] = [];
 
   constructor(readonly id: string) {
-    this.game.onKillEvent = (bot, killer) => {
+    // A bot went down, however it was done. The bearing and the size of the
+    // killing blow ride along because a client throws its corpse with them —
+    // `Bot.takeDamage` captured both before this fired, which is the same pair
+    // the offline game hands `RagdollSystem` and the reason it does not need a
+    // second copy of any of it.
+    this.game.onKillEvent = (bot, killer, headshot) => {
       this.pending.push({
         e: "kill",
         killer,
         victim: this.game.battle.bots.indexOf(bot),
-        headshot: false,
+        headshot,
+        from: [bot.deathFrom.x, bot.deathFrom.y, bot.deathFrom.z],
+        amount: bot.deathDamage,
       });
     };
     this.game.conquest.onCaptured = (point, by) =>
@@ -199,6 +206,30 @@ export class Match {
         health: player.health,
       });
       if (killed) {
+        // The other half of "one kill event per death". A person goes down
+        // through this callback whoever pulled the trigger — a bot's rifle, a
+        // blast, another client's round — so it is the only place that sees
+        // every one of them, exactly as `onKillEvent` is for a bot.
+        //
+        // The killer's team is DERIVED and not carried: friendly fire is
+        // excluded by construction everywhere in this game (`fire` takes the
+        // shooter's own target list), so the side that killed a person is
+        // always the other one, and plumbing a killer down through
+        // `CombatSystem.takeDamage` to be told what is already known would be
+        // the kind of wire field that can disagree with the world.
+        //
+        // `headshot` is false rather than unknown: the flag is the SHOOTER's
+        // feedback and reaches them on their own `hit` event, which is
+        // resolved where the head zone was actually tested. Nothing renders it
+        // for a victim.
+        this.pending.push({
+          e: "kill",
+          killer: 1 - player.team,
+          victim: player.slot,
+          headshot: false,
+          from: from ? [from.x, from.y, from.z] : [0, 0, 0],
+          amount,
+        });
         this.pending.push({
           e: "died",
           slot: player.slot,
@@ -484,7 +515,9 @@ export class Match {
           // side.
           moving: this.movingFor(i, player.position.x, player.position.z),
           alive: player.alive,
-          dead: player.alive ? 0 : 1,
+          // The same tween a bot's body plays, off the same field — see
+          // `NetPlayer.deathProgress` for why this is not a bare 1.
+          dead: player.deathProgress,
         });
         continue;
       }
@@ -720,19 +753,14 @@ export class Match {
       headshot: result.headshot,
     });
 
-    if (!result.killed) return;
-    // The ticket and the `died` event are NOT charged here. `NetPlayer.takeDamage`
-    // already raised them through `onPlayerDamaged`, and a bot going down
-    // already went through `HeadlessGame.onKill` — both of which fire whoever
-    // pulled the trigger. Repeating them here would charge two reinforcements
-    // for one death, and the round would end in half the time with nothing
-    // obviously wrong.
-    this.pending.push({
-      e: "kill",
-      killer: player.team,
-      victim: victimSlot,
-      headshot: result.headshot,
-    });
+    // The `hit` above and NOTHING ELSE. Everything a death owes — the ticket,
+    // the `kill` line, the `died` clock — is raised by whichever of the two
+    // authority callbacks saw the body go down: `onPlayerDamaged` for a person,
+    // `onKillEvent` for a bot, and each of those fires for every death of its
+    // kind however it was dealt. Pushing a second `kill` from here would put
+    // two lines in the killfeed for one body, and the one this method could
+    // build would be the poorer of the two — it does not know where a bot's
+    // killing blow came from, which is what the corpse is thrown with.
   }
 
   /**

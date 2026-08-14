@@ -97,14 +97,96 @@ Two consequences to preserve:
 - **The walk weight is derived server-side**, from ground actually covered, not
   reported by the client. An animation flag a client sets is one it can lie
   about.
+- **A person's body falls over on the same field a bot's does.**
+  `NetPlayer.deathProgress` is `Bot.deathProgress` derived from the respawn
+  clock, and it rides `EntityState.dead`. Sending a bare `1` instead — which is
+  what it did — makes a killed player VANISH on the tick they die instead of
+  collapsing, and it takes the ragdoll's fallback with it, since a corpse the
+  pool declines has nothing else left to play.
+
+## A death, on the side that only watches
+
+The authority decides who died and has already charged the ticket, written the
+killfeed line and started the respawn clock before a client hears about it. What
+is left is a body falling over, and that is the client's alone — the same
+`RagdollSystem` pool, the same five refusals, the same collapse tween underneath
+them as offline. Three things make that work and each has a way of failing
+quietly.
+
+**The trigger is the interpolated death, not the `kill` event.** `NetRoster`
+reads the `alive` edge either side of the one call that can move it and raises
+`onDeath`; `Game` wires that to `ragdolls.spawn` exactly as `onBotKilled` is
+wired to `registerBotKill`. Two reasons it is not the event. The event arrives in
+real time and the body is drawn `interpDelay` behind it, so spawning from the
+event throws a corpse a tenth of a second before the round that killed it appears
+to land. And every death is in the snapshot stream by construction, whereas an
+event is a message a reconnect can drop — a missed killfeed line is a missed
+line, but a missed corpse is a body that never falls.
+
+**The `kill` event still has to arrive, because it carries the throw.** `from`
+and `amount` are the killing blow's origin and size — the pair `damage` already
+carried, and the pair `RagdollSystem.applyImpulse` needs — so the event ARMS a
+soldier and the interpolated death SPENDS it. An unarmed death is still a death:
+a zero-length direction reads as "straight up", so the body falls over instead of
+being thrown, which is what a lost `kill` should look like and is never a body
+that fails to fall.
+
+**One `kill` event per death, and the server has two doors onto that.**
+`onKillEvent` sees every bot go down and `onPlayerDamaged` sees every person,
+whoever dealt it — a rifle, a blast, another client's round. `Match.onShot` must
+raise only the `hit`: a second `kill` from there would put two lines in the
+killfeed for one body, and it is the poorer of the two anyway, because it does
+not know where a bot's killing blow came from. The killer's team on a person's
+death is DERIVED (`1 - victim.team`) rather than carried, because friendly fire
+is excluded by construction everywhere in this game.
+
+**`HeadlessGame.resolveShot` is the third way a bot can die, and it is the one
+that was not charging for it.** `BattleSystem.onBotKilled` fires for a bot shot
+by another bot and the grenade handler fires for a blast, but a person's round
+reaches `CombatSystem.fire` through `resolveShot` and touches neither — so every
+bot a human killed cost that team no reinforcement at all, and the only thing
+draining their tickets was the flag bleed. It is charged there now, one line
+after the resolve, exactly where the client's `Game` charges the same kill
+through `registerBotKill`. The failure mode is worth remembering because it is
+silent in both directions: rounds simply ran long, which reads as mistuned
+config rather than a missing call.
+
+**While the pool owns a rig, `NetSoldier.update` stands aside entirely** — the
+same one-line answer `Bot.update` gives in its own dead branch, and for the same
+reason: the solver writes proxy nodes the joints hang off, and a second writer on
+those nodes is two things posing one body. `alive` is still read from the samples
+ahead of that guard, because it is the pool's own self-defence — a slot whose
+subject came back to life releases it on the next step, and it can only know that
+from the wire.
+
+**The local player's own death is the death cam, and it runs here too.** The
+`died` event routes to `enterDying` rather than straight to the deploy screen: a
+death cam decides nothing, so nothing about it belongs to the authority except
+the clock, which arrives on the event as `respawnIn`. The bearing and size of the
+blow come from the `damage` event the server queues immediately ahead of it —
+`died` carries a slot and a clock and nothing to throw a body with. And because
+`dying` is a STEP and not a lid, `updateNet` is called from `updateWorld` rather
+than from `updateGameplay`: on the other side of that split, the four seconds
+spent watching your own body fall were four seconds during which nobody else on
+the map moved.
 
 ## The client runs none of the simulation and all of its own dressing
 
 `Game.updateWorld` returns early in a netplay round, and the line it draws is
-"decides an outcome", not "moves something". Conquest, the bots, the ragdolls
-and the physics step are the authority's and are skipped. **`CombatSystem` and
-`GrenadeSystem` are still stepped**, because what they hold between frames is
+"decides an outcome", not "moves something". Conquest and the bots are the
+authority's and are skipped. **`CombatSystem`, `GrenadeSystem` and
+`RagdollSystem` are still stepped**, because what they hold between frames is
 this client's own effects and nobody else advances them.
+
+**A ragdoll is on the near side of that line, and reading it as simulation is
+what left multiplayer with no ragdolls at all.** A corpse decides nothing: it is
+not in `NavGrid`, not in `ObstacleField`, not in `hittablesAgainst`, and the
+authority has already spent the ticket and the kill by the time the news
+arrives. Skipping the physics step does not merely stop bodies falling — it
+stops them *finishing*, so a body the pool did take would hang mid-tumble for
+the rest of the round with its joints parented to proxies nothing is writing.
+The rule is the same one the tracer teaches next door: what this client owns
+between frames, this client has to advance.
 
 Getting that line wrong does not look like a missing effect, it looks like a
 haunting. A tracer is spawned AT the muzzle a hundredth of a metre long and

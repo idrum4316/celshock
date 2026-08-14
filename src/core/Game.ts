@@ -382,6 +382,12 @@ export class Game {
   private readonly grenadeHand = new Vector3();
   /** Counts down while the player is waiting to redeploy. */
   private respawnT = 0;
+  /**
+   * What this life owes before the next one, latched by `enterDying` and spent
+   * by `updateDeathCam` when the shot is over. Offline it is the config
+   * constant; in a networked round it is whatever the `died` event said.
+   */
+  private deathRespawnIn: number = CONFIG.conquest.respawnDelay;
   /** Where the player's feet were when they died — scratch for `enterDying`. */
   private readonly deathFeet = new Vector3();
   /** Round scoreboard: kills and losses per team, plus the player's own line. */
@@ -2352,11 +2358,6 @@ export class Game {
       if (this.player.reloading) this.sfx.reload(this.player.reloadTime);
     }
 
-    // The networked half of the frame, after the local player has moved and
-    // before anything reads where anybody is. Draws every other body from the
-    // wire and reports this one back.
-    this.updateNet(dt);
-
     if (!this.updateWorld(dt)) return;
 
     this.updateCameraAndLighting(dt);
@@ -2449,6 +2450,22 @@ export class Game {
 
     net.onEvent = (event) => this.onNetEvent(event);
 
+    // Somebody else's body went down. The same pool, the same offer and the
+    // same five refusals every bot's corpse goes through — the only difference
+    // is that offline `registerBotKill` reaches this line having just charged a
+    // ticket and written a killfeed line, and here the authority did both
+    // before the news arrived. A callback rather than a reach into the roster
+    // for the reason every other cross-system effect in this file is one.
+    //
+    // Not the priority offer: that is the death cam's alone, and a full pool
+    // refusing a body across the square is the pool working. The collapse tween
+    // the server is already driving through `EntityState.dead` is what a
+    // refusal falls back to, which is why that tween is load-bearing on this
+    // path exactly as it is on the bots'.
+    net.roster.onDeath = (soldier) =>
+      this.ragdolls.spawn(soldier, this.cameraSys.camera.position);
+    net.roster.onRetire = (soldier) => this.ragdolls.retire(soldier);
+
     // A new round on a new map, same seat. The world is rebuilt LOCALLY from
     // the same layout the server is using — the map never crosses the wire —
     // and the server's spawn event puts the body back afterwards.
@@ -2505,6 +2522,14 @@ export class Game {
         const victimSlot = this.net?.roster.soldiers[event.victim];
         const victim = victimSlot ? CONFIG.teams[victimSlot.team].name : "";
         this.hud.addKill(killer, victim, event.killer === this.player.team);
+        // Arm the corpse with the round that felled it. It is SPENT later, by
+        // `NetRoster` when the interpolated death arrives — this event is real
+        // time and the body is drawn `interpDelay` behind it, so throwing it
+        // here would throw a body that has not visibly been hit yet.
+        if (victimSlot) {
+          victimSlot.deathFrom.set(event.from[0], event.from[1], event.from[2]);
+          victimSlot.deathDamage = event.amount;
+        }
         break;
       }
       case "captured":
@@ -2542,6 +2567,7 @@ export class Game {
         if (event.victim === this.net?.slot) {
           this.player.applyServerHealth(event.health);
           this.netDamageFrom.set(event.from[0], event.from[1], event.from[2]);
+          this.netDamageAmount = event.amount;
           this.onPlayerDamaged(event.amount, false, this.netDamageFrom);
         }
         break;
@@ -2549,11 +2575,28 @@ export class Game {
       // A death, decided elsewhere. `killPlayer` is the local path and must not
       // run here: it charges a ticket and starts a respawn clock, both of which
       // the server already owns.
+      //
+      // What it DOES owe is the four seconds of watching, because a death cam
+      // decides nothing — it is a camera and a stand-in body, and the round
+      // carries on underneath it either way. The bearing and the size of the
+      // killing blow are the `damage` event's, which the server queues
+      // immediately ahead of this one and which is the only thing that knows
+      // them: `died` carries a slot and a clock and nothing to throw a body
+      // with. `enterDying` falls through to the deploy screen on its own if the
+      // cam cannot come up, so this is not a state that can strand a player.
       case "died":
         if (event.slot === this.net?.slot) {
           this.player.health = 0;
           this.player.alive = false;
-          this.enterDeploy(event.respawnIn);
+          if (this.state === "playing") {
+            this.enterDying(
+              this.netDamageFrom,
+              this.netDamageAmount,
+              event.respawnIn,
+            );
+          } else {
+            this.enterDeploy(event.respawnIn);
+          }
         }
         break;
 
@@ -2572,13 +2615,21 @@ export class Game {
 
   /** Scratch for a networked damage bearing; never allocated per hit. */
   private readonly netDamageFrom = new Vector3();
+  /**
+   * How much the last networked hit was for, kept alongside the bearing so the
+   * `died` event that follows it has something to throw the corpse with.
+   */
+  private netDamageAmount = 0;
 
   /**
    * The networked half of a frame.
    *
-   * Called from `updateGameplay` after the local player has moved, so what is
+   * Called from `updateWorld` after the local player has moved, so what is
    * uploaded is this frame's position rather than last frame's, and before
-   * anything reads where the other bodies are.
+   * anything reads where the other bodies are. `updateWorld` and not
+   * `updateGameplay` because the death cam runs the former and not the latter,
+   * and a death cam over sixteen bodies frozen mid-stride is the screenshot
+   * that split is there to prevent.
    */
   private updateNet(dt: number): void {
     if (!this.net) return;
@@ -2619,9 +2670,25 @@ export class Game {
     // the muzzle had been, and a thrown grenade hung at the release point with
     // a fuse that never ran down. Nothing in here may decide an outcome; that
     // is what keeps this from growing back into the simulation below.
+    //
+    // The bodies are drawn from here rather than from `updateGameplay` so that
+    // the DEATH CAM gets them too. Every line of this method is what a death
+    // cam needs and none of what surrounds it — that is the split the header
+    // above argues — and a networked round left `updateNet` on the other side
+    // of it, so the four seconds spent watching your own body fall were four
+    // seconds during which nobody else moved. The order is unchanged: this is
+    // still the first thing after the local player has been simulated and
+    // before anything reads where anybody is.
     if (this.net) {
+      this.updateNet(dt);
       this.combat.update(dt);
       this.grenades.update(dt);
+      // The pool is stepped in a networked round exactly as it is offline, and
+      // for the same reason it is stepped HERE rather than from `scene.animate`
+      // — this is the one call site that a pause, the deploy screen and the
+      // menu do not reach. What differs is only who decided a body should fall:
+      // offline it is `registerBotKill`, here it is the wire.
+      this.ragdolls.update(dt);
       return true;
     }
 
@@ -2690,7 +2757,7 @@ export class Game {
     // depending on all of them continuing to.
     const dc = CONFIG.player.deathCam;
     if (!this.deathCam.active || this.deathCam.elapsed >= dc.time) {
-      this.enterDeploy(Math.max(0, CONFIG.conquest.respawnDelay - dc.time));
+      this.enterDeploy(Math.max(0, this.deathRespawnIn - dc.time));
     }
   }
 
@@ -3100,8 +3167,21 @@ export class Game {
    * — this falls straight through to the deploy screen at the full delay. A
    * state whose exit condition is a clock that never starts is a game that
    * never respawns you, and that is the one failure here worth spelling out.
+   *
+   * `respawnIn` is how long this life owes before the next one, and it is a
+   * parameter rather than the config constant because in a networked round the
+   * clock is the SERVER's. It happens to be the same number today — both sides
+   * read `conquest.respawnDelay` — and the point of taking it here is that
+   * nothing breaks quietly on the day one of them stops.
    */
-  private enterDying(from: Vector3 | undefined, amount: number): void {
+  private enterDying(
+    from: Vector3 | undefined,
+    amount: number,
+    // Annotated, because `CONFIG` is `as const` and the bare default would give
+    // this parameter the literal type `8` — see the convention in CLAUDE.md.
+    respawnIn: number = CONFIG.conquest.respawnDelay,
+  ): void {
+    this.deathRespawnIn = respawnIn;
     this.deathFeet.set(
       this.player.position.x,
       this.player.floorY,
@@ -3116,7 +3196,7 @@ export class Game {
       amount,
     );
     if (!this.deathCam.active) {
-      this.enterDeploy(CONFIG.conquest.respawnDelay);
+      this.enterDeploy(respawnIn);
       return;
     }
     // The weapon is parented to the camera, so it would ride the cam out of
