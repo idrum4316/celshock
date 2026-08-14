@@ -16,12 +16,14 @@ import type { WebSocket } from "ws";
 import {
   decode,
   encode,
+  MAX_NAME_LENGTH,
   PROTOCOL_VERSION,
   SNAPSHOT_HZ,
   INPUT_HZ,
   TICK_HZ,
   type ClientMessage,
   type EntityState,
+  type MatchSummary,
   type PointState,
   type ServerEvent,
   type ServerMessage,
@@ -101,6 +103,39 @@ const SHOT_DIR = new Vector3();
  * see the note on those constants for why a fractional ratio is not allowed.
  */
 const TICKS_PER_SNAPSHOT = TICK_HZ / SNAPSHOT_HZ;
+
+/** What an unusable name falls back to, so a slot always has something to say. */
+const NAME_FALLBACK = "operative";
+
+/**
+ * A display name that can safely go on fifteen other people's screens.
+ *
+ * BOUNDED rather than validated — anything may be a name, so this strips what
+ * is not one: the C0/C1 control characters (which can hide the rest of a string
+ * or rewrite a log line) and whitespace runs that make one name read as
+ * several. The length cap matters because the name is in every roster
+ * broadcast, and a client that could state a kilobyte would be handed sixteen
+ * ways to send it.
+ *
+ * The `typeof` guard is not paranoia: `decode` returns parsed JSON asserted to
+ * a `ClientMessage`, so the static type is a claim about a well-behaved client
+ * and nothing more. Every other field off that message is range-checked before
+ * use for the same reason.
+ *
+ * It deliberately does NOT escape markup. Escaping belongs to whatever renders
+ * the string, and a name stored pre-escaped shows up as `&amp;` the moment it
+ * reaches something that escapes properly — every screen in `src/ui/` writes a
+ * name with `textContent`, which needs none.
+ */
+function cleanName(raw: unknown): string {
+  if (typeof raw !== "string") return NAME_FALLBACK;
+  const clean = raw
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_NAME_LENGTH);
+  return clean.length > 0 ? clean : NAME_FALLBACK;
+}
 
 let nextPeerId = 1;
 
@@ -187,12 +222,21 @@ export class Match {
     return this.roster.hasBotSlot();
   }
 
-  summary(): { id: string; humans: number; slots: number; tick: number } {
+  /**
+   * This match as the lobby lists it.
+   *
+   * `state` is read off what is actually running rather than tracked as a
+   * field, so it cannot disagree with the loop: the timer exists only while
+   * there are peers (`stop` clears it when the last one leaves) and `rotating`
+   * spans the gap between a round ending and the next map being built.
+   */
+  summary(): MatchSummary {
     return {
       id: this.id,
+      mapId: this.mapId,
       humans: this.roster.humanCount,
       slots: this.roster.slots.length,
-      tick: this.ticks,
+      state: this.rotating ? "rotating" : this.timer ? "live" : "empty",
     };
   }
 
@@ -204,8 +248,12 @@ export class Match {
    * asking "is there room" and this method acting on the answer are two separate
    * moments and a race between them is exactly how a seventeenth player gets in.
    */
-  async admit(socket: WebSocket, name: string, weapon?: string): Promise<void> {
+  async admit(socket: WebSocket, rawName: string, weapon?: string): Promise<void> {
     const id = `p${nextPeerId++}`;
+    // Cleaned HERE, at the one door into the roster, rather than at the
+    // handshake — the same placement as the weapon lookup below, and for the
+    // same reason: a second caller of `admit` must not be able to skip it.
+    const name = cleanName(rawName);
     const slot = this.roster.claim(id, name);
     if (!slot) {
       socket.send(encode({ t: "rejected", reason: "match full" }));

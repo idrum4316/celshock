@@ -22,7 +22,7 @@ import { Scene, Vector3 } from "@babylonjs/core";
 import type { Team } from "../entities/Combatant";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { ControlPoint } from "../systems/ConquestSystem";
-import { Connection, type ConnectionState } from "./Connection";
+import { Connection, type ConnectionState, type JoinOptions } from "./Connection";
 import { NetRoster } from "./NetRoster";
 import { INPUT_HZ, type ServerEvent, type ServerMessage } from "./protocol";
 
@@ -57,6 +57,8 @@ export class NetSession {
   onEvent: (event: ServerEvent) => void = () => {};
   /** Wired by Game: the connection came up or went away. */
   onStateChange: (state: ConnectionState) => void = () => {};
+  /** Wired by Game: the server refused the handshake, and this is why. */
+  onRejected: (reason: string) => void = () => {};
   /** Wired by Game: a new round has begun on this map. */
   onRoundStart: (mapId: string) => void = () => {};
 
@@ -78,13 +80,17 @@ export class NetSession {
   }
 
   /**
-   * `weapon` is passed straight through and not kept here: `Connection` holds
-   * it so a RECONNECT re-sends the same loadout, and a second copy in this
-   * class would be one that could disagree with the one actually on the wire.
+   * Everything in `opts` is passed straight through and not kept here:
+   * `Connection` holds it so a RECONNECT re-sends the same loadout and asks for
+   * the same match, and a second copy in this class would be one that could
+   * disagree with what is actually on the wire.
    */
-  connect(name: string, url?: string, weapon?: string): void {
-    this.conn.connect(name, url, weapon);
+  connect(opts: JoinOptions): void {
+    this.conn.connect(opts);
   }
+
+  /** Which match we are in, once the server has said. Empty before that. */
+  matchId = "";
 
   /**
    * One frame of a networked round: draw everybody else, then report ourselves.
@@ -176,7 +182,13 @@ export class NetSession {
         this.slot = msg.slot;
         this.team = msg.team;
         this.mapId = msg.mapId;
+        this.matchId = msg.matchId;
         this.seated = true;
+        // Interpreting the welcome is this class's job, not `Connection`'s —
+        // so the match we actually landed in is handed back down for the
+        // reconnect to aim at. See `Connection.pinMatch` for why a retry that
+        // re-sent the ORIGINAL join would be a bug.
+        this.conn.pinMatch(msg.matchId);
         break;
 
       // A new round on a new map, same seat. Only the map changes here; the
@@ -212,8 +224,13 @@ export class NetSession {
         this.onCorrection(this.scratch, msg.reason);
         break;
 
+      // The handshake was refused — a full match, a match that has retired, or
+      // a protocol the server does not speak. It carries a reason precisely so
+      // it can be shown, and a lobby that sent the player here is the thing
+      // best placed to show it.
       case "rejected":
         console.warn(`[net] refused: ${msg.reason}`);
+        this.onRejected(msg.reason);
         break;
     }
   }

@@ -1,0 +1,208 @@
+/**
+ * lobby.css — The match browser: a scrim, a panel, and a list of matches.
+ * Owns #lobby and nothing else. Scaled by --ov-scale (declared in base.css,
+ * where #lobby is in the selector list) — like #settings and unlike #loadout,
+ * this screen has no hole in it for the 3D scene, so a transform is safe.
+ */
+
+/* Level with #loadout at 11 rather than above it: both are lids raised
+   from the main menu and the two can never be up together. It takes
+   pointer events across its whole area for the reason the pause card
+   does — the menu underneath confirms on mouse-DOWN, so a click on the
+   empty half of this screen would otherwise deploy a single-player
+   round out from under it. */
+#lobby {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  background: radial-gradient(
+    ellipse at 50% 45%,
+    rgba(6, 9, 16, 0.9) 0%,
+    rgba(2, 3, 6, 0.97) 70%
+  );
+}
+
+#lobby.hidden { display: none; }
+
+#lobby .lb-panel {
+  --cham: 16px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  /* ONE content width, the rule every screen in here follows: the
+     heading, every row and the foot measure to this, so three edges run
+     down the panel instead of each block centring on itself. */
+  --col: 640px;
+  width: min(var(--col), calc(100vw - 64px));
+  padding: 26px 30px 22px;
+}
+
+/* Rules either side, matching the settings and kit screens' headings. */
+#lobby h2 {
+  position: relative;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.55em;
+  color: var(--hot);
+  padding: 0 26px;
+}
+#lobby h2::before,
+#lobby h2::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 54px;
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgba(255, 230, 128, 0.55));
+}
+#lobby h2::before { right: 100%; }
+#lobby h2::after {
+  left: 100%;
+  background: linear-gradient(to left, transparent, rgba(255, 230, 128, 0.55));
+}
+
+/* The status line: how many matches, or why there are none to show. It
+   holds its height when empty so the list below does not jump between a
+   fetch and its answer. */
+#lobby .lb-sub {
+  min-height: 14px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+#lobby .lb-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  /* Bounded so a server running many matches scrolls rather than pushing
+     the foot off a short viewport. --ov-scale has already shrunk the
+     whole screen by then; this is the second line of defence. */
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+/* THREE COLUMNS, and every row states the same template so the map
+   names, the states and the counts line up down the panel. Unlike the
+   settings rows these are real boxes rather than `display: contents`,
+   because each one is a target — it takes a hover and a click, and a
+   row with no box of its own has nothing to hit. */
+#lobby .lb-row {
+  display: grid;
+  grid-template-columns: 1fr auto 74px;
+  align-items: center;
+  gap: 0 16px;
+  padding: 10px 14px;
+  border-left: 2px solid transparent;
+  background: rgba(255, 255, 255, 0);
+  transition: background 0.12s, border-color 0.12s;
+  cursor: pointer;
+}
+#lobby .lb-row.sel {
+  background: rgba(255, 255, 255, 0.05);
+  border-left-color: var(--hot);
+}
+
+#lobby .lb-id {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #cdd6e6;
+  /* A map id this build has never heard of is shown verbatim, so this
+     cell can be handed an arbitrary string off the wire. It clips rather
+     than wrapping, which keeps a hostile-length name from making one row
+     as tall as the panel. */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+#lobby .lb-row.sel .lb-id { color: #fff; }
+
+#lobby .lb-state {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.34);
+}
+
+#lobby .lb-count {
+  text-align: right;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.4);
+}
+#lobby .lb-count b {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--hot);
+}
+
+/* A full match stays in the list and stops being a target — knowing a
+   round is there and full is worth more than a shorter list. The cursor
+   still lands on it (it is a row like any other) and the confirm is
+   refused in `activate`. */
+#lobby .lb-row.full {
+  opacity: 0.42;
+  cursor: default;
+}
+#lobby .lb-row.full .lb-count b { color: var(--theirs); }
+
+/* The row a join is in flight on. */
+#lobby .lb-row.busy .lb-state { color: var(--hot); }
+
+/* The actions under the matches, separated by a rule rather than a gap so
+   they read as a different KIND of row without needing a heading to say
+   so. The adjacent-sibling selector is the whole rule and deliberately so:
+   the divider exists to separate the actions FROM the matches, so with no
+   matches on screen there is nothing to divide and the rule must not draw.
+   `:first-of-type` was wrong here — it selects on the element type (every
+   row is a div), so it matched the first action whether or not any match
+   preceded it, and an empty lobby drew a line under its own subtitle. */
+#lobby .lb-match + .lb-action {
+  margin-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+#lobby .lb-action .lb-id { color: #aeb6c2; }
+#lobby .lb-action.sel .lb-id { color: var(--hot); }
+
+#lobby .lb-nav {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.32);
+}
+#lobby .lb-nav span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+#lobby kbd {
+  font: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 3px 6px;
+  min-width: 22px;
+  text-align: center;
+  color: #cfd6e2;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+#lobby kbd.pad {
+  color: var(--hot);
+  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
+}

@@ -187,13 +187,64 @@ The pouch is the server's count. There is no resupply in this game — death is
 the only refill — so the ammunition IS the limit, and a client tracking its own
 would throw as many as it liked.
 
+## The lobby, and why there is no central registry
+
+**The registry in `server/index.ts` IS the lobby.** Matches live in that
+process's memory, so the list it serves on `GET /matches` is authoritative for
+itself: there is nothing for a match server to check in WITH, because there is
+one of them and it already knows everything there is to know. A master server —
+the thing dedicated servers heartbeat into so clients can be handed a list of
+addresses — solves a problem this deployment does not have, and building one now
+would be a second source of truth about matches that only one process owns.
+
+That stops being true the moment there are two processes, and the trigger is
+CPU: Node is single-threaded, so every match in a process shares one core.
+`MAX_MATCHES` (env, default 4) is what bounds it, and it exists so that "New
+match" is a safe button — a create path with nothing behind it is a way for
+anyone to spend the server's memory from a menu.
+
+Three pieces, and the shape is the same one every screen here follows:
+
+- **`GET /matches`** returns a `MatchList`: the protocol version, whether the
+  server will create any more, and a `MatchSummary` per match. The version is on
+  it because this is the FIRST thing a client asks, so it is the cheapest place
+  to find out the server is running a newer build.
+- **`Join.matchId`** names a match, and a named match is **never substituted**.
+  A peer that asked for `m3` and could be seated in `m4` is refused with a reason
+  rather than moved, because it picked that row for something on it and being
+  quietly relocated is indistinguishable from the lobby being wrong. An UNNAMED
+  join still fills whatever has room — that is `?mp` and every client that
+  predates this, neither of which expressed a preference to betray.
+- **`LobbyScreen`** renders what `Game` hands it and fetches nothing, the split
+  `SettingsScreen` already keeps.
+
+**The reconnect is why `Connection.pinMatch` exists.** A retry re-sends the
+original join, so a client that opened with `create: true` would stand up a NEW
+match on every dropped socket — abandoning the one it was playing in and walking
+through the match cap in a bad minute. `NetSession` reads the match out of the
+welcome and pins the connection to it, which also turns a reconnect into a real
+rejoin rather than a fresh roll of the dice.
+
+**The name is the one client string other people's screens render**, so it is
+bounded on arrival (`cleanName` in `Match.ts`) exactly as the weapon id is
+resolved there: truncated to `MAX_NAME_LENGTH`, stripped of the control
+characters that hide the rest of a string, and never escaped — escaping belongs
+to whatever renders it, and every screen writes a name with `textContent`.
+
 ## What is not built yet
 
 Stated so nobody assumes otherwise:
 
-- **A lobby.** The way into a match is `?mp` on the URL. The menu is a
-  list-shaped screen with a cursor (`docs/ui.md`) and a Multiplayer row belongs
-  in it.
+- **Choosing your name.** It is `?name=` and a default, because the menu has no
+  text entry anywhere in it: a focused input has to be kept from feeding the
+  game's own key handling, and neither that nor a pad path exists. `Game.playerName`
+  is where it lands.
+- **A round you join is a round you are already in.** `joinMatch` books the
+  local round immediately, so the deploy screen can be up before the welcome
+  arrives. `NetSession.seated` gates the uploads, so nothing is reported until
+  the server has answered — but a player who deploys inside that window is in
+  the world before the authority knows where. Widening with latency, and closed
+  properly by spawn selection below.
 - **Spawn selection.** Reinforcements arrive through `HeadlessGame.step`. The
   `deploy` message is accepted and deliberately inert: letting a client choose
   means offering it a validated list first, and an unvalidated index is a
@@ -206,4 +257,21 @@ Stated so nobody assumes otherwise:
   round survives; the seat is not reserved.
 - **More than one match server process.** Matches live in memory, so two
   replicas behind one proxy put players who joined "the same" match into two
-  different worlds.
+  different worlds — and each would serve its own half of `/matches` as though
+  it were all of them. This is the one item above whose fix IS a central
+  registry, and the ceiling that forces it is one core's worth of matches.
+
+## Deploying it
+
+`docker compose up --build` is the whole of it: `web` is nginx serving `dist/`
+and `match-server` is this process, deliberately unpublished so the only route
+in is the proxy. **Both `/ws` and `/matches` need a `location` block** — anything
+nginx does not name falls through to the static root and comes back as a 404,
+and that failure is a nasty one because the lobby works perfectly against
+`npm run server` on a dev machine, where the client reaches the match server
+directly and nginx is not in the picture at all.
+
+In DEV the two are on different origins, which is what `?server=ws://host:port/ws`
+is for and why `/matches` answers with `access-control-allow-origin: *`. The
+list is public and read-only — it is the same information anyone gets by
+connecting — so there is nothing there for an origin check to protect.

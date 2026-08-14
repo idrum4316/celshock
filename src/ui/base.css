@@ -179,7 +179,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 #hud { --ov-scale: 1; }
 @media (max-height: 620px) { #hud { --ov-scale: 0.75; } }
 @media (max-height: 430px) { #hud { --ov-scale: 0.45; } }
-#overlay, #deploy, #settings {
+#overlay, #deploy, #settings, #lobby {
   width: calc(100% / var(--ov-scale));
   height: calc(100% / var(--ov-scale));
   transform: scale(var(--ov-scale));

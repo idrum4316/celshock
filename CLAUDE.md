@@ -334,7 +334,7 @@ backstop rules, the GPU dust pool (the one place a particle system may be spawne
 per event, and why `addColorGradient` would take the scene down), the throw
 timeline, and the bots' range band.
 
-### The interface is four screens and the chrome
+### The interface is five screens and the chrome
 
 `src/ui/` holds one class per thing on screen, and `HUD` is not where a new one
 goes — it owns **only** the gameplay chrome. Each screen builds its own root and
@@ -347,10 +347,16 @@ interface: the black background, and the boot screen `main.ts` takes down once a
 frame has been drawn (or turns into the "needs WebGL2" message). Nothing that
 reacts to game state may join them.
 
+**Every screen here is a LIST, and a list whose rows can change under the cursor
+keeps its place by IDENTITY rather than by index.** The lobby is the one that
+can: a refresh inserts match rows above the actions, and a carried index means
+the highlight moves onto a different row while the player's hand is still on
+Enter.
+
 → **[`docs/ui.md`](docs/ui.md)** — the four cards and why they are one class, the
 menu cursor and the list-shaped screens, why **the pointer deploys only through
 the Deploy button**, the deploy map, the kit turntable that is the real viewmodel
-in a hole in the scrim, and the short-viewport scaling.
+in a hole in the scrim, the lobby's row identity, and the short-viewport scaling.
 
 ### The scene has (almost) no Babylon lights
 
@@ -584,6 +590,18 @@ On the client a bot and a remote human are the SAME object (`NetSoldier`), and
 the client is never told which is which — that is what makes "start without a
 full lobby" and "hand a leaver's slot back to a bot" one mechanism instead of
 two.
+
+**The match registry in `server/index.ts` IS the lobby, and needs nothing
+central to check in with** — matches live in that one process's memory, so the
+list it serves on `GET /matches` is authoritative for itself. A master server is
+what a SECOND process would need, and the ceiling that forces one is CPU: Node
+is single-threaded, so every match shares one core (`MAX_MATCHES`, env, default
+4). A named join is **never substituted** — a peer that asked for `m3` and could
+be seated in `m4` is refused with a reason, because being quietly relocated is
+indistinguishable from the lobby being wrong. **A client's display name is the
+one string of theirs that other people's screens render**, so it is bounded on
+arrival exactly as the weapon id is resolved there, and every screen writes it
+with `textContent`.
 
 **The server cannot run `MapBuilder`**: it has no canvas, so `DynamicTexture`
 throws. It rebuilds the solid world from the generated

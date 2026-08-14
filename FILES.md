@@ -7,8 +7,11 @@ these modules obey; this file is for finding your way to the right one.
 
 server/               # The authoritative match server. Node, NullEngine, no
   index.ts            #   rendering and no canvas — see server/README.md.
-                      #   Process entry: health endpoint, ws listener, match
-                      #   registry. Owns no game rules
+                      #   Process entry: /health, /matches, the ws listener and
+                      #   the match registry — which IS the lobby, because
+                      #   matches live in this process. Routes a join (named,
+                      #   create, or wherever there is room) and caps how many
+                      #   matches exist. Owns no game rules
   Match.ts            #   One match: fixed-step loop, snapshots, the gates on
                       #   what a client may claim, round rotation
   Roster.ts           #   The sixteen slots, team balance, human<->bot handover
@@ -223,7 +226,8 @@ src/
                         #   vitals, ammo, the stowed slot, crosshair, killfeed,
                         #   scoreboard, damage arcs, + .paused/.editing/.dying
     OverlayScreen.ts    # The four cards — menu, round-over, pause, building —
-      overlay.css       #   and the .overlaid class they raise
+      overlay.css       #   and the .overlaid class they raise. The menu is a
+                        #   LIST: MENU_ITEMS is the cursor's whole world
     DeployScreen.ts     # Top-down deploy map + the deploy and kit buttons
       deploy.css
     LoadoutScreen.ts    # Kit screen: two slots, a stat chart derived from
@@ -233,6 +237,11 @@ src/
                         #   thumb picks an option INDEX, so both are the same
                         #   choice). Owns no setting: picks leave through
                         #   onChange and return as setValues
+    LobbyScreen.ts      # The match browser: one row per match on the server,
+      lobby.css         #   plus new/refresh/back. Rows are DERIVED from the
+                        #   list, and everything off the wire is written with
+                        #   textContent. Fetches nothing — Game hands it a
+                        #   result and takes onJoin/onCreate back
     Minimap.ts          # Corner minimap: flags, friendlies, firing enemies
       minimap.css
   net/                # Multiplayer, client side. Nothing here is constructed
@@ -247,6 +256,9 @@ src/
     NetRoster.ts      #   The pool of NetSoldiers + mirrored flags/tickets.
                       #   The client's stand-in for BattleSystem: same job on
                       #   screen, none of the job underneath
+    lobby.ts          #   GET /matches, and the one bit of arithmetic behind
+                      #   it: the ws:// URL's origin -> the HTTP one. The only
+                      #   part of multiplayer that is not the WebSocket
   pwa/
     register.ts         # SW registration + the touch fullscreen gesture.
                         #   Knows nothing about the game

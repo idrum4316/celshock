@@ -19,7 +19,17 @@
  */
 
 /** Protocol version. Bumped on any incompatible change; a mismatch is refused. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
+
+/**
+ * The longest display name a client may claim, in characters.
+ *
+ * Here rather than in `CONFIG` because both ends need it: the server TRUNCATES
+ * to it (a bound the client cannot talk its way past) and the lobby's name
+ * field stops there, so what a player types is what they get rather than
+ * something silently shortened on arrival.
+ */
+export const MAX_NAME_LENGTH = 20;
 
 /**
  * How often the server steps the simulation.
@@ -63,6 +73,52 @@ export type Vec3 = [x: number, y: number, z: number];
 
 /** 0 = Wardens, 1 = The Blight — the same indices `CONFIG.teams` uses. */
 export type NetTeam = 0 | 1;
+
+// --- lobby ----------------------------------------------------------------
+
+/**
+ * One match as the lobby lists it.
+ *
+ * The only shape here that does NOT travel over the WebSocket — it is the body
+ * of `GET /matches`, fetched before there is a socket at all. It lives in this
+ * module anyway, because the rule is that a shape both ends must agree on is
+ * declared once, and "the server writes it, the client parses it" is exactly
+ * that. A client picks a row and sends its `id` back as `Join.matchId`.
+ *
+ * `slots` is on the wire rather than assumed to be sixteen: a client drawing
+ * "3 / 16" from its own `CONFIG.bots.perTeam` would draw the wrong denominator
+ * against a server built with a different one, and the row would be a lie in
+ * the one place a player is choosing between servers.
+ */
+export interface MatchSummary {
+  id: string;
+  /** Which map is standing, so a lobby row can name it. */
+  mapId: string;
+  humans: number;
+  slots: number;
+  /**
+   * `empty` — built, nobody in it, the world may already be disposed.
+   * `live` — a round is being simulated.
+   * `rotating` — the round ended and the next map is being built.
+   */
+  state: "empty" | "live" | "rotating";
+}
+
+/**
+ * The body of `GET /matches`.
+ *
+ * It carries the server's protocol version even though every row is otherwise
+ * about matches, because this is the FIRST thing a client asks and therefore
+ * the cheapest place to discover a version mismatch. Learning it here means the
+ * lobby can say "this server is running a newer build, reload" instead of
+ * offering rows that all fail at the socket with a message nobody sees.
+ */
+export interface MatchList {
+  protocol: number;
+  /** True when the server will not create any more matches. */
+  full: boolean;
+  matches: MatchSummary[];
+}
 
 // --- roster ---------------------------------------------------------------
 
@@ -231,7 +287,38 @@ export type ServerMessage =
 export interface Join {
   t: "join";
   version: number;
+  /**
+   * What to call this player.
+   *
+   * Truncated and stripped on arrival, never trusted as sent — it is the one
+   * client-supplied string that other people's screens render, so it is bounded
+   * on the authority's side for the same reason the weapon id below is resolved
+   * there. See `MAX_NAME_LENGTH`.
+   */
   name: string;
+  /**
+   * Which match to join, from a `MatchSummary.id` the lobby listed.
+   *
+   * Absent means "put me wherever there is room", which is what `?mp` on the
+   * URL does and what a client with no lobby has always done. Naming a match
+   * that has since filled or been disposed is REFUSED rather than redirected:
+   * a player who picked a specific row and silently landed somewhere else has
+   * been lied to, and the lobby can simply refresh and show why.
+   */
+  matchId?: string;
+  /**
+   * Start a NEW match rather than filling one that has room.
+   *
+   * Only consulted when `matchId` is absent — naming a match and asking for a
+   * fresh one are contradictory, and the named one wins because it is the more
+   * specific request. Bounded by the server's match cap, so this is a request
+   * and not an instruction.
+   *
+   * It exists because "there is room somewhere" and "I want to play there" are
+   * different questions. A lobby showing a half-full round on a map you do not
+   * want needs a way past it that is not waiting for sixteen strangers.
+   */
+  create?: boolean;
   /**
    * The primary weapon this client wants to carry.
    *

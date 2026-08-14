@@ -267,8 +267,9 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
 
 - **Multiplayer needs a server, and the client reaches it with `?mp`.** Build and
   start it (`npm run build:server`, then `PORT=8097 node dist-server/index.js`)
-  and load the page as `?mp=ws://localhost:8097/ws`. Three things about driving
-  it that have already cost time. **A test cannot place a player anywhere** —
+  and load the page as `?mp=ws://localhost:8097/ws` to skip the menu and join
+  straight in, or `?server=ws://localhost:8097/ws` to aim the LOBBY at it and
+  drive the menu. Three things about driving it that have already cost time. **A test cannot place a player anywhere** —
   the validator refuses it as a teleport, correctly — so a script that wants two
   players near each other has to WALK them, and one that dead-reckons from the
   server's last reported position never advances, because that report lags the
@@ -278,6 +279,23 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   rejection. And **the straight line between two home spawns runs through the
   village**: walk to the map centre instead, which is the control point every
   road leads to.
+- **Restart the match server between runs, and do not trust a hang.** Matches
+  outlive the client that made them by a minute (`IDLE_DISPOSE_MS`), so a script
+  run three times leaves three worlds simulating at 60 Hz on the box that is
+  also running SwiftShader — and the symptom is not a slow test but a handshake
+  that never completes, which reads exactly like a broken join. A `curl
+  localhost:PORT/matches` before the run tells you whether the registry is
+  clean. It also breaks any assertion of the form "there is exactly one match".
+- **Playwright's `click()` does not reach the interface: the canvas fills the
+  viewport and is read as intercepting**, even though `#hud` is
+  `pointer-events: none` and each control opts back in. Every button that leaves
+  a screen binds `onpointerdown`, so `locator.dispatchEvent("pointerdown")` is
+  both the reliable path and the true one.
+- **Do not monkey-patch `window.WebSocket` without carrying its statics.**
+  `Connection.send` compares `readyState` against `WebSocket.OPEN`, so a wrapper
+  function without `OPEN` on it makes every send a silent no-op — the socket
+  opens, the state reads `open`, and the join is never sent. It costs an hour
+  because everything looks connected.
 - **`npm run simulate` is the fastest way to see the rules work at all** — a
   whole round with no clients and no rendering, in seconds of wall clock. It is
   not a balance oracle: sixteen bots is not eight bots and eight people.

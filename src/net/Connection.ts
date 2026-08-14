@@ -28,6 +28,25 @@ import { decode, encode, PROTOCOL_VERSION, type ClientMessage, type ServerMessag
 
 export type ConnectionState = "idle" | "connecting" | "open" | "closed";
 
+/**
+ * Everything the handshake needs, as one object.
+ *
+ * An object rather than four positional strings — `connect(name, url, weapon,
+ * matchId)` is a signature where transposing any two of the last three still
+ * typechecks and joins the wrong thing, which is the same reason `MenuState`
+ * exists next door in the UI layer.
+ */
+export interface JoinOptions {
+  name: string;
+  /** Where to reach the server. Same-origin `/ws` when absent. */
+  url?: string;
+  weapon?: string;
+  /** A specific match from the lobby. Absent means "wherever there is room". */
+  matchId?: string;
+  /** Ask for a fresh match instead of filling one. Ignored with `matchId`. */
+  create?: boolean;
+}
+
 export class Connection {
   state: ConnectionState = "idle";
 
@@ -39,8 +58,7 @@ export class Connection {
   private socket: WebSocket | null = null;
   private attempts = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
-  private name = "player";
-  private weapon: string | undefined;
+  private join: JoinOptions = { name: "player" };
   private closedByUs = false;
 
   /**
@@ -63,14 +81,30 @@ export class Connection {
     return this.now() - CONFIG.net.interpDelay * 1000;
   }
 
-  // Annotated `string`, not inferred: `CONFIG` is `as const`, so the default
-  // would narrow the parameter to the literal `"/ws"` and refuse every caller
-  // that passes a real URL. The documented gotcha in CLAUDE.md.
-  connect(name: string, url: string = CONFIG.net.url, weapon?: string): void {
-    this.name = name;
-    this.weapon = weapon;
+  connect(opts: JoinOptions): void {
+    this.join = opts;
     this.closedByUs = false;
+    // Annotated `string`, not inferred: `CONFIG` is `as const`, so taking the
+    // default inline would narrow it to the literal `"/ws"` and refuse every
+    // caller that passes a real URL. The documented gotcha in CLAUDE.md.
+    const url: string = opts.url ?? CONFIG.net.url;
     this.open(url);
+  }
+
+  /**
+   * Fixes this connection to the match it actually landed in.
+   *
+   * Called by whoever reads the `welcome` — this file does not interpret
+   * messages — and it exists because of RECONNECTION. A retry re-sends the
+   * original join, so a client that opened with `create: true` would stand up
+   * a brand new match on every dropped socket, abandoning the one it was
+   * playing in and burning through the server's match cap in a bad minute. It
+   * also turns a reconnect into a genuine rejoin: the same match is asked for
+   * by name, and if that match is gone the server says so rather than dropping
+   * the player into a stranger's round.
+   */
+  pinMatch(matchId: string): void {
+    this.join = { ...this.join, matchId, create: false };
   }
 
   private open(url: string): void {
@@ -91,8 +125,10 @@ export class Connection {
       this.send({
         t: "join",
         version: PROTOCOL_VERSION,
-        name: this.name,
-        weapon: this.weapon,
+        name: this.join.name,
+        matchId: this.join.matchId,
+        create: this.join.create,
+        weapon: this.join.weapon,
       });
     });
 

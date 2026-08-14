@@ -60,6 +60,7 @@ import { Bot } from "../entities/Bot";
 import { difficultyNames } from "../entities/BotSkill";
 import type { Combatant, Team } from "../entities/Combatant";
 import { NetSession } from "../net/NetSession";
+import { fetchMatches } from "../net/lobby";
 import type { ServerEvent } from "../net/protocol";
 import { Player } from "../entities/Player";
 import { type SightId } from "../entities/sights";
@@ -88,6 +89,7 @@ import { HUD, type CaptureStatus } from "../ui/HUD";
 import { OverlayScreen } from "../ui/OverlayScreen";
 import { kitLabel, LoadoutScreen } from "../ui/LoadoutScreen";
 import { SettingsScreen } from "../ui/SettingsScreen";
+import { LobbyScreen } from "../ui/LobbyScreen";
 import { Minimap } from "../ui/Minimap";
 import { enterFullscreenOnTouch } from "../pwa/register";
 import { CameraSystem } from "./CameraSystem";
@@ -138,6 +140,13 @@ import { Sfx } from "./Sfx";
  * the scene rather than from the title card — which makes it the one lid that
  * can be raised over another one.
  *
+ * `lobby` is a lid too, and the simplest of the three: it covers `menu` and
+ * only `menu`, so it needs no `-From` field to remember where it came from.
+ * Picking a match out of it leaves through `startRound` exactly as Deploy does,
+ * which is why the lobby is not a step in the state machine — a networked round
+ * and a single-player one are the same `loading -> deploy -> playing` cycle,
+ * differing only in whether `Game.net` exists.
+ *
  * `editor` sits outside that cycle: it is a dev-only side state reachable from
  * anywhere with F2, and leaving it always restarts the round rather than
  * resuming, because the systems that cache the GameMap cannot be handed a map
@@ -152,6 +161,7 @@ type GameState =
   | "paused"
   | "loadout"
   | "settings"
+  | "lobby"
   | "roundover"
   | "editor";
 
@@ -184,6 +194,7 @@ export class Game {
   private deployScreen: DeployScreen;
   private loadoutScreen: LoadoutScreen;
   private settingsScreen: SettingsScreen;
+  private lobbyScreen: LobbyScreen;
   private minimap: Minimap;
   private sfx: Sfx;
   private mapBuilder: MapBuilder;
@@ -316,6 +327,33 @@ export class Game {
    * which is the failure that would be invisible and unfixable.
    */
   private net: NetSession | null = null;
+
+  /**
+   * Which match server to talk to, for both the lobby's list and the socket.
+   *
+   * `undefined` is the deployed case and means the page's own origin, which is
+   * where nginx answers `/ws` and `/matches`. It is only ever something else in
+   * DEV, from `?server=` or `?mp=` — the client is on Vite's port then and the
+   * server on its own, with nothing in between to make them one origin.
+   *
+   * One field for both because they are one server. Letting the list and the
+   * socket be aimed separately would make "browsing one server and joining
+   * another" representable, which is not a thing anybody wants and is a bug the
+   * moment it happens by accident.
+   */
+  private netUrl: string | undefined;
+
+  /**
+   * What to call this player on the wire. Server-side it is truncated and
+   * stripped (see `MAX_NAME_LENGTH`); this is only what gets offered.
+   *
+   * Still `?name=` and a default, because the menu has no text entry anywhere
+   * in it and adding one is its own feature — a focused input has to be kept
+   * from feeding the game's own key handling, and neither the pad nor the
+   * on-screen path exists. Named as a field rather than read at the join so
+   * there is one obvious place for that feature to land.
+   */
+  private playerName = "player";
 
   private readonly combatants: Combatant[] = [];
   /** Scratch for the shadow focus point — no per-frame allocation. */
@@ -491,6 +529,7 @@ export class Game {
     this.deployScreen = new DeployScreen();
     this.loadoutScreen = new LoadoutScreen();
     this.settingsScreen = new SettingsScreen(this.settings);
+    this.lobbyScreen = new LobbyScreen();
     this.minimap = new Minimap();
     this.lighting = new LightingSystem();
     this.atmosphere = new Atmosphere(this.scene);
@@ -808,8 +847,13 @@ export class Game {
     this.loadoutScreen.onClose = () => this.closeLoadout();
     this.player.onCarryChanged = () => this.applyCarry();
     this.overlayScreen.onOpenSettings = () => this.openSettings();
+    this.overlayScreen.onOpenMultiplayer = () => this.openLobby();
     this.settingsScreen.onChange = (key, value) => this.setSetting(key, value);
     this.settingsScreen.onClose = () => this.closeSettings();
+    this.lobbyScreen.onJoin = (matchId) => this.joinMatch({ matchId });
+    this.lobbyScreen.onCreate = () => this.joinMatch({ create: true });
+    this.lobbyScreen.onRefresh = () => void this.refreshLobby();
+    this.lobbyScreen.onClose = () => this.closeLobby();
     this.overlayScreen.onPauseAction = (action) => {
       // Restart needs nothing put back by hand: `startRound` lifts the lid,
       // hides the overlay and ends in `enterDeploy`, which sets the state.
@@ -949,6 +993,47 @@ export class Game {
     // changed, so it is redrawn on the way out — the same reason
     // `closeLoadout` does it. The pause card was never taken down.
     if (this.state === "menu") this.showMenu();
+  }
+
+  /**
+   * Raises the lobby over the menu, and asks the server what it is running.
+   *
+   * The fetch is fired here rather than by the screen, which renders what it is
+   * handed and nothing else — the same split `SettingsScreen` keeps. It is not
+   * awaited: the screen goes up in its loading state on this frame, and the
+   * answer lands on whatever frame it lands on.
+   *
+   * Menu-only, unlike the settings lid. A lobby raised over a live round would
+   * be offering to join a second match while standing in one.
+   */
+  private openLobby(): void {
+    if (this.state !== "menu") return;
+    this.state = "lobby";
+    this.lobbyScreen.show();
+    void this.refreshLobby();
+  }
+
+  private closeLobby(): void {
+    if (this.state !== "lobby") return;
+    this.lobbyScreen.hide();
+    this.state = "menu";
+    // Redrawn on the way out, for the reason `closeSettings` states: the menu
+    // owns its markup and has been covered.
+    this.showMenu();
+  }
+
+  /**
+   * Fetches the match list and hands it to the screen.
+   *
+   * Guarded on the screen still being open, because the fetch has a timeout of
+   * several seconds and a player who pressed Back is entitled to have meant it
+   * — a late answer must not repaint a screen that is down, or worse, put one
+   * back up over the menu.
+   */
+  private async refreshLobby(): Promise<void> {
+    const result = await fetchMatches(this.netUrl);
+    if (this.state !== "lobby") return;
+    this.lobbyScreen.setList(result);
   }
 
   /**
@@ -1278,6 +1363,9 @@ export class Game {
       case "settings":
         this.updateSettingsScreen();
         break;
+      case "lobby":
+        this.updateLobbyScreen();
+        break;
       case "paused":
         this.updatePauseMenu();
         break;
@@ -1384,6 +1472,10 @@ export class Game {
       }
       if (this.input.settingsPressed) {
         this.openSettings();
+        return;
+      }
+      if (this.input.multiplayerPressed) {
+        this.openLobby();
         return;
       }
     }
@@ -1504,6 +1596,32 @@ export class Game {
     if (this.input.menuLeftPressed) this.settingsScreen.stepRow(-1, false);
     if (this.input.menuRightPressed) this.settingsScreen.stepRow(1, false);
     if (this.input.menuConfirmPressed) this.settingsScreen.stepRow(1, true);
+  }
+
+  /**
+   * The lobby. A list like the settings screen, and simpler: every row does one
+   * thing, so there is no left/right — a horizontal nudge on a match row has
+   * nothing to step, and spending it on anything would make the cursor's own
+   * edges feel like traps (the reasoning `stepMenuItem` states next door).
+   */
+  private updateLobbyScreen(): void {
+    // B, Escape and `M` all leave, matching the settings screen's three ways
+    // out. Enter is spent on joining, which is what the screen is for.
+    if (
+      this.input.menuBackPressed ||
+      this.input.pausePressed ||
+      this.input.multiplayerPressed
+    ) {
+      // B is the pad's crouch toggle as well; the press that closed this screen
+      // has already flipped the latch behind it. The same correction the pause
+      // and settings branches make.
+      if (this.input.menuBackPressed) this.input.clearCrouchToggle();
+      this.closeLobby();
+      return;
+    }
+    if (this.input.menuUpPressed) this.lobbyScreen.moveRow(-1);
+    if (this.input.menuDownPressed) this.lobbyScreen.moveRow(1);
+    if (this.input.menuConfirmPressed) this.lobbyScreen.activate();
   }
 
   /**
@@ -1678,6 +1796,16 @@ export class Game {
    */
   private enterMenu(): void {
     this.state = "menu";
+    // A networked round ends HERE, and the socket is closed rather than left to
+    // time out: a peer that merely goes quiet holds its roster slot until the
+    // server notices, and the bot that should have taken the seat back stays
+    // benched for as long as that takes.
+    //
+    // This was inert while `?mp` was the only way into a match — there was no
+    // route from the menu back into one, so a stale session could never be hit.
+    // The lobby is that route, and without this the second join is refused by
+    // `joinMatch`'s own guard and looks like a dead button.
+    this.leaveMatch();
     this.clearPause();
     this.deployScreen.hide();
     this.stowKit();
@@ -1960,9 +2088,11 @@ export class Game {
     // silent failure `installMap` exists to prevent.
     if (this.state === "loading") return;
     this.overlayScreen.hide();
-    // Reachable from the menu, so either lid may still be up over it.
+    // Reachable from the menu, so any lid may still be up over it — including
+    // the lobby, which is the one that got here on a networked round.
     this.stowKit();
     this.settingsScreen.hide();
+    this.lobbyScreen.hide();
     // Reachable straight from the pause menu ("Restart round"), and harmless
     // from anywhere else.
     this.clearPause();
@@ -2249,30 +2379,43 @@ export class Game {
    * same failure `installMap` exists to prevent one layer down.
    */
   /**
-   * Joins a networked match. Dev entry point until the lobby lands (phase 8).
+   * What the URL says about multiplayer, read once at construction.
    *
-   * The map is built locally exactly as an offline round builds it — the server
+   * Three parameters, and only the first is needed in a deployed build:
+   *
+   * - `?name=` — what to call this player, until the lobby grows text entry.
+   * - `?server=ws://host:port/ws` — which match server the LOBBY should list
+   *   and join. Purely a dev affordance: the client is on Vite's port and the
+   *   server on its own, so same-origin does not reach it.
+   * - `?mp` — skip the menu and join immediately, optionally naming the server
+   *   the way `?server=` does. It predates the lobby and is kept because it is
+   *   how the smoke tests get into a networked round in one navigation; the
+   *   menu's Multiplayer row is the way a player gets there.
+   */
+  private joinFromUrl(): void {
+    const params = new URLSearchParams(location.search);
+    const name = params.get("name");
+    if (name) this.playerName = name;
+    const server = params.get("server");
+    if (server) this.netUrl = server;
+    const mp = params.get("mp");
+    if (mp === null) return;
+    // A value on `?mp` names the server too, so the one-navigation form does
+    // not also need `?server=`.
+    if (mp !== "") this.netUrl = mp;
+    this.joinMatch();
+  }
+
+  /**
+   * Joins a networked match: a specific one from the lobby, a fresh one, or
+   * whatever has room when neither is asked for.
+   *
+   * The map is built LOCALLY exactly as an offline round builds it — the server
    * has the same layout and the same baked colliders, so the world both sides
    * reason about is the same one without a byte of it crossing the wire. What
    * comes over the wire is only what MOVES.
    */
-  /**
-   * Joins from the URL, for a dev build: `?mp` for the same origin, or
-   * `?mp=ws://host:port/ws` to point at a server somewhere else.
-   *
-   * A stopgap and labelled as one. The menu is a list-shaped screen with a
-   * cursor (see `docs/ui.md`) and a Multiplayer row belongs in it; until that
-   * lands this is the honest way in, and it is at least discoverable from the
-   * address bar rather than being a console incantation.
-   */
-  private joinFromUrl(): void {
-    const param = new URLSearchParams(location.search).get("mp");
-    if (param === null) return;
-    const name = new URLSearchParams(location.search).get("name") ?? "player";
-    this.joinMatch(name, param === "" ? undefined : param);
-  }
-
-  joinMatch(name: string, url?: string): void {
+  joinMatch(opts: { matchId?: string; create?: boolean } = {}): void {
     if (this.net) return;
     const net = new NetSession(this.scene, this.mats);
     this.net = net;
@@ -2311,8 +2454,40 @@ export class Game {
       if (state === "closed") this.hud.toast("disconnected");
     };
 
+    // The handshake was refused — a match that filled or retired between the
+    // list and the pick, or a server speaking a protocol this build does not.
+    // The round that was optimistically started is torn down and the player is
+    // put back where they chose from, with the server's own words for why.
+    net.onRejected = (reason) => {
+      // `enterMenu` drops the session and tears the round down; the lobby then
+      // goes back up over it and re-fetches, so the row that refused is gone
+      // from the list by the time the player reads why.
+      this.enterMenu();
+      this.hud.toast(reason);
+      this.openLobby();
+    };
+
+    // The screen stays up under the build, showing which row is being joined,
+    // and `startRound` takes it down on the way into `loading`.
+    if (opts.matchId) this.lobbyScreen.setJoining(opts.matchId);
+
     this.startRound();
-    net.connect(name, url, this.weapon);
+    net.connect({
+      name: this.playerName,
+      url: this.netUrl,
+      weapon: this.weapon,
+      matchId: opts.matchId,
+      create: opts.create,
+    });
+  }
+
+  /**
+   * Drops the networked session, if there is one. Idempotent, and safe to call
+   * from a state that never had one — which is most of `enterMenu`'s callers.
+   */
+  private leaveMatch(): void {
+    this.net?.dispose();
+    this.net = null;
   }
 
   /** What a server event does to this client's screen. Presentation only. */

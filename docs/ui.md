@@ -1,16 +1,17 @@
-# The interface: four screens and the chrome
+# The interface: five screens and the chrome
 
-What each UI class owns, where a stylesheet lives, and how the three screens
-between the title and the world are driven by a pointer and a pad alike. Split out
+What each UI class owns, where a stylesheet lives, and how the screens between
+the title and the world are driven by a pointer and a pad alike. Split out
 of [`CLAUDE.md`](../CLAUDE.md), which keeps the summary; this file is the
 contract for everything under `src/ui/`.
 
-## The interface is four screens and the chrome
+## The interface is five screens and the chrome
 
 `src/ui/` holds one class per thing on screen, and `HUD` is not where a new one
 goes: `OverlayScreen` owns the four full-screen cards, `DeployScreen` the deploy
-map, `LoadoutScreen` the kit, `SettingsScreen` the settings list, `Minimap` the
-corner map, and `HUD` **only** the gameplay chrome.
+map, `LoadoutScreen` the kit, `SettingsScreen` the settings list, `LobbyScreen`
+the match browser, `Minimap` the corner map, and `HUD` **only** the gameplay
+chrome.
 
 **The boot screen is the one piece of interface that is not in this directory**,
 and the exception is what defines it: it covers the stretch before any module
@@ -27,8 +28,19 @@ it belongs here with a stylesheet of its own.
 Each screen builds its own root element and appends it to `#hud`, which is why
 construction order in `Game`'s constructor matters exactly once: `HUD` writes
 `#hud.innerHTML` and would wipe anything already appended, so it is built first.
-Stacking is not DOM order — `#overlay` (10) and `#loadout` (11) carry z-indices,
-because a pause can be taken with the deploy map on screen.
+Stacking is not DOM order — `#overlay` (10), `#loadout` and `#lobby` (11) and
+`#settings` (12) carry z-indices, because a pause can be taken with the deploy
+map on screen. The kit and the lobby share a rung on purpose: both are lids
+raised from the main menu and the two can never be up together.
+
+**A list-shaped screen keeps its cursor by IDENTITY, not by index.** The lobby
+is the one whose rows come and go under it — a refresh inserts matches ABOVE the
+actions — and an index carried across a rebuild silently means a different row:
+press Refresh, let a match appear, press Enter and you have created a match
+instead, with the highlight having moved under your hand to say so. `sameRow`
+matches an action by kind and a match by id, never by anything that changes
+(a count going 3 → 4 is the same row). The settings screen is spared this only
+because its rows are a static table.
 
 **The four cards are one class because they are one element** — they share the
 shell, the title block, the controls table and the Deploy button. The bar for a
@@ -199,8 +211,12 @@ change moved no content-hashed filename. Three rules keep it that way:
 
 ## Getting into a round
 
-Three screens stand between the title and the world, each driven by a pointer *and*
-by a pad, with no path that needs the other.
+Four screens stand between the title and the world, each driven by a pointer
+*and* by a pad, with no path that needs the other. The fourth is the lobby, and
+it is the one that is optional: it is how a NETWORKED round is chosen, and
+picking a match out of it leaves through `startRound` exactly as Deploy does —
+a networked round and a single-player one are the same `loading -> deploy ->
+playing` cycle, differing only in whether `Game.net` exists.
 
 **Every screen here is a LIST: move the cursor, A picks, B backs out.** That
 replaced a screen per verb — left/right for difficulty, `L`/Y for the kit, `O` for
