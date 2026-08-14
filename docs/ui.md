@@ -274,7 +274,15 @@ the map's edges). The two big titles are the deliberate exception.
 - **Only the controls opt into pointer events, never the rows.** `#hud` is
   `pointer-events: none` and the menu's confirm is a mouse-down anywhere, so a row
   that claimed events would turn its labels, hints and the grid's gaps into dead zones
-  where a click does nothing instead of starting the round.
+  where a click does nothing instead of starting the round. **The cost is that a new
+  control is unclickable until it names itself**, and the failure is quiet from both
+  sides: the keyboard fires it through `activateMenu`, which never touches the DOM, so
+  the row works perfectly for whoever is testing with a pad and is dead under the
+  mouse. The screen-openers share one list in `base.css` (`kit-open`,
+  `settings-open`, `mp-open`, `#deploy-kit`) and the selection ring is a second list
+  in `overlay.css` — a fifth opener goes in **both**, not just the first. The
+  multiplayer button shipped in neither and read as a bug in the button rather than a
+  missing rule.
 - **`#deploy-actions` wraps.** The map is height-led, so on a 768-tall laptop it is
   430 px across and the longest kit ("Marksman rifle · Scope") does not fit beside a
   Deploy button. Both buttons grow, so a broken row gives two full-width buttons
