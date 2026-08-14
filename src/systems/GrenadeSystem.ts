@@ -34,7 +34,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import type { Team } from "../entities/Combatant";
+import type { Combatant, Team } from "../entities/Combatant";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
 import type { EnvironmentSpec } from "../world/environment";
 import { TerrainField } from "../world/TerrainField";
@@ -51,8 +51,21 @@ interface Grenade {
   fuse: number;
   live: boolean;
   team: Team;
-  /** Whether the player threw it — the scoreboard needs to know. */
-  byPlayer: boolean;
+  /**
+   * Who threw it, for whoever has to be credited with what it does.
+   *
+   * A reference and not a team, because a scoreboard counts BODIES: the team
+   * is already on the slot next door (it is what the target list is fetched
+   * against) and the thrower's identity is the part that cannot be recovered
+   * three seconds and two bounces later. It also replaces the `byPlayer` flag
+   * this field grew out of — "was it the player" is a question only `Game` can
+   * answer, and it answers it by comparing this against its own `Player`.
+   *
+   * Null is a grenade nobody owns, which nothing throws today; the field is
+   * optional so that this system never has to invent a thrower to satisfy a
+   * type. Its team is NEVER read here — see the note on `hittablesFor`.
+   */
+  by: Combatant | null;
   /** Set once it has settled, so a resting grenade stops paying for a ray. */
   resting: boolean;
 }
@@ -114,13 +127,19 @@ export class GrenadeSystem {
 
   /**
    * Wired by Game: the blast hurt someone. `killed` is whether it finished
-   * them, `thrower` is the team to credit, and `byPlayer` separates the
-   * player's own kills from their team's.
+   * them, `thrower` is the team to credit, and `by` is the combatant who threw
+   * it — the one thing a kill needs that cannot be worked out at the far end.
+   *
+   * `by` is where the retired `byPlayer` flag went. The flag was this system
+   * carrying an answer to a question about `Game`'s own `Player`, which it has
+   * never had any way to ask; a consumer compares the thrower against whatever
+   * it considers "us" and gets the same answer without this file knowing there
+   * is such a thing as a player.
    */
   onBlastHit: (
     victim: Hittable,
     thrower: Team,
-    byPlayer: boolean,
+    by: Combatant | null,
     killed: boolean,
   ) => void = () => {};
 
@@ -180,7 +199,7 @@ export class GrenadeSystem {
         fuse: 0,
         live: false,
         team: 0,
-        byPlayer: false,
+        by: null,
         resting: false,
       });
     }
@@ -240,14 +259,14 @@ export class GrenadeSystem {
     from: Vector3,
     dir: Vector3,
     team: Team,
-    byPlayer: boolean,
+    by: Combatant | null,
   ): boolean {
     // Tilting a unit direction up by an angle and renormalising: cheaper than
     // building a rotation, and the axis is always world up.
     _launch.copyFrom(dir).normalize();
     _launch.y += Math.tan(CONFIG.grenade.throwLift);
     _launch.normalize().scaleInPlace(CONFIG.grenade.throwSpeed);
-    return this.throwFrom(from, _launch, team, byPlayer);
+    return this.throwFrom(from, _launch, team, by);
   }
 
   /**
@@ -265,7 +284,12 @@ export class GrenadeSystem {
    * spends longer in the air, which is longer for the target to walk out of it,
    * and it is the one that catches the eaves on the way over.
    */
-  throwAt(from: Vector3, to: Vector3, team: Team, byPlayer: boolean): boolean {
+  throwAt(
+    from: Vector3,
+    to: Vector3,
+    team: Team,
+    by: Combatant | null,
+  ): boolean {
     const cfg = CONFIG.grenade;
     const dx = to.x - from.x;
     const dz = to.z - from.z;
@@ -283,7 +307,7 @@ export class GrenadeSystem {
       Math.sin(angle) * cfg.throwSpeed,
       (dz / d) * horizontal,
     );
-    return this.throwFrom(from, _launch, team, byPlayer);
+    return this.throwFrom(from, _launch, team, by);
   }
 
   /** Claims a pool slot and puts the grenade in the air. */
@@ -291,7 +315,7 @@ export class GrenadeSystem {
     from: Vector3,
     velocity: Vector3,
     team: Team,
-    byPlayer: boolean,
+    by: Combatant | null,
   ): boolean {
     const slot = this.grenades.find((n) => !n.live);
     if (!slot) return false;
@@ -301,7 +325,7 @@ export class GrenadeSystem {
     slot.live = true;
     slot.resting = false;
     slot.team = team;
-    slot.byPlayer = byPlayer;
+    slot.by = by;
     slot.mesh.rotation.set(
       Math.random() * 3,
       Math.random() * 3,
@@ -430,7 +454,7 @@ export class GrenadeSystem {
           ? 1
           : 1 - (dist - g.innerRadius) / (g.blastRadius - g.innerRadius);
       const killed = target.takeDamage(g.damage * falloff, at);
-      this.onBlastHit(target, n.team, n.byPlayer, killed);
+      this.onBlastHit(target, n.team, n.by, killed);
     }
 
     this.spawnBlast(at);
@@ -528,6 +552,10 @@ export class GrenadeSystem {
       n.resting = false;
       n.mesh.isVisible = false;
       n.pip.isVisible = false;
+      // Dropped rather than left to be overwritten by the next throw: a round
+      // is over, and a pooled slot holding a reference to last round's thrower
+      // is the one thing in here that would outlive it.
+      n.by = null;
     }
     for (const b of this.blasts) {
       b.t = 0;

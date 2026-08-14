@@ -40,7 +40,7 @@ export class NetRoster {
 
   /**
    * Wired by `Game`: this body just went down, and may be offered to the
-   * ragdoll pool. The counterpart of `BattleSystem.onBotKilled`, and it says
+   * ragdoll pool. The counterpart of `BattleSystem.onBotKill`, and it says
    * strictly less: a death here is news that ALREADY happened, so there is no
    * killer, no ticket and no score on it — the authority spent all three
    * before this client heard about it. What is left is the body falling over,

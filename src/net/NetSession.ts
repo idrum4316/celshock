@@ -24,7 +24,12 @@ import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { ControlPoint } from "../systems/ConquestSystem";
 import { Connection, type ConnectionState, type JoinOptions } from "./Connection";
 import { NetRoster } from "./NetRoster";
-import { INPUT_HZ, type ServerEvent, type ServerMessage } from "./protocol";
+import {
+  INPUT_HZ,
+  type ServerEvent,
+  type ServerMessage,
+  type SlotState,
+} from "./protocol";
 
 const UPLOAD_INTERVAL = 1 / INPUT_HZ;
 
@@ -54,6 +59,32 @@ export class NetSession {
 
   /** True once the welcome has arrived and the round is ours to play. */
   seated = false;
+
+  /**
+   * Who is in each slot, as the last roster message said.
+   *
+   * Kept here rather than in `NetRoster` because it is not about drawing
+   * anybody: that class deliberately reads a roster only to find out which body
+   * to stop rendering, and everything else about an occupant is invisible to
+   * it — a bot and a person are the same object on screen and must stay that
+   * way. The one screen that does need to tell them apart is the scoreboard,
+   * which is naming rows rather than drawing bodies, and this is what it reads.
+   */
+  slots: readonly SlotState[] = [];
+
+  /**
+   * The round's board, indexed by slot, as the authority last stated it.
+   *
+   * Mirrored rather than counted, exactly like `tickets`. A client sees only
+   * the kill events it was connected for — and `kill` names a killer's team
+   * rather than the body — so anything added up here would be a different board
+   * on every screen and would start a joiner's round at zero-all. Both arrays
+   * are empty until the first `scores` message, which the server sends on
+   * arrival and then only when the table moves; a row that has not arrived
+   * reads as 0.
+   */
+  readonly slotKills: number[] = [];
+  readonly slotDeaths: number[] = [];
 
   /** Wired by Game: the server has placed us. */
   onSpawn: (pos: Vector3, yaw: number) => void = () => {};
@@ -264,11 +295,28 @@ export class NetSession {
       // anybody.
       case "roundstart":
         this.mapId = msg.mapId;
+        // Last round's board is not this round's. The server clears and
+        // re-sends its own within a snapshot of this message; clearing here is
+        // what keeps the fraction of a second in between from showing a
+        // finished round's kills against a map that has just been built.
+        this.slotKills.length = 0;
+        this.slotDeaths.length = 0;
         this.onRoundStart(msg.mapId);
         break;
 
       case "roster":
+        this.slots = msg.slots;
         this.roster.applyRoster(msg.slots, this.slot);
+        break;
+
+      // The board, whole. Copied INTO the arrays rather than replacing them,
+      // because they are `readonly` fields other code holds a reference to —
+      // the same reason `tickets` is written element-wise next door.
+      case "scores":
+        this.slotKills.length = 0;
+        this.slotDeaths.length = 0;
+        this.slotKills.push(...msg.kills);
+        this.slotDeaths.push(...msg.deaths);
         break;
 
       case "snap":

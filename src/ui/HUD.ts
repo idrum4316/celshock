@@ -167,6 +167,27 @@ function angleDelta(a: number, b: number): number {
 }
 
 /**
+ * One combatant's line on the scoreboard.
+ *
+ * A body, not a person: a bot and a human are the same row with the same three
+ * numbers, because they are the same thing to the round they are fighting in.
+ * `Game.scoreRows` builds these — offline from its own counters, in a match
+ * from the authority's table — and this file only sorts and prints them.
+ *
+ * `name` is the one field here that can be a STRANGER'S STRING, so it is
+ * written with `textContent` and never interpolated into markup. The server
+ * bounds its length on arrival; nothing bounds what is in it.
+ */
+export interface ScoreRow {
+  name: string;
+  team: number;
+  kills: number;
+  deaths: number;
+  /** The local player's own row, which the board picks out. */
+  you: boolean;
+}
+
+/**
  * The flag the player is standing in, relative to the player's own team. Game
  * derives this from the live ControlPoint each frame; the HUD picks the words.
  */
@@ -1120,8 +1141,11 @@ export class HUD {
       kills: readonly number[];
       deaths: readonly number[];
       playerTeam: number;
-      playerKills: number;
-      playerDeaths: number;
+      /**
+       * One line per body in the round, in roster order. Summed for the team
+       * totals above by the caller, and split into two columns here.
+       */
+      rows: readonly ScoreRow[];
     },
   ): void {
     if (visible !== this.lastScoreboardVisible) {
@@ -1142,11 +1166,15 @@ export class HUD {
     // the key is what makes that true rather than aspirational.
     //
     // Everything the markup interpolates is in the key, so a ticket ticking
-    // down or a kill landing still redraws on the frame it happens.
+    // down or a kill landing still redraws on the frame it happens. The rows
+    // are in it whole: a kill anywhere on the roster moves one of their numbers
+    // and reorders the column it is in, and a board that redraws only when the
+    // TOTALS move would sit there showing the wrong order for the rest of the
+    // round every time two people traded.
     const key =
       `${rows.map}|${rows.playerTeam}|${rows.teams}|${rows.tickets}|` +
       `${rows.flags}|${rows.kills}|${rows.deaths}|` +
-      `${rows.playerKills}|${rows.playerDeaths}`;
+      rows.rows.map((r) => `${r.name}:${r.team}:${r.kills}:${r.deaths}`).join(",");
     if (key === this.lastScoreboardKey) return;
     this.lastScoreboardKey = key;
     const max = CONFIG.conquest.tickets;
@@ -1164,6 +1192,10 @@ export class HUD {
         <span class="sb-n">${rows.deaths[t]}</span>
       </div>`;
     };
+    // The frame, which interpolates nothing a player typed: the map's own name,
+    // the two team names out of CONFIG, and numbers. The per-body rows are
+    // built as ELEMENTS below rather than joined into this string, because one
+    // of their fields is a name somebody else chose — see `ScoreRow.name`.
     this.scoreboard.innerHTML = `
       <div class="sb-head">
         <span class="sb-mode">CONQUEST</span>
@@ -1174,12 +1206,71 @@ export class HUD {
         <span>KILLS</span><span>LOSSES</span>
       </div>
       ${row(rows.playerTeam)}${row(1 - rows.playerTeam)}
-      <div class="sb-you">
-        <span class="sb-label">OPERATIVE</span>
-        <span class="sb-stat"><b>${rows.playerKills}</b> KILLS</span>
-        <span class="sb-stat"><b>${rows.playerDeaths}</b> DEATHS</span>
+      <div class="sb-teams">
+        <div class="sb-col" data-side="mine"></div>
+        <div class="sb-col" data-side="theirs"></div>
       </div>
     `;
+    const columns = this.scoreboard.querySelectorAll<HTMLElement>(".sb-col");
+    // Your side on the left, always — the board is read from where you are
+    // standing, and a column that swaps ends with the team you were seated
+    // onto is one a player has to find before they can read it.
+    const sides = [rows.playerTeam, 1 - rows.playerTeam];
+    for (let i = 0; i < sides.length; i++) {
+      const team = sides[i];
+      const column = columns[i];
+      const mine = team === rows.playerTeam;
+      column.classList.add(mine ? "mine" : "theirs");
+      column.appendChild(
+        this.scoreHeading(rows.teams[team].toUpperCase()),
+      );
+      // Sorted by kills, then by the fewer deaths. `sort` is stable, so bodies
+      // level on both keep roster order and a row does not jitter between two
+      // places while a player is looking at it.
+      const side = rows.rows
+        .filter((r) => r.team === team)
+        .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+      for (const r of side) column.appendChild(this.scoreRow(r));
+    }
+  }
+
+  /** The column header over one team's rows. */
+  private scoreHeading(team: string): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "sb-prow sb-phead";
+    const name = document.createElement("span");
+    name.className = "sb-pname";
+    name.textContent = team;
+    const k = document.createElement("span");
+    k.textContent = "K";
+    const d = document.createElement("span");
+    d.textContent = "D";
+    el.append(name, k, d);
+    return el;
+  }
+
+  /**
+   * One body's row.
+   *
+   * Built rather than interpolated, and that is a rule and not a preference:
+   * `name` is a string another player typed on a machine this one has never
+   * met, so it reaches the document through `textContent` — the same way every
+   * other screen in the game writes one. The server bounds its length; nothing
+   * bounds its contents.
+   */
+  private scoreRow(r: ScoreRow): HTMLElement {
+    const el = document.createElement("div");
+    el.className = r.you ? "sb-prow sb-pyou" : "sb-prow";
+    const name = document.createElement("span");
+    name.className = "sb-pname";
+    name.textContent = r.name;
+    const kills = document.createElement("span");
+    kills.textContent = String(r.kills);
+    const deaths = document.createElement("span");
+    deaths.className = "sb-pd";
+    deaths.textContent = String(r.deaths);
+    el.append(name, kills, deaths);
+    return el;
   }
 
   /**

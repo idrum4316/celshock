@@ -145,7 +145,7 @@ table at the top names for that subsystem.
 ### Ownership and wiring
 
 `src/core/Game.ts` is the only place systems meet. Systems never import each
-other; `Game` wires them with callbacks (`battle.onBotKilled/onBotFired`,
+other; `Game` wires them with callbacks (`battle.onBotKill/onBotFired`,
 `conquest.onCaptured/onNeutralised`, `player.onDamaged`, `deployScreen.onDeploy`)
 and hands bot AI a `BattleCtx` (in `entities/Bot.ts`) built once rather than
 rebuilt per frame. New cross-system behavior belongs in that wiring, not in an
@@ -270,6 +270,15 @@ one. `updateCamera` guards on the position, so a state with a still camera pays
 one comparison; and because a new material is seeded with that same eye
 (`CelShader.applyCamera`), a map built under the building card comes out of
 `installMap` already correct.
+
+**`Game.pushScoreboard` is the other thing pushed from `tick` rather than from a
+state's own arm**, and for the mirror reason: the Tab board is owed to `playing`,
+`dying` and `deploy` alike, so it belongs to the ROUND rather than to the states
+that simulate one. It runs after the switch and before the render, so the state
+a frame ends in decides — which is what makes "the board goes when the round
+does" one line instead of a `setScoreboard(false)` owed by every one of the six
+ways out of a round. A lid takes it away, because a lid is a screen the player
+asked for.
 
 `ConquestSystem.update` runs *before* `BattleSystem.update`, so a bot's think tick
 sees this frame's flag ownership rather than last frame's.
@@ -648,6 +657,16 @@ one string of theirs that other people's screens render**, so it is bounded on
 arrival exactly as the weapon id is resolved there, and every screen writes it
 with `textContent`.
 
+**The scoreboard is a line per SLOT and it is the authority's**, sent as state
+(`scores`) when it moves rather than added up on a client from the `kill` events
+that client happened to receive — those name a killer's *team*, a reconnect
+drops them, and a joiner never saw the ones before they arrived. A kill is
+counted at the KILLER's door and a death at the victim's, once each, because
+every death already arrives somewhere while who fired is known only to whatever
+pulled the trigger; that is why `battle.onBotKill` hands over the shooting bot
+and any victim, and why a grenade carries its thrower. Team totals are SUMMED
+from the rows on both sides and stored nowhere — offline and in a match alike.
+
 **The server cannot run `MapBuilder`**: it has no canvas, so `DynamicTexture`
 throws. It rebuilds the solid world from the generated
 `src/world/<map>/collision.ts` and picks against it with the same
@@ -659,8 +678,9 @@ bake older than its layout.
 what it deliberately does not defend against, the roster and the bench, the
 interpolation clock and the sign error that is easy to make in it, the rewind
 and why `resolve` takes a callback, what a death owes on each side and the one
-`kill` event per body that carries it, what may never cross the wire, and the
-list of what is not built yet.
+`kill` event per body that carries it, the per-slot scoreboard and why it is
+state on the wire rather than events added up on a client, what may never cross
+the wire, and the list of what is not built yet.
 
 ## Conventions
 

@@ -106,6 +106,8 @@ src/
     weapons.ts          # WeaponId + WeaponSetup, + SIDEARM/PRIMARY_WEAPON_IDS
     sights.ts           # SightId + magnification -> FOV, sensitivity, zoomComp
     Combatant.ts        # Team + the shared shootable/shooter interface
+    callsigns.ts        # What to call an AI on the scoreboard: roster index ->
+                        #   phonetic name, derived on both sides, never sent
     Bot.ts              # Bot FSM (advance/hunt/engage/takeCover/suppressed/
                         #   retreat/capture) + movement, aim, magazine, peek
     BotMemory.ts        # One bot's decaying picture of the fight

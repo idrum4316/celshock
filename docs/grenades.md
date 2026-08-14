@@ -136,3 +136,15 @@ shake of its own would be a second integrator writing the same offset; and **a
 blast kills through `Game.registerBotKill`**, the one place a bot's death reaches
 the scoreboard, tickets and killfeed from all three causes (the hitmarker and rumble
 stay with the weapon, being about the shot that landed rather than the body).
+
+**A grenade carries its THROWER, not a flag about them.** The slot holds a
+`Combatant` (`by`), which is what a kill is credited to at either end of the
+wire, and it replaced a `byPlayer` boolean that was this system answering a
+question about `Game`'s own `Player` — a thing it has never had any way to ask.
+The consumer compares `by` against whatever it considers "us" and gets the same
+answer for the hitmarker. **Its team is never read here**: the target list is
+still fetched against the slot's own `team` at detonation, so this file keeps
+knowing nothing about sides, and friendly fire stays excluded by construction
+rather than by a check. `reset` drops the reference, because a pooled slot is
+the one thing in here that would otherwise outlive the round its thrower fought
+in.

@@ -54,8 +54,10 @@ async function runRound(mapId: string, difficulty: number) {
     simSeconds: ticks / TICK_HZ,
     winner: game.conquest.winner,
     tickets: [...game.conquest.tickets] as [number, number],
-    kills: [...game.kills] as [number, number],
-    losses: [...game.losses] as [number, number],
+    // Summed out of the per-slot board rather than kept alongside it — see
+    // `HeadlessGame.teamScore`.
+    kills: [game.teamScore(0).kills, game.teamScore(1).kills] as [number, number],
+    losses: [game.teamScore(0).deaths, game.teamScore(1).deaths] as [number, number],
     captures: captures.length,
     blasts,
     flagsHeld: [game.conquest.flagsHeld(0), game.conquest.flagsHeld(1)] as [number, number],

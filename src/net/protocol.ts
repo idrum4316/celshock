@@ -351,12 +351,45 @@ export interface Rejected {
   reason: string;
 }
 
+/**
+ * The round's scoreboard: kills and deaths for every slot, in slot order.
+ *
+ * **State, not events, and that is the whole design.** A client could add up
+ * the `kill` events instead, and it would be wrong within a minute — events are
+ * a queue a reconnect drops, a spectator joining mid-round has missed every one
+ * of them, and `kill` names the killer's TEAM rather than the body that did it,
+ * because the killfeed only ever needed a side. Sending the table means a
+ * missed message is corrected by the next one and a joiner is right on arrival.
+ *
+ * **Sent only when it changes**, which is a few times a minute rather than
+ * twenty times a second: `Match` compares `HeadlessGame.scoreVersion` against
+ * what it last sent, on the same tick the snapshot goes out. Thirty-two numbers
+ * on a snapshot that carries none of them is the trade the `fire` event makes
+ * next door — the wire says a thing once rather than repeating it at the
+ * simulation's cadence.
+ *
+ * Both arrays are indexed by slot and always the full roster's length, so a
+ * client indexes them with the same number it indexes everything else with.
+ * Deaths are counted at the victim's door and kills at the killer's, once each
+ * — see `HeadlessGame.creditKill`.
+ *
+ * Additive, like `fire`: an older client ignores a message type it has no case
+ * for, and a newer client against an older server simply shows a board of
+ * zeros. Neither is a protocol break, so this arrived without a version bump.
+ */
+export interface ScoresMessage {
+  t: "scores";
+  kills: number[];
+  deaths: number[];
+}
+
 export type ServerMessage =
   | Welcome
   | RoundStart
   | RosterMessage
   | Snapshot
   | EventsMessage
+  | ScoresMessage
   | Correction
   | Rejected;
 

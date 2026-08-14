@@ -218,6 +218,17 @@ export class Match {
    */
   private readonly firedSlots = new Set<number>();
 
+  /**
+   * The `scoreVersion` the clients have been told about, or -1 for "tell them".
+   *
+   * The board is state and goes out only when it moves, so this is the whole of
+   * that test: `broadcastSnapshot` compares it against the simulation's counter
+   * and sends the table when the two differ. It starts at -1 so the empty board
+   * of a fresh round is published once rather than waiting for the first death,
+   * and `rotate` puts it back for the same reason.
+   */
+  private sentScoreVersion = -1;
+
   constructor(readonly id: string) {
     // A bot went down, however it was done. The bearing and the size of the
     // killing blow ride along because a client throws its corpse with them —
@@ -399,6 +410,11 @@ export class Match {
       now: Date.now(),
     });
     this.broadcastRoster();
+    // The board as it stands, to this peer alone. A joiner arrives mid-round
+    // and has missed every kill in it, so without this their scoreboard is
+    // zeros until somebody happens to die — and in a quiet minute that is a
+    // screen confidently reporting that nothing has happened all round.
+    this.send(peer, this.scores());
     console.log(
       `[${this.id}] ${name} (${id}) took slot ${slot.index} on team ${slot.team}`,
     );
@@ -534,6 +550,11 @@ export class Match {
     }
     this.ticks = 0;
     this.rotating = false;
+    // `startRound` cleared the board; this is what makes sure the cleared one
+    // is sent. The version moved, so the test in `broadcastSnapshot` would
+    // catch it anyway — resetting here is what covers the case where it has not
+    // moved, which is a rotation nobody scored in.
+    this.sentScoreVersion = -1;
     this.broadcast({ t: "roundstart", mapId: this.mapId, now: Date.now() });
     this.broadcastRoster();
     console.log(`[${this.id}] rotated to ${this.mapId}`);
@@ -607,6 +628,17 @@ export class Match {
       tickets: [this.game.conquest.tickets[0], this.game.conquest.tickets[1]],
     };
     this.broadcast(snap);
+
+    // The board, on the ticks it has moved — a few times a minute against a
+    // snapshot every 50 ms, which is why it is a message of its own rather than
+    // thirty-two more numbers on the one above. Sent AFTER the snapshot for the
+    // same reason the fire events are queued after it: a death is visible in
+    // this snapshot, so the score that counts it should not arrive ahead of the
+    // body going down.
+    if (this.game.scoreVersion !== this.sentScoreVersion) {
+      this.broadcast(this.scores());
+      this.sentScoreVersion = this.game.scoreVersion;
+    }
 
     // Everyone who fired during the interval this snapshot closes, one event
     // each. Queued here and not where the trigger went, so the count on the
@@ -945,7 +977,9 @@ export class Match {
     SHOT_DIR.set(nx, ny, nz);
     // Spent only if the arm accepts it — the pool refuses rather than stealing
     // a live slot, and a refused throw must cost nothing.
-    if (this.game.grenades.throwAlong(SHOT_ORIGIN, SHOT_DIR, player.team, false)) {
+    if (
+      this.game.grenades.throwAlong(SHOT_ORIGIN, SHOT_DIR, player.team, player)
+    ) {
       player.grenades--;
     }
   }
@@ -961,6 +995,20 @@ export class Match {
 
   private broadcastRoster(): void {
     this.broadcast({ t: "roster", slots: this.roster.slots });
+  }
+
+  /**
+   * The scoreboard as one message. Copied, not referenced: `encode` runs
+   * immediately for a broadcast, but the arrays are the simulation's own and
+   * live ones on a queued message would report whatever the round had reached
+   * by the time it was encoded.
+   */
+  private scores(): ServerMessage {
+    return {
+      t: "scores",
+      kills: [...this.game.slotKills],
+      deaths: [...this.game.slotDeaths],
+    };
   }
 
   private send(peer: Peer, msg: ServerMessage): void {

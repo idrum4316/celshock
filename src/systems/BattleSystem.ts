@@ -13,7 +13,7 @@
  * NOT pulsed from here — this system only records flash positions and Game
  * spends CONFIG.lighting.muzzleBudgetPerFrame on the nearest few (16 shader
  * light slots are absolute). Runs AFTER ConquestSystem.update each frame.
- * Cross-system effects go out via onBotKilled/onBotFired callbacks wired in
+ * Cross-system effects go out via onBotKill/onBotFired callbacks wired in
  * Game — never import other systems. A bot's grenade leaves the same way
  * (throwGrenadeFor): the ballistics and the pool are GrenadeSystem's, and this
  * file only forwards the bot's ask and its answer.
@@ -88,8 +88,25 @@ export class BattleSystem {
   private readonly flashPool: Vector3[] = [];
   private flashCount = 0;
 
-  /** Wired by Game: a bot died. */
-  onBotKilled: (bot: Bot, killer: Team) => void = () => {};
+  /**
+   * Wired by Game: a bot's round killed somebody.
+   *
+   * The VICTIM is whatever the ray found and may be anybody a bot is allowed to
+   * shoot — another bot, the local player, a person on the server's roster — so
+   * a consumer that only cares about one kind filters it here rather than being
+   * filtered for. That is the shape `GrenadeSystem.onBlastHit` already has, and
+   * making the rifle path match it is what lets a bot be credited for killing a
+   * PERSON: the older signature named the bot that fell and dropped every other
+   * victim on the floor, so a bot that spent a round shooting people scored
+   * nothing at all.
+   *
+   * `by` is the bot that fired, and it is the only thing here that cannot be
+   * derived: a victim's death is already counted at the victim's own door
+   * (`registerBotKill` on the client, `onPlayerDamaged` for a person), and the
+   * killer's team is `by.team`. What the scoreboard needs is who to credit,
+   * which is why this carries an identity rather than a side.
+   */
+  onBotKill: (victim: Hittable, by: Bot) => void = () => {};
   /** Wired by Game: a bot pulled the trigger, at this world position. */
   onBotFired: (bot: Bot, at: Vector3) => void = () => {};
   /** Wired by Game: a bot ran its magazine dry and started reloading. */
@@ -113,8 +130,13 @@ export class BattleSystem {
    *
    * A callback for the same reason `spawnPointFor` is one — the grenades are
    * another system's, and this one imports no systems.
+   *
+   * The BOT is passed rather than its team, for the reason `onBotKill` carries
+   * one: a blast is a kill somebody has to be credited with, and the grenade
+   * has to be told whose it is at the throw because the only other place that
+   * knows is seconds and a bounce away.
    */
-  throwGrenadeFor: (from: Vector3, at: Vector3, team: Team) => boolean = () =>
+  throwGrenadeFor: (bot: Bot, from: Vector3, at: Vector3) => boolean = () =>
     false;
 
   private nav: NavGrid | null = null;
@@ -213,8 +235,7 @@ export class BattleSystem {
         return this.cover.opennessAt(s);
       },
       separation: (bot, out) => this.separation(bot, out),
-      throwGrenade: (bot, at) =>
-        this.throwGrenadeFor(bot.eyePos, at, bot.team),
+      throwGrenade: (bot, at) => this.throwGrenadeFor(bot, bot.eyePos, at),
       clearObstacles: (x, y, z, out) =>
         this.obstacles
           ? this.obstacles.resolve(x, y, z, CONFIG.nav.bodyRadius, out)
@@ -626,9 +647,10 @@ export class BattleSystem {
     this.onBotFired(bot, at);
     this.hearGunshot(at, bot.team);
     // The victim is whoever the ray actually found, which is often not the bot
-    // that was being aimed at — a squadmate walks into the line all the time.
-    if (shot.killed && shot.target instanceof Bot) {
-      this.onBotKilled(shot.target, bot.team);
+    // that was being aimed at — a squadmate walks into the line all the time,
+    // and on a server half the roster is people.
+    if (shot.killed && shot.target) {
+      this.onBotKill(shot.target, bot);
     }
     return shot.hitWall && !shot.target;
   }

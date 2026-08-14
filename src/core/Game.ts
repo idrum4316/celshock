@@ -25,7 +25,9 @@
  * (spendMuzzleLightBudget) — new per-bot transient lights need the same
  * treatment; a grenade's blast light is deliberately outside it (seconds
  * apart, not eighty a second). A bot goes down through registerBotKill
- * whichever of the three things killed it — rifle, player rifle, grenade.
+ * whichever of the three things killed it — rifle, player rifle, grenade — and
+ * whoever put it there is credited through creditKill, one door each: the
+ * victim's death is known where it fell and the kill only where it was fired.
  * The map is a `MapDef` held in one field (`mapDef`) and built in one method
  * (`installMap`), which both a round start and an editor rebuild go through —
  * no map's layout or environment may be named anywhere else in here.
@@ -58,6 +60,7 @@ import { HorrorPost } from "../shaders/HorrorPost";
 import { MotionBlur } from "../shaders/MotionBlur";
 import { Bot } from "../entities/Bot";
 import { difficultyNames } from "../entities/BotSkill";
+import { callsign } from "../entities/callsigns";
 import type { Combatant, Team } from "../entities/Combatant";
 import { NetSession } from "../net/NetSession";
 import { fetchMatches } from "../net/lobby";
@@ -85,7 +88,7 @@ import type { EditorSession } from "../editor";
 import { MAPS, type MapDef } from "../world/maps";
 import { MapBuilder, type BuildOptions, type GameMap } from "../world/MapBuilder";
 import { DeployScreen } from "../ui/DeployScreen";
-import { HUD, type CaptureStatus } from "../ui/HUD";
+import { HUD, type CaptureStatus, type ScoreRow } from "../ui/HUD";
 import { OverlayScreen } from "../ui/OverlayScreen";
 import { kitLabel, LoadoutScreen } from "../ui/LoadoutScreen";
 import { SettingsScreen } from "../ui/SettingsScreen";
@@ -399,9 +402,24 @@ export class Game {
   private deathRespawnIn: number = CONFIG.conquest.respawnDelay;
   /** Where the player's feet were when they died — scratch for `enterDying`. */
   private readonly deathFeet = new Vector3();
-  /** Round scoreboard: kills and losses per team, plus the player's own line. */
-  private readonly kills: [number, number] = [0, 0];
-  private readonly losses: [number, number] = [0, 0];
+  /**
+   * The round's scoreboard, OFFLINE: one line per body, indexed by bot.
+   *
+   * Per body rather than per team, because the team totals are the sum of the
+   * rows and a second set of counters for them is a second set that can drift.
+   * The player is not in these — they are not in the bot pool — and their own
+   * two numbers are below, which is the same split every other list in this
+   * file makes between `battle.bots` and `this.player`.
+   *
+   * **Netplay writes none of this.** In a match the board is the authority's
+   * and arrives whole (`NetSession.slotKills`): this client runs no AI, its
+   * local `BattleSystem` is a pool of dead bodies nobody steps, and a client
+   * that added up the kill events it happened to receive would show a
+   * different board on every screen. `scoreRows` is where the two sources
+   * meet, and it is the only reader of either.
+   */
+  private readonly botKills: number[] = [];
+  private readonly botDeaths: number[] = [];
   private playerKills = 0;
   private playerDeaths = 0;
 
@@ -615,7 +633,16 @@ export class Game {
     this.player.onDamaged = (amount, died, from) =>
       this.onPlayerDamaged(amount, died, from);
     this.battle.setPlayer(this.player);
-    this.battle.onBotKilled = (bot, killer) => this.registerBotKill(bot, killer, false);
+    // A bot's round killed somebody. The two halves are taken separately
+    // because they are known in different places: the shooter is credited
+    // whoever it hit — including the player, which is the one kill on the board
+    // a bot used to be denied — while the ticket, the killfeed line and the
+    // corpse are owed only when a BOT fell. The player's own death goes through
+    // `onPlayerDamaged`, which `takeDamage` reached before this callback ran.
+    this.battle.onBotKill = (victim, by) => {
+      this.creditKill(by);
+      if (victim instanceof Bot) this.registerBotKill(victim, by.team, false);
+    };
     this.wireDeaths();
     this.wireGrenades();
     this.wireBattle();
@@ -676,7 +703,14 @@ export class Game {
     this.grenades.onExploded = (at) => {
       if (!this.net) this.onExplosion(at);
     };
-    this.grenades.onBlastHit = (victim, thrower, byPlayer, killed) => {
+    this.grenades.onBlastHit = (victim, thrower, by, killed) => {
+      // "Was that ours" is a comparison against our own `Player`, which is why
+      // the grenade carries the thrower rather than a flag saying so — that
+      // system has no way to know what a player is.
+      const byPlayer = by === this.player;
+      // The killer's row, whoever fell, and before the victim filter below:
+      // a blast that finishes the player is still a kill somebody threw.
+      if (killed) this.creditKill(by);
       // The player's own death is already handled, all the way down to the
       // deploy screen, by `onPlayerDamaged` — `takeDamage` routed it there
       // before this callback ran. Only bots are this handler's business.
@@ -686,8 +720,8 @@ export class Game {
     };
     // A bot asking for a grenade on a position. The arm has the last word — a
     // solve it cannot make returns false and the bot spends nothing.
-    this.battle.throwGrenadeFor = (from, at, team) =>
-      this.grenades.throwAt(from, at, team, false);
+    this.battle.throwGrenadeFor = (bot, from, at) =>
+      this.grenades.throwAt(from, at, bot.team, bot);
   }
 
   /**
@@ -1491,6 +1525,13 @@ export class Game {
     // it cannot: `updateCamera` guards on the position, so a still camera in
     // any state costs one comparison and no walk.
     this.mats.updateCamera(this.cameraSys.camera.position);
+    // In every state too, and AFTER the switch above rather than inside any of
+    // its arms: what decides whether the board is up is the state this frame
+    // ENDS in, so a frame that deployed the player, killed them or ended the
+    // round has already changed it by the time this reads it. That is what
+    // makes "the board goes away when the round does" a property of one line
+    // rather than a call every one of those boundaries has to remember.
+    this.pushScoreboard();
     this.scene.render();
   }
 
@@ -1902,7 +1943,6 @@ export class Game {
     this.hud.setDeathCam(false);
     this.minimap.setVisible(false);
     this.player.setBodyHidden(true);
-    this.hud.setScoreboard(false);
     this.hud.clearDamageDirections();
     this.hud.setCapture(null);
     this.battle.reset();
@@ -2224,8 +2264,14 @@ export class Game {
     // welcome beat this build; when it did not, the welcome applies it itself.
     // Either way it goes in through the one funnel — see `applyPlayerTeam`.
     this.applyPlayerTeam(this.net?.seated ? this.net.team : 0, map);
-    this.kills[0] = this.kills[1] = 0;
-    this.losses[0] = this.losses[1] = 0;
+    // A new round is a new board. Sized from the pool here rather than at
+    // construction, so it is the roster that says how many rows there are.
+    this.botKills.length = 0;
+    this.botDeaths.length = 0;
+    for (let i = 0; i < this.battle.bots.length; i++) {
+      this.botKills.push(0);
+      this.botDeaths.push(0);
+    }
     this.playerKills = 0;
     this.playerDeaths = 0;
     // The building card comes down on the far side of the work it covered, and
@@ -2473,6 +2519,10 @@ export class Game {
           killed ? haptic.killMs : haptic.hitMs,
         );
         if (killed && shot.target instanceof Bot) {
+          // Both doors, one line apart: our row, and the body's. Offline only
+          // — in a netplay round `killed` is false above, because the roster's
+          // bodies refuse local damage and the authority scores this round.
+          this.creditKill(this.player);
           this.registerBotKill(shot.target, this.player.team, true);
         }
       }
@@ -3242,7 +3292,7 @@ export class Game {
         this.grenadeHand,
         forward,
         this.player.team,
-        true,
+        this.player,
       )
     ) {
       return;
@@ -3429,25 +3479,6 @@ export class Game {
     // in, and a body on the ground is not standing in one — a panel counting a
     // capture nobody is contributing to is worse than no panel.
     this.hud.setCapture(dying ? null : this.captureStatus());
-    // Assembled only while the board is actually up. The payload is an object
-    // and two arrays, and `flagsHeld` counts the control points twice — all of
-    // it built every frame of every round to be handed to a call that returned
-    // at its first line for all but the seconds a player holds Tab.
-    if (this.input.scoreboard) {
-      this.hud.setScoreboard(true, {
-        map: this.mapDef.name,
-        teams: [CONFIG.teams[0].name, CONFIG.teams[1].name],
-        tickets: this.conquest.tickets,
-        flags: [this.conquest.flagsHeld(0), this.conquest.flagsHeld(1)],
-        kills: this.kills,
-        deaths: this.losses,
-        playerTeam: this.player.team,
-        playerKills: this.playerKills,
-        playerDeaths: this.playerDeaths,
-      });
-    } else {
-      this.hud.setScoreboard(false);
-    }
     this.hud.setLockHint(!this.input.pointerLocked && !this.input.gamepadConnected);
     this.minimap.update(
       dt,
@@ -3509,9 +3540,11 @@ export class Game {
     // stood where it fell; a rifle stuck to the camera has to be put away.
     this.player.setBodyHidden(true);
     this.hud.clearDamageDirections();
-    this.hud.setScoreboard(false);
     // updateHud stops running outside `playing`, so the panel has to be told
-    // to go — otherwise the zone the player died in stays on screen.
+    // to go — otherwise the zone the player died in stays on screen. The
+    // SCOREBOARD is deliberately not told anything here: it is pushed from
+    // `tick` in every state that has a round behind it, and this screen is one
+    // of them — a player waiting out a reinforcement is exactly who wants it.
     this.hud.setCapture(null);
     if (this.map) this.deployScreen.show(this.map, this.conquest, this.player.team);
     this.deployScreen.update(this.respawnT);
@@ -3528,7 +3561,6 @@ export class Game {
     this.hud.setDeathCam(false);
     this.deployScreen.hide();
     this.player.setBodyHidden(true); // same reason as enterDeploy
-    this.hud.setScoreboard(false);
     this.hud.clearDamageDirections();
     this.hud.setCapture(null);
     // `updateGameplay` stops running here, so push the final state once more —
@@ -3588,7 +3620,8 @@ export class Game {
     );
     if (died) {
       this.conquest.registerDeath(this.player.team);
-      this.losses[this.player.team] += 1;
+      // Our own row's death, offline: the victim's door, and the bot that shot
+      // us was credited at its own by `battle.onBotKill`.
       this.playerDeaths += 1;
       this.hud.addKill(
         CONFIG.teams[1 - this.player.team].name,
@@ -3657,13 +3690,18 @@ export class Game {
   }
 
   /**
-   * A bot went down: the sound, the ticket, the scoreboard and the killfeed.
+   * A bot went down: the sound, the ticket, its line on the board and the
+   * killfeed.
    *
    * One method rather than three copies because there are now three ways to
    * kill one — a bot's rifle, the player's rifle, and either side's grenade —
    * and they disagree about nothing except whose name goes on the line.
    * `byPlayer` is what separates the player's own kill from their team's, and
    * it is the only thing the three callers pass differently.
+   *
+   * This is the VICTIM's door, so it counts the death and not the kill: the
+   * killer is credited by `creditKill` at whichever call site actually knows
+   * who they were. Every caller here raises both, one line apart.
    *
    * Deliberately NOT the hitmarker or the rumble: those are about the shot
    * that landed rather than the body that fell, and they belong with whichever
@@ -3677,14 +3715,155 @@ export class Game {
     this.ragdolls.spawn(bot, this.cameraSys.camera.position);
     this.sfx.enemyDie();
     this.conquest.registerDeath(bot.team);
-    this.kills[killer] += 1;
-    this.losses[bot.team] += 1;
-    if (byPlayer) this.playerKills += 1;
+    const slot = this.battle.bots.indexOf(bot);
+    if (slot >= 0) this.botDeaths[slot] = (this.botDeaths[slot] ?? 0) + 1;
     this.hud.addKill(
       byPlayer ? "YOU" : CONFIG.teams[killer].name,
       CONFIG.teams[bot.team].name,
       byPlayer,
     );
+  }
+
+  /**
+   * The scoreboard, pushed once per frame from `tick` in EVERY state that has a
+   * round behind it — playing, the death cam, and the deploy screen.
+   *
+   * It is here rather than in `updateHud` for the reason `mats.updateCamera` is
+   * in `tick`: `updateHud` runs while you are alive and holding a weapon, and
+   * this panel is owed to two states that are neither. **The deploy screen is
+   * where a player most wants it** — it is the one screen in the game you sit
+   * on while the round carries on without you, for a reinforcement clock's
+   * worth of every death in a match, and it is where you decide where to come
+   * back in. A board that goes dark exactly then is dark for a good share of
+   * the round.
+   *
+   * The state test is `this.state` and deliberately not `stateUnderLids`: a lid
+   * is a screen the player ASKED for and put in front of the round, so the
+   * board goes away under one — which also means nothing has to remember to
+   * hide it. That is the whole reason this is a per-frame push rather than a
+   * call at each boundary: the six ways out of a round (deploying, dying, the
+   * round ending, a pause, the kit screen, the menu) each used to owe a
+   * `setScoreboard(false)`, and the one that forgot would leave last round's
+   * numbers hanging over the next screen.
+   *
+   * Assembled only while the board is actually up: the payload is an object
+   * and three arrays, and `flagsHeld` counts the control points twice.
+   */
+  private pushScoreboard(): void {
+    const inRound =
+      this.state === "playing" ||
+      this.state === "dying" ||
+      this.state === "deploy";
+    if (!inRound || !this.input.scoreboard) {
+      this.hud.setScoreboard(false);
+      return;
+    }
+    const rows = this.scoreRows();
+    // The team totals are SUMMED from the rows rather than counted beside
+    // them, so the header and the columns under it cannot disagree — one
+    // number that is wrong and one that is right is worse than two that are
+    // wrong together, because nothing on screen shows which is which.
+    const kills: [number, number] = [0, 0];
+    const deaths: [number, number] = [0, 0];
+    for (const r of rows) {
+      kills[r.team] += r.kills;
+      deaths[r.team] += r.deaths;
+    }
+    this.hud.setScoreboard(true, {
+      map: this.mapDef.name,
+      teams: [CONFIG.teams[0].name, CONFIG.teams[1].name],
+      tickets: this.conquest.tickets,
+      flags: [this.conquest.flagsHeld(0), this.conquest.flagsHeld(1)],
+      kills,
+      deaths,
+      playerTeam: this.player.team,
+      rows,
+    });
+  }
+
+  /**
+   * One row per body in the round, for the scoreboard.
+   *
+   * **The two sources meet HERE and nowhere else.** Offline the board is this
+   * client's own — the player's two numbers plus a line per bot in the pool.
+   * In a match it is the authority's, read off the session: a slot's name from
+   * the roster, its kills and deaths from the last `scores` message, and the
+   * row order straight from the roster, because a slot index is the same number
+   * on both sides of the wire and on both sides of this branch.
+   *
+   * A bot's name is DERIVED rather than sent (`callsign`), which is what keeps
+   * "a bot and a person are the same body on screen" true while still letting
+   * this one screen tell them apart: nothing about the row changes how anything
+   * is drawn, and the server spends no bandwidth naming sixteen bodies that
+   * already have a number each.
+   *
+   * Assembled only while Tab is held — see the caller.
+   */
+  private scoreRows(): ScoreRow[] {
+    const rows: ScoreRow[] = [];
+    if (this.net) {
+      for (const slot of this.net.slots) {
+        const occupant = slot.occupant;
+        rows.push({
+          name:
+            occupant.kind === "human" ? occupant.name : callsign(slot.index),
+          team: slot.team,
+          kills: this.net.slotKills[slot.index] ?? 0,
+          deaths: this.net.slotDeaths[slot.index] ?? 0,
+          you: slot.index === this.net.slot,
+        });
+      }
+      return rows;
+    }
+    // Offline the player is not in the pool — they are the seventeenth body in
+    // a sixteen-bot round — so their line is pushed rather than found.
+    rows.push({
+      name: "YOU",
+      team: this.player.team,
+      kills: this.playerKills,
+      deaths: this.playerDeaths,
+      you: true,
+    });
+    for (let i = 0; i < this.battle.bots.length; i++) {
+      rows.push({
+        name: callsign(i),
+        team: this.battle.bots[i].team,
+        kills: this.botKills[i] ?? 0,
+        deaths: this.botDeaths[i] ?? 0,
+        you: false,
+      });
+    }
+    return rows;
+  }
+
+  /**
+   * Somebody put a body down: one kill on their own row, OFFLINE.
+   *
+   * **The kill is counted at the killer's door and the death at the victim's,
+   * once each**, because the two are known in different places. Every death in
+   * the game already arrives somewhere — `registerBotKill` for a bot,
+   * `onPlayerDamaged` for the player — while who fired is known only to
+   * whatever pulled the trigger, and a single door would mean one of the two
+   * inventing the half it cannot see. It is also what lets a bot be credited
+   * for killing the PLAYER, which no bot-shaped kill callback could carry.
+   *
+   * Silent in a netplay round by the same rule that empties every other local
+   * count there: the board is the authority's, this is only ever the offline
+   * one, and a kill is credited to a bot the server is not simulating. Nothing
+   * gates it — the callers that could fire in a match are the ones whose local
+   * `takeDamage` returns false, so no kill is ever raised to be counted.
+   */
+  private creditKill(by: Combatant | null): void {
+    if (by === this.player) {
+      this.playerKills += 1;
+      return;
+    }
+    const slot = by instanceof Bot ? this.battle.bots.indexOf(by) : -1;
+    // `?? 0` rather than a bare increment, for the reason the authority's copy
+    // takes the same care: the rows are sized at the round's build, and one
+    // that is somehow not there yet starts at one rather than at `NaN`, which
+    // would spread through the team totals on the way to the screen.
+    if (slot >= 0) this.botKills[slot] = (this.botKills[slot] ?? 0) + 1;
   }
 
   /**

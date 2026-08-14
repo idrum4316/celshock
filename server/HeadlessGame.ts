@@ -101,6 +101,18 @@ export class HeadlessGame {
     this.grenades.reset();
     for (const bot of this.battle.bots) this.lag.track(bot);
     this.tick = 0;
+    // A new round is a new board. Sized here rather than at construction
+    // because the pool is what says how many slots there are, and bumping the
+    // version is what makes the cleared table go out to everybody still seated
+    // — a rotation that left last round's kills on sixteen screens is exactly
+    // the kind of stale state a client cannot detect.
+    this.slotKills.length = 0;
+    this.slotDeaths.length = 0;
+    for (let i = 0; i < this.battle.bots.length; i++) {
+      this.slotKills.push(0);
+      this.slotDeaths.push(0);
+    }
+    this.scoreVersion++;
   }
 
   /**
@@ -218,7 +230,17 @@ export class HeadlessGame {
     // draining tickets is the flag bleed, and a round runs several times too
     // long in a way that looks like mistuned config rather than a missing
     // callback.
-    this.battle.onBotKilled = (bot, killer) => this.onKill(bot, killer);
+    //
+    // The victim may be a person as easily as a bot — half a full roster is
+    // people — so the two halves of a kill are taken separately: `creditKill`
+    // for the bot that fired, whoever it hit, and the ticket-and-killfeed
+    // bookkeeping only when what fell was a bot. A person's death arrives at
+    // its own door (`NetPlayer.onDamaged`, wired in `addPlayer`), which is
+    // where it is charged and announced.
+    this.battle.onBotKill = (victim, by) => {
+      this.creditKill(by);
+      if (victim instanceof Bot) this.onKill(victim, by.team);
+    };
     this.battle.spawnPointFor = (bot) => this.spawnPointFor(bot.team);
     this.battle.planSquads = (team, centroids, previous) =>
       this.conquest.planSquads(team, centroids, previous);
@@ -229,19 +251,25 @@ export class HeadlessGame {
     };
     // A bot asking for a grenade on a position. The arm has the last word: a
     // solve it cannot make returns false and the bot spends nothing.
-    this.battle.throwGrenadeFor = (from, at, team) =>
-      this.grenades.throwAt(from, at, team, false);
+    this.battle.throwGrenadeFor = (bot, from, at) =>
+      this.grenades.throwAt(from, at, bot.team, bot);
     // A blast resolves against the THROWER's target list, the same way a bullet
     // does, so friendly fire is excluded by construction here too and this
     // system never learns what a team is.
     this.grenades.hittablesFor = (team) => this.battle.hittablesAgainst(team);
     this.grenades.onExploded = (at) => this.onExplosion(at);
-    this.grenades.onBlastHit = (victim, thrower, _byPlayer, killed) => {
+    this.grenades.onBlastHit = (victim, thrower, by, killed) => {
+      if (!killed) return;
+      // The thrower's row, whoever the blast finished — the same rule the
+      // rifle path above follows, and the reason a bot's grenade is worth
+      // something on the board rather than being the one kill in the game
+      // nobody is credited with.
+      this.creditKill(by);
       // A person's damage already left through `NetPlayer.onDamaged`, which
       // `takeDamage` raised before this callback ran — the same split the
       // client makes, where `onPlayerDamaged` has already handled the player by
       // the time this fires. Only bots are this handler's business.
-      if (killed && victim instanceof Bot) this.onKill(victim, thrower);
+      if (victim instanceof Bot) this.onKill(victim, thrower);
     };
   }
 
@@ -296,7 +324,7 @@ export class HeadlessGame {
     );
 
     // A bot this round put down is charged HERE, and it is the only path that
-    // could. `BattleSystem.onBotKilled` fires for a bot shot by another bot and
+    // could. `BattleSystem.onBotKill` fires for a bot shot by another bot and
     // the grenade handler fires for a blast; a person's rifle reaches
     // `CombatSystem.fire` through this method and touches neither, so without
     // this line the eight bots a human kills in a round cost their team nothing
@@ -307,8 +335,14 @@ export class HeadlessGame {
     //
     // The client's `Game` charges the same kill in the same place for the same
     // reason, one line after its own `combat.fire` — see `registerBotKill`.
-    if (result?.killed && result.target instanceof Bot) {
-      this.onKill(result.target, shooter.team, result.headshot);
+    if (result?.killed) {
+      // The shooter's row first, whoever fell — a person killing a person
+      // reaches this line and nothing else on the server would ever credit it,
+      // since the victim's own door only knows it was the other side.
+      this.creditKill(shooter);
+      if (result.target instanceof Bot) {
+        this.onKill(result.target, shooter.team, result.headshot);
+      }
     }
     return result;
   }
@@ -327,7 +361,13 @@ export class HeadlessGame {
     // only whether that killed. Routed here for the same reason every other
     // cross-system effect in this file is: the systems never reach each other.
     player.onDamaged = (amount, from, killed) => {
-      if (killed) this.conquest.registerDeath(player.team);
+      if (killed) {
+        this.conquest.registerDeath(player.team);
+        // The victim's door for a person, and the counterpart of the line in
+        // `onKill` that counts a bot's. Whoever killed them was credited at
+        // their own door, wherever the round or the blast came from.
+        this.registerDeath(player.slot);
+      }
       this.onPlayerDamaged(player, amount, from, killed);
     };
     this.players.set(slot, player);
@@ -361,16 +401,89 @@ export class HeadlessGame {
   }
 
   /**
-   * A bot went down. Charges the ticket and reports it upward.
+   * A bot went down. Charges the ticket, counts the death and reports it
+   * upward.
    *
    * `Match` wires `onKill` to turn this into a killfeed event for the clients;
    * this class does not know what a client is.
+   *
+   * The DEATH is counted here and the kill is not — see `creditKill`. This is
+   * the victim's door and there is exactly one of it per bot death, which is
+   * the same "exactly once" the ticket above has always rested on.
    */
   private onKill(bot: Bot, killer: Team, headshot = false): void {
     this.conquest.registerDeath(bot.team);
-    this.kills[killer] += 1;
-    this.losses[bot.team] += 1;
+    this.registerDeath(this.battle.bots.indexOf(bot));
     this.onKillEvent(bot, killer, headshot);
+  }
+
+  /**
+   * A combatant put somebody down: one kill on their own row.
+   *
+   * **The kill is counted at the KILLER's door and the death at the victim's,
+   * once each.** They are separate doors because they are separate facts with
+   * separate witnesses — every death in the game already arrives somewhere
+   * (`onKill` for a bot, `NetPlayer.onDamaged` for a person, whatever dealt it)
+   * while the killer is known only to whatever fired, and pairing them would
+   * mean one of the two paths inventing the half it cannot see. It is also what
+   * lets a kill be credited when the victim is a person, which the old
+   * bot-shaped callback simply dropped.
+   *
+   * Silent on a thrower this class cannot place. A grenade with no owner and a
+   * body that is not on the roster are both "nobody's kill" rather than an
+   * error: the death is counted regardless, so the board still balances at the
+   * team level even when a row cannot be found for the credit.
+   */
+  private creditKill(by: Combatant | null): void {
+    const slot = this.slotOf(by);
+    if (slot < 0) return;
+    // `?? 0` rather than a bare increment: the arrays are sized in
+    // `startRound`, and a row that somehow is not there yet should start at one
+    // rather than at `NaN` — a number that spreads through the totals and out
+    // onto sixteen screens before anybody can tell where it came from.
+    this.slotKills[slot] = (this.slotKills[slot] ?? 0) + 1;
+    this.scoreVersion++;
+  }
+
+  /**
+   * A team's totals, which are the sum of its rows and are not stored.
+   *
+   * Derived rather than counted alongside, because two counters for one fact
+   * is two counters that can disagree — and the one that would be wrong is the
+   * one nothing on screen could check. A slot's side is the pool's, not the
+   * roster's: they agree by construction (a human is seated into the slot whose
+   * bot they bench, and that bot keeps its team while it sits out), and reading
+   * it from the pool means this answers the same for a bot and for the person
+   * standing in its place.
+   */
+  teamScore(team: Team): { kills: number; deaths: number } {
+    let kills = 0;
+    let deaths = 0;
+    for (let i = 0; i < this.battle.bots.length; i++) {
+      if (this.battle.bots[i].team !== team) continue;
+      kills += this.slotKills[i] ?? 0;
+      deaths += this.slotDeaths[i] ?? 0;
+    }
+    return { kills, deaths };
+  }
+
+  /** One death on `slot`'s row. Called once per body that goes down. */
+  registerDeath(slot: number): void {
+    if (slot < 0) return;
+    this.slotDeaths[slot] = (this.slotDeaths[slot] ?? 0) + 1;
+    this.scoreVersion++;
+  }
+
+  /**
+   * Which roster slot a combatant occupies, or -1 for one that holds none.
+   *
+   * A person carries their slot and a bot IS its index in the pool, which is
+   * the same number by construction — the identity this whole file rests on.
+   */
+  private slotOf(c: Combatant | null): number {
+    if (!c) return -1;
+    if (c instanceof Bot) return this.battle.bots.indexOf(c);
+    return c instanceof NetPlayer ? c.slot : -1;
   }
 
   /**
@@ -397,9 +510,35 @@ export class HeadlessGame {
     killed: boolean,
   ) => void = () => {};
 
-  /** Kills and losses per team, for the scoreboard. */
-  readonly kills: [number, number] = [0, 0];
-  readonly losses: [number, number] = [0, 0];
+  /**
+   * The round's scoreboard: kills and deaths per SLOT, in slot order.
+   *
+   * Per slot rather than per team because a team's totals are the sum of its
+   * eight rows and can be added up wherever they are wanted, whereas the rows
+   * cannot be recovered from the totals. It is also the only place either
+   * exists: the clients hold no simulation, so a board they added up from the
+   * `kill` events they happened to receive would be a different board on every
+   * screen.
+   *
+   * A slot is a bot or a person and this makes no distinction — the number is
+   * about the BODY in that slot, which is what makes benching invisible here
+   * exactly as it is everywhere else. Sized to the roster in `startRound`.
+   */
+  readonly slotKills: number[] = [];
+  readonly slotDeaths: number[] = [];
+
+  /**
+   * How many times the two arrays above have changed.
+   *
+   * `Match` sends the table only when this moves, so a round in which nobody
+   * dies puts nothing on the wire and one in which somebody does puts the whole
+   * table out once. A counter rather than a dirty flag because the reader is
+   * not the writer: a flag would have to be cleared by whoever sent it, and two
+   * senders (a broadcast and a joiner's first message) clearing one flag is how
+   * a client ends up with a board that is one kill stale for the rest of the
+   * round.
+   */
+  scoreVersion = 0;
 
   /**
    * Where a combatant of `team` deploys.

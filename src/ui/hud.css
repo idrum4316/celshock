@@ -143,6 +143,15 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  /* Above the DEPLOY SCREEN and below everything else that covers a round.
+     `#hud` is written first and every screen appends itself after, so DOM
+     order alone would put this under a screen it is meant to be read over —
+     and the deploy screen is the one place a player sits and reads it. The
+     number is chosen against the other roots rather than plucked: `#overlay`
+     is 10, the loadout and lobby 11, settings 12. Those are all lids the
+     player asked for, and the board is not pushed under any of them; this
+     only has to beat `#deploy`, which takes the default. */
+  z-index: 9;
   --cham: 20px;
   --frame-fill: rgba(6, 8, 13, 0.94);
   min-width: 620px;
@@ -227,22 +236,57 @@
   transform: skewX(-20deg);
 }
 #scoreboard .sb-gauge u { display: block; height: 100%; background: currentColor; }
-#scoreboard .sb-you {
-  display: flex;
-  align-items: baseline;
-  gap: 18px;
+/* --- the two columns of bodies ---
+   One row per combatant, bots included: the round is 8v8 whoever is driving,
+   so a board that listed only the people in it would be reporting a fraction
+   of the fight. Your side is always the left column — see `setScoreboard`. */
+#scoreboard .sb-teams {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 26px;
   margin: 12px 26px 0;
-  padding-top: 11px;
+  padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
-  font-size: 11px;
-  letter-spacing: 0.22em;
-  color: rgba(255, 255, 255, 0.55);
 }
-#scoreboard .sb-you .sb-label { color: var(--hot); font-weight: 700; }
-#scoreboard .sb-you b {
-  font-size: 17px;
-  color: #fff;
-  margin-right: 5px;
+#scoreboard .sb-col.mine { color: var(--mine); }
+#scoreboard .sb-col.theirs { color: var(--theirs); }
+#scoreboard .sb-prow {
+  display: grid;
+  grid-template-columns: 1fr 34px 34px;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+  /* The rows are neutral and the team's colour is spent on the heading and on
+     your own line — sixteen coloured rows is a wash of two hues with the one
+     row that matters lost in it. */
+  color: #cfd6e2;
+}
+#scoreboard .sb-pname {
+  text-align: left;
+  letter-spacing: 0.1em;
+  /* A name is up to MAX_NAME_LENGTH characters of somebody else's choosing, so
+     the column clips rather than growing the panel around it. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#scoreboard .sb-pd { color: rgba(255, 255, 255, 0.45); }
+#scoreboard .sb-phead {
+  color: inherit;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  padding-bottom: 4px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+#scoreboard .sb-phead .sb-pname { letter-spacing: 0.22em; }
+/* Your own line, in the colour the HUD keeps for you and nothing else. */
+#scoreboard .sb-pyou {
+  color: var(--hot);
+  background: rgba(255, 196, 107, 0.1);
 }
 
 /* --- conquest: the reinforcement gauge ---

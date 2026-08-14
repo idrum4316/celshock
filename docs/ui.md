@@ -117,6 +117,36 @@ goes up and the crosshair comes down, and they are not the same decision —
 `.overlaid` would take the tickets and vitals with it, which under a pause are
 still true.
 
+**The scoreboard is the one markup rebuild left in `HUD`, and its rows are BUILT
+rather than interpolated.** Tab is a held key, so `Game.updateHud` pushes the
+panel on every frame it is up; a key over everything the markup says is what
+keeps that to a rebuild per change, and the per-body rows are in that key
+because a kill anywhere reorders the column it lands in. The team summary is a
+template literal — a map name and two names out of `CONFIG` — while every row
+under it goes through `document.createElement` and `textContent`, because one of
+its fields is **a name another player typed**. The server bounds that string's
+length; nothing bounds what is in it, and this file is where it is finally
+drawn. A bot's name is not on the wire at all: `entities/callsigns.ts` derives
+one from the roster index, which is the same number on every screen.
+
+**It is pushed from `tick`, in every state with a round behind it** — playing,
+the death cam, and the DEPLOY SCREEN, which is where a player most wants it: in
+a match that screen is where you sit out every reinforcement clock while the
+round carries on without you. The push is one line after the state switch and
+before the render, so the state a frame ENDS in decides, and the six ways out of
+a round no longer each owe a `setScoreboard(false)` — the one that forgot would
+leave the numbers hanging over the next screen. It goes away under a lid
+(`paused`, `loadout`, `settings`) because a lid is a screen the player asked
+for. `#scoreboard` carries a `z-index` for exactly one reason: every screen
+appends itself after `#hud`, so DOM order alone would bury it under the deploy
+screen it is meant to be read over.
+
+**Your side is the LEFT column, whichever side you were seated onto.** A board is
+read from where the reader is standing, and a column that changes ends between
+matches is one a player has to find before they can read it. The rows are sorted
+by kills and then by fewer deaths, on a stable sort, so bodies level on both keep
+roster order instead of trading places while somebody is looking at them.
+
 **The magazine strip is markup the WEAPON TABLE sizes**, and it is the one place
 a number in `CONFIG.weapons` reaches the DOM. `HUD.setAmmo` builds one `<i>` per
 round in the carried weapon's magazine — the count is what makes the strip

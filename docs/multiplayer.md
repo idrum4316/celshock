@@ -198,6 +198,13 @@ calls `leaveMatch` and `this.net` is null in every state that reads back as one.
 A `paused` netplay round IS running, which is the whole difference between a lid
 here and a lid offline.
 
+**The scoreboard is up on that screen too, and it is a match feature more than
+an offline one.** Offline the deploy screen is a couple of seconds; in a match it
+is where a player spends every reinforcement clock of every death, watching a
+round they are not in — the exact moment "how is this going" is worth asking.
+`Game.pushScoreboard` runs from `tick` for `playing`, `dying` and `deploy`
+alike, so the panel follows the round rather than the weapon in your hands.
+
 **So a networked lid covers the local half of a frame and nothing else**, and
 the things a pause normally freezes alongside the world have to be let go with
 it. The HUD keeps its real `dt` — a killfeed held at zero stacks the kills that
@@ -241,7 +248,7 @@ quietly.
 
 **The trigger is the interpolated death, not the `kill` event.** `NetRoster`
 reads the `alive` edge either side of the one call that can move it and raises
-`onDeath`; `Game` wires that to `ragdolls.spawn` exactly as `onBotKilled` is
+`onDeath`; `Game` wires that to `ragdolls.spawn` exactly as `onBotKill` is
 wired to `registerBotKill`. Two reasons it is not the event. The event arrives in
 real time and the body is drawn `interpDelay` behind it, so spawning from the
 event throws a corpse a tenth of a second before the round that killed it appears
@@ -267,7 +274,7 @@ death is DERIVED (`1 - victim.team`) rather than carried, because friendly fire
 is excluded by construction everywhere in this game.
 
 **`HeadlessGame.resolveShot` is the third way a bot can die, and it is the one
-that was not charging for it.** `BattleSystem.onBotKilled` fires for a bot shot
+that was not charging for it.** `BattleSystem.onBotKill` fires for a bot shot
 by another bot and the grenade handler fires for a blast, but a person's round
 reaches `CombatSystem.fire` through `resolveShot` and touches neither — so every
 bot a human killed cost that team no reinforcement at all, and the only thing
@@ -482,6 +489,34 @@ net.slot` / `event.victim === net.slot` tests stay, demoted from filters to
 guards: client and server ship as separate images, so a rolling deploy can put a
 new client in front of a server that still broadcasts, and neither event's shape
 changed, so the handshake's version check would not catch it.
+
+**The scoreboard is STATE and is sent as state, not added up from events.** The
+authority keeps one line per slot — `HeadlessGame.slotKills`/`slotDeaths` — and
+`Match` broadcasts the pair whole as a `scores` message on the ticks it has
+moved, which it learns by comparing `scoreVersion` against what it last sent. A
+client that instead counted the `kill` events it saw would be wrong three ways
+at once: events are a queue a reconnect drops, a joiner has missed every one of
+them that happened before they arrived, and `kill` names the killer's *team*
+rather than the body, because the killfeed only ever needed a side. As state it
+self-corrects — a lost message is superseded by the next — and a joiner is
+handed the table on admission, which is a message to one peer for the same
+reason `hit` is.
+
+**A kill is counted at the KILLER's door and a death at the VICTIM's, once
+each.** They are separate facts with separate witnesses: every death in the game
+already arrives somewhere (`onKill` for a bot, `NetPlayer.onDamaged` for a
+person) while who fired is known only to whatever pulled the trigger, so a
+single door would mean one path inventing the half it cannot see. That is what
+`HeadlessGame.creditKill` is, and it is why `BattleSystem.onBotKill` hands over
+the shooting BOT and any victim rather than the falling bot and a team — the
+older shape dropped every kill whose victim was a person, which on a server is
+half the roster. The client's `Game` runs the identical pair offline.
+
+**A team's totals are SUMMED from the rows and stored nowhere.** Two counters
+for one fact is two counters that can disagree, and the one that would be wrong
+is the one nothing on screen can check. `HeadlessGame.teamScore` is that sum on
+the server (`npm run simulate` prints it); `Game.updateHud` does the same on the
+client, over the same rows the columns under it are drawn from.
 
 **The client sends** its position at `INPUT_HZ`, and — per event — the round it
 fired and the grenade it threw. Every one of those is gated before it is acted
