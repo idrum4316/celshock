@@ -263,15 +263,73 @@ Stated so nobody assumes otherwise:
 
 ## Deploying it
 
-`docker compose up --build` is the whole of it: `web` is nginx serving `dist/`
-and `match-server` is this process, deliberately unpublished so the only route
-in is the proxy. **Both `/ws` and `/matches` need a `location` block** — anything
-nginx does not name falls through to the static root and comes back as a 404,
-and that failure is a nasty one because the lobby works perfectly against
-`npm run server` on a dev machine, where the client reaches the match server
-directly and nginx is not in the picture at all.
+`docker compose up --build` is the whole of it on a development machine: `web`
+is nginx serving `dist/` and `match-server` is this process, deliberately
+unpublished so the only route in is the proxy. On a server,
+`docker-compose.prod.yml` is the same two services from the images CI pushes —
+`idrum4316/hollowmere` and `idrum4316/hollowmere-server`, **two images from one
+Dockerfile, and the workflow needs `target:` on each**; without it Docker builds
+the last stage in the file, which is `web`, and the server image silently never
+exists.
+
+**Both `/ws` and `/matches` need a `location` block** — anything nginx does not
+name falls through to the static root and comes back as a 404, and that failure
+is a nasty one because the lobby works perfectly against `npm run server` on a
+dev machine, where the client reaches the match server directly and nginx is not
+in the picture at all.
+
+**The upstream must be reached through a VARIABLE, and this is not a style
+choice.** A literal `proxy_pass http://match-server:8080` is resolved when nginx
+loads its config, so a `web` container with no match server beside it does not
+serve a 502 — it exits, with `host not found in upstream "match-server"`, and
+takes the single-player game down with it. That is the deployment this repo had
+for most of its life and the one every reader assumes still works. Through
+`set $match_server "${MATCH_SERVER}"` the lookup moves to request time, which
+is also what makes the address a deploy-time setting; a named upstream then
+needs a `resolver`, and `docker/14-resolvers.envsh` is what fills one in with a
+fallback so that no DNS is still not a config error.
+
+**The edge proxy in front of the domain needs to know about the WebSocket.** A
+site that has only ever served files has never had to forward an Upgrade, and
+the symptom when it does not is a socket that opens and closes immediately with
+nothing worth reading in it. For nginx:
+
+```nginx
+location /ws {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 1h;
+}
+```
+
+Caddy needs nothing said: `reverse_proxy 127.0.0.1:8080` carries WebSockets on
+its own.
+
+**Capacity is one core per process, and it is not the constraint people expect.**
+Measured on one container: four concurrent matches — sixty-four bodies, sixteen
+of them under a nav graph and a think budget each — cost 13–25% of a core and
+278 MB together; one match costs ~9% and 154 MB. `MAX_MATCHES` is what bounds
+it, and the interesting limit is memory per match rather than CPU per tick.
 
 In DEV the two are on different origins, which is what `?server=ws://host:port/ws`
 is for and why `/matches` answers with `access-control-allow-origin: *`. The
 list is public and read-only — it is the same information anyone gets by
 connecting — so there is nothing there for an origin check to protect.
+
+**A deploy that moves `PROTOCOL_VERSION` breaks returning players for exactly
+one launch, and that is the service worker rather than a bug.** Caching is
+cache-first, so a player who already has the app runs the PREVIOUS build once
+while the new one installs behind them — against a server that has already
+moved. They are refused at the handshake with the server's own words (`protocol
+2 but this server speaks 3`), the lobby puts the reason on screen, and a reload
+fixes it. Worth knowing before bumping the constant for something cosmetic;
+worth saying out loud when you bump it for something real.
+
+**The service worker will eat the lobby if it is let to.** In a deployed build
+`/matches` is same-origin, `sw.js` is cache-first over everything same-origin,
+and the Cache API ignores `no-store` on both the request and the response — so
+the list is served from cache forever after the first fetch. `sw.js` exempts
+`/matches` and `/health` by path. It reproduces on the live site only: there is
+no worker in dev and none on a first load.

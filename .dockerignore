@@ -8,7 +8,9 @@ tmp_shots
 undefined
 models
 specs
-scripts
+# NOT scripts/: the build stage COPYs it, because `npm run build` runs
+# scripts/check-collision.mjs — the gate that refuses a bake older than the
+# layout it came from. Excluding it fails the image build at the COPY.
 *.md
 Dockerfile
 .dockerignore

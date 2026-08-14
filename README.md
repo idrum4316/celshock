@@ -52,6 +52,50 @@ docker compose up --build
 open http://localhost:8080
 ```
 
+## Hosting it
+
+The deployment is those same two containers from published images, behind
+whatever already terminates HTTPS for the domain:
+
+```bash
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+`web` (nginx and the game) listens on `127.0.0.1:8080` and `match-server` is not
+published at all — the only route to the simulation is nginx's `/ws` proxy on
+the compose network. Point the reverse proxy at `127.0.0.1:8080` and give it one
+thing it did not need while this was a static site: **`/ws` is a WebSocket, so
+the Upgrade must survive the hop.**
+
+```nginx
+location /ws {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 1h;
+}
+
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+}
+```
+
+Caddy carries WebSockets by itself, so it is one line:
+`reverse_proxy 127.0.0.1:8080`.
+
+Nothing else needs configuring: the client asks its own origin for the match
+list and opens the socket there, so the game does not know or care what the
+domain is. Two settings are worth a look — `MAX_MATCHES` on the server (default
+4, and one process's matches all share one core) and `MATCH_SERVER` on `web`
+(default `match-server:8080`, the compose service name).
+
+The single-player game still deploys on its own: bring up `web` without the
+server and it plays exactly as it always has — the socket never opens, and the
+lobby says it could not reach a match server.
+
 ## Installing it
 
 The build is an installable app (a PWA): a web app manifest, generated icons,

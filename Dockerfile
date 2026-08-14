@@ -78,8 +78,25 @@ CMD ["node", "dist-server/index.js"]
 # ---------------------------------------------------------------------------
 FROM nginx:1.27-alpine AS web
 
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+# A TEMPLATE under /etc/nginx/templates, not a conf under /etc/nginx/conf.d:
+# the image's entrypoint substitutes the environment into it and writes the
+# result to conf.d before nginx starts. That is what makes MATCH_SERVER a deploy
+# -time setting. The .envsh beside it publishes this container's own DNS servers
+# for the `resolver` the templated upstream needs; it is sourced, so it must be
+# executable, and the chmod is explicit rather than trusted to the checkout.
+COPY docker/default.conf.template /etc/nginx/templates/default.conf.template
+COPY docker/14-resolvers.envsh /docker-entrypoint.d/14-resolvers.envsh
+RUN chmod +x /docker-entrypoint.d/14-resolvers.envsh
+
 COPY --from=build /app/dist /usr/share/nginx/html
+
+# Where the match server is, as host:port. The default is the compose service
+# name, so `docker compose up` needs no configuration at all; a deployment that
+# runs the two containers some other way sets this to whatever it named the
+# server. Nothing is resolved until a request arrives on /ws or /matches, so a
+# wrong value here — or no server at all — costs those two paths and not the
+# game.
+ENV MATCH_SERVER=match-server:8080
 
 EXPOSE 80
 

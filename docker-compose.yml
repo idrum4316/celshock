@@ -13,7 +13,13 @@
 # returns nothing in production.
 #
 # The single-player game does not need `match-server` at all. Bring up `web`
-# alone and it plays exactly as it always has; the socket simply never opens.
+# alone and it plays exactly as it always has; the socket simply never opens and
+# the lobby says it could not reach a server. (That is true because the nginx
+# upstream is resolved per request rather than at startup — see
+# `docker/default.conf.template`, where undoing it costs the whole site.)
+#
+# This file BUILDS from the checkout, which is what a development machine wants.
+# `docker-compose.prod.yml` is the same two services from the images CI pushes.
 
 services:
   web:

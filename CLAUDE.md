@@ -22,7 +22,7 @@ substitute: read the companion before changing that subsystem.
 | [`docs/bots.md`](docs/bots.md) | navigation, perception, cover, squads, bot cost |
 | [`docs/deaths.md`](docs/deaths.md) | ragdolls, Havok, the death cam |
 | [`docs/pwa.md`](docs/pwa.md) | `public/`, `src/pwa/`, the service worker |
-| [`docs/multiplayer.md`](docs/multiplayer.md) | anything under `server/` or `src/net/`, the roster, the collision bake |
+| [`docs/multiplayer.md`](docs/multiplayer.md) | anything under `server/` or `src/net/`, the roster, the collision bake, the two images and the proxy in front of them |
 
 Three more companions carry what is looked up rather than reasoned about:
 
@@ -81,7 +81,7 @@ tuning fixes either. **A production build resolves the asset itself, so `vite
 preview` works with or without the exclusion; testing only there will not catch
 this.** Deployed nginx needs nothing (`application/wasm` is in its bundled
 `mime.types`; the web app manifest is not, which is why only that has a block in
-`docker/nginx.conf`).
+`docker/default.conf.template`).
 
 **The same optimizer bites from the other side: never add a deep static import
 into `@babylonjs/core`.** A new subpath entry (`@babylonjs/core/Shaders/...`)
