@@ -228,7 +228,30 @@ export type ServerEvent =
       from: Vec3;
       amount: number;
     }
+  /**
+   * A blow one player took: how big, which way it came from, and what it left
+   * them on.
+   *
+   * **Addressed to the victim.** It is the only message in the protocol that
+   * carries a health at all — see `docs/multiplayer.md` on why one is enough —
+   * so broadcasting it published every player's exact pool to every client,
+   * live, with the bearing they were shot from beside it. `victim` stays on the
+   * wire and the client still checks it, for the reason `hit` below does.
+   */
   | { e: "damage"; victim: number; amount: number; from: Vec3; health: number }
+  /**
+   * A round the authority agrees landed — the shooter's own hitmarker, arriving
+   * a round trip after the prediction it either claims or corrects.
+   *
+   * **Addressed to the shooter.** Everything not marked that way here is public
+   * by nature: a client needs the kills, the captures and the blasts to draw the
+   * same round as everyone else. This one is feedback about one person's
+   * trigger, and broadcasting it handed every client a live feed of who was
+   * hitting whom — including `killed`, which says a body is going down a tick
+   * before the snapshot shows it. `Match` sends it to one peer; the client still
+   * checks `shooter`, because the two halves deploy separately and an older
+   * server broadcasts it with this same shape.
+   */
   | { e: "hit"; shooter: number; victim: number; killed: boolean; headshot: boolean }
   | { e: "died"; slot: number; by: number; respawnIn: number }
   | { e: "explode"; at: Vec3 }

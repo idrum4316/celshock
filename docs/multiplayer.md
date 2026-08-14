@@ -302,6 +302,45 @@ geometry. A client names a *weapon id* at join; the server validates it against
 the real table and looks up everything it means. The map is built locally on
 both sides from the same layout module.
 
+**An event with one audience is ADDRESSED, not broadcast and filtered.** Most of
+what `Match` queues is public by nature — a flag changed hands, a body went
+down, a grenade went off — and every client needs it to draw the same round.
+Two are not, and both were broadcast with the client filtering them on arrival:
+
+- **`hit`, to the shooter.** Feedback about one person's trigger. Broadcast, it
+  told every client in the match who was hitting whom and, through `killed`,
+  that a body was going down a tick before the snapshot would honestly show it.
+- **`damage`, to the victim.** The sharper of the two, because it is the only
+  message in the protocol carrying a health at all — so every client held every
+  player's exact pool, live, with the bearing they were shot from beside it.
+  That pair is precisely the read a wallhack is after.
+
+A filter on the far side does not fix either, because it is a promise about the
+client rather than a property of the server, and the payload is on the wire
+regardless for anything reading the socket. So `PendingEvent` carries the
+audience — a slot, or `ALL_PEERS` — and `flushEvents` builds a per-peer payload
+on the ticks that have something addressed on them; a tick without one is the
+single encoded broadcast it always was.
+
+**The `kill` beside that `damage` stays public, and the pair is where the line
+is.** That somebody DIED is everyone's business: the killfeed line and the
+corpse are on every screen, and `from`/`amount` ride along because that is what
+each client throws the body with. How close they were to dying before it
+happened is nobody's business but theirs. `died` is broadcast too and could
+equally be addressed to its slot — the client already gates it — but it adds
+nothing to what its `kill` has just said in public except a respawn clock.
+
+Two things about that queue are load-bearing. The audience rides on the SAME
+list as the events, because a client reads one ordered stream: hit credits are
+paired off it FIFO with no shot id on the wire, and `died` is read against the
+bearing the `damage` immediately ahead of it left behind. A second list flushed
+alongside the first would slide a tick's shared events wholly before or wholly
+after that client's own and break both. And the client's `event.shooter ===
+net.slot` / `event.victim === net.slot` tests stay, demoted from filters to
+guards: client and server ship as separate images, so a rolling deploy can put a
+new client in front of a server that still broadcasts, and neither event's shape
+changed, so the handshake's version check would not catch it.
+
 **The client sends** its position at `INPUT_HZ`, and — per event — the round it
 fired and the grenade it threw. Every one of those is gated before it is acted
 on. The shot's `dir` is the direction the round *actually* flew, spread already

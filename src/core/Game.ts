@@ -2621,6 +2621,13 @@ export class Game {
       // claimed silently, because a marker and a tick arriving twice for one
       // bullet — a round trip apart, so plainly a second event rather than an
       // echo — reads as two hits and makes the cue worth less than it was.
+      //
+      // The server addresses this one to the shooter, so the slot test is a
+      // GUARD and not the filter it used to be. It stays because the two halves
+      // ship as separate images: during a rolling deploy this client may be
+      // talking to a server old enough to still broadcast the event, and a
+      // hitmarker for somebody else's round is exactly the failure a version
+      // check at the handshake cannot catch, since the shape did not change.
       case "hit":
         if (
           event.shooter === this.net?.slot &&
@@ -2639,6 +2646,9 @@ export class Game {
       // hit that never crosses the wire: the server holds the health down for
       // `regenDelay` and then heals it back, and the client runs the identical
       // curve locally rather than being told about every point of it.
+      //
+      // Addressed to the victim by the server, so — exactly as with `hit` above
+      // — the slot test is a rolling-deploy guard rather than the filter it was.
       case "damage":
         if (event.victim === this.net?.slot) {
           this.player.applyServerHealth(event.health);

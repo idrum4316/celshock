@@ -52,6 +52,25 @@ interface Peer {
   seq: number;
 }
 
+/**
+ * A queued event and who is allowed to see it.
+ *
+ * Most of what happens in a match is public — a flag changed hands, a body went
+ * down, a grenade went off — and every client needs it to draw the same round.
+ * A few are one person's business, and those are ADDRESSED rather than
+ * broadcast-and-filtered: a client cannot act on what it was never sent, and a
+ * filter on the far side is a promise about the client rather than a property
+ * of the server.
+ */
+interface PendingEvent {
+  /** The slot this is for, or `ALL_PEERS`. */
+  to: number;
+  ev: ServerEvent;
+}
+
+/** `PendingEvent.to` for an event every client gets. */
+const ALL_PEERS = -1;
+
 const STEP_MS = 1000 / TICK_HZ;
 
 /**
@@ -149,14 +168,22 @@ export class Match {
   private ticks = 0;
 
   /**
-   * Events accumulated since the last broadcast.
+   * Events accumulated since the last broadcast, each with the audience it is
+   * for: `ALL_PEERS`, or the one roster slot it is addressed to.
    *
    * Queued rather than sent as they happen because a kill and the snapshot that
    * shows the body falling belong in the same frame for a client: delivering the
    * killfeed line first makes the corpse arrive late, and it reads as lag in the
    * one moment a player is paying most attention.
+   *
+   * The audience is carried on the queue rather than kept in a second list so
+   * that ORDER survives it. Events are a single stream to a client — the hit
+   * credits `Game.claimPredictedHit` pairs off are FIFO with no shot id on the
+   * wire — and two lists flushed one after the other would put a tick's shared
+   * events either wholly before or wholly after that client's own, whichever
+   * way round the flush happened to be written.
    */
-  private readonly pending: ServerEvent[] = [];
+  private readonly pending: PendingEvent[] = [];
 
   /** Reused so a snapshot allocates nothing per tick beyond its own arrays. */
   private readonly entityScratch: EntityState[] = [];
@@ -184,7 +211,7 @@ export class Match {
     // the offline game hands `RagdollSystem` and the reason it does not need a
     // second copy of any of it.
     this.game.onKillEvent = (bot, killer, headshot) => {
-      this.pending.push({
+      this.queue({
         e: "kill",
         killer,
         victim: this.game.battle.bots.indexOf(bot),
@@ -194,11 +221,20 @@ export class Match {
       });
     };
     this.game.conquest.onCaptured = (point, by) =>
-      this.pending.push({ e: "captured", point: point.def.id, by });
+      this.queue({ e: "captured", point: point.def.id, by });
     this.game.conquest.onNeutralised = (point) =>
-      this.pending.push({ e: "neutralised", point: point.def.id });
+      this.queue({ e: "neutralised", point: point.def.id });
     this.game.onPlayerDamaged = (player, amount, from, killed) => {
-      this.pending.push({
+      // Addressed to the victim, and the sharpest case for it: this is the ONE
+      // message in the protocol carrying a health, so broadcasting it published
+      // every player's exact pool to everybody, live, along with the bearing
+      // they were shot from. That is the read a wallhack wants — who is hurt
+      // and which way they are facing it — handed over for free.
+      //
+      // The `kill` below stays public, and the pair is the line: that somebody
+      // DIED is everyone's business, because the killfeed and the corpse are on
+      // every screen. How close they were to dying is nobody's but theirs.
+      this.queueTo(player.slot, {
         e: "damage",
         victim: player.slot,
         amount,
@@ -222,7 +258,7 @@ export class Match {
         // feedback and reaches them on their own `hit` event, which is
         // resolved where the head zone was actually tested. Nothing renders it
         // for a victim.
-        this.pending.push({
+        this.queue({
           e: "kill",
           killer: 1 - player.team,
           victim: player.slot,
@@ -230,7 +266,7 @@ export class Match {
           from: from ? [from.x, from.y, from.z] : [0, 0, 0],
           amount,
         });
-        this.pending.push({
+        this.queue({
           e: "died",
           slot: player.slot,
           by: -1,
@@ -239,9 +275,9 @@ export class Match {
       }
     };
     this.game.onExplosion = (at) =>
-      this.pending.push({ e: "explode", at: [at.x, at.y, at.z] });
+      this.queue({ e: "explode", at: [at.x, at.y, at.z] });
     this.game.onPlayerSpawned = (player, at, yaw) =>
-      this.pending.push({
+      this.queue({
         e: "spawn",
         slot: player.slot,
         pos: [at.x, at.y, at.z],
@@ -432,7 +468,7 @@ export class Match {
     this.ticks++;
 
     if (!live && this.game.conquest.winner !== null && !this.rotating) {
-      this.pending.push({ e: "roundover", winner: this.game.conquest.winner });
+      this.queue({ e: "roundover", winner: this.game.conquest.winner });
       // The round is over but the match is not. Everyone stays seated, the
       // card goes up on every client, and the next map is built after a pause
       // — a server that stopped here would leave sixteen people looking at a
@@ -551,10 +587,44 @@ export class Match {
     };
     this.broadcast(snap);
 
-    if (this.pending.length > 0) {
-      this.broadcast({ t: "events", events: [...this.pending] });
-      this.pending.length = 0;
+    this.flushEvents();
+  }
+
+  /** Queues an event for every client. */
+  private queue(ev: ServerEvent): void {
+    this.pending.push({ to: ALL_PEERS, ev });
+  }
+
+  /** Queues an event for one roster slot, and for nobody else. */
+  private queueTo(slot: number, ev: ServerEvent): void {
+    this.pending.push({ to: slot, ev });
+  }
+
+  /**
+   * Sends the tick's events and empties the queue.
+   *
+   * A tick with nothing addressed on it — which is most of them — keeps the
+   * single encode it has always had. A tick that does carry somebody's own
+   * event is built per peer, and that is deliberately not optimised: the
+   * payload is a handful of small objects against a snapshot of sixteen
+   * entities encoded once next door, so sixteen of these is noise beside the
+   * message that has already gone out this tick.
+   */
+  private flushEvents(): void {
+    if (this.pending.length === 0) return;
+
+    const shared = this.pending.filter((p) => p.to === ALL_PEERS);
+    if (shared.length === this.pending.length) {
+      this.broadcast({ t: "events", events: shared.map((p) => p.ev) });
+    } else {
+      for (const peer of this.peers.values()) {
+        const events = this.pending
+          .filter((p) => p.to === ALL_PEERS || p.to === peer.slot)
+          .map((p) => p.ev);
+        if (events.length > 0) this.send(peer, { t: "events", events });
+      }
     }
+    this.pending.length = 0;
   }
 
   private onMessage(peer: Peer, msg: ClientMessage): void {
@@ -745,7 +815,12 @@ export class Match {
     if (!result?.target) return;
 
     const victimSlot = this.slotOf(result.target);
-    this.pending.push({
+    // Addressed to the shooter, because it is feedback about their own trigger
+    // and nobody else's screen has anything to do with it. Broadcast, it told
+    // fifteen other clients who is hitting whom and — through `killed` — that a
+    // body across the map is going down, a tick before the snapshot that would
+    // honestly show either.
+    this.queueTo(peer.slot, {
       e: "hit",
       shooter: peer.slot,
       victim: victimSlot,
