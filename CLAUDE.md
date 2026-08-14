@@ -209,6 +209,19 @@ is still there on return, and the voice counter stays honest because nothing end
 while the clock is stopped), and the HUD is ticked with `dt = 0` so the killfeed
 and toasts freeze with the world instead of fading off a frozen screen.
 
+**Both of those invert under a NETPLAY lid, because there the game is not
+held.** The authority never heard the key, so `paused`, `settings` and `loadout`
+all step `updateNetUnderLid` — the netplay frame and the gauges as the deploy screen
+draws them, plus the reinforcement clock when the deploy screen is what the
+stack is over, since that clock is the round's and the server runs it down
+regardless. The HUD keeps its real `dt` (kills arrive while the card is up), and
+the audio clock is left running: a suspended context would not play the wire's
+`hit`/`damage`/`explode` cues *or* let them end, and the whole pause-worth of
+them would sound on the resume. **The question is never which screen is up, but
+whether what is under it is moving** — `Game.worldHeld` and `Game.stateUnderLids`
+are that question asked once each, `settings` is the one lid that has to look
+through another to answer it, and a new screen over a round owes the same call.
+
 **Losing the pointer lock is the trigger, and it has to be.** Escape belongs to
 the browser — it is the UA's gesture for dropping the lock and the keydown behind
 it is not reliably delivered — so `Game` pauses on the *transition* out of the

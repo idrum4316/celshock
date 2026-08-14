@@ -180,19 +180,55 @@ who acts first, so a version-2 client against a version-3 server would sit dead
 in a live match forever, alive on its own screen and absent from everyone
 else's. Refused at the handshake, it is a sentence the lobby prints instead.
 
-**The deploy screen is the one state outside the round that still steps the
-netplay frame.** `Game.updateNetWorld` is called from `updateDeployScreen` as
-well as from `updateWorld`, because a player waiting to come back is watching a
-fight that has not stopped for them: unstepped, sixteen bodies stand frozen
-behind the card and snap on the frame they deploy, the ticket strip under it
-shows the round they died in, and the flags the offer is derived from never
-arrive at all before the first deploy — so a player joining a match in progress
-is offered their home spawn and nothing else. `RagdollSystem` is in that method
-for a sharper reason than symmetry: `updateNet` is what raises an interpolated
-death, and a death raised while the pool is not stepped is a corpse that takes a
-rig and hangs in the air for the rest of the round. It stays out of `paused` and
-`menu` for the reason it belongs in `deploy` — those two are a round that is not
-running, and this is a round running without you.
+**The deploy screen and every lid over it step the netplay frame, and there is
+no state left that draws a live round without stepping it.**
+`Game.updateNetWorld` is called from `updateWorld` for the states inside the
+round and from `updateNetUnderCard` for the ones that are outside it, because a
+player waiting to come back — or sitting in a menu — is watching a fight that
+has not stopped for them: unstepped, sixteen bodies stand frozen behind the card
+and snap on the frame they leave it, the ticket strip under it shows the round
+they died in, and the flags the deploy offer is derived from never arrive at all
+before the first deploy, so a player joining a match in progress is offered their
+home spawn and nothing else. `RagdollSystem` is in that method for a sharper
+reason than symmetry: `updateNet` is what raises an interpolated death, and a
+death raised while the pool is not stepped is a corpse that takes a rig and hangs
+in the air for the rest of the round. It stays out of `menu`, which is a round
+that is not running — and `menu` needs no test of its own, because `enterMenu`
+calls `leaveMatch` and `this.net` is null in every state that reads back as one.
+A `paused` netplay round IS running, which is the whole difference between a lid
+here and a lid offline.
+
+**So a networked lid covers the local half of a frame and nothing else**, and
+the things a pause normally freezes alongside the world have to be let go with
+it. The HUD keeps its real `dt` — a killfeed held at zero stacks the kills that
+arrive while the card is up and fades the lot on the resume. The reinforcement
+countdown keeps running, because it is the server's `NetPlayer.respawnT` that
+gates the deploy and the local copy is a number on a card plus the gate on its
+own button: a lid that stops it makes a player wait out time the authority has
+already given back. The audio clock is left running, which is the least obvious
+of the three: `hit`, `damage` and `explode` sound straight from the message
+handler in whatever state the client is in, and against a suspended
+`AudioContext` they neither play nor reach `onended`, so each holds a voice
+against the cap until the resume and then they all fire on the same instant.
+
+**Three lids — `paused`, `settings` and `loadout` — and `settings` is the one
+that can be raised over another**, so what a frame owes cannot be read off
+`Game.state` alone: `stateUnderLids` looks through the stack (two deep, and it
+can be no deeper — nothing may cover the settings screen) and `worldHeld` asks
+the only question the HUD's clock cares about. All three call
+`updateNetUnderLid` rather than each deciding for itself, for the reason
+`updateNetWorld` has one home, and **a fourth screen owes the same call the day
+it is written**. The kit screen is the one where this is easiest to skip and
+worst to skip: its scrim is opaque but for the stage the weapon turns on, so the
+freeze behind it is nearly invisible and the snap on the way out is
+unattributable.
+
+What a lid still covers is everything that would be a decision — the player does
+not move, shoot or upload; `updateNet` asks for `state === "playing"` before it
+sends a move sample, so a paused client is already indistinguishable on the wire
+from one standing still. **That is the cost of the feature and it is not a
+bug**: the body stays in the world, breathing and shootable, for as long as the
+menu is up.
 
 ## A death, on the side that only watches
 

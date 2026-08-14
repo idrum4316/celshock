@@ -121,7 +121,11 @@ export class Sfx {
   }
 
   /**
-   * Freezes or thaws the whole graph — the pause menu, and nothing else.
+   * Freezes or thaws the whole graph — an OFFLINE pause menu, and nothing
+   * else. A networked round is still being played by everybody else and is
+   * still sounding off the wire while its card is up, so `Game.pause` leaves
+   * this alone there: a stopped clock would neither play those nor let them
+   * end, and they would all arrive together on the resume.
    *
    * Suspending the context rather than muting a gain is what makes this
    * correct for free: anything already scheduled (the tail of the shot that

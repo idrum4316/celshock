@@ -1396,13 +1396,29 @@ export class Game {
         this.updateLoadoutScreen(dt);
         break;
       case "settings":
-        this.updateSettingsScreen();
+        this.updateSettingsScreen(dt);
         break;
       case "lobby":
         this.updateLobbyScreen();
         break;
       case "paused":
         this.updatePauseMenu();
+        // A pause is a lid over the local game, and in a networked round the
+        // local game is not the round: the authority never heard the key. So
+        // the half of a frame that DRAWS what it was told is owed here exactly
+        // as it is owed to the deploy screen, and for the same reason — both
+        // are a round running without you, which offline is a thing that
+        // cannot happen and here is the normal case. Left out, sixteen bodies
+        // stand frozen behind the card and snap to where they really are on
+        // the frame the player resumes.
+        //
+        // Still nothing that decides an outcome, which is what makes it legal
+        // from a state that owns none. The lid stays on the half of the frame
+        // that is genuinely this client's: the player does not move, does not
+        // shoot, and reports nothing while the menu is up — `updateNet` sends
+        // no move sample because it asks for `state === "playing"`, so being
+        // paused is already indistinguishable on the wire from standing still.
+        this.updateNetUnderLid(dt);
         break;
       case "playing":
         if (this.input.pausePressed) {
@@ -1435,7 +1451,14 @@ export class Game {
     // damage vignette are all part of the frozen frame, and a fight fading off
     // the screen while nothing in the world moves is the tell that the pause
     // is only skin deep. Every other state passes the real dt.
-    this.hud.update(this.state === "paused" ? 0 : dt);
+    //
+    // A NETWORKED pause is not a frozen frame and the test inverts with it:
+    // the fight behind the card is live, kills keep arriving from the wire,
+    // and a killfeed held at zero would stack them unread and then fade the
+    // lot at once on the resume — the same tell, from the other side. So the
+    // question is not which screen is up but whether what is under it moves,
+    // which is what `worldHeld` answers.
+    this.hud.update(this.worldHeld ? 0 : dt);
     this.post.update(dt);
     this.sky.update(dt);
     // After every state has had its go at the camera, and before the render
@@ -1552,21 +1575,7 @@ export class Game {
     // current — but the bodies behind the card, the tickets on the strip and
     // the effects this client owns are all stepped from a frame, and this
     // state's frame is the only one they get while a player is choosing.
-    //
-    // The two HUD pushes are `updateGameplay`'s, made here because the deploy
-    // screen is one of the two overlays that deliberately does NOT hide the
-    // gauges under it: a flag falling while you pick where to drop in changes
-    // both, and a strip that only refreshes once you are back in the world
-    // spends the whole of that decision showing the round you died in.
-    if (this.net) {
-      this.updateNetWorld(dt);
-      this.hud.setTickets(
-        [CONFIG.teams[0].name, CONFIG.teams[1].name],
-        this.conquest.tickets,
-        this.player.team,
-      );
-      this.hud.setFlags(this.conquest.points, this.player.team);
-    }
+    this.updateNetUnderCard(dt);
     // Stepped before the redraw, so the marker and the status line move on
     // the frame the key was pressed. Both axes step the same list — the
     // spawns are a handful of points scattered over a map rather than a
@@ -1596,6 +1605,13 @@ export class Game {
    * there is nothing to confirm, each pick is already on the weapon behind.
    */
   private updateLoadoutScreen(dt: number): void {
+    // The third lid, and the one that hides the most: the scrim is opaque
+    // except for the stage the weapon turns on. That makes no difference to
+    // what is owed — the round is still being played by fifteen other people
+    // and the reinforcement clock is still running down — and it is precisely
+    // the screen where the freeze was hardest to see and the snap on the way
+    // out hardest to explain. Offline this does nothing.
+    this.updateNetUnderLid(dt);
     // Two axes, two slots: up/down chooses which half of the kit is being
     // edited, left/right steps through it. Back, confirm and pause all
     // close — there is nothing to confirm here, every pick has already been
@@ -1624,7 +1640,14 @@ export class Game {
    * The settings list. The one screen where the confirm is NOT an exit: a
    * boolean has nothing to step through, so A and Enter flip the row.
    */
-  private updateSettingsScreen(): void {
+  private updateSettingsScreen(dt: number): void {
+    // The one lid that can be raised over another, and the only one that can
+    // cover a round from two states away — but the round underneath does not
+    // care which screen is on top of it, only whether the authority is still
+    // running it. So this owes exactly what the pause card owes, and the two
+    // ask the same method rather than each deciding for themselves. Offline it
+    // does nothing at all: there is no round running without you.
+    this.updateNetUnderLid(dt);
     // Up/down picks the row, left/right and Enter flip it. The confirm is
     // NOT an exit here, which is the one place this screen departs from the
     // kit screen's shape: a boolean has nothing to step through, so A and
@@ -1763,7 +1786,17 @@ export class Game {
     this.overlayScreen.showPause();
     // Suspends the audio clock, so the tail of the last shot is still there
     // when the round starts again instead of ringing out over the menu.
-    this.sfx.setSuspended(true);
+    //
+    // OFFLINE ONLY, and not merely because a live fight should be audible.
+    // Suspending stops `AudioContext.currentTime`, and a networked round goes
+    // on making noise the moment it is stopped: `hit`, `damage` and `explode`
+    // all sound straight off the wire, from the message handler, in whatever
+    // state the client happens to be in. Scheduled against a clock that is not
+    // running, none of them plays and none of them ENDS — so each holds a
+    // voice against the cap until the resume, at which point the whole
+    // pause-worth of them fires on the same instant. The choice is between a
+    // menu with gunfire behind it and a menu that saves the gunfire up.
+    if (!this.net) this.sfx.setSuspended(true);
     document.exitPointerLock();
   }
 
@@ -2980,6 +3013,91 @@ export class Game {
     this.combat.update(dt);
     this.grenades.update(dt);
     this.ragdolls.update(dt);
+  }
+
+  /**
+   * That same frame, plus the two gauges, for a card the round is running
+   * behind. Offline both callers are a game genuinely held; in netplay neither
+   * is, and the difference is the whole of this method.
+   *
+   * The two HUD pushes are `updateGameplay`'s, made here because the deploy
+   * screen and the pause card are the two overlays that deliberately do NOT
+   * hide the gauges under them: a flag falling while you pick where to drop in
+   * — or while you sit in a menu — changes both, and a strip that only
+   * refreshes once you are back in the world spends the whole of that showing
+   * the round you left.
+   *
+   * One method rather than the same eight lines twice, for the reason
+   * `updateNetWorld` is one method: two copies of a frame drift, and the way
+   * they drift is that a screen added to one keeps drawing while the other
+   * stands still.
+   */
+  private updateNetUnderCard(dt: number): void {
+    if (!this.net) return;
+    this.updateNetWorld(dt);
+    this.hud.setTickets(
+      [CONFIG.teams[0].name, CONFIG.teams[1].name],
+      this.conquest.tickets,
+      this.player.team,
+    );
+    this.hud.setFlags(this.conquest.points, this.player.team);
+  }
+
+  /**
+   * What the game is actually DOING, looked at through whatever screens are
+   * stacked over it. `settings` is the one lid that can cover another one, so
+   * this is two deep and can be no deeper: nothing may be raised over it.
+   *
+   * `menu` needs no arm because a lid cannot be over a networked round there —
+   * `enterMenu` calls `leaveMatch`, so `this.net` is null in every state that
+   * reads back as `menu`.
+   */
+  /**
+   * True while the world on screen is genuinely stopped — an offline pause, and
+   * the settings screen raised over one. It is what the HUD's own clock keys
+   * off: the killfeed and the toasts belong to the frame, so they freeze with
+   * it and fade with it, and the failure either way round is a fight fading off
+   * a still screen or a still screen catching up in one jump.
+   *
+   * The deploy screen is deliberately not in here even offline, where it holds
+   * the world just as hard: the gauges under it are the ones a player reads
+   * while choosing, and the countdown on the card is a clock of its own.
+   */
+  private get worldHeld(): boolean {
+    if (this.net) return false;
+    return (
+      this.state === "paused" ||
+      (this.state === "settings" && this.settingsFrom === "paused")
+    );
+  }
+
+  private get stateUnderLids(): GameState {
+    if (this.state === "settings") {
+      return this.settingsFrom === "paused" ? this.pausedFrom : this.settingsFrom;
+    }
+    if (this.state === "paused") return this.pausedFrom;
+    if (this.state === "loadout") return this.loadoutFrom;
+    return this.state;
+  }
+
+  /**
+   * A netplay round carrying on under a lid: the frame, the gauges, and the
+   * reinforcement clock when what is under the stack is the deploy screen.
+   *
+   * The clock is here rather than left to `updateDeployScreen` because it is
+   * the ROUND's and not the screen's. The authority runs `NetPlayer.respawnT`
+   * down whatever this client has on top, and the local copy is a countdown
+   * drawn on the card plus the gate on its own Deploy button — so a lid that
+   * stops it makes a player wait out time the server has already given them
+   * back, and the number on the card is wrong the whole while. Offline that
+   * same lid genuinely holds the round and the clock is right to stop with it.
+   */
+  private updateNetUnderLid(dt: number): void {
+    if (!this.net) return;
+    this.updateNetUnderCard(dt);
+    if (this.stateUnderLids !== "deploy") return;
+    this.respawnT -= dt;
+    this.deployScreen.update(this.respawnT);
   }
 
   private updateWorld(dt: number): boolean {
