@@ -653,7 +653,14 @@ export class Game {
     // same way a bullet does — so friendly fire is excluded by construction
     // here too, and this system never learns what a team is.
     this.grenades.hittablesFor = (team) => this.battle.hittablesAgainst(team);
-    this.grenades.onExploded = (at) => this.onExplosion(at);
+    // Netplay: the blast belongs to the authority and arrives as an `explode`
+    // event, which reaches the thrower like everybody else. The local copy is
+    // the ARC — the thing the thrower watched leave their hand — and firing
+    // this as well would flash, bang and shake twice, a fraction of a second
+    // apart, at two points that agree only to within the round trip.
+    this.grenades.onExploded = (at) => {
+      if (!this.net) this.onExplosion(at);
+    };
     this.grenades.onBlastHit = (victim, thrower, byPlayer, killed) => {
       // The player's own death is already handled, all the way down to the
       // deploy screen, by `onPlayerDamaged` — `takeDamage` routed it there
@@ -2601,7 +2608,22 @@ export class Game {
     // it was told and runs none of it. The bodies, the flags and the tickets
     // all arrive through `NetSession`, which is stepped from `updateGameplay`
     // where the local player's own frame is.
-    if (this.net) return true;
+    //
+    // What it still owes is the DRESSING on what it was told, and that is a
+    // shorter list than "everything below": a tracer, the impact at the end of
+    // it and the grenade the thrower watched leave their own hand decide
+    // nothing, are owned by this client alone, and are stepped by nobody else.
+    // Left out they do not merely stop moving — a tracer is spawned AT the
+    // muzzle a hundredth of a metre long and it is `update` that flies it and
+    // hides it again, so every shot left a lit dot hanging in the air where
+    // the muzzle had been, and a thrown grenade hung at the release point with
+    // a fuse that never ran down. Nothing in here may decide an outcome; that
+    // is what keeps this from growing back into the simulation below.
+    if (this.net) {
+      this.combat.update(dt);
+      this.grenades.update(dt);
+      return true;
+    }
 
     // --- objectives ---
     // Runs before the bots so their think tick sees this frame's ownership.

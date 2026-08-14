@@ -98,6 +98,29 @@ Two consequences to preserve:
   reported by the client. An animation flag a client sets is one it can lie
   about.
 
+## The client runs none of the simulation and all of its own dressing
+
+`Game.updateWorld` returns early in a netplay round, and the line it draws is
+"decides an outcome", not "moves something". Conquest, the bots, the ragdolls
+and the physics step are the authority's and are skipped. **`CombatSystem` and
+`GrenadeSystem` are still stepped**, because what they hold between frames is
+this client's own effects and nobody else advances them.
+
+Getting that line wrong does not look like a missing effect, it looks like a
+haunting. A tracer is spawned AT the muzzle a hundredth of a metre long and
+`update` is what flies it out to the impact and hides it again — so a round
+fired without that step leaves a lit dot floating where the muzzle was, one per
+shot, forever. The impact spark, its dust and its sound ride the same clock (they
+are spawned when the streak's head arrives, not when the ray resolved), so they
+never happen at all; and a thrown grenade hangs at the release point with a fuse
+that never runs down.
+
+The blast is the one place the local copy and the authority both have an opinion,
+and the authority wins: **`onExploded` is suppressed in a netplay round**. Every
+client — the thrower included — gets the explosion from the server's `explode`
+event, so firing the local one as well would flash, bang and shake twice, a
+round trip apart, at two points that agree only to within that trip.
+
 ## Interpolation, and the clock underneath it
 
 Remote bodies are drawn `CONFIG.net.interpDelay` behind the newest snapshot, so
