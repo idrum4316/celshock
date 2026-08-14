@@ -204,6 +204,20 @@ export class Match {
   /** When each slot last fired, for the rate limit. */
   private readonly lastShot: number[] = [];
 
+  /**
+   * Who has fired since the last snapshot went out — a SET, because one `fire`
+   * event per slot per snapshot is the whole of what that event means.
+   *
+   * A set rather than a queued event per round for the reason the event's own
+   * comment argues: the client turns this into a timer, so the second round
+   * inside one snapshot interval carries nothing, and the difference on the
+   * wire between a burst and a held trigger is the difference between one small
+   * event and thirty. Drained in `broadcastSnapshot`, which is also the only
+   * place `pending` is flushed, so a fire raised on any tick of the interval
+   * leaves on the same message as everything else that happened in it.
+   */
+  private readonly firedSlots = new Set<number>();
+
   constructor(readonly id: string) {
     // A bot went down, however it was done. The bearing and the size of the
     // killing blow ride along because a client throws its corpse with them —
@@ -220,6 +234,13 @@ export class Match {
         amount: bot.deathDamage,
       });
     };
+    // A bot pulled its trigger. Taken HERE rather than in `HeadlessGame.wire`
+    // because nothing in the simulation wants it — it is news for a screen, and
+    // the queue that carries news to a screen is this class's. It is also the
+    // only way the fact can reach one: a client runs none of the AI, so a bot's
+    // shot is otherwise silent and invisible on every machine but this one.
+    this.game.battle.onBotFired = (bot) =>
+      this.noteFire(this.game.battle.bots.indexOf(bot));
     this.game.conquest.onCaptured = (point, by) =>
       this.queue({ e: "captured", point: point.def.id, by });
     this.game.conquest.onNeutralised = (point) =>
@@ -587,7 +608,28 @@ export class Match {
     };
     this.broadcast(snap);
 
+    // Everyone who fired during the interval this snapshot closes, one event
+    // each. Queued here and not where the trigger went, so the count on the
+    // wire is bounded by the roster rather than by the rate of fire — see
+    // `firedSlots`. After the snapshot's own `push`es and before the flush,
+    // which puts a shot in the same message as the kill it may have caused.
+    for (const slot of this.firedSlots) this.queue({ e: "fire", slot });
+    this.firedSlots.clear();
+
     this.flushEvents();
+  }
+
+  /**
+   * A weapon went off in this slot, whoever was holding it.
+   *
+   * The one entry point for both kinds of shooter — `BattleSystem.onBotFired`
+   * for a bot, an accepted `shot` message for a person — because the clients
+   * cannot tell the two apart and nothing here should be able to either.
+   * Guarded against -1: `indexOf` is how a bot names its slot, and a bot that
+   * somehow is not in the pool must not queue an event for a slot that isn't.
+   */
+  private noteFire(slot: number): void {
+    if (slot >= 0) this.firedSlots.add(slot);
   }
 
   /** Queues an event for every client. */
@@ -824,6 +866,12 @@ export class Match {
     ) {
       return;
     }
+
+    // Past all three gates, so this is a round the authority accepts was fired
+    // — which is what gives the shooter away, whatever it goes on to hit. Noted
+    // before the ray rather than after it for exactly that reason: a miss is as
+    // loud as a hit, and a shot at nobody must still light the map up.
+    this.noteFire(peer.slot);
 
     SHOT_ORIGIN.set(ox, oy, oz);
     SHOT_DIR.set(nx, ny, nz);

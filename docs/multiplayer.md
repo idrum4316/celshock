@@ -303,6 +303,35 @@ whose `takeDamage` returns false, so this is a PREDICTION and nothing else —
 the authority re-resolves the same round against its own rewound copy, and only
 that result deals damage.
 
+**The minimap reads the same substitution, and it is the second place that
+empty list had gone unnoticed.** `Game.mapBodies` is where the choice is made —
+the bot pool offline, `NetRoster.soldiers` in a match — and without it a netplay
+round drew no blips at all: the panel was up, the backdrop was right and the
+flags moved on it, so what was missing did not read as a broken list so much as
+a map of an empty village. Unlike `enemyTargets` this is a plain READ, so it
+hands back both teams and the array as it stands, and the minimap decides for
+itself which half it may draw. The local player's own slot is in that array and
+is left dead for the life of the session — `NetRoster.applyRoster` resets it and
+`applySnapshot` skips it — which is what keeps a friendly blip from sitting
+under the arrow that already stands for them.
+
+**Gunfire gives an enemy away, and in a match only the authority can say so.**
+Offline that rule is `wireBattle` reading `BattleSystem.onBotFired`; here no
+client runs the AI that pulled the trigger and none of them hears another
+person's, so the server raises a public `fire` event carrying a slot and nothing
+else. A position on it would be a second copy of one the snapshot has already
+delivered, on a different clock, and could only disagree with the body being
+drawn. `Match.noteFire` is the one door — `onBotFired` for a bot, an accepted
+`shot` message for a person, so neither this side nor the far side can tell the
+two apart — and it is noted BEFORE the ray is re-run, because a miss gives a
+shooter away exactly as loudly as a hit. It is **coalesced to one per slot per
+snapshot**: the client turns it into a timer rather than a count, so a second
+event inside the same 50 ms says nothing the first did not, and sixteen
+automatic weapons at 600 rpm would put ten times the traffic on the wire to say
+it. Nothing is given away by making it public that the snapshot has not already
+handed over — every position is in there, and what the minimap withholds it
+withholds by choice rather than by ignorance.
+
 **Both ends have an opinion about the same bullet, and it is announced once.**
 The local resolve cues the marker and the tick the instant the trigger goes; the
 server's `hit` arrives a round trip later saying whether it agrees. Cueing both
@@ -380,7 +409,8 @@ both sides from the same layout module.
 
 **An event with one audience is ADDRESSED, not broadcast and filtered.** Most of
 what `Match` queues is public by nature — a flag changed hands, a body went
-down, a grenade went off — and every client needs it to draw the same round.
+down, a grenade went off, a weapon fired — and every client needs it to draw the
+same round.
 Two are not, and both were broadcast with the client filtering them on arrival:
 
 - **`hit`, to the shooter.** Feedback about one person's trigger. Broadcast, it
@@ -561,6 +591,13 @@ Stated so nobody assumes otherwise:
 - **In-flight grenade replication.** The blast is authoritative and every client
   sees it; the projectile arcing toward them is not yet replicated, so a grenade
   currently arrives as an explosion.
+- **Hearing anybody else's weapon.** A remote body is silent: the shot, the
+  reload and the boots are `Sfx.botShot`/`botReload`/`botStep` hung off
+  `BattleSystem` callbacks offline, and none of those fires on a client here.
+  The `fire` event is not that feature waiting to be plugged in — it is
+  coalesced to one per slot per snapshot, which is right for a reveal and wrong
+  for a report, and a shot a player can place by ear needs the muzzle's position
+  and the rounds' own timing rather than a slot and a 50 ms bucket.
 - **Reconnect into your own slot.** A dropped player rejoins as a new peer and
   takes whatever slot is free — on either team, and into a body that is dead
   until it asks, which is why the deploy screen goes back up on a re-seat. The

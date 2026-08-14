@@ -201,6 +201,14 @@ export class HeadlessGame {
    * too; none of those exist on a server, so what is left is the three
    * callbacks that are actually about the fight. Their absence is the point —
    * a server that had to stub `Sfx` would be a server that had imported it.
+   *
+   * One of those presentation callbacks is nonetheless taken, and by `Match`
+   * rather than here: `onBotFired`. The reveal it feeds belongs to a screen,
+   * but the FACT belongs to the authority — no client runs the AI that pulled
+   * the trigger — so `Match` wires it straight to the event queue, which is
+   * the same place it takes `conquest.onCaptured` from and for the same
+   * reason. Nothing about the fight is decided by it, which is why it is not
+   * here.
    */
   private wire(): void {
     // A death costs the dying side a reinforcement. This is the whole of what

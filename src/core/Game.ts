@@ -2748,6 +2748,28 @@ export class Game {
         }
         break;
 
+      // Somebody's weapon went off. Gunfire gives an enemy away on the minimap
+      // for a couple of seconds, which offline is `wireBattle` reading
+      // `BattleSystem.onBotFired` — a callback that fires on nothing here,
+      // because this client runs no AI and never hears another person's
+      // trigger. So the authority says it instead, and the two paths make the
+      // same team test at the same point: a friendly is drawn on that map
+      // whether they are shooting or not, and our own slot is the player, who
+      // is the arrow in the middle of it.
+      //
+      // Public, and it may name a body across the map behind a wall — exactly
+      // as offline, where any enemy bot firing anywhere is revealed. It gives
+      // nothing away that the snapshot has not already handed over: every
+      // position is in there, and what the minimap withholds it withholds by
+      // choice rather than by ignorance.
+      case "fire": {
+        const shooter = this.net?.roster.soldiers[event.slot];
+        if (shooter && shooter.team !== this.player.team) {
+          this.minimap.reveal(shooter);
+        }
+        break;
+      }
+
       // A blast the authority resolved. The light, the noise and the
       // concussion are `onExplosion`'s, exactly as they are offline — the
       // difference is only who decided it happened.
@@ -2787,6 +2809,30 @@ export class Game {
     return this.net
       ? this.net.roster.hittablesAgainst(this.player.team)
       : this.battle.hittablesAgainst(this.player.team);
+  }
+
+  /**
+   * Every body but the local player's, as the minimap draws them.
+   *
+   * The same substitution `enemyTargets` makes, for the same reason and with
+   * the same failure behind it: in a netplay round `battle.bots` is a pool
+   * `battle.reset()` left dead and `updateWorld` never steps again, so the map
+   * drew no friendlies at all and a reveal had nobody to name. It was not a
+   * missing feature so much as a list that had quietly gone empty — the panel
+   * still drew, the flags still moved, and only the blips were gone.
+   *
+   * Unlike `enemyTargets` this is a plain READ — no shot is resolved against
+   * it, no team is filtered out of it — so it hands back the array as it
+   * stands rather than a scratch list, and both teams are in it because the
+   * minimap decides for itself which half it may draw.
+   *
+   * The local player's own slot IS in the netplay array, and is left dead by
+   * `NetRoster.applyRoster` for the life of the session (its snapshots are
+   * skipped, so nothing revives it). That is what keeps a friendly blip from
+   * sitting under the arrow that already stands for the player.
+   */
+  private mapBodies(): readonly Combatant[] {
+    return this.net ? this.net.roster.soldiers : this.battle.bots;
   }
 
   /**
@@ -3292,7 +3338,7 @@ export class Game {
       // above it while the camera orbits away from the player's last heading.
       dying ? this.deathCam.yaw : this.cameraSys.yaw,
       this.conquest.points,
-      this.battle.bots,
+      this.mapBodies(),
       this.player.team,
     );
   }

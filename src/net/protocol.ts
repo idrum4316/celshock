@@ -263,6 +263,30 @@ export type ServerEvent =
    */
   | { e: "hit"; shooter: number; victim: number; killed: boolean; headshot: boolean }
   | { e: "died"; slot: number; by: number; respawnIn: number }
+  /**
+   * A weapon went off in this slot. Public, and the only thing on the wire that
+   * says a shot was fired at all.
+   *
+   * It carries a slot and nothing else, because where that body is has already
+   * arrived in the snapshot every client holds — a position here would be a
+   * second copy of one, on a different clock, that could only disagree with the
+   * one being drawn. What the client does with it is the minimap reveal, the
+   * offline rule that gunfire gives an enemy away; a client cannot reach that
+   * rule on its own, because the trigger was pulled by an AI it does not run
+   * or by a person it never hears from.
+   *
+   * **At most once per slot per snapshot, not once per round.** A reveal is a
+   * timer being refreshed rather than a count, so a second event inside the
+   * same 50 ms says nothing the first did not — and sixteen automatic weapons
+   * at 600 rpm would put ten times the traffic on the wire to say it. `Match`
+   * coalesces; a client may still receive several in a row for one slot after a
+   * dropped frame and must treat each as "still firing".
+   *
+   * Additive: a client that has never heard of it ignores it, and a new client
+   * against an older server simply gets no reveals, so this arrived without a
+   * `PROTOCOL_VERSION` bump.
+   */
+  | { e: "fire"; slot: number }
   | { e: "explode"; at: Vec3 }
   | { e: "captured"; point: string; by: NetTeam }
   | { e: "neutralised"; point: string }

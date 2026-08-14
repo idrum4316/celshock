@@ -4,12 +4,15 @@
  * Invariants: enemies are NEVER shown live — only briefly via reveal() when
  * they fire. That's a deliberate information-rule, not a missing feature.
  * setMap() must be called once per round to rebuild the backdrop.
+ * The bodies it draws are `Combatant`s and nothing narrower: offline they are
+ * `Bot`s and in a netplay round they are the roster's `NetSoldier`s, and this
+ * class must never be able to tell which — a remote human is a body on the map
+ * exactly as a bot is.
  */
 import "./minimap.css";
 import type { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import type { Bot } from "../entities/Bot";
-import type { Team } from "../entities/Combatant";
+import type { Combatant, Team } from "../entities/Combatant";
 import type { ControlPoint } from "../systems/ConquestSystem";
 import type { GameMap } from "../world/MapBuilder";
 
@@ -29,10 +32,12 @@ const COLOR_TEXT = "#e8e8ea";
  * collider boxes — the same source the deploy screen draws from, so the two
  * maps can never disagree, and a layout change updates both for free.
  *
- * Enemies are deliberately NOT shown: that would be a wallhack. Instead a bot
+ * Enemies are deliberately NOT shown: that would be a wallhack. Instead a body
  * that opens fire is revealed for `CONFIG.minimap.enemyRevealTime` seconds —
  * the classic "shooting gives you away" rule — via `reveal()`, wired in Game
- * to `BattleSystem.onBotFired`.
+ * to `BattleSystem.onBotFired` offline and to the server's `fire` event in a
+ * netplay round. Both callers make the team test; this class reveals whoever
+ * it is handed.
  */
 export class Minimap {
   private canvas: HTMLCanvasElement;
@@ -46,8 +51,8 @@ export class Minimap {
   /** Static backdrop (ground + footprints + home gates), rebuilt per round. */
   private base: HTMLCanvasElement | null = null;
   private mapSize: number = CONFIG.map.size;
-  /** Enemy bots currently given away by their gunfire, seconds remaining. */
-  private readonly revealed = new Map<Bot, number>();
+  /** Enemies currently given away by their gunfire, seconds remaining. */
+  private readonly revealed = new Map<Combatant, number>();
   /** Accumulator driving the contested-flag pulse. */
   private pulseT = 0;
 
@@ -134,17 +139,24 @@ export class Minimap {
     this.base = base;
   }
 
-  /** Marks an enemy as visible for a while — wired to bot gunfire in Game. */
-  reveal(bot: Bot): void {
-    this.revealed.set(bot, CONFIG.minimap.enemyRevealTime);
+  /** Marks an enemy as visible for a while — wired to gunfire in Game. */
+  reveal(who: Combatant): void {
+    this.revealed.set(who, CONFIG.minimap.enemyRevealTime);
   }
 
+  /**
+   * `bodies` is every combatant but the local player — the bot pool offline,
+   * the roster's sixteen in a netplay round, chosen by `Game.mapBodies`. The
+   * local player's own slot is in the netplay list and is deliberately never
+   * alive there, so it draws nothing under the arrow that already stands for
+   * them.
+   */
   update(
     dt: number,
     playerPos: Vector3,
     playerYaw: number,
     points: ControlPoint[],
-    bots: readonly Bot[],
+    bodies: readonly Combatant[],
     playerTeam: Team,
   ): void {
     if (!this.base) return;
@@ -214,25 +226,25 @@ export class Minimap {
     // --- friendlies ---
     const mr = CONFIG.minimap;
     c.fillStyle = COLOR_MINE;
-    for (const bot of bots) {
-      if (!bot.alive || bot.team !== playerTeam) continue;
+    for (const body of bodies) {
+      if (!body.alive || body.team !== playerTeam) continue;
       c.beginPath();
-      c.arc(toX(bot.position.x), toY(bot.position.z), mr.friendlyRadius, 0, Math.PI * 2);
+      c.arc(toX(body.position.x), toY(body.position.z), mr.friendlyRadius, 0, Math.PI * 2);
       c.fill();
     }
 
     // --- enemies, only while their gunfire gives them away ---
-    for (const [bot, t] of this.revealed) {
+    for (const [body, t] of this.revealed) {
       const left = t - dt;
-      if (left <= 0 || !bot.alive) {
-        this.revealed.delete(bot);
+      if (left <= 0 || !body.alive) {
+        this.revealed.delete(body);
         continue;
       }
-      this.revealed.set(bot, left);
+      this.revealed.set(body, left);
       c.globalAlpha = Math.min(1, left / mr.enemyFadeTime);
       c.fillStyle = COLOR_THEIRS;
       c.beginPath();
-      c.arc(toX(bot.position.x), toY(bot.position.z), mr.enemyRadius, 0, Math.PI * 2);
+      c.arc(toX(body.position.x), toY(body.position.z), mr.enemyRadius, 0, Math.PI * 2);
       c.fill();
       c.globalAlpha = 1;
     }
