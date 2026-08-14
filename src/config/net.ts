@@ -35,6 +35,24 @@ export const net = {
   reconnectMax: 8,
 
   /**
+   * How long a hitmarker this client PREDICTED stands in for the authority's
+   * `hit`, in seconds.
+   *
+   * A landed round is cued twice by construction — once locally the instant it
+   * was fired, once when the server has re-resolved it — and the second one is
+   * only worth showing when it says something the first did not. So a
+   * prediction is remembered for this long, and the event that claims it is
+   * silent unless it disagrees. The window has to cover the round trip plus the
+   * server's event batching, which is why it is generously over a playable
+   * ping: too short and the doubled marker comes back on exactly the connection
+   * that can least afford the confusion. Too long costs at most one missing
+   * correction, in the rare case where a mispredicted round's credit is still
+   * standing when a genuinely surprising hit lands — the cheaper of the two
+   * mistakes, which is what sets the direction of this number.
+   */
+  hitCreditWindow: 0.5,
+
+  /**
    * How far the local body may be from the server's idea of it before a
    * correction snaps rather than eases (metres).
    *

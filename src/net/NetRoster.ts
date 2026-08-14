@@ -1,7 +1,8 @@
 /**
  * net/NetRoster.ts — The sixteen other bodies on screen, driven by snapshots.
  * Owns: the `NetSoldier` pool, applying snapshots to it, the mirrored flag and
- * ticket state, and the distance LOD. It is the client's replacement for
+ * ticket state, the distance LOD, and the target list the local player's own
+ * rounds are resolved against. It is the client's replacement for
  * `BattleSystem` in a networked round — same job on screen, none of the job
  * underneath, because no AI runs here.
  * Invariants: the pool is built once and NEVER disposed, sized to the roster,
@@ -20,6 +21,7 @@ import { CONFIG } from "../config";
 import { NetSoldier } from "../entities/NetSoldier";
 import type { Combatant, Team } from "../entities/Combatant";
 import type { CelMaterialFactory } from "../shaders/CelShader";
+import type { Hittable } from "../systems/CombatSystem";
 import type { ControlPoint } from "../systems/ConquestSystem";
 import type { PointState, SlotState, Snapshot } from "./protocol";
 
@@ -32,6 +34,9 @@ export class NetRoster {
 
   /** The slot the local player owns, or -1 while spectating. */
   localSlot = -1;
+
+  /** One per team, reused by `hittablesAgainst` so a shot allocates nothing. */
+  private readonly hittableScratch: [Hittable[], Hittable[]] = [[], []];
 
   /**
    * Wired by `Game`: this body just went down, and may be offered to the
@@ -165,6 +170,35 @@ export class NetRoster {
       if (soldier.ragdolling) soldier.setEnabled(true);
       soldier.setOutlines(d < b.lodOutlineDistance);
     }
+  }
+
+  /**
+   * Living enemies of `team`, as hitscan targets. Reused, not reallocated —
+   * `BattleSystem.hittablesAgainst`'s contract to the letter, because this
+   * stands in for that call on a client and the callers are the same two: the
+   * local player's shot resolve and the gamepad aim assist. They must be handed
+   * the SAME list, or the assist holds an aim on a body the rounds cannot find.
+   *
+   * These targets exist to be predicted against and for nothing else.
+   * `NetSoldier.takeDamage` returns false and changes nothing; the authority
+   * re-resolves the round against its own rewound copy of the same body and
+   * only that result deals damage. What the list buys is everything that is
+   * owed to the shooter's own screen before the round trip: the tracer stopping
+   * in the man it hit rather than sparking off the wall behind him, and an
+   * immediate hitmarker for the server's `hit` event to correct.
+   *
+   * The local slot is skipped for the reason `update` and `combatants` skip it
+   * — that body is drawn as a viewmodel, not a soldier — though the team check
+   * would drop it anyway, since it is on the shooter's own side by definition.
+   */
+  hittablesAgainst(team: Team): Hittable[] {
+    const out = this.hittableScratch[team];
+    out.length = 0;
+    for (const soldier of this.soldiers) {
+      if (soldier.slot === this.localSlot) continue;
+      if (soldier.alive && soldier.team !== team) out.push(soldier);
+    }
+    return out;
   }
 
   /** Everything drawable, for the systems that take a combatant list. */

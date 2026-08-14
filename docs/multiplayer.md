@@ -211,6 +211,47 @@ are spawned when the streak's head arrives, not when the ray resolved), so they
 never happen at all; and a thrown grenade hangs at the release point with a fuse
 that never runs down.
 
+**The dressing needs targets, and they come from `NetRoster`, never from
+`BattleSystem`.** `Game.enemyTargets` is the one place that choice is made, and
+both callers that need it — the local shot resolve and the gamepad aim assist —
+go through it, because an assist that holds an aim on a body the rounds cannot
+find is worse than no assist. Asking `battle` there does not merely return the
+wrong list, it returns an EMPTY one that no team check exposes: `buildRound`
+calls `battle.reset()`, which leaves every bot in the local pool dead, and
+`updateWorld` returns before `battle.update` could ever respawn one, so the only
+combatant that side still knows about is the local player — whom the team check
+drops. The symptom is a shooter's own screen going quiet: sparks on the wall
+behind the man who was hit, no hitmarker until the `hit` event has made the
+round trip, and aim assist inert. What the roster hands back are `NetSoldier`s
+whose `takeDamage` returns false, so this is a PREDICTION and nothing else —
+the authority re-resolves the same round against its own rewound copy, and only
+that result deals damage.
+
+**Both ends have an opinion about the same bullet, and it is announced once.**
+The local resolve cues the marker and the tick the instant the trigger goes; the
+server's `hit` arrives a round trip later saying whether it agrees. Cueing both
+does not read as an echo — the gap is far too long — it reads as two hits, which
+makes the marker worth less than it was. So a prediction leaves a credit
+(`Game.creditPredictedHit`), the event claims it (`claimPredictedHit`), and the
+event is silent unless it carries something the prediction could not: a KILL,
+which the local resolve can never report and which is the marker that means stop
+shooting, or a headshot where this client scored a body hit — the bodies here
+are `interpDelay` behind, so the two do not always test the same head zone. The
+opposite correction, a predicted headshot the server scored as a body hit, is
+deliberately silent: it is a hit either way and the marker is already up.
+Credits are a FIFO queue because rounds are re-resolved and reported in the
+order they were fired, which pairs them without a shot id on the wire, and they
+expire (`CONFIG.net.hitCreditWindow`) because a round the authority scored as a
+miss is never followed by any event at all — an unclaimed credit that never went
+away would swallow the next genuine correction.
+
+A grenade is deliberately NOT given that list. `hittablesFor` stays wired to
+`battle` and so finds nobody, which is right rather than merely harmless: a
+bullet owes the shooter a tracer that stops in a body and an immediate marker,
+while a blast owes nothing local at all — its light, noise and concussion arrive
+on the server's `explode` event — so pointing it at the roster would buy a
+line-of-sight ray per body inside the radius and no cue.
+
 The blast is the one place the local copy and the authority both have an opinion,
 and the authority wins: **`onExploded` is suppressed in a netplay round**. Every
 client — the thrower included — gets the explosion from the server's `explode`

@@ -70,7 +70,7 @@ import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
 import { CaptureZoneSystem } from "../systems/CaptureZoneSystem";
-import { CombatSystem } from "../systems/CombatSystem";
+import { CombatSystem, type Hittable } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
 import { DeathCam } from "../systems/DeathCam";
 import { GrassSystem } from "../systems/GrassSystem";
@@ -2328,17 +2328,17 @@ export class Game {
         spread,
         this.player.damage,
         muzzle,
-        this.battle.hittablesAgainst(this.player.team),
+        this.enemyTargets(),
         this.player.range,
         this.player.shotOptions,
       );
       // Networked: report the round. Everything above stays exactly as it is —
       // the local resolve is what draws the tracer, flashes the hitmarker and
       // kicks the weapon, and none of that may wait on a round trip. What it
-      // no longer does is decide anything: in a netplay round the local target
-      // list holds `NetSoldier`s whose `takeDamage` returns false and changes
-      // nothing, so the hitmarker below is a PREDICTION and the server's
-      // `hit` event is the truth.
+      // no longer does is decide anything: in a netplay round `enemyTargets`
+      // answers with the `NetSoldier`s the roster is drawing, whose
+      // `takeDamage` returns false and changes nothing, so the hitmarker below
+      // is a PREDICTION and the server's `hit` event is the truth.
       //
       // `shot.dir` and not `cameraSys.forward`: the spread was rolled inside
       // `fire`, and the server has to re-resolve this bullet rather than a
@@ -2388,6 +2388,10 @@ export class Game {
         this.hud.flashHitmarker(killed, shot.headshot);
         if (shot.headshot) this.sfx.headshot();
         else this.sfx.hit();
+        // Netplay: this marker is a guess, and remembering that it was made is
+        // what keeps the authority's answer from repeating it a round trip
+        // later. See `claimPredictedHit`.
+        if (this.net) this.creditPredictedHit(shot.headshot);
         this.input.rumble(
           killed ? haptic.killStrong : haptic.hitStrong,
           killed ? haptic.killWeak : haptic.hitWeak,
@@ -2573,6 +2577,10 @@ export class Game {
   private leaveMatch(): void {
     this.net?.dispose();
     this.net = null;
+    // Nothing can claim these now. They would time out on their own inside the
+    // second, and clearing them is what makes that a property of the boundary
+    // rather than of the window's length.
+    this.hitCredits.length = 0;
   }
 
   /** What a server event does to this client's screen. Presentation only. */
@@ -2608,9 +2616,16 @@ export class Game {
       // Our own round landed — or, as often, did not. The local hitmarker was
       // a prediction made against interpolated bodies; this is the authority
       // re-resolving it against what we were actually looking at. When the two
-      // disagree the server wins, and the extra marker here is the correction.
+      // disagree the server wins, and what is cued here is the CORRECTION and
+      // nothing else: a round the shooter has already been told about is
+      // claimed silently, because a marker and a tick arriving twice for one
+      // bullet — a round trip apart, so plainly a second event rather than an
+      // echo — reads as two hits and makes the cue worth less than it was.
       case "hit":
-        if (event.shooter === this.net?.slot) {
+        if (
+          event.shooter === this.net?.slot &&
+          !this.claimPredictedHit(event.killed, event.headshot)
+        ) {
           this.hud.flashHitmarker(event.killed, event.headshot);
           if (event.headshot) this.sfx.headshot();
           else this.sfx.hit();
@@ -2672,6 +2687,102 @@ export class Game {
       case "spawn":
         break;
     }
+  }
+
+  /**
+   * Who the local player's own rounds may find: the bots offline, the bodies
+   * drawn from the wire in a netplay round.
+   *
+   * Two callers — the shot resolve and the gamepad aim assist — and the whole
+   * reason this is a method is that they must never be handed different lists:
+   * the assist's job is to hold an aim the rounds can use.
+   *
+   * `battle` is not merely the wrong list in a netplay round, it is an EMPTY
+   * one, and empty in a way no team check reveals. `buildRound` calls
+   * `battle.reset()`, which leaves every bot in the pool dead, and `updateWorld`
+   * returns before `battle.update` is ever reached, so nothing respawns them;
+   * the only other combatant that side knows about is the local player, whom the
+   * team check drops. Reading that list there cost the shooter every local cue a
+   * hit is owed — sparks landed on the wall behind the man who was hit, no
+   * hitmarker arrived until the server's `hit` event had made the round trip,
+   * and aim assist had nothing to hold on to at all.
+   *
+   * The result is a scratch array owned by whichever side answered. Consume it
+   * inside the call, exactly as `BattleSystem.hittablesAgainst`'s own contract
+   * requires — both callers do.
+   */
+  private enemyTargets(): Hittable[] {
+    return this.net
+      ? this.net.roster.hittablesAgainst(this.player.team)
+      : this.battle.hittablesAgainst(this.player.team);
+  }
+
+  /**
+   * Rounds this client has already cued a hitmarker for, waiting on the
+   * authority to say whether it agrees.
+   *
+   * The pair of methods below is the whole of the rule that a landed round is
+   * announced ONCE. Both ends have an opinion about the same bullet — the local
+   * resolve the instant the trigger went, the server's `hit` a round trip later
+   * — and the second is worth a marker and a noise only when it carries
+   * something the first did not.
+   *
+   * A queue rather than a counter because several rounds are in flight at
+   * automatic rates, and each is claimed in the order it was fired: the server
+   * re-resolves them in that order and reports them down one socket, so
+   * first-in-first-out pairs them without the protocol carrying a shot id.
+   * Entries expire on their own, which is what stops a round the authority
+   * scored as a MISS — no event ever arrives for one — from leaving a credit
+   * standing to swallow the next real correction.
+   *
+   * Only bullets are ever in here: `Match` raises `hit` from the shot path and
+   * from nowhere else, so a blast can neither leave a credit nor claim one.
+   */
+  private readonly hitCredits: { headshot: boolean; until: number }[] = [];
+
+  /** Drops credits the authority never claimed. Ordered, so the front is oldest. */
+  private pruneHitCredits(now: number): void {
+    while (this.hitCredits.length > 0 && this.hitCredits[0].until <= now) {
+      this.hitCredits.shift();
+    }
+  }
+
+  /** A local resolve says this round landed, and the marker is already up. */
+  private creditPredictedHit(headshot: boolean): void {
+    const now = performance.now();
+    this.pruneHitCredits(now);
+    this.hitCredits.push({
+      headshot,
+      until: now + CONFIG.net.hitCreditWindow * 1000,
+    });
+  }
+
+  /**
+   * The authority's verdict on a round. True when this client has already said
+   * everything the verdict has to say, and the event owes no second cue.
+   *
+   * The credit is spent either way — this round's answer has arrived, whatever
+   * it is. Two things override agreement:
+   *
+   * - **A kill.** The prediction cannot make that claim (`NetSoldier.takeDamage`
+   *   returns false, so the local resolve never reports one), and the red marker
+   *   is the one that means STOP SHOOTING — the most useful thing a hitmarker
+   *   ever says, and never a repetition.
+   * - **A headshot the prediction missed.** The bodies here are drawn
+   *   `interpDelay` behind, so the head zone the server found on its rewound
+   *   copy is not always the one this client tested against.
+   *
+   * The other direction — this client called a headshot and the server scored a
+   * body hit — is deliberately silent. It is a hit either way, the marker for it
+   * is already on screen, and correcting the flavour downward is worth less than
+   * the doubled cue it would cost.
+   */
+  private claimPredictedHit(killed: boolean, headshot: boolean): boolean {
+    this.pruneHitCredits(performance.now());
+    const credit = this.hitCredits.shift();
+    if (!credit) return false;
+    if (killed) return false;
+    return !(headshot && !credit.headshot);
   }
 
   /** Scratch for a networked damage bearing; never allocated per hit. */
@@ -2871,10 +2982,15 @@ export class Game {
     this.player.spendGrenade();
     // Networked: the authority throws its own copy and owns the blast. The
     // local one above still flies — it is what the thrower watches arc — but
-    // in a netplay round its `hittablesFor` list is NetSoldiers whose
-    // `takeDamage` does nothing, so it hurts nobody and the server's copy
-    // decides. The pouch is the server's count too; spending here only keeps
-    // the HUD honest.
+    // it hurts nobody, because `hittablesFor` is wired to `battle`, and in a
+    // netplay round that list is empty: the local bot pool is reset dead and
+    // never stepped. A bullet is given the roster's bodies instead
+    // (`enemyTargets`) because a shot owes the shooter an immediate tracer and
+    // hitmarker; a blast owes nothing of the kind — its light, noise and
+    // concussion all arrive on the server's `explode` event — so pointing this
+    // at them would buy a line-of-sight ray per body within the radius and
+    // nothing else. The pouch is the server's count too; spending here only
+    // keeps the HUD honest.
     this.net?.sendGrenade(this.grenadeHand, this.cameraSys.forward);
     this.sfx.grenadeThrow();
     // The body's own follow-through, through the spring the landing and the
@@ -2910,7 +3026,7 @@ export class Game {
       this.cameraSys.aimYaw,
       this.cameraSys.aimPitch,
       this.cameraSys.stickYawRate,
-      this.battle.hittablesAgainst(this.player.team),
+      this.enemyTargets(),
     );
     // First person: the camera goes to the eye the bots shoot at, so what a
     // bot can see of you is exactly what you can see of it.
