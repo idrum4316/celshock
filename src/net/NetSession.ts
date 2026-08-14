@@ -69,6 +69,21 @@ export class NetSession {
   onRoundStart: (mapId: string) => void = () => {};
 
   /**
+   * Wired by Game: the welcome landed, and this is the side we are on.
+   *
+   * The one thing in the welcome the client cannot work out for itself.
+   * `Roster.claim` seats the second human on team 1, so a client that assumes
+   * team 0 reads every mine/theirs question in the game backwards — its flags,
+   * its ticket strip, its minimap and the colours its own corpse falls in.
+   *
+   * It is RAISED and not merely stored because the welcome can arrive on
+   * either side of the local map build: `joinMatch` books the round before the
+   * socket is open. `Game.buildRound` reads `team` off this class when the
+   * welcome was early; this is how it hears about it when it was late.
+   */
+  onSeated: (team: Team) => void = () => {};
+
+  /**
    * The live control points, kept as a field because a snapshot arrives on a
    * socket callback rather than on a frame — there is no call stack to thread
    * them down. `update` refreshes the reference every frame.
@@ -195,6 +210,11 @@ export class NetSession {
         // reconnect to aim at. See `Connection.pinMatch` for why a retry that
         // re-sent the ORIGINAL join would be a bug.
         this.conn.pinMatch(msg.matchId);
+        // Last, so that whatever `Game` does with the team is done against a
+        // session that is already fully seated. A reconnect comes through here
+        // a second time and can land in a slot on the OTHER team, which is why
+        // this is an edge rather than a one-shot.
+        this.onSeated(msg.team);
         break;
 
       // A new round on a new map, same seat. Only the map changes here; the

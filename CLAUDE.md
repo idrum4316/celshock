@@ -590,6 +590,13 @@ and leaving must never charge a team a reinforcement. The bench lives in
 roster there must skip it. **A slot index IS a bot index**, because `Roster` and
 `BattleSystem` lay their sixteen out in the same order.
 
+**The local player's TEAM is the server's too, and only `Game.applyPlayerTeam`
+may write it.** Balance seats the second person into a match on team 1, so a
+hardcoded 0 turns every mine/theirs question — flags, tickets, minimap, deploy
+spawns, killfeed, the colours your own corpse falls in — backwards at once. It
+arrives in the welcome, which races the local map build: `buildRound` reads
+`NetSession.team` when it won and `NetSession.onSeated` applies it when it lost.
+
 On the client a bot and a remote human are the SAME object (`NetSoldier`), and
 the client is never told which is which — that is what makes "start without a
 full lobby" and "hand a leaver's slot back to a bot" one mechanism instead of

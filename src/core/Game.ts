@@ -2144,12 +2144,11 @@ export class Game {
     // and follow the same terrain the ring is drawn across.
     this.zones.build(map.controlPoints, map.terrain, map.nav, env);
     this.player.fullReset();
-    this.player.team = 0;
-    // Built here, not at the moment of death: nine merged meshes and their GL
-    // buffers is not a cost to pay on the frame the player is killed on. It is
-    // a no-op on every round after the first, since the team never changes.
-    this.deathCam.prepare(this.player.team);
-    this.minimap.setMap(map, this.player.team);
+    // Offline the player is team 0 for the life of the process. In a netplay
+    // round the side is the authority's, and the session has it whenever the
+    // welcome beat this build; when it did not, the welcome applies it itself.
+    // Either way it goes in through the one funnel — see `applyPlayerTeam`.
+    this.applyPlayerTeam(this.net?.seated ? this.net.team : 0, map);
     this.kills[0] = this.kills[1] = 0;
     this.losses[0] = this.losses[1] = 0;
     this.playerKills = 0;
@@ -2159,6 +2158,49 @@ export class Game {
     // HUD underneath it rather than hiding it.
     this.overlayScreen.hide();
     this.enterDeploy(0);
+  }
+
+  /**
+   * Which side the player is on, and everything already standing in its
+   * colours.
+   *
+   * Offline the answer is always team 0. In a netplay round it is the
+   * authority's — `Roster.claim` seats the second human on team 1 — and it
+   * arrives in the welcome, which can land on EITHER side of the local build
+   * because `joinMatch` books the round before the socket is open. So this is
+   * called from both ends: `buildRound` deals whatever the session already
+   * has, and `NetSession.onSeated` deals it again when it turns out to
+   * disagree. That is why nothing here may assume it is running on a fresh
+   * round.
+   *
+   * Almost everything downstream reads `player.team` live, every frame, and
+   * needs nothing from this. What it collects is the things that take a COPY
+   * and would otherwise wear the old side's colours for the rest of the round:
+   * the death cam's stand-in body is built once, the minimap's backdrop is
+   * prerendered once, and the HUD's strip is only re-read inside `playing` —
+   * which the deploy screen the welcome usually lands under is not.
+   */
+  private applyPlayerTeam(team: Team, map: GameMap): void {
+    this.player.team = team;
+    // Built here, not at the moment of death: nine merged meshes and their GL
+    // buffers is not a cost to pay on the frame the player is killed on. A
+    // change of side is the one thing that rebuilds it, and `prepare` is the
+    // one that knows how to do that safely — see there.
+    this.deathCam.prepare(team);
+    this.minimap.setMap(map, team);
+    this.hud.setTickets(
+      [CONFIG.teams[0].name, CONFIG.teams[1].name],
+      this.conquest.tickets,
+      team,
+    );
+    this.hud.setFlags(this.conquest.points, team);
+    // Only when it is already up. `enterDeploy` shows it a moment after a
+    // build, so doing it there too would be the same paint twice — and a team
+    // that changed UNDER a standing deploy screen has to go back through
+    // `show`, because the spawn list it is offering belongs to the other side.
+    if (this.deployScreen.visible) {
+      this.deployScreen.show(map, this.conquest, team);
+    }
   }
 
   private spawnPlayer(at?: { pos: Vector3; yaw: number }): void {
@@ -2446,6 +2488,25 @@ export class Game {
       } else {
         this.player.nudgeTo(pos);
       }
+    };
+
+    // The side the authority put us on, arriving after the round was booked.
+    // The build below is optimistic about everything, and about this it was
+    // wrong for the second person into a match: `Roster.claim` fills the
+    // thinner team, so they are on team 1 while every screen here is painted
+    // for team 0.
+    //
+    // Two cases and one of them is not this callback's: a welcome that beats
+    // the build has nothing on screen to correct and is read straight off the
+    // session by `buildRound`, which is what the `loading` test defers to. The
+    // team not having changed is the ordinary case — every first joiner, and
+    // every reconnect that lands back on the same side — and it returns rather
+    // than repainting, because re-showing the deploy screen would throw away
+    // the spawn the player is in the middle of choosing.
+    net.onSeated = (team) => {
+      if (this.state === "loading" || !this.map) return;
+      if (team === this.player.team) return;
+      this.applyPlayerTeam(team, this.map);
     };
 
     net.onEvent = (event) => this.onNetEvent(event);

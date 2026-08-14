@@ -75,6 +75,20 @@ Team balance is corrected by *arrivals*, never by moving anybody. Being
 reassigned mid-round is disorienting; `Roster.claim` always takes the thinner
 side, so an imbalance left by departures heals on its own.
 
+**Which side the local player is on comes from the welcome and from nowhere
+else.** That balance rule puts the SECOND person into a match on team 1, so a
+client holding a hardcoded 0 reads every mine/theirs question in the game
+backwards at once — the ticket strip, the flag colours, the minimap, the spawns
+the deploy screen offers, the killfeed's "was that us", and the colours its own
+body falls in. `Game.applyPlayerTeam` is the single funnel, and it is called
+from **both ends of the race the welcome is in**: `joinMatch` books the local
+round before the socket is open, so `buildRound` reads `NetSession.team` when
+the welcome was early and `NetSession.onSeated` applies it when it was late.
+What the funnel is for is the short list of things painted ONCE in a side's
+colours — the death cam's stand-in body, the minimap backdrop, the HUD strip
+outside `playing`, the deploy screen's spawn list. Everything else reads
+`player.team` live every frame and needs nothing.
+
 ## On the client, a bot and a person are the same thing
 
 `NetSoldier` is a `Combatant` with a `SoldierRig`, posed from snapshots. It never
