@@ -99,7 +99,14 @@ export class NetPlayer implements Combatant {
     this.sprinting = sprinting;
 
     const eyeY = crouching ? p.crouchEyeHeight : CONFIG.camera.eyeHeight;
-    const centerY = crouching ? p.crouchCenterHeight : CONFIG.camera.eyeHeight - 0.05;
+    // `height / 2` standing, exactly as `Player.syncCombatant` resolves it —
+    // and NOT `eyeHeight - 0.05`, which is the trap this line was in. The 0.05
+    // in `config/player.ts` is where the sphere's TOP sits relative to the eye
+    // (0.9 + 0.7 = 1.60, against an eye at 1.55), not where its centre does;
+    // read as a centre it puts a standing player's body sphere 0.6 m up their
+    // own chest, so the authority disagrees with both the client that drew the
+    // body and the shooter that aimed at it.
+    const centerY = crouching ? p.crouchCenterHeight : p.height / 2;
     this.eyePos.set(x, y + eyeY, z);
     this.center.set(x, y + centerY, z);
 

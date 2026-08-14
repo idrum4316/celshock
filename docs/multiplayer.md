@@ -148,6 +148,29 @@ on. The shot's `dir` is the direction the round *actually* flew, spread already
 applied, because `CombatSystem.fire` jitters internally and the server has to
 re-resolve that bullet rather than a differently jittered one.
 
+**A position on the wire is the FEET**, and the whole of a body is built up from
+it on the far side: the validator asks what is solid at that height, `NetPlayer`
+raises the eye and the hit sphere off it, and `NetSoldier` stands a rig on it.
+Nothing sends a height twice and nothing sends a height for a part of a body, so
+a `y` that means anything else is wrong in three places at once and looks like
+one bug in none of them. It has been wrong once: the client uploaded
+`Player.root.position` — the collider capsule's CENTRE, half a body higher — and
+so remote players floated 0.9 m off the ground, their hit spheres floated with
+them, and the movement validator asked whether there was room for someone
+standing 0.9 m in the air, which is how a **door lintel became a wall** and a
+player got stuck walking through cottage doorways. That is why `Player.position`
+is the feet and `Combatant` says so: it is a rule about a whole game's worth of
+geometry, not a detail of one entity.
+
+**The two ends of a body must agree about its middle, too.** A standing hit
+sphere is centred at `height / 2` (0.9), which is what puts its top the 0.05 m
+above the eye that `config/player.ts` argues for — and `SoldierModel`'s rig
+centre, `Player.center` and `NetPlayer.center` are all that same number. Deriving
+it from `eyeHeight` instead is the near miss: it is the *top* of the sphere that
+the eye is 0.05 below, not the centre, and reading that comment as a centre put
+the authority's idea of a player 0.6 m up their own chest — so the client drew a
+body where the server had none and hitmarkers stopped meaning anything.
+
 ## The world the server stands in
 
 The server has no canvas. `DynamicTexture.getContext()` throws

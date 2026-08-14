@@ -2436,7 +2436,7 @@ export class Game {
         this.player.placeAt(pos.clone());
         this.hud.toast(`resynced (${reason})`);
       } else {
-        this.player.position.copyFrom(pos);
+        this.player.nudgeTo(pos);
       }
     };
 
@@ -2763,8 +2763,10 @@ export class Game {
     this.cameraSys.update(dt, this.input, this.player.eyePos, assist);
     // Shadows follow the player (biased a little along the view so the
     // window covers what's ahead); outline ink thins with the same camera.
+    // From the body's CENTRE, not its feet: the shadow window is placed around
+    // this point and it should sit in the middle of the body it follows.
     this.shadowFocus
-      .copyFrom(this.player.position)
+      .copyFrom(this.player.center)
       .addInPlace(this.cameraSys.forwardToRef(this.shadowForward).scaleInPlace(8));
     this.updateSceneForCamera(dt, this.shadowFocus, this.player, this.combatants);
   }
@@ -2810,10 +2812,13 @@ export class Game {
       if (lampIntensity > 0) {
         this.lighting.setCarried(
           "player-lamp",
+          // Above the body's CENTRE. `lampHeight` is measured from there — a
+          // lamp is carried, so it rides the chest and drops with a crouch
+          // rather than being pinned to the ground the player stands on.
           this.lampPos.set(
-            player.position.x,
-            player.position.y + lc.lampHeight,
-            player.position.z,
+            player.center.x,
+            player.center.y + lc.lampHeight,
+            player.center.z,
           ),
           lc.lampColor,
           lc.lampRange,

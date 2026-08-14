@@ -39,6 +39,7 @@ export const lighting = {
   lampColor: "#ffd9a8",
   lampRange: 18,
   lampIntensity: 1.6,
+  /** Above `Player.center` — a carried light rides the body, not the ground. */
   lampHeight: 1.45,
   /**
    * The kit screen's bench lamps — carried lights that exist only while a

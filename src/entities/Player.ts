@@ -14,6 +14,11 @@
  * `completeSwap` is the one place the hands change, partway through it and
  * behind the bottom of the frame. Nothing fires while it is in flight.
  * Invariants: probeGround and step-up ray tests filter metadata.solid === true.
+ * `position` is the FEET, as `Combatant` requires, and is NOT `root.position`
+ * — the capsule's centre, half a body higher. Anything wanting the middle of
+ * the body wants `center`. The three exported points (`position`, `center`,
+ * `eyePos`) are derived in `syncCombatant` and are the only ones anything
+ * outside this file may read.
  * Crouch moves `eyePos` AND `center` on one blend — the eye is the camera, the
  * LOS target and the bots' aim point at once, so lowering it without lowering
  * the hit sphere makes crouching a liability rather than cover.
@@ -179,6 +184,20 @@ export class Player implements Combatant {
   root: Mesh;
   /** Which side the player fights for. Set by Game when a round starts. */
   team: Team = 0;
+  /**
+   * FEET, as `Combatant` requires — NOT `root.position`, which is the collider
+   * capsule's centre and sits `groundY` above them.
+   *
+   * The distinction is invisible offline, where nothing outside this file reads
+   * the `y` at all, and it is the whole ballgame over a wire: the server and
+   * every other client take a combatant's `position.y` as the ground under it
+   * and build the body, the centre and the eye up from there. Handed a capsule
+   * centre they build all three half a body too high — the remote body floats,
+   * its hit spheres float with it, and the movement validator asks whether
+   * there is room for a player standing 0.9 m in the air, which is how a door
+   * lintel becomes a wall. Kept in sync beside `center` and `eyePos`.
+   */
+  readonly position = new Vector3();
   /** Body centre and eye line, kept in sync each frame for hitscan and LOS. */
   readonly center = new Vector3();
   readonly eyePos = new Vector3();
@@ -489,10 +508,10 @@ export class Player implements Combatant {
     // ordinary rendering group and is occluded by geometry like anything else.
 
     this.applyVisibility();
-  }
-
-  get position(): Vector3 {
-    return this.root.position;
+    // `position`, `center` and `eyePos` are read by things that run before the
+    // player has ever been placed — the shadow focus and the carried lamp are
+    // both live under the menu — so they start correct rather than at origin.
+    this.syncCombatant();
   }
 
   /** Whatever is in the hands right now. Everything weapon-shaped reads this. */
@@ -956,6 +975,23 @@ export class Player implements Combatant {
     // first probe runs — without this the blob shadow spends the frame the
     // player appears on at whatever floor the last life ended over.
     this.floorY = spawn.y;
+    this.syncCombatant();
+  }
+
+  /**
+   * Moves the body to `feet` without touching what it is doing.
+   *
+   * This is the small end of a networked correction, and the difference from
+   * `placeAt` is the point: a spawn is a body arriving on solid ground, so it
+   * lands stopped and grounded, while a correction is the authority disagreeing
+   * with a body that is still living its life. Zeroing `velY` here would eat a
+   * jump or a fall, and every accepted step near a wall would strip the arc off
+   * a player who is merely brushing it.
+   *
+   * `feet`, like everything else that crosses the wire — see `position`.
+   */
+  nudgeTo(feet: Vector3): void {
+    this.root.position.set(feet.x, feet.y + this.groundY, feet.z);
     this.syncCombatant();
   }
 
@@ -1606,6 +1642,7 @@ export class Player implements Combatant {
     const eyeH =
       CONFIG.camera.eyeHeight +
       (c.crouchEyeHeight - CONFIG.camera.eyeHeight) * this.crouchBlend;
+    this.position.set(p.x, feet, p.z);
     this.center.set(p.x, feet + centerH, p.z);
     this.eyePos.set(p.x, feet + eyeH, p.z);
   }
