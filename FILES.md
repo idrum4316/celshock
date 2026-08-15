@@ -25,6 +25,9 @@ server/               # The authoritative match server. Node, NullEngine, no
                       #   collider half of MapBuilder and nothing else
   lagComp.ts          #   Position history + the rewind around a shot. `resolve`
                       #   takes a callback so the restore cannot be skipped
+  wire.ts             #   Is a client message shaped like what it claims to be?
+                      #   The one door a frame becomes a ClientMessage through,
+                      #   so no handler past it re-checks a field
   validate.ts         #   Is a reported step physically possible? speed, ground,
                       #   solid — and nothing else
   simulate.ts         #   `npm run simulate`: a whole round, headless, no clients

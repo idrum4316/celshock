@@ -35,13 +35,50 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
-  decode,
   encode,
   PROTOCOL_VERSION,
-  type ClientMessage,
   type MatchList,
 } from "../src/net/protocol";
 import { Match } from "./Match";
+import { readClientMessage } from "./wire";
+
+/**
+ * The backstop under everything else, installed before anything can throw.
+ *
+ * **It is not a substitute for a single check and must never be treated as
+ * one.** Every throw this catches is a bug with a real fix somewhere else —
+ * the one that made it necessary was three handlers destructuring a `Vec3` off
+ * an unvalidated client message, and the fix for that is `server/wire.ts`, not
+ * this. What this answers is the second question: when the next one gets
+ * through, how much does it cost?
+ *
+ * Without it, the answer is everything. Node's default for an uncaught
+ * exception is to exit, and since 15.x an unhandled rejection is an uncaught
+ * exception — so one bad frame from one socket, or one rejected promise in one
+ * timer, takes down every match in this process and drops sixteen people per
+ * match mid-round. `restart: unless-stopped` brings the container back in a
+ * second, which turns a permanent outage into a repeatable one: a client
+ * sending a single message every few seconds keeps the server down for as long
+ * as it cares to.
+ *
+ * So the process stays up and says loudly what happened. This is the trade Node
+ * warns about — resuming after an uncaught exception means carrying on from an
+ * unknown state — and it is the right way round HERE, where the realistic
+ * throw is inside one socket's handler or one match's timer and the rest of the
+ * process is untouched. A match that has genuinely been corrupted has its own
+ * way out: `rotate` abandons it and every client reconnects into a fresh one.
+ *
+ * The log line is the point, not the survival. A server that swallows these
+ * silently is one where the next `wire.ts`-shaped bug is invisible until
+ * somebody reads a stack trace they were never shown.
+ */
+function backstop(kind: string): (err: unknown) => void {
+  return (err) => {
+    console.error(`[fatal] uncaught ${kind} — the process survived it:`, err);
+  };
+}
+process.on("uncaughtException", backstop("exception"));
+process.on("unhandledRejection", backstop("rejection"));
 
 const PORT = Number(process.env.PORT ?? 8080);
 
@@ -482,7 +519,10 @@ wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
     // Tested before `decode` rather than after, because the parse is the cost.
     if (refused || joined) return;
 
-    const msg = decode(String(raw)) as ClientMessage | null;
+    // The shape gate, not `decode`: a `join` whose `version` is a string would
+    // otherwise reach the comparison below and be refused as a protocol
+    // mismatch it is not. See `server/wire.ts`.
+    const msg = readClientMessage(String(raw));
     if (!msg) return refuse("malformed message");
 
     if (msg.t !== "join") return refuse("first message must be join");

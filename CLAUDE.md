@@ -616,6 +616,16 @@ socket may spend before it has proved it is a player is bounded in
 `server/index.ts`, along with the pong deadline that is the only thing there
 which notices a peer that stopped existing without saying so.
 
+**`decode` proves only that a frame is JSON with a `t` on it, so a
+`ClientMessage` is a CLAIM about a well-behaved client and never a fact.**
+`server/wire.ts` is the one door that makes it one — both callers read a frame
+through `readClientMessage`, nothing else on the server may, and a new client
+message type owes an arm in its switch. Skipping it does not fail softly:
+destructuring a `Vec3` that is not there throws out of the socket listener and
+takes every match in the process down with it, and a non-numeric field walks
+through every check downstream, because each of those is a comparison and every
+comparison against `NaN` is false.
+
 → **[`docs/multiplayer.md`](docs/multiplayer.md)** — the authority model and what
 it deliberately does not defend against, the roster and the bench, which side the
 local player is on and the race the welcome is in, the deploy ask and why the

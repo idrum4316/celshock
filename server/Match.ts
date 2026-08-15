@@ -14,7 +14,6 @@
 import { Vector3 } from "@babylonjs/core";
 import type { WebSocket } from "ws";
 import {
-  decode,
   encode,
   MAX_NAME_LENGTH,
   PROTOCOL_VERSION,
@@ -42,6 +41,7 @@ import { MAPS } from "../src/world/maps";
 import { HeadlessGame } from "./HeadlessGame";
 import { Roster } from "./Roster";
 import { validateMove } from "./validate";
+import { readClientMessage } from "./wire";
 
 /** One connected human. */
 interface Peer {
@@ -463,9 +463,14 @@ export class Match {
       // no slot to act on any more, and the test is what stops a flooder being
       // logged and refused once per message all the way through the close.
       if (!this.peers.has(id)) return;
-      // Before `decode`, because the parse is what a flood is spending.
+      // Before the decode, because the parse is what a flood is spending.
       if (!this.spendMessage(peer)) return;
-      const msg = decode(String(raw)) as ClientMessage | null;
+      // `readClientMessage` and never `decode`: the shape gate is what makes
+      // the `ClientMessage` type below a fact rather than a claim about a
+      // well-behaved client, and every handler past this line reads fields off
+      // it without checking them again. See `server/wire.ts` — a `move` with no
+      // `pos` on it used to throw out of this listener and take the process.
+      const msg = readClientMessage(String(raw));
       if (msg) this.onMessage(peer, msg);
     });
     socket.on("close", () => this.drop(peer));

@@ -827,6 +827,64 @@ a second, and a peer seated into a slot its own departure had already released.
 bake read off disk, a fetch — opens that window for free**, and these rules are
 what stop it being rediscovered from the symptoms.
 
+## What a socket may SAY, before any handler reads it
+
+**`decode` is not a validator and the `ClientMessage` type is not a fact.** It
+answers "is this JSON with a string `t` on it" and then asserts the result to
+the union, so every field a handler reads off a client message is a field a
+socket chose — the same thing `cleanName`'s `typeof` guard says about a name,
+generalised to the whole protocol. `server/wire.ts` is where that is made true
+instead of assumed, and **it is the only thing on the server that turns a frame
+into a `ClientMessage`**: both callers — the handshake and `Match`'s per-peer
+listener — go through `readClientMessage`, so a handler past it can destructure
+a `Vec3` without asking, and a fifth message type added to the protocol owes an
+arm in that switch rather than a check in its own handler.
+
+**A missing array was a remote kill switch for the whole process.** `onMove`,
+`onShot` and `onGrenade` each destructure a `Vec3` straight off the message, and
+destructuring `undefined` THROWS — out of the socket's `message` listener,
+through ws's receiver, and out of the process, taking every other match in it
+down mid-round. `{"t":"move"}` is thirty bytes and needs nothing but a seat.
+Only reachable once alive, which is what kept it hidden: a freshly joined player
+is dead and all three handlers return early, so it never fires in ordinary
+testing. With `restart: unless-stopped` in front of it the result is not an
+outage but a repeatable one — one message every few seconds holds the server
+down for as long as somebody cares to.
+
+**A non-numeric field was worse, because nothing refused it.** `pos:
+["x","y","z"]` passes the whole of `validate.ts`: every test there is a
+comparison and every comparison against `NaN` is false, so speed, bounds, ground
+and solid all fall through, no `correct` is sent, and the strings are broadcast
+to all sixteen clients. It bypasses the shot origin gate for the same reason —
+`Math.hypot(NaN, ...) > MAX_ORIGIN_SLIP` is false — so a client that has
+poisoned its own position fires accepted rounds from anywhere on the map.
+**`Number.isFinite` and never the global `isFinite`**, which coerces: `"3"` is
+finite to the global, which would leave the gate open to exactly the strings it
+was built to stop.
+
+**The line is drawn at what can crash or poison arithmetic**, which is why that
+file checks numbers and arrays and leaves the strings and the booleans alone.
+Those already have doors, and a second opinion beside a rule with one owner is
+how the two drift: `cleanName` bounds the name, `weaponSetup` and the `MAPS`
+lookup resolve an id against a real table, and `crouching`/`sprinting` are only
+ever read as the condition of a ternary, so nothing a socket puts in either
+reaches arithmetic at all.
+
+**A malformed message is dropped silently and the peer is not punished.** The
+token bucket has already charged for the frame, so a flood of unparseable bytes
+costs this thread what a flood of `move` does and is closed out by the same
+rule — while a log line per bad message hands any socket an unbounded write to
+the server's stdout.
+
+**Under all of it, `server/index.ts` installs an `uncaughtException` and
+`unhandledRejection` backstop, and it is not a substitute for a single check
+above.** Every throw it catches is a bug with a real fix elsewhere; what it
+bounds is the blast radius of the next one, because Node's default is to exit
+and since 15.x an unhandled rejection is an uncaught exception — so one bad
+frame from one socket, or one rejected promise in one timer, drops every match
+in the process. It logs loudly rather than swallowing: a server that survives
+these quietly is one where the next bug of this shape is invisible.
+
 ## What a socket may spend before it has proved anything
 
 **One core runs every match on the box**, which is the sentence the whole of
