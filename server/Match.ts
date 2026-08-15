@@ -35,6 +35,7 @@ import {
   DEFAULT_WEAPON,
   isPrimaryWeaponId,
   weaponSetup,
+  WEAPON_IDS,
   type WeaponSetup,
 } from "../src/entities/weapons";
 import { MAPS } from "../src/world/maps";
@@ -51,6 +52,12 @@ interface Peer {
   slot: number;
   /** Last input sequence accepted from this peer. */
   seq: number;
+  /**
+   * Inbound messages this peer may still send, and when that was last topped
+   * up. A bucket rather than a counter per window — see `spendMessage`.
+   */
+  budget: number;
+  budgetAt: number;
 }
 
 /**
@@ -101,6 +108,55 @@ const GRENADE_CONE_COS = Math.cos((50 * Math.PI) / 180);
 
 /** How far a claimed muzzle may be from the shooter's own head, in metres. */
 const MAX_ORIGIN_SLIP = 2;
+
+/**
+ * The fastest anything in the weapon table can be fired, in rounds a second.
+ *
+ * DERIVED rather than written down, for the reason `validate.ts` derives its
+ * speed ceiling from `CONFIG.player`: a weapon added at thirty rounds a second
+ * would otherwise make every player carrying it look like a flooder, and the
+ * symptom — dropped shots for one weapon only — would read as anything but a
+ * constant in this file.
+ */
+const FASTEST_FIRE_HZ = Math.max(
+  ...WEAPON_IDS.map((id) => CONFIG.weapons[id].fireRate),
+);
+
+/**
+ * Inbound messages one peer may send per second, sustained.
+ *
+ * **`onShot` was the only thing here with a rate limit, and a weapon's rate of
+ * fire is not the rate a socket can talk at.** A client's honest traffic is
+ * movement at `INPUT_HZ` plus at most one `shot` per round of the fastest
+ * weapon there is; grenades are bounded by a pouch of two and deploys by a
+ * screen a person is looking at, so both disappear into the doubling. Anything
+ * past that is a client this process would otherwise `JSON.parse` and act on as
+ * fast as it can produce it — and `onMove` is the expensive one, because it
+ * spends a nav-graph lookup and an obstacle resolve on every sample and answers
+ * a rejected one with a `correct` message BACK, so an unbounded inbound rate is
+ * an unbounded outbound rate too. There is one core here and every match on the
+ * box shares it.
+ */
+const MESSAGE_RATE = (INPUT_HZ + FASTEST_FIRE_HZ) * 2;
+
+/**
+ * How much of that a peer may bank against a moment of it — one second's worth,
+ * which is an order of magnitude more than the bunching a real connection
+ * delivers after a stall and still a bound.
+ */
+const MESSAGE_BURST = MESSAGE_RATE;
+
+/**
+ * How far past its allowance a peer may get before the socket is closed rather
+ * than the message dropped.
+ *
+ * Dropping is the ordinary answer, because the ordinary cause is a connection
+ * that bunched rather than a client that is misbehaving, and a laggy player who
+ * loses a movement sample loses nothing a later one does not correct. Five
+ * seconds of solid over-budget traffic is not that: it is a client with a
+ * runaway loop or a peer with a purpose, and either is better off the socket.
+ */
+const MESSAGE_DEBT = MESSAGE_RATE * 5;
 
 /**
  * How long an empty match keeps its world before throwing it away.
@@ -385,7 +441,15 @@ export class Match {
       return;
     }
 
-    const peer: Peer = { id, name, socket, slot: slot.index, seq: 0 };
+    const peer: Peer = {
+      id,
+      name,
+      socket,
+      slot: slot.index,
+      seq: 0,
+      budget: MESSAGE_BURST,
+      budgetAt: Date.now(),
+    };
     this.peers.set(id, peer);
     // Somebody came back before the world was thrown away.
     if (this.idleTimer !== null) {
@@ -394,6 +458,13 @@ export class Match {
     }
 
     socket.on("message", (raw) => {
+      // Gone: dropped by `spendMessage` below, or by a `close` whose remaining
+      // buffered messages are still being delivered. Either way this peer has
+      // no slot to act on any more, and the test is what stops a flooder being
+      // logged and refused once per message all the way through the close.
+      if (!this.peers.has(id)) return;
+      // Before `decode`, because the parse is what a flood is spending.
+      if (!this.spendMessage(peer)) return;
       const msg = decode(String(raw)) as ClientMessage | null;
       if (msg) this.onMessage(peer, msg);
     });
@@ -859,6 +930,49 @@ export class Match {
       }
     }
     this.pending.length = 0;
+  }
+
+  /**
+   * Spends one message from a peer's inbound allowance, and says whether there
+   * was one to spend.
+   *
+   * A token bucket rather than a count per window: a window boundary is a thing
+   * a client can sit exactly on the wrong side of, sending a full window's worth
+   * twice in a millisecond and being inside the rule both times. The bucket
+   * refills continuously, so the sustained rate is the sustained rate wherever
+   * the messages land in time.
+   *
+   * It is charged per MESSAGE and not per kind, because what is being bounded
+   * is the socket rather than the move or the shot: the parse comes first, the
+   * type is not known until after it, and a flood of unparseable bytes costs
+   * this thread exactly what a flood of `move` does. The per-kind gates
+   * downstream — `onShot`'s rate, `onGrenade`'s pouch, `onDeploy`'s dead-only
+   * test — are about the GAME, and they still all apply.
+   *
+   * Debt is allowed to accumulate rather than being clamped at zero, which is
+   * what makes "over budget for a moment" and "over budget for five seconds"
+   * different states rather than the same one. The second is closed out.
+   */
+  private spendMessage(peer: Peer): boolean {
+    const now = Date.now();
+    peer.budget = Math.min(
+      MESSAGE_BURST,
+      peer.budget + ((now - peer.budgetAt) / 1000) * MESSAGE_RATE,
+    );
+    peer.budgetAt = now;
+    peer.budget -= 1;
+    if (peer.budget >= 0) return true;
+    if (peer.budget <= -MESSAGE_DEBT) {
+      console.warn(`[${this.id}] ${peer.name} (${peer.id}) flooded; dropped`);
+      // Sent before the close, which `send` tests for, and dropped by hand
+      // rather than left to the socket's own `close` — that arrives a turn
+      // later, and until it does every buffered message would come back
+      // through here.
+      this.send(peer, { t: "rejected", reason: "too many messages" });
+      peer.socket.close();
+      this.drop(peer);
+    }
+    return false;
   }
 
   private onMessage(peer: Peer, msg: ClientMessage): void {

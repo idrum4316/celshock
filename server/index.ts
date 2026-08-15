@@ -9,6 +9,16 @@
  * only ever given the slot the roster hands out. Never import a rendering
  * system; see `server/README.md` for what a NullEngine cannot do.
  *
+ * **Everything an anonymous socket may spend is bounded here**, because this is
+ * the only place one exists: a peer that has not said `join` holds no slot and
+ * no match, so nothing downstream has a name for it or a place to charge it.
+ * The four bounds are the payload size, the time it may stay anonymous, how
+ * many sockets one address may hold, and — once it is past the handshake —
+ * `Match`'s own per-peer message allowance. They are one subject rather than
+ * four, and the reason is the process: Node is single-threaded, so a socket
+ * that can make this thread work without limit is a socket that can stall every
+ * match on the box, not just its own.
+ *
  * **This registry IS the lobby.** Matches live in this process's memory, so the
  * list it serves on `/matches` is authoritative for itself and needs nothing
  * central to check in with — which is true exactly as long as there is one
@@ -16,7 +26,7 @@
  * world as though it were all of it, and a player picking `m1` would reach
  * whichever replica the proxy chose. See `docs/multiplayer.md`.
  */
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   decode,
@@ -28,6 +38,74 @@ import {
 import { Match } from "./Match";
 
 const PORT = Number(process.env.PORT ?? 8080);
+
+/**
+ * A count from the environment, or the default when there isn't a usable one.
+ *
+ * The `Number.isFinite` test is the point. `Number(process.env.X ?? 4)` reads
+ * `MAX_MATCHES=four` as `NaN`, and every comparison against `NaN` is false — so
+ * a typo in a compose file does not fall back to the default, it removes the
+ * cap entirely and the failure is a server that keeps building matches until it
+ * runs out of memory. A bound that a typo can delete is not a bound.
+ */
+function envCount(name: string, fallback: number, min: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(min, Math.trunc(n)) : fallback;
+}
+
+/**
+ * The largest inbound WebSocket message this server will read, in bytes.
+ *
+ * `ws` defaults to 100 MB, which is a size nothing in this protocol has any use
+ * for: the biggest message a legitimate client sends is a `join` carrying a
+ * display name, and the most frequent is a movement sample of a couple of
+ * hundred bytes. At the default, a socket that has not yet proved it is a
+ * player at all can make this process buffer a hundred megabytes and then hand
+ * it to `JSON.parse` — on the one thread every match here shares.
+ *
+ * A frame past this is a protocol error rather than a message: `ws` closes the
+ * socket with 1009 and raises `error` ON the socket, which is one of the two
+ * reasons every socket below is given an `error` listener the moment it
+ * connects.
+ *
+ * A name longer than this is refused with the socket rather than truncated, and
+ * that is the right way round — `cleanName` bounds what a name may CONTAIN, and
+ * a kilobyte of it is not a name that got away from somebody.
+ */
+const MAX_MESSAGE_BYTES = 4096;
+
+/**
+ * How long a socket may stay anonymous — connected, but not yet through the
+ * handshake.
+ *
+ * A client sends `join` from its own `open` handler, so the honest case is one
+ * round trip and this is ten seconds of slack on it. What it bounds is the
+ * socket that connects and then says nothing: it costs no roster slot and no
+ * match, which is exactly what makes it the cheapest thing an attacker can hold
+ * open in bulk, and nothing else in this process would ever close it.
+ */
+const HANDSHAKE_MS = 10_000;
+
+/**
+ * How many sockets one client address may hold at once. 0 disables the cap.
+ *
+ * Generous on purpose: it is bounding a flood, not policing a household, and
+ * sixteen is far above a player with a reconnect in flight and far below
+ * anything that costs this process something. The addresses it counts are
+ * whatever `clientKey` can work out, which behind a proxy that forwards no
+ * client address at all is ONE key for the whole internet — so an operator in
+ * that position either fixes the proxy (see `docker/default.conf.template`, and
+ * the edge-proxy block in `docs/multiplayer.md`) or sets this to 0. The refusal
+ * says which address it counted, so the misconfiguration is legible from a log
+ * line rather than from players reporting that the lobby sometimes refuses
+ * them.
+ */
+const MAX_SOCKETS_PER_IP = envCount("MAX_SOCKETS_PER_IP", 16, 0);
+
+/** Live sockets per client address, for the cap above. */
+const socketsPerAddress = new Map<string, number>();
 
 /**
  * How many matches this process will hold at once.
@@ -43,7 +121,7 @@ const PORT = Number(process.env.PORT ?? 8080);
  * create path with nothing bounding it is a way for anyone to spend the whole
  * server's memory from the menu.
  */
-const MAX_MATCHES = Math.max(1, Number(process.env.MAX_MATCHES ?? 4));
+const MAX_MATCHES = envCount("MAX_MATCHES", 4, 1);
 
 /**
  * Matches, by id. One for now — matchmaking across several is phase 8, and the
@@ -166,50 +244,185 @@ const http = createServer((req, res) => {
   res.writeHead(404).end();
 });
 
-const wss = new WebSocketServer({ server: http, path: "/ws" });
+/** `::ffff:10.0.0.4` and `10.0.0.4` are the same host; count them as one. */
+function bareAddress(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.startsWith("::ffff:") ? trimmed.slice(7) : trimmed;
+}
 
-wss.on("connection", (socket: WebSocket) => {
+/**
+ * Is the far end of this socket something that could be a proxy of ours?
+ *
+ * Loopback and the private ranges, which is every deployment this repo
+ * describes: `docker compose` puts nginx and this process on the same bridge
+ * network (172.16/12), and an edge proxy in front of the domain reaches it over
+ * 127.0.0.1. A peer arriving from a public address is a browser talking to this
+ * port directly, and a browser's own claim about which address it is at is
+ * worth nothing.
+ *
+ * The two IPv6 prefixes are the unique-local block (`fc00::/7`) and are exact
+ * rather than approximate: public IPv6 is `2000::/3` and link-local is `fe80::`,
+ * so nothing routable begins with either letter pair.
+ */
+function isLocalPeer(address: string): boolean {
+  return (
+    address === "127.0.0.1" ||
+    address === "::1" ||
+    address.startsWith("10.") ||
+    address.startsWith("192.168.") ||
+    address.startsWith("169.254.") ||
+    address.startsWith("fc") ||
+    address.startsWith("fd") ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(address)
+  );
+}
+
+/**
+ * Which client the per-address cap should count this socket against.
+ *
+ * A forwarded header is read only when the socket's own peer is local, and the
+ * distinction is the whole of the security here: through the shipped nginx this
+ * process never sees a browser directly, so `remoteAddress` is the proxy's and
+ * counting it would make every player on the box one address — while a socket
+ * that arrives from a public address is a browser, and a browser stating its
+ * own `X-Real-IP` would simply be choosing which bucket to spend. `TRUST_PROXY`
+ * forces the question either way, for a proxy that is not on this machine.
+ *
+ * `x-real-ip` before `x-forwarded-for`, because the first is set by the proxy
+ * (`docker/default.conf.template` overwrites whatever the client sent) while
+ * the second is a list a client can prepend to and nginx passes through
+ * untouched. Both are a proxy's word for it, which is exactly as far as this
+ * goes: what the cap protects is the process, and the worst an unattributable
+ * address buys is the behaviour there was before the cap existed.
+ */
+function clientKey(req: IncomingMessage): string {
+  const peer = bareAddress(req.socket.remoteAddress ?? "");
+  const trustProxy = process.env.TRUST_PROXY;
+  const trusted =
+    trustProxy === "1" || (trustProxy !== "0" && isLocalPeer(peer));
+  if (trusted) {
+    const real = req.headers["x-real-ip"];
+    if (typeof real === "string" && real.length > 0) return bareAddress(real);
+    const forwarded = req.headers["x-forwarded-for"];
+    const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(
+      ",",
+    )[0];
+    if (first) return bareAddress(first);
+  }
+  return peer || "unknown";
+}
+
+const wss = new WebSocketServer({
+  server: http,
+  path: "/ws",
+  // Not a tuning knob: see the constant. ws's default lets one socket spend a
+  // hundred megabytes of this process before it has said who it is.
+  maxPayload: MAX_MESSAGE_BYTES,
+});
+
+wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
+  // FIRST, and before anything can throw. A `WebSocket` is an EventEmitter, so
+  // an `error` with no listener is not swallowed — it is thrown, out of ws's
+  // own callback, which takes the process and every match on it down with it.
+  // Until the handshake there was nothing listening: `Match.admit` wires its
+  // own, and an anonymous socket never reaches it. ws raises one here for an
+  // oversized frame (1009, which `maxPayload` now makes reachable), a malformed
+  // one, and a connection reset — none of which needs handling beyond not
+  // being fatal, because `close` follows every one of them.
+  socket.on("error", () => {});
+
+  // The per-address cap is charged before anything else this socket could cost,
+  // and released on `close` — which ws emits for every ending, including the
+  // refusal below.
+  const key = clientKey(req);
+  const held = socketsPerAddress.get(key) ?? 0;
+  if (MAX_SOCKETS_PER_IP > 0 && held >= MAX_SOCKETS_PER_IP) {
+    console.warn(`[net] ${key} holds ${held} sockets; refused another`);
+    socket.send(
+      encode({ t: "rejected", reason: "too many connections from your address" }),
+    );
+    socket.close();
+    return;
+  }
+  socketsPerAddress.set(key, held + 1);
+  socket.on("close", () => {
+    const left = (socketsPerAddress.get(key) ?? 1) - 1;
+    if (left > 0) socketsPerAddress.set(key, left);
+    else socketsPerAddress.delete(key);
+  });
+
   // A peer is anonymous until it says `join`. Until then it holds no slot, so a
   // socket that opens and says nothing costs one entry in ws's own client set
-  // and nothing in any match.
+  // and nothing in any match — and would sit there for as long as the far end
+  // kept the TCP connection up, which is why it is on a clock.
   let joined = false;
+  let refused = false;
+  let handshake: ReturnType<typeof setTimeout> | null = null;
+
+  const clearHandshake = (): void => {
+    if (handshake === null) return;
+    clearTimeout(handshake);
+    handshake = null;
+  };
 
   const refuse = (reason: string): void => {
+    // Once. `close` starts a handshake rather than finishing one, so messages
+    // already in the socket's buffer are still delivered afterwards — and a
+    // second `rejected` down a closing socket is a message nobody will read,
+    // queued against a peer that has already been told why.
+    if (refused) return;
+    refused = true;
+    clearHandshake();
     socket.send(encode({ t: "rejected", reason }));
     socket.close();
   };
 
-  socket.on("message", (raw) => {
+  handshake = setTimeout(() => {
+    handshake = null;
+    refuse("no join within the handshake window");
+  }, HANDSHAKE_MS);
+  socket.on("close", clearHandshake);
+
+  const onHandshakeMessage = (raw: unknown): void => {
+    // Nothing to decode: this socket is on its way out, or the match owns it.
+    // Tested before `decode` rather than after, because the parse is the cost.
+    if (refused || joined) return;
+
     const msg = decode(String(raw)) as ClientMessage | null;
     if (!msg) return refuse("malformed message");
 
-    if (!joined) {
-      if (msg.t !== "join") return refuse("first message must be join");
-      if (msg.version !== PROTOCOL_VERSION) {
-        return refuse(
-          `protocol ${msg.version} but this server speaks ${PROTOCOL_VERSION}`,
-        );
-      }
-      const route = routeJoin(msg.matchId, msg.create, msg.map);
-      // Refused BEFORE `joined` is set, so a client that named a match which
-      // has since filled can pick another row and try again on the same socket
-      // rather than reconnecting. `refuse` closes it anyway today; leaving the
-      // flag alone is what makes a retry a one-line change rather than a
-      // handshake redesign.
-      if ("refuse" in route) return refuse(route.refuse);
-      joined = true;
-      // `admit` builds the world on the first arrival, so it is async. A
-      // failure there must close the socket rather than leave a client waiting
-      // on a welcome that is never coming.
-      route.match.admit(socket, msg.name, msg.weapon).catch((err: unknown) => {
-        console.error("admit failed:", err);
-        refuse("could not start a match");
-      });
-      return;
+    if (msg.t !== "join") return refuse("first message must be join");
+    if (msg.version !== PROTOCOL_VERSION) {
+      return refuse(
+        `protocol ${msg.version} but this server speaks ${PROTOCOL_VERSION}`,
+      );
     }
+    const route = routeJoin(msg.matchId, msg.create, msg.map);
+    // Refused BEFORE `joined` is set, so a client that named a match which
+    // has since filled can pick another row and try again on the same socket
+    // rather than reconnecting. `refuse` closes it anyway today; leaving the
+    // flag alone is what makes a retry a one-line change rather than a
+    // handshake redesign.
+    if ("refuse" in route) return refuse(route.refuse);
+    joined = true;
+    clearHandshake();
     // Past the handshake the match owns the peer, including this socket's
-    // remaining messages — it registered its own handler in `admit`.
-  });
+    // remaining messages — it registers its own handler inside `admit`, which
+    // is synchronous up to its first await. This listener goes rather than
+    // merely standing down, because leaving it wired meant every `move` and
+    // every `shot` for the life of the connection was decoded twice: once here
+    // to discover it was not a `join`, and once by the handler that acts on it.
+    socket.off("message", onHandshakeMessage);
+    // `admit` builds the world on the first arrival, so it is async. A
+    // failure there must close the socket rather than leave a client waiting
+    // on a welcome that is never coming.
+    route.match.admit(socket, msg.name, msg.weapon).catch((err: unknown) => {
+      console.error("admit failed:", err);
+      refuse("could not start a match");
+    });
+  };
+
+  socket.on("message", onHandshakeMessage);
 });
 
 http.listen(PORT, () => {

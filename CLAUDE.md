@@ -654,6 +654,16 @@ choosing — menu or lobby only, remembered, and never written from the wire —
 the only join that carries a map is one that CREATES a match (`Join.map`, resolved
 against the server's own table like the weapon id).
 
+**One core runs every match on the box, so everything an unproven socket can
+spend is bounded** — the frame size (`maxPayload`, against ws's 100 MB
+default), how long it may stay anonymous before saying `join`, how many sockets
+one address may hold, and, once seated, a per-peer inbound message allowance
+that `onShot`'s rate limit was never doing the job of. **Every socket also gets
+an `error` listener the instant it connects**, and that one is not a bound but a
+crash: a `ws` WebSocket is an EventEmitter, so an `error` with no listener is
+thrown out of ws's own callback and takes the process with every match in it —
+six bytes of malformed frame, from a socket that never joined.
+
 **The match registry in `server/index.ts` IS the lobby, and needs nothing
 central to check in with** — matches live in that one process's memory, so the
 list it serves on `GET /matches` is authoritative for itself. A master server is
@@ -684,7 +694,8 @@ should be run after anything touching the world layer; `npm run build` refuses a
 bake older than its layout.
 
 → **[`docs/multiplayer.md`](docs/multiplayer.md)** — the authority model and
-what it deliberately does not defend against, the roster and the bench, the
+what it deliberately does not defend against, what a socket may spend before it
+has proved anything, the roster and the bench, the
 interpolation clock and the sign error that is easy to make in it, the rewind
 and why `resolve` takes a callback, what a death owes on each side and the one
 `kill` event per body that carries it, the per-slot scoreboard and why it is

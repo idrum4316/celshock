@@ -44,6 +44,12 @@ sand.
   letting a laggy honest player through, because a legitimate player yanked
   backwards has a worse experience than everyone has from a cheat worth 19%
   speed.
+- **A flood from many addresses at once.** The bounds below are per socket and
+  per address, so what they stop is one host spending this process; a thousand
+  hosts sending one connection each is a network-layer problem and there is
+  nothing in Node that answers it. What the bounds do buy against that is that
+  the cost per connection is bounded and known, rather than being whatever the
+  attacker chose to send.
 
 ## The roster is the feature
 
@@ -819,6 +825,97 @@ a second, and a peer seated into a slot its own departure had already released.
 bake read off disk, a fetch — opens that window for free**, and these rules are
 what stop it being rediscovered from the symptoms.
 
+## What a socket may spend before it has proved anything
+
+**One core runs every match on the box**, which is the sentence the whole of
+this section follows from: a connection that can make this thread work without
+limit is not a problem for its own match, it is a problem for all four. So
+everything an unproven socket can spend is bounded, and the bounds live where
+the socket does — `server/index.ts` for the anonymous half, `Match` for the
+seated one. They read as a list of unrelated small rules and they are not: each
+one is a different way of asking the same question, which is what this
+connection can cost before it has proved it is a player.
+
+**Every socket gets an `error` listener the instant it connects, and this one
+is not a bound but a crash.** A `ws` WebSocket is an EventEmitter, so an
+`error` with no listener is *thrown* — out of ws's own callback, taking the
+process and every match in it. `Match.admit` wires one, but an anonymous socket
+never reaches `admit`, so until it joined there was nothing listening: one
+malformed frame — `RSV1 must be clear`, six bytes, no handshake needed beyond
+the upgrade — killed the server. Confirmed by repro against the old listener
+set, and against the current one, which survives it. ws raises that event for
+an oversized frame (1009), a malformed one and a reset connection alike, and
+`close` follows every one of them, so the listener has nothing to do except
+exist.
+
+**`maxPayload` is 4 KB, against ws's default of 100 MB.** The largest message
+in this protocol is a `join` carrying a display name and the most frequent is a
+movement sample of a couple of hundred bytes, so the default is not a generous
+ceiling, it is an invitation: buffer a hundred megabytes and hand it to
+`JSON.parse`, from a socket that has not yet said who it is. A name longer than
+the frame limit takes the socket rather than being truncated, and that is the
+right way round — `cleanName` bounds what a name may *contain*, and a kilobyte
+of one is not a name that got away from somebody.
+
+**An anonymous socket is on a ten-second clock.** A client sends `join` from
+its own `open` handler, so the honest case is one round trip; what the clock
+bounds is the socket that connects and then says nothing, which holds no slot
+and no match and is therefore the cheapest thing there is to hold open in bulk.
+Nothing else in the process would ever close it. The timer is cleared by the
+join and by the close, and a socket that got through the handshake is never
+touched by it.
+
+**The handshake listener is removed on the way through, not merely stood
+down.** It used to fall through its own `if (!joined)` guard, which meant every
+`move` and every `shot` for the life of a connection was decoded twice: once
+there to discover it was not a `join`, and once by the handler that acts on it.
+
+**A seated peer has an inbound message allowance, and `onShot`'s rate limit was
+never it.** A weapon's rate of fire bounds the rounds a client may fire; it says
+nothing about how fast the socket may talk, and `move` had no bound at all —
+which is the expensive one, because `onMove` spends a nav-graph lookup and an
+obstacle resolve per sample and answers a rejected one with a `correct` message
+BACK, so an unbounded inbound rate was an unbounded outbound rate too. The
+allowance is a token bucket at `(INPUT_HZ + fastest weapon's fireRate) × 2` a
+second with a second's worth of burst, and both halves are DERIVED — a weapon
+added at thirty rounds a second must not make everyone carrying it look like a
+flooder. It is charged per MESSAGE rather than per kind, because what is being
+bounded is the socket: the parse comes first, the type is not known until after
+it, and a flood of unparseable bytes costs this thread exactly what a flood of
+`move` does. The per-kind gates downstream are about the game and all still
+apply.
+
+**Over-budget drops the message; five seconds of over-budget drops the peer.**
+The ordinary cause of a burst is a connection that bunched rather than a client
+misbehaving, and a laggy player who loses a movement sample loses nothing the
+next one does not correct — so debt is allowed to accumulate rather than being
+clamped at zero, which is what makes "over for a moment" and "over for five
+seconds" different states instead of the same one. A peer that reaches the debt
+limit is told why, closed, and `drop`ped by hand rather than left to its own
+`close` — that arrives a turn later, and until it does every buffered message
+comes back through the same door and is refused and logged again.
+
+**The per-address cap counts sockets, defaults to 16, and keys on what a
+trusted proxy says.** A forwarded header (`x-real-ip`, then the first
+`x-forwarded-for` entry) is read only when the socket's own peer is loopback or
+a private address — which is every deployment described here, since the shipped
+compose file puts nginx and this process on one bridge network and an edge proxy
+reaches it over 127.0.0.1. A socket arriving from a *public* address is a
+browser talking to this port directly, and a browser's own claim about where it
+is is worth nothing. `TRUST_PROXY=1`/`0` forces the question for a proxy that
+is not on this machine. **The cap is the one bound here that can be turned into
+a bug by a misconfiguration**: behind a proxy that forwards no client address
+at all, every player is one key and the seventeenth is refused — so `X-Real-IP`
+is set in `docker/default.conf.template` and in the edge-proxy block at the
+bottom of this document, the refusal names the address it counted, and
+`MAX_SOCKETS_PER_IP=0` turns it off outright.
+
+**Counts from the environment go through `envCount`.** `Number(process.env.X ??
+4)` reads `MAX_MATCHES=four` as `NaN`, and every comparison against `NaN` is
+false — so a typo in a compose file does not fall back to the default, it
+deletes the cap and leaves a server that builds matches until it runs out of
+memory. A bound a typo can delete is not a bound.
+
 ## What is not built yet
 
 Stated so nobody assumes otherwise:
@@ -884,12 +981,17 @@ location /ws {
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
+    # Which client this is. Without it every player on the box arrives from
+    # 127.0.0.1 and the per-address socket cap counts them as one person —
+    # see "What a socket may spend before it has proved anything".
+    proxy_set_header X-Real-IP $remote_addr;
     proxy_read_timeout 1h;
 }
 ```
 
 Caddy needs nothing said: `reverse_proxy 127.0.0.1:8080` carries WebSockets on
-its own.
+its own, and sets `X-Forwarded-For` without being asked — which is the other
+header the per-address cap reads.
 
 **Capacity is one core per process, and it is not the constraint people expect.**
 Measured on one container: four concurrent matches — sixty-four bodies, sixteen

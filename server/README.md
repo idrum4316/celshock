@@ -54,3 +54,9 @@ things to inline.
   instead — see `scripts/bake-collision.mjs` for why that is sound.
 - **No trusting a client.** A client reports where it is and what it shot; the
   server decides whether either is true.
+- **No unbounded input.** Every socket costs a bounded amount of this process
+  whether or not it ever becomes a player: a frame size, a handshake window, a
+  per-address socket count and a per-peer message allowance. There is one core
+  here and every match on the box shares it, so a new inbound path that can be
+  driven at whatever rate a client likes is a new way to stall all of them.
+  See `docs/multiplayer.md`.
