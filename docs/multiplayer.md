@@ -756,6 +756,69 @@ sends no `map` gets the default, which is what every client got before the field
 existed. The lobby's own Map row is where a player sets it, and it is the same
 pick the menu shows — one choice, two places it is on screen.
 
+## A match builds one world, and every guard for it sits behind an await
+
+**`Match` does asynchronous work — building a world — while sockets keep
+arriving and rounds keep ending.** That is the one seam in the server where two
+things genuinely happen at once, and every rule here exists because a test
+written on the near side of an `await` and acted on from the far side is not a
+guard: the loop turns in between, and whoever else is waiting runs the same test
+against the same unchanged state.
+
+**`ensureRunning` hands every concurrent caller the SAME promise, and must go on
+doing so.** It is deliberately not `async`: an async wrapper around the same body
+gives each caller a fresh promise over a fresh build, which is the thing it
+exists to prevent. Two peers landing in an empty match inside the build — one
+lobby row two people click on, or a restart everybody reconnects to — each found
+`timer` and `map` null and each went on to build a world and start a loop over
+it. The failure is not a match that runs slowly: the second assignment to
+`timer` orphans the first interval, so `stop` can never clear it, the match
+steps twice per tick for the rest of its life, and the orphan goes on calling
+`step` after `retire` has disposed the scene — a throw inside a timer callback,
+which takes every other match in the process down with it. `starting` is cleared
+in a `finally`, so a build that FAILED is retried by the next arrival rather
+than remembered as permanently in progress.
+
+**`admit` asks whether its peer is still connected on the far side of the
+await.** The socket's `close` handler is wired before the build, so a peer that
+drops during one has already been through `drop`, which released its roster slot
+and put the bot back — and seating it anyway puts a `NetPlayer` nobody owns into
+`players` and into the rewind history, with the bot in that slot benched for the
+life of the match. Nothing can ever remove either, because the removal has been
+and gone. The peer map is the test, because that map is what `drop` empties and
+what everything else in the file reads to mean "still connected".
+
+**`rotating` is what says the world is not the match's to touch**, and it gates
+`step` as well as the three client messages that reach into it — `move`, `shot`
+and `grenade`. For the length of `rotate`'s rebuild, `HeadlessGame.map` points
+at the map `startRound` has already disposed. That has never crashed, and the
+reason is worth naming rather than resting on: `conquest.winner` is still set
+from the round that ended, so the step returns before it reaches `battle` — a
+safety that holds only while a second flag agrees with the first, and that ends
+the day anything resets `winner` earlier. `deploy` is deliberately not gated. It
+touches no geometry, it writes an integer a later tick spends, and refusing it
+would drop a request the client has no reason to send twice.
+
+**A rotation that throws abandons the match rather than freezing it.** That gate
+makes `rotating` load-bearing in both directions, since only a completed
+rotation clears it: an unhandled build failure would leave sixteen people in a
+round that renders and never advances, and an unhandled rejection out of a
+`setTimeout` would take the process. `abandon` closes every socket with a reason
+instead, and each client's own reconnect puts it in a fresh match a second
+later — which is honest, where a live-looking round that never moves is
+indistinguishable from a server gone quiet.
+
+**None of this reproduces against the server as it stands, and that is the
+reason to write it down rather than to relax about it.** The only yield between
+`admit` and its guards is the collision module's dynamic `import()`, which does
+not reliably turn the I/O phase, so neither race fires on the build path today;
+both were confirmed by forcing the window open with a temporary await inside
+`buildServerWorld`, which produced two worlds and a match running at 120.8 ticks
+a second, and a peer seated into a slot its own departure had already released.
+**Anything that adds a genuinely asynchronous step to a build — a larger map, a
+bake read off disk, a fetch — opens that window for free**, and these rules are
+what stop it being rediscovered from the symptoms.
+
 ## What is not built yet
 
 Stated so nobody assumes otherwise:
