@@ -114,6 +114,11 @@ src/
     BotSkill.ts         # skill scalar -> BotProfile; difficulty tiers
     SoldierModel.ts     # Merged bot rig + procedural animation, and the
                         #   RagdollSubject interface
+    NetSoldier.ts       # Somebody else, drawn from the wire: one rig, the
+                        #   interpolation buffer behind it, no behaviour at all
+    GrenadeModel.ts     # What a grenade looks like — body, fuse pip, and the
+                        #   blink that reads the fuse. Built by the system that
+                        #   simulates them and by the one that only draws them
   systems/
     BattleSystem.ts     # Bot pool, AI scheduling, LOS, distance LOD
     ConquestSystem.ts   # Flags, meters, tickets, bleed, spawns, planSquads
@@ -262,6 +267,9 @@ src/
     NetRoster.ts      #   The pool of NetSoldiers + mirrored flags/tickets.
                       #   The client's stand-in for BattleSystem: same job on
                       #   screen, none of the job underneath
+    NetGrenades.ts    #   Everybody else's grenades in the air, interpolated on
+                      #   the same clock as the bodies. The thrower's own is
+                      #   skipped — they are watching their local copy
     lobby.ts          #   GET /matches, and the one bit of arithmetic behind
                       #   it: the ws:// URL's origin -> the HTTP one. The only
                       #   part of multiplayer that is not the WebSocket

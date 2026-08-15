@@ -1,8 +1,8 @@
 /**
  * net/NetSession.ts — A networked round, from the client's side.
- * Owns: the `Connection`, the `NetRoster`, the movement upload clock, and the
- * translation of server messages into the callbacks `Game` wires. It is the
- * single seam between the game and the wire.
+ * Owns: the `Connection`, the `NetRoster`, the `NetGrenades` pool, the movement
+ * upload clock, and the translation of server messages into the callbacks
+ * `Game` wires. It is the single seam between the game and the wire.
  * Invariants: `Game` talks to this and never to a socket; this talks to the
  * socket and never to a game system it was not handed. It decides nothing about
  * the round — every outcome here arrived from the authority.
@@ -23,6 +23,7 @@ import type { Team } from "../entities/Combatant";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { ControlPoint } from "../systems/ConquestSystem";
 import { Connection, type ConnectionState, type JoinOptions } from "./Connection";
+import { NetGrenades } from "./NetGrenades";
 import { NetRoster } from "./NetRoster";
 import {
   INPUT_HZ,
@@ -51,6 +52,13 @@ export interface LocalState {
 export class NetSession {
   readonly conn = new Connection();
   readonly roster: NetRoster;
+
+  /**
+   * Everybody else's grenades, in the air. The one thing the authority sends
+   * that is neither a body nor a fact about the round — see `NetGrenades` for
+   * why it is state on the wire and not a throw announced once.
+   */
+  readonly grenades: NetGrenades;
 
   /** The roster slot this client owns, or -1 before the welcome lands. */
   slot = -1;
@@ -127,6 +135,7 @@ export class NetSession {
 
   constructor(scene: Scene, mats: CelMaterialFactory) {
     this.roster = new NetRoster(scene, mats);
+    this.grenades = new NetGrenades(scene, mats);
     this.conn.onStateChange = (s) => this.onStateChange(s);
     this.conn.onMessage = (msg) => this.receive(msg);
   }
@@ -159,7 +168,12 @@ export class NetSession {
     alive: boolean,
   ): void {
     this.points = points;
-    this.roster.update(this.conn.renderTime(), cameraPos);
+    // One render time for both, read once: the bodies and the grenades between
+    // them are the same instant of the same round, and two calls to a clock
+    // that moves would draw a grenade a hair ahead of the man it is landing on.
+    const renderTime = this.conn.renderTime();
+    this.roster.update(renderTime, cameraPos);
+    this.grenades.update(renderTime);
 
     if (!this.seated || !alive) return;
     this.uploadT += dt;
@@ -301,6 +315,11 @@ export class NetSession {
         // finished round's kills against a map that has just been built.
         this.slotKills.length = 0;
         this.slotDeaths.length = 0;
+        // Last round's grenades, over last round's terrain. Nothing will ever
+        // send the end of a flight the rotation interrupted, so the pool is
+        // dropped here for the same reason `Game.installMap` drops the local
+        // one — and the local `Player`'s own copy is dropped with it there.
+        this.grenades.reset();
         this.onRoundStart(msg.mapId);
         break;
 
@@ -321,6 +340,9 @@ export class NetSession {
 
       case "snap":
         this.roster.applySnapshot(msg, this.points);
+        // Our own slot, so the grenades we threw are left to the local copy
+        // already flying out of our own hand.
+        this.grenades.applySnapshot(msg, this.slot);
         break;
 
       case "events":
@@ -358,5 +380,6 @@ export class NetSession {
   dispose(): void {
     this.conn.close();
     this.roster.dispose();
+    this.grenades.dispose();
   }
 }

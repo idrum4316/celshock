@@ -7,10 +7,10 @@
  * here, and `ConquestSystem.update` runs BEFORE `BattleSystem.update` so a
  * bot's think tick sees this frame's flag ownership.
  * Invariants: NOTHING here may render, and nothing may reach a canvas — see
- * `server/README.md`. No `GrenadeSystem` yet: its `BlastDust` builds a
- * `DynamicTexture` and a `GPUParticleSystem`, neither of which exists without
- * GL, so grenades wait for phase 7 and the split that lets the dust stay
- * behind.
+ * `server/README.md`. `GrenadeSystem` is here under `{ dust: false }`, which is
+ * that rule applied rather than bent: where a grenade goes and who it hurts is
+ * a rule and belongs to the authority, while `BlastDust` builds a
+ * `DynamicTexture` and a `GPUParticleSystem` and neither exists without GL.
  *
  * A slot index IS a bot index, by construction: `Roster` lays its slots out
  * team 0 then team 1, `BattleSystem` builds its pool the same way, and both are

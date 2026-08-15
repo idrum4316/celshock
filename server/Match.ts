@@ -23,6 +23,7 @@ import {
   TICK_HZ,
   type ClientMessage,
   type EntityState,
+  type GrenadeState,
   type MatchSummary,
   type PointState,
   type ServerEvent,
@@ -195,6 +196,12 @@ export class Match {
 
   /** Reused so a snapshot allocates nothing per tick beyond its own arrays. */
   private readonly entityScratch: EntityState[] = [];
+
+  /**
+   * The same, for whatever is in the air. Usually empty, and an empty one is
+   * left OFF the snapshot rather than sent — see `Snapshot.grenades`.
+   */
+  private readonly grenadeScratch: GrenadeState[] = [];
 
   /** Last broadcast position per slot, for deriving a player's walk cycle. */
   private readonly lastSeen: ({ x: number; z: number } | undefined)[] = [];
@@ -637,6 +644,22 @@ export class Match {
       contested: p.contested,
     }));
 
+    // Everything in the air. A grenade is the one thing here that takes
+    // SECONDS to arrive, so its position is state like a body's rather than a
+    // throw announced once and re-simulated on sixteen clients that would each
+    // land it somewhere else — see `GrenadeState`. `by` is the thrower's slot,
+    // for the one client that must not draw this because it is already
+    // watching its own copy of the same throw.
+    this.grenadeScratch.length = 0;
+    this.game.grenades.forEachLive((id, at, fuse, by) => {
+      this.grenadeScratch.push({
+        i: id,
+        p: [at.x, at.y, at.z],
+        by: this.slotOf(by),
+        fuse,
+      });
+    });
+
     const snap: Snapshot = {
       t: "snap",
       tick: this.ticks,
@@ -645,6 +668,10 @@ export class Match {
       points,
       tickets: [this.game.conquest.tickets[0], this.game.conquest.tickets[1]],
     };
+    // Attached only when something is flying: the field is optional precisely
+    // so that the twenty snapshots a second in which nothing is do not carry
+    // an empty array to say so.
+    if (this.grenadeScratch.length > 0) snap.grenades = this.grenadeScratch;
     this.broadcast(snap);
 
     // The board, on the ticks it has moved — a few times a minute against a
@@ -1002,7 +1029,11 @@ export class Match {
     }
   }
 
-  /** Which roster slot a hit body belongs to, or -1 if it is not on the roster. */
+  /**
+   * Which roster slot a body belongs to, or -1 if it is not on the roster —
+   * the one a round hit, or the one that threw a grenade. `null` (a grenade
+   * nobody owns) is a slotless body like any other and comes back as -1.
+   */
   private slotOf(target: unknown): number {
     for (const [slot, player] of this.game.players) {
       if (player === target) return slot;

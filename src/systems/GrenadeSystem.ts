@@ -35,7 +35,8 @@ import {
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { Combatant, Team } from "../entities/Combatant";
-import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
+import { buildGrenade, pipLit } from "../entities/GrenadeModel";
+import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { EnvironmentSpec } from "../world/environment";
 import { TerrainField } from "../world/TerrainField";
 import { SOLID_ONLY } from "../world/solid";
@@ -46,6 +47,18 @@ interface Grenade {
   mesh: Mesh;
   /** The fuse tell — blinks faster as the fuse runs out. */
   pip: Mesh;
+  /**
+   * What this FLIGHT is called, for anything outside that has to follow one
+   * grenade across frames — today the multiplayer server, which replicates the
+   * live ones so every client can watch them arrive.
+   *
+   * Monotonic and never reused, which is the whole reason it is not simply the
+   * pool index: a slot is claimed the instant the last grenade in it went off,
+   * so a client keying on the index would take the new grenade's samples as a
+   * continuation of the old one's and draw a streak from the detonation to
+   * somebody's hand.
+   */
+  id: number;
   vel: Vector3;
   /** Seconds of fuse left; <= 0 while the slot is free. */
   fuse: number;
@@ -107,6 +120,8 @@ export class GrenadeSystem {
   private dust: BlastDust | null;
   /** Reused by the flight and the line-of-sight tests alike. */
   private readonly ray = new Ray(new Vector3(), new Vector3(0, -1, 0), 1);
+  /** Names the next flight. Never reset — see `Grenade.id`. */
+  private nextId = 0;
   /** The map's floor, as a backstop under the collider proxies. */
   private terrain: TerrainField = new TerrainField();
 
@@ -158,43 +173,15 @@ export class GrenadeSystem {
     // the system without the dust. Everything else here is spheres and
     // materials, which are inert without a renderer and cost nothing to keep.
     this.dust = opts?.dust === false ? null : new BlastDust(scene);
-    const body = mats.get("#3f4a33");
-    const pipMat = mats.getEmissive("#ff5a4f");
     const fireMat = mats.getEmissive("#ffb45a");
     const emberMat = mats.getEmissive("#ffd07a");
 
     for (let i = 0; i < g.poolSize; i++) {
-      const mesh = MeshBuilder.CreateSphere(
-        `grenade${i}`,
-        { diameter: g.radius * 2, segments: 6 },
-        scene,
-      );
-      mesh.material = body;
-      mesh.isVisible = false;
-      // A grenade is a thing in the world, not a collider: it carries no
-      // `solid` flag and no WorldBox, so nothing shoots it, walks into it or
-      // treats it as cover — it is dressing with a timer.
-      mesh.isPickable = false;
-      const pip = MeshBuilder.CreateSphere(
-        `grenadePip${i}`,
-        { diameter: g.radius * 0.62, segments: 4 },
-        scene,
-      );
-      pip.parent = mesh;
-      // The pip has to stand proud of the body's outline shell or the ink
-      // swallows it — the same rule the player's visor slit follows. At this
-      // size that is a fine line, hence the deliberately thin outline below.
-      pip.position.y = g.radius;
-      pip.material = pipMat;
-      pip.metadata = { noOutline: true };
-      pip.isPickable = false;
-      // Ink, or a dark green sphere in a night game is invisible against the
-      // ground it is rolling across — which for the one object the player has
-      // to notice arriving is the whole ball game.
-      addOutline(mesh, 0.02);
+      const { mesh, pip } = buildGrenade(scene, mats, `grenade${i}`);
       this.grenades.push({
         mesh,
         pip,
+        id: 0,
         vel: new Vector3(),
         fuse: 0,
         live: false,
@@ -245,6 +232,28 @@ export class GrenadeSystem {
    */
   setEnvironment(env: EnvironmentSpec): void {
     this.dust?.setEnvironment(env);
+  }
+
+  /**
+   * Every grenade in the air right now, for whoever has to say where they are.
+   *
+   * The multiplayer server is the caller: a grenade is the one thing in this
+   * game that takes seconds to arrive, so the authority replicates the live
+   * ones in its snapshot and every client draws them arcing in rather than
+   * being handed the explosion. `by` goes with the position because the
+   * thrower is already watching their OWN copy of it fly — see
+   * `net/NetGrenades`.
+   *
+   * A visitor rather than an array, so the hot path allocates nothing and
+   * nobody outside can hold on to a pooled slot: `at` is the live mesh
+   * position and is valid only for the length of the call.
+   */
+  forEachLive(
+    fn: (id: number, at: Vector3, fuse: number, by: Combatant | null) => void,
+  ): void {
+    for (const n of this.grenades) {
+      if (n.live) fn(n.id, n.mesh.position, n.fuse, n.by);
+    }
   }
 
   /**
@@ -319,6 +328,7 @@ export class GrenadeSystem {
   ): boolean {
     const slot = this.grenades.find((n) => !n.live);
     if (!slot) return false;
+    slot.id = ++this.nextId;
     slot.mesh.position.copyFrom(from);
     slot.vel.copyFrom(velocity);
     slot.fuse = CONFIG.grenade.fuse;
@@ -345,14 +355,9 @@ export class GrenadeSystem {
         this.detonate(n);
         continue;
       }
-      // The tell: a pip that blinks faster the closer the fuse gets to zero, so
-      // a grenade at your feet is readable without a timer on the HUD. It is
-      // the only warning there is, and it has to be visible from the side a
-      // grenade is most likely to arrive from — hence a separate mesh rather
-      // than a colour change on a body the ink already darkens.
-      const left = n.fuse / g.fuse;
-      n.pip.isVisible =
-        Math.sin((1 - left) * (1 - left) * 90) > 0 || left > 0.75;
+      // The tell, from the model file so that a grenade drawn off the wire
+      // blinks in step with this one — see `pipLit`.
+      n.pip.isVisible = pipLit(n.fuse / g.fuse);
       if (n.resting) continue;
 
       n.vel.y -= g.gravity * dt;

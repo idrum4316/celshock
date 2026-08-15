@@ -607,6 +607,58 @@ The pouch is the server's count. There is no resupply in this game — death is
 the only refill — so the ammunition IS the limit, and a client tracking its own
 would throw as many as it liked.
 
+**A grenade in the air is STATE on the wire, not a throw announced once.** It is
+the only object in this game that takes seconds to arrive, and it is the one a
+player is owed the sight of: an explosion that appears with no warning is a
+different game from one you watched bounce off a wall toward you. So every live
+flight rides the snapshot — `Snapshot.grenades`, a `GrenadeState` per grenade,
+attached only on the ticks something is flying — and every client interpolates
+it on exactly the clock the bodies are drawn on.
+
+Announcing the throw instead and re-simulating it on each client is the design
+that does not work, and it fails for a reason worth stating: the flight is
+integrated per frame against a frame time nobody shares, and a bounce
+multiplies that disagreement rather than damping it. The grenade would come to
+rest at your feet on your screen and go off three metres away, because the
+blast is the authority's and always has been. Sixteen ballistic solves off one
+message is also sixteen chances for one of them to be somewhere no client can
+correct.
+
+**The thrower draws their own and the wire's copy of it is skipped**, which is
+what `GrenadeState.by` is for. `Game.releaseGrenade` puts a real grenade in the
+local `GrenadeSystem` on the frame the hand opens — that is what the thrower
+watches arc, with no round trip in it — and the authority's copy of the same
+throw comes back a round trip later with their slot on it. Drawing both is two
+grenades for one throw. It is the same skip `NetRoster` makes for the local
+player's own body, for the same reason and at the same seam.
+
+**Everybody else's are `net/NetGrenades`**, which is `NetSoldier`'s job done
+for the one thing on the map that is not a body: a fixed pool the size of the
+authority's own, one interpolation buffer per flight, and no ballistics at all.
+Two details in it are load-bearing.
+
+- **A flight is named by a monotonic id, never by a pool slot.** A slot is
+  reclaimed the instant the grenade in it went off, so a client keying on the
+  index takes the next grenade's samples as a continuation of the last one's
+  and draws a streak from the detonation to somebody's hand. `GrenadeSystem`
+  stamps `Grenade.id` at the throw and never reuses one.
+- **A ghost is shown on the frame it is POSED, not the frame it is claimed.**
+  The claim happens on a socket callback and the pose on the next frame, so a
+  mesh shown at the claim is drawn once at wherever the pool last left it — the
+  origin for a slot nobody has used, and the previous grenade's detonation
+  point for one that has. Measured in a browser against a live match: every
+  first-drawn position was a metre or two off a hand before the fix and the
+  map's origin or a dead grenade's grave before it.
+
+A flight that stops appearing in snapshots has gone off, and it is hidden on
+the snapshot that drops it rather than played out to the end of its buffer.
+`Match` flushes the `explode` event on the same broadcast, so the two arrive
+together and the grenade vanishes on the frame the fireball appears. The cost
+is the last `interpDelay` of arc, which is nothing for the ordinary detonation
+— a grenade that has already come to rest — and a stride for one caught still
+bouncing. Playing the tail out instead would draw a grenade flying through the
+middle of its own explosion.
+
 ## The lobby, and why there is no central registry
 
 **The registry in `server/index.ts` IS the lobby.** Matches live in that
@@ -712,9 +764,6 @@ Stated so nobody assumes otherwise:
   text entry anywhere in it: a focused input has to be kept from feeding the
   game's own key handling, and neither that nor a pad path exists. `Game.playerName`
   is where it lands.
-- **In-flight grenade replication.** The blast is authoritative and every client
-  sees it; the projectile arcing toward them is not yet replicated, so a grenade
-  currently arrives as an explosion.
 - **Hearing anybody else's weapon.** A remote body is silent: the shot, the
   reload and the boots are `Sfx.botShot`/`botReload`/`botStep` hung off
   `BattleSystem` callbacks offline, and none of those fires on a client here.

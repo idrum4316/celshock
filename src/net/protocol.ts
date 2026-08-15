@@ -184,6 +184,49 @@ export interface EntityState {
   fired?: boolean;
 }
 
+/**
+ * One grenade in the air, as the client needs to draw it.
+ *
+ * **State and not an event**, which is the whole of the design here. A throw
+ * announced once and simulated on each client would be sixteen ballistic
+ * solves off one message — and they would not agree: the flight is integrated
+ * per frame against a frame time nobody shares, and a bounce multiplies the
+ * disagreement rather than damping it. The grenade would come to rest at your
+ * feet on your screen and go off three metres away, because the blast is the
+ * authority's and always has been. So the position is sent at the snapshot
+ * cadence like everything else that moves, and interpolated behind the same
+ * clock — see `net/NetGrenades`.
+ *
+ * Additive, like `fire` and `scores`: an older client ignores the field and
+ * sees exactly what it saw before it existed, a newer client against an older
+ * server draws nothing, and neither is a protocol break — hence no version
+ * bump.
+ */
+export interface GrenadeState {
+  /**
+   * Names the FLIGHT, not a pool slot: monotonic on the server and never
+   * reused, so a client can key a sample buffer on it. See `Grenade.id` in
+   * `GrenadeSystem` for what reuse would draw.
+   */
+  i: number;
+  p: Vec3;
+  /**
+   * The thrower's roster slot, or -1 for one nobody on the roster threw.
+   *
+   * On the wire so that the one client who must NOT draw this can tell: the
+   * thrower has watched their own copy leave their own hand since the frame
+   * they threw it, a round trip before this arrived, and drawing the
+   * authority's as well would put two grenades in the air for one throw.
+   */
+  by: number;
+  /**
+   * Seconds of fuse left, so the pip blinks in step with the thrower's own —
+   * see `pipLit`. It falls linearly, which is what makes lerping it between
+   * two samples exact rather than merely close.
+   */
+  fuse: number;
+}
+
 /** A control point, mirrored onto the client's `ConquestSystem`. */
 export interface PointState {
   id: string;
@@ -201,6 +244,13 @@ export interface Snapshot {
   entities: EntityState[];
   points: PointState[];
   tickets: [number, number];
+  /**
+   * Grenades in the air, and ABSENT when there are none — which is most ticks.
+   * A snapshot goes out twenty times a second and a grenade is a rare thing,
+   * so the empty array is worth not sending; a client reads the missing field
+   * as "nothing is flying", which is also what an older server means by it.
+   */
+  grenades?: GrenadeState[];
 }
 
 // --- events ---------------------------------------------------------------
