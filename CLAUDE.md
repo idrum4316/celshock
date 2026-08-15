@@ -292,54 +292,40 @@ shadow. Crouch is that one point moving, and `Player.center` must come down the
 same half metre or the feature inverts and crouching makes you *easier* to kill.
 
 Two tables carry the kit and neither knows about the other: `CONFIG.weapons` owns
-the round, `CONFIG.sights` owns the picture, and `entities/weapons.ts` /
+the round and `CONFIG.sights` owns the picture, and `entities/weapons.ts` /
 `entities/sights.ts` derive their ids from those tables so each is declared in
-exactly one place. **The aimed pose is derived, never authored** — `applyFit`
-cancels the fitted sight's own `sightCenter` so its reticle lands on the axis
-`CombatSystem` sends bullets down, and it owes a re-derivation on every loadout
-change, *including a change of weapon*. **The aimed hold sway is on the AIM, not
-the rendered camera**: applied to the camera it would slide the world behind a
-reticle still welded to the bore, and the sight picture would lie.
+exactly one place.
 
-**The trigger is two questions, not one**: `semiAuto` asks whether it has to come
-up between pulls and `burst` asks what one pull spends. `Player.tryShot` owns both,
-and the burst is the one thing in the game that fires with the trigger *released* —
-the rounds are owed by the pull, so a reload, a swap, an empty magazine or a death
-must ABANDON what is left rather than bank it.
+**Everything about an aimed weapon is arranged so that the reticle cannot lie,
+and every rule here is that one rule.** The aimed pose is DERIVED and never
+authored — `applyFit` cancels the fitted sight's own `sightCenter` so its reticle
+lands on the axis `CombatSystem` sends bullets down, and it owes a re-derivation
+on every loadout change, *including a change of weapon*. The aimed hold sway is
+on the AIM rather than on the rendered camera, which would slide the world behind
+a reticle still welded to the bore. The kick spring's off-axis terms are damped
+hard while aimed and its longitudinal travel is not, because anything that
+rotates or laterally shifts the model while aimed takes the sight off that axis —
+and the reload breaks the aim outright rather than posing an aimed weapon.
 
-**The reload is a timeline keyed to its own sound, and the magazine is the one
-part of a weapon that moves.** `CONFIG.viewmodel.reload` lays the gesture out in
-fractions of the weapon's `reloadTime`, and three of them are `Sfx.reload`'s
-clacks to the frame — change one and change the other. The magazine can move at
-all only because the model merged it into a node of its own (`WeaponParts.magazine`);
-everything else on a weapon is inside one merged mesh per colour and cannot be
-animated without the same split. The gesture is a CANT rather than a lift, and it
-**breaks the aim** (`reload.aimBreak`) rather than posing the weapon where it
-stands: an aimed weapon is on the camera axis, so any reload pose applied there
-puts the receiver across the middle of the screen.
+**What is left is springs and timelines with one owner each.** The punch is a
+SPRING the shot hands a velocity to: `Player` owns the integrator and `ViewModel`
+reads it, the shape the bob phase has (`CameraSystem` owns it, the other two
+read) and for the same reason. The reload is a timeline keyed to `Sfx.reload`'s
+clacks to the frame — change a fraction in one file and change it in the other —
+and the magazine moves only because the model merged it into a node of its own,
+which is the one way any part is let out of a weapon. **The trigger is two
+questions**: `semiAuto` asks whether it must come up between pulls, `burst` asks
+what one pull spends, and a reload, a swap, an empty magazine or a death must
+ABANDON what a burst still owes rather than bank it.
 
-**The weapon punch is a SPRING the shot hands a velocity to, not a level the
-shot sets.** `Player` owns it and `ViewModel` reads it — one integrator with one
-owner and one reader, the same shape as the bob phase (which `CameraSystem` owns
-and both of the others read) — so a round travels, overshoots the carry on the way home and settles,
-and a round arriving on a weapon that has not come home adds to what is there.
-Its lateral, roll and yaw take the shot's own `kickDrift`, so the model leans the
-way the muzzle actually walked, and its whole reach is scaled by a **compressed**
-`recoilMult` (`kick.compress`) because 2.2 is a defensible thing to do to an aim
-and an indefensible thing to do to a pose in centimetres. **The off-axis terms
-are damped hard while aimed and the longitudinal travel is not**: the weapon
-carries the sight, so anything that rotates or laterally shifts it while aimed
-takes the reticle off the axis the rounds fly down, and a reticle that moves
-where the bullets do not is the failure the aimed hold sway is arranged to avoid
-from the other side.
-
-→ **[`docs/weapons.md`](docs/weapons.md)** — the viewmodel's own rendering group
-and pose stack, the bob phase's single integrator, the reload's four beats and
-the magazine that leaves the weapon on them, the kick spring and the recoil
-pattern's two envelopes, the two slots and their holsters, the five weapons and
-the three fire modes, how an optic's size and its eye relief are one number, and
-the procedural-model rules (merge per colour; a second merge is how a part is let
-out of the weapon; never scale a part non-uniformly).
+→ **[`docs/weapons.md`](docs/weapons.md)** — the crouch latch and what spends it,
+the viewmodel's own rendering group and pose stack, the bob phase's single
+integrator, the reload's four beats and the magazine that leaves the weapon on
+them, the kick spring's compressed reach and the recoil pattern's two envelopes,
+the two slots and their holsters, the five weapons and the three fire modes, the
+head zone, how an optic's size and its eye relief are one number, and the
+procedural-model rules (merge per colour; a second merge is how a part is let out
+of the weapon; never scale a part non-uniformly).
 
 ### Grenades
 
@@ -382,12 +368,12 @@ in a hole in the scrim, the lobby's row identity, and the short-viewport scaling
 
 ### The scene has (almost) no Babylon lights
 
-Cel materials carry their own `lightDir`/`lightColor`/`ambientColor`/
-`skyLightColor` and a packed array of up to `MAX_POINT_LIGHTS` (16) point lights
-as uniforms; `LightingSystem` is the sole owner of dynamic light and uploads the
-winning slots once per frame. **Adding a `PointLight` or `HemisphericLight` to the
-scene will not affect any cel-shaded mesh.** The one exception is `ShadowSystem`'s
-`DirectionalLight`, which no material reads — it exists to define the shadow
+Cel materials carry their own light as uniforms — key, ambient and sky fill, plus
+a packed array of up to `MAX_POINT_LIGHTS` (16) point lights — and
+`LightingSystem` is the sole owner of dynamic light, uploading the winning slots
+once per frame. **Adding a `PointLight` or `HemisphericLight` to the scene will
+not affect any cel-shaded mesh.** The one exception is `ShadowSystem`'s
+`DirectionalLight`, which no material reads: it exists to define the shadow
 camera.
 
 **Nothing drawn outside the cel shader gets fog for free, and everything that
@@ -397,23 +383,22 @@ every unlit emissive material. Nothing may describe different weather from the
 wall it hangs in front of.
 
 **The world carries a VERTEX COLOUR buffer and its neutral values are the GL
-defaults, not ours.** `world/ambientOcclusion.ts` bakes per-vertex ambient
-occlusion into the buffer's **alpha** and marks world geometry in its **green**,
-because a mesh with no such buffer reads the disabled attrib's `(0, 0, 0, 1)` —
-alpha 1 (unoccluded) and green 0 (not world). That is what lets the rigs, the
-viewmodel and every effect mesh stay correct while carrying nothing, and it is
-why AO is in alpha rather than in a channel that would have needed a fourth cel
-material variant. The bake runs **after every merge**: `VertexData.merge` throws
-outright when one mesh in a group has `colors` and another does not.
+defaults, not ours** — baked ambient occlusion in the **alpha**, a world marker
+in the **green**, because a mesh with no such buffer reads the disabled attrib's
+`(0, 0, 0, 1)`: alpha 1 (unoccluded) and green 0 (not world). That is what lets
+the rigs, the viewmodel and every effect mesh stay correct while carrying
+nothing. The bake runs **after every merge**, and cannot be moved earlier:
+`VertexData.merge` throws outright when one mesh in a group has `colors` and
+another does not.
 
 → **[`docs/rendering.md`](docs/rendering.md)** — the four light terms and the
-baked occlusion that modifies two of them, the three light flavours and the
-muzzle-flash budget, the per-pixel/per-mesh fog split and `OutlineFog`'s three
-cache-invalidation rules, the shadow window, its four-tap lookup and the
-registry that lets grass and water share it, why the dither is in the surface
-shaders rather than the grade, the constraints that look like bugs if you undo
-them (image processing, rendering group 1, thick boxes under walked surfaces,
-coplanar faces), and the painted sky.
+baked occlusion that modifies two of them (and the three further rules that
+buffer carries), the three light flavours and the muzzle-flash budget, the
+per-pixel/per-mesh fog split and `OutlineFog`'s three cache-invalidation rules,
+the shadow window, its four-tap lookup and the registry that lets grass and water
+share it, why the dither is in the surface shaders rather than the grade, the
+constraints that look like bugs if you undo them (image processing, rendering
+group 1, thick boxes under walked surfaces, coplanar faces), and the painted sky.
 
 ### The map is data, not code
 
