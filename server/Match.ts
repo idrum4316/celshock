@@ -405,6 +405,20 @@ export class Match {
     // has nothing to simulate.
     await this.ensureRunning();
 
+    // That await is long enough for the socket to have gone — a tab closed, a
+    // connection that never really came up — and `close` was wired above it, so
+    // `drop` has ALREADY run: it released the roster slot and put the bot back.
+    // Seating the player now would bench that bot for the life of the match and
+    // leave a body in `HeadlessGame.players` that no peer owns and nothing ever
+    // removes, because the only thing that removes one is the drop that has
+    // been and gone. The team plays a body short and the ghost is tracked for
+    // rewind forever.
+    //
+    // Tested on the peer map rather than on a flag, because that map is what
+    // `drop` empties and what everything else here reads to mean "still
+    // connected".
+    if (!this.peers.has(id)) return;
+
     // The bot in this slot comes off the field and a person takes its place.
     const player = this.game.addPlayer(slot.index, slot.team);
     // A slot changing hands must not inherit the last occupant's travel. The
@@ -488,8 +502,76 @@ export class Match {
     console.log(`[${this.id}] idle; world disposed`);
   }
 
-  private async ensureRunning(): Promise<void> {
-    if (this.timer) return;
+  /**
+   * Ends this match and drops everyone in it, for a failure it cannot carry on
+   * through. The only caller is a rotation that threw.
+   *
+   * Closing the sockets is the honest answer rather than the harsh one: every
+   * client reconnects on its own (`net/Connection.retry`) and lands in a fresh
+   * match a second later, whereas a match left standing with a stopped loop is
+   * a round that renders, never advances and never ends — and nothing on a
+   * client can tell that from a server that has merely gone quiet.
+   *
+   * The peer map is emptied here rather than left to each socket's `close`,
+   * which arrives a turn later: `retire` refuses to run while anybody is still
+   * seated, and the point of this method is that nobody is.
+   */
+  private abandon(reason: string): void {
+    this.rotating = false;
+    this.stop();
+    if (this.idleTimer !== null) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    for (const peer of this.peers.values()) {
+      this.send(peer, { t: "rejected", reason });
+      peer.socket.close();
+    }
+    this.peers.clear();
+    this.retire();
+  }
+
+  /**
+   * The build that is in flight, or null. **The whole of what makes
+   * `ensureRunning` safe to call from two arrivals at once.**
+   *
+   * Every guard in `start` below is written on the far side of an `await`, so
+   * without this two peers landing in an empty match inside the world build —
+   * a couple of hundred milliseconds, which is one lobby row two people click
+   * on, or a server restart everybody reconnects to — each find `timer` null
+   * and `map` null and each go on to build a world and start a loop over it.
+   * What that leaves is not a slow match, it is a broken process: the second
+   * assignment to `timer` orphans the first interval, so `stop` can never clear
+   * it, the match steps twice per tick for the rest of its life, and the orphan
+   * goes on calling `step` after `retire` has disposed the scene — which throws
+   * inside a timer callback and takes down every other match in the process
+   * with it.
+   *
+   * Cleared in a `finally` so a build that FAILED is retried by the next
+   * arrival rather than being remembered as permanently in progress; the
+   * rejection still reaches every caller that was waiting on it, and
+   * `server/index.ts` closes each of their sockets with a reason.
+   */
+  private starting: Promise<void> | null = null;
+
+  /**
+   * Builds the world and starts the loop, once, however many peers ask at once.
+   *
+   * Not `async` itself: the point is to hand every concurrent caller the SAME
+   * promise, and an async wrapper around the same body would give each of them
+   * a fresh one over a fresh build.
+   */
+  private ensureRunning(): Promise<void> {
+    if (this.timer) return Promise.resolve();
+    if (!this.starting) {
+      this.starting = this.start().finally(() => {
+        this.starting = null;
+      });
+    }
+    return this.starting;
+  }
+
+  private async start(): Promise<void> {
     if (!this.game.map) {
       const def = MAPS.find((m) => m.id === this.mapId) ?? MAPS[0];
       await this.game.startRound(def, 1);
@@ -526,10 +608,31 @@ export class Match {
 
   /** One simulation step, and a snapshot on the ticks that owe one. */
   private step(): void {
+    // A rotation owns the world until it hands it back, and the loop keeps
+    // firing across the whole of it — the round-over pause and then the rebuild
+    // — because nothing here stops the interval. For the length of `rotate`'s
+    // await, `HeadlessGame.map` still points at the map `startRound` has
+    // already DISPOSED, so a step taken there walks a scene whose meshes are
+    // gone.
+    //
+    // It does not currently crash, and that is an accident worth naming rather
+    // than relying on: `conquest.winner` is still set from the round that
+    // ended, so `HeadlessGame.step` returns before it reaches `battle`, and it
+    // stops being true the moment anything resets that earlier. This flag is
+    // the fact itself, so the safety no longer rests on a second one agreeing
+    // with it.
+    //
+    // The tick the round ends on is not affected: `rotating` is set BELOW,
+    // after that tick has already run and broadcast its `roundover`.
+    if (this.rotating) return;
+
     const live = this.game.step(1 / TICK_HZ);
     this.ticks++;
 
-    if (!live && this.game.conquest.winner !== null && !this.rotating) {
+    // No `!this.rotating` here any more: the guard at the top of this method is
+    // that test, made once for the whole step rather than for this branch
+    // alone.
+    if (!live && this.game.conquest.winner !== null) {
       this.queue({ e: "roundover", winner: this.game.conquest.winner });
       // The round is over but the match is not. Everyone stays seated, the
       // card goes up on every client, and the next map is built after a pause
@@ -537,7 +640,19 @@ export class Match {
       // frozen world with no way out but reconnecting.
       this.rotating = true;
       this.broadcastSnapshot();
-      setTimeout(() => this.rotate(), ROUND_OVER_MS);
+      setTimeout(() => {
+        // A rotation is the one place a failure would now be permanent. It is
+        // what clears `rotating`, and `rotating` is what lets the loop step, so
+        // a build that threw would leave sixteen people in a match that renders
+        // and never advances — and an uncaught rejection out of a timer takes
+        // the process, and every other match on it, down instead. Neither is
+        // an outcome to leave to chance for the sake of an await that is
+        // usually fine.
+        this.rotate().catch((err: unknown) => {
+          console.error(`[${this.id}] rotation failed; abandoning match:`, err);
+          this.abandon("the match server could not build the next map");
+        });
+      }, ROUND_OVER_MS);
       return;
     }
     if (this.ticks % TICKS_PER_SNAPSHOT === 0) this.broadcastSnapshot();
@@ -752,13 +867,23 @@ export class Match {
         // Already seated. A second join is a confused client, not an attack.
         break;
       case "move":
-        this.onMove(peer, msg);
-        break;
       case "shot":
-        this.onShot(peer, msg);
-        break;
       case "grenade":
-        this.onGrenade(peer, msg);
+        // The three that reach into the world, gated on the same fact `step`
+        // is: between a round ending and the next one being built there is a
+        // window in which `game.map` is the map `startRound` has already
+        // disposed, and a message is the one thing that can arrive inside it —
+        // a client whose own round is over still has a socket, and its last
+        // shots are in flight. Dropping them is right on its own terms as well:
+        // a round fired into a fight that has finished has nothing left to hit.
+        //
+        // `deploy` below is deliberately NOT here. It touches no geometry — it
+        // writes an integer a later tick spends — and refusing it would drop a
+        // request the client has no reason to send twice.
+        if (this.rotating) break;
+        if (msg.t === "move") this.onMove(peer, msg);
+        else if (msg.t === "shot") this.onShot(peer, msg);
+        else this.onGrenade(peer, msg);
         break;
       case "deploy":
         this.onDeploy(peer, msg);
