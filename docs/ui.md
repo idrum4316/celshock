@@ -42,6 +42,19 @@ matches an action by kind and a match by id, never by anything that changes
 (a count going 3 → 4 is the same row). The settings screen is spared this only
 because its rows are a static table.
 
+**A row that PICKS is not a row that FIRES, and the pointer has to tell them
+apart.** The lobby's rows fire on pointer-DOWN — that is the edge everything
+which leaves a screen uses — but its Map row only steps a choice, and the map
+buttons inside it take ordinary clicks on the way UP, exactly as the menu's own
+map and difficulty rows do. Firing the row on the down edge as well would cycle
+the choice under the finger and then set the clicked one, which lands in the
+right place by luck and flickers getting there. The row is above **New match**
+rather than below it for the reason the menu puts Map above Deploy: the
+parameter, then the button that spends it. It is the map a match this client
+CREATES will be started on and says nothing about the matches listed above it —
+see [`docs/multiplayer.md`](multiplayer.md) for why joining one takes that
+match's map instead.
+
 **The four cards are one class because they are one element** — they share the
 shell, the title block, the controls table and the Deploy button. The bar for a
 screen of its own is *state*: the deploy map has a selection and a canvas, the kit

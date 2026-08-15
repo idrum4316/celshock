@@ -431,6 +431,23 @@ export interface Join {
    */
   create?: boolean;
   /**
+   * The map a NEW match should be started on.
+   *
+   * A request and only that. It is consulted when this join CREATES a match and
+   * ignored entirely when it lands in one that already exists — a match's map is
+   * a fact about the match, and sixteen people are already standing in it. So a
+   * client sends its preference on every join and the server spends it or drops
+   * it; what a client must never do is take its own answer, which is the bug
+   * this field was added to fix (a lobby join built whatever the menu had
+   * selected while the authority ran something else).
+   *
+   * Resolved against the server's own `MAPS` table exactly as the weapon id is,
+   * and an id it has never heard of falls back to the default rather than being
+   * refused. Additive: a server that has never heard of the field creates on its
+   * default map, which is what every client got before this existed.
+   */
+  map?: string;
+  /**
    * The primary weapon this client wants to carry.
    *
    * The SERVER resolves this to damage and range, and validates it against the

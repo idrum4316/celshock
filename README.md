@@ -33,6 +33,11 @@ matches that server is running, with a row per match and a button to start a
 fresh one. A match is always 8v8; every seat nobody is sitting in is a bot, so a
 round starts with one person in it and fills up as people arrive.
 
+**A new match is started on the map you pick in that screen's Map row; joining
+one puts you on the map it is already running**, whichever map the menu happens
+to be showing. Every row names its match's map, and the server rotates to the
+next one when a round ends.
+
 Locally:
 
 ```bash

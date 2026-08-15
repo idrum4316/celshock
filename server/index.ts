@@ -59,9 +59,15 @@ const matches = new Map<string, Match>();
  */
 let nextMatchId = 1;
 
-/** Builds and registers a match. The only place either happens. */
-function createMatch(): Match {
-  const match = new Match(`m${nextMatchId++}`);
+/**
+ * Builds and registers a match. The only place either happens.
+ *
+ * `mapId` is what the joining client ASKED for and is passed straight to
+ * `Match`, which resolves it against the real map table — nothing here trusts
+ * it, and nothing here needs to know what maps exist.
+ */
+function createMatch(mapId?: string): Match {
+  const match = new Match(`m${nextMatchId++}`, mapId);
   match.onRetired = () => matches.delete(match.id);
   matches.set(match.id, match);
   return match;
@@ -84,10 +90,17 @@ function createMatch(): Match {
  * An UNNAMED join is the opposite and still fills whatever has room: that is
  * `?mp` on the URL and every client that predates the lobby, neither of which
  * expressed a preference to betray.
+ *
+ * **The requested map is spent only on a match this call CREATES**, and both
+ * create paths take it — the explicit one and the fallthrough where nothing had
+ * room. A peer landing in an existing match gets that match's map and is told so
+ * in the welcome; a preference cannot move a round sixteen people are already
+ * standing in.
  */
 function routeJoin(
   matchId?: string,
   create?: boolean,
+  map?: string,
 ): { match: Match } | { refuse: string } {
   if (matchId !== undefined) {
     const match = matches.get(matchId);
@@ -102,7 +115,7 @@ function routeJoin(
     if (matches.size >= MAX_MATCHES) {
       return { refuse: "this server is already running as many matches as it can" };
     }
-    return { match: createMatch() };
+    return { match: createMatch(map) };
   }
   for (const match of matches.values()) {
     if (match.hasBotSlot()) return { match };
@@ -110,7 +123,7 @@ function routeJoin(
   if (matches.size >= MAX_MATCHES) {
     return { refuse: "every match on this server is full" };
   }
-  return { match: createMatch() };
+  return { match: createMatch(map) };
 }
 
 /** The lobby's view of this process. */
@@ -177,7 +190,7 @@ wss.on("connection", (socket: WebSocket) => {
           `protocol ${msg.version} but this server speaks ${PROTOCOL_VERSION}`,
         );
       }
-      const route = routeJoin(msg.matchId, msg.create);
+      const route = routeJoin(msg.matchId, msg.create, msg.map);
       // Refused BEFORE `joined` is set, so a client that named a match which
       // has since filled can pick another row and try again on the same socket
       // rather than reconnecting. `refuse` closes it anyway today; leaving the

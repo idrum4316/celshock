@@ -45,6 +45,11 @@ export interface JoinOptions {
   matchId?: string;
   /** Ask for a fresh match instead of filling one. Ignored with `matchId`. */
   create?: boolean;
+  /**
+   * Which map a match created by this join should be started on. Ignored when
+   * the join lands in a match that already exists — see `Join.map`.
+   */
+  map?: string;
 }
 
 export class Connection {
@@ -128,6 +133,7 @@ export class Connection {
         name: this.join.name,
         matchId: this.join.matchId,
         create: this.join.create,
+        map: this.join.map,
         weapon: this.join.weapon,
       });
     });

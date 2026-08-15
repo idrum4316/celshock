@@ -289,6 +289,16 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   budget wrecks: the local reinforcement countdown takes ~80 s of wall clock to
   run out, so force `g.respawnT = 0` rather than waiting for it. The server's
   clock is real and is the one that actually gates the deploy.
+- **To stage a map change, push the MESSAGE, not the callback.** `g.net.onRoundStart("greyfen")`
+  looks like a rotation and is not one: `NetSession.mapId` is written by `receive`,
+  so calling the callback directly leaves the session still naming the old map and
+  `buildRound` — which reads it as the authority's answer — quietly puts the map
+  back on the way through. `g.net.conn.onMessage({t:"roundstart", mapId, now:
+  Date.now()})` goes through the real path, and the same trick stages a reconnect
+  onto a rotated match with a `welcome`. Both are the only way to see a rotation at
+  all without playing a round out: `ROUND_OVER_MS` is 8 s on top of a full ticket
+  bleed. To record which world each build actually got, wrap `g.installMap` and push
+  `g.mapDef.id` — the end state alone cannot tell one build from two.
 - **The whole of spawn selection is testable without a browser, and two of the
   three ways are faster than one.** `dist-server/assets/HeadlessGame-*.js`
   exports the simulation (`H`) and the world chunk exports `MAPS`/`CONFIG`

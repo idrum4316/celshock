@@ -651,6 +651,59 @@ resolved there: truncated to `MAX_NAME_LENGTH`, stripped of the control
 characters that hide the rest of a string, and never escaped — escaping belongs
 to whatever renders it, and every screen writes a name with `textContent`.
 
+### The map belongs to the match, and a client never picks it
+
+**A match is played on the map the authority is running, and joining one takes
+that map whatever the menu had selected.** This is not a preference the client
+gets to hold: the world is built LOCALLY on both sides and no geometry crosses
+the wire, so a client on a different map is not playing the same game — its
+walls, its flags and its spawns are somewhere else, and every position that
+arrives is nonsense in the world it is drawn into. It read exactly like a
+multiplayer bug of the ordinary kind: pick Greyfen in the menu, join a match
+running Hollowmere, and the round comes up in Greyfen with bodies walking
+through hillsides.
+
+The map is stated in the `welcome` and again in every `roundstart`, and
+`Game.applyMatchMap` is the single funnel that spends either. It answers three
+things, because there are three:
+
+- **`same`** — the ordinary case, and what the lobby's row buys. `LobbyScreen`
+  hands the row's `mapId` down with its id (`onJoin`), so `joinMatch` applies it
+  BEFORE booking the round and the first build is already the right world.
+- **`changed`** — the caller owes a build, and there are three callers.
+  `buildRound` reads it when the welcome beat the build (the same two-sided race
+  the team has, and settled the same way); `NetSession.onSeated` rebuilds when
+  the welcome lost, which is an unnamed `?mp` join or a match that rotated
+  between the list and the pick; `onRoundStart` rebuilds on every rotation.
+- **`unknown`** — an id this build does not have, from a server one version
+  ahead. There is no world to build, so there is no round to play: the session is
+  dropped and the player is put back in the lobby with the reason, the same three
+  moves a `rejected` makes.
+
+**Rotation was the case that proved the rule was missing.** The client used to
+route it through `Game.setMap`, which refuses to run outside the menu — and a
+rotation arrives in `roundover`, so *every* map change on the server left the
+client rebuilding the map it was already on. `applyMatchMap` may write `mapDef`
+from any state precisely because every caller builds within the same frame;
+`setMap` keeps the menu guard, because it is the player choosing.
+
+**`setMap` is the PREFERENCE and is remembered; a match's map is neither.**
+Nothing on the netplay path calls `writeMap`, and `enterMenu` puts `mapDef` back
+to `readMap()` on the way out of a match — so the menu offers what you chose,
+not the map of whatever round you last dropped into.
+
+**Creating a match is the one join that carries a map**, as `Join.map`. It is a
+REQUEST: the server spends it only on a match this join actually builds (both
+create paths in `routeJoin`, including the fallthrough where nothing had room)
+and ignores it entirely when the peer lands in an existing match — a preference
+cannot move a round sixteen people are already standing in. `Match`'s constructor
+resolves it against the real `MAPS` table exactly as `admit` resolves the weapon
+id, so an unknown id falls back to the default rather than standing up a match
+naming a world the server does not have. Additive on the wire: a client that
+sends no `map` gets the default, which is what every client got before the field
+existed. The lobby's own Map row is where a player sets it, and it is the same
+pick the menu shows — one choice, two places it is on screen.
+
 ## What is not built yet
 
 Stated so nobody assumes otherwise:

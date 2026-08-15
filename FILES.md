@@ -241,10 +241,13 @@ src/
                         #   choice). Owns no setting: picks leave through
                         #   onChange and return as setValues
     LobbyScreen.ts      # The match browser: one row per match on the server,
-      lobby.css         #   plus new/refresh/back. Rows are DERIVED from the
-                        #   list, and everything off the wire is written with
-                        #   textContent. Fetches nothing — Game hands it a
-                        #   result and takes onJoin/onCreate back
+      lobby.css         #   plus map/new/refresh/back. Rows are DERIVED from
+                        #   the list, and everything off the wire is written
+                        #   with textContent. Fetches nothing — Game hands it a
+                        #   result and takes onJoin/onCreate/onPickMap back.
+                        #   The Map row is what a match CREATED here starts on;
+                        #   joining one takes that match's map, and onJoin
+                        #   carries it
     Minimap.ts          # Corner minimap: flags, friendlies, firing enemies
       minimap.css
   net/                # Multiplayer, client side. Nothing here is constructed

@@ -645,6 +645,15 @@ no ragdolls at all. The body is offered on the INTERPOLATED death rather than on
 the `kill` event, because the event is real time and the body is drawn
 `interpDelay` behind it; the event's job is to carry the blow that throws it.
 
+**The map belongs to the MATCH, and a client never picks the map of a match it
+joins.** Both sides build the world locally and none of it crosses the wire, so a
+client on a different map is not playing the same game. The authority states it in
+the welcome and in every `roundstart`; `Game.applyMatchMap` is the one funnel that
+spends either, and it rebuilds when they disagree. `Game.setMap` is the *player*
+choosing — menu or lobby only, remembered, and never written from the wire — and
+the only join that carries a map is one that CREATES a match (`Join.map`, resolved
+against the server's own table like the weapon id).
+
 **The match registry in `server/index.ts` IS the lobby, and needs nothing
 central to check in with** — matches live in that one process's memory, so the
 list it serves on `GET /matches` is authoritative for itself. A master server is

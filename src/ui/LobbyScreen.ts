@@ -32,6 +32,16 @@ import { MAPS } from "../world/maps";
  */
 type LobbyRow =
   | { kind: "match"; match: MatchSummary }
+  /**
+   * The map a NEW match would be started on — the same pick as the menu's Map
+   * row, shown again here because this is where it is spent.
+   *
+   * It says nothing about the match rows above it: a match is played on the map
+   * it is running, and joining one takes that map whatever this row says. Above
+   * `create` for the reason the menu puts Map above Deploy — the parameter,
+   * then the button that spends it.
+   */
+  | { kind: "map" }
   | { kind: "create" }
   | { kind: "refresh" }
   | { kind: "back" };
@@ -43,7 +53,13 @@ type LobbyPhase =
   /** A join is in flight. The list stays up so the chosen row is still read. */
   | { phase: "joining"; matchId: string };
 
-/** Label and hint for each action row. */
+/**
+ * Label and hint for each action row.
+ *
+ * `create`'s hint is the one that is not a constant — it names the map the row
+ * would start a match on, which is `fillRow`'s job because the answer is a
+ * field. What is here is the fallback for a screen that has not been told one.
+ */
 const ACTION_LABELS: Record<"create" | "refresh" | "back", [string, string]> = {
   create: ["New match", "Start a fresh round"],
   refresh: ["Refresh", "Ask the server again"],
@@ -104,10 +120,26 @@ export class LobbyScreen {
   private index = 0;
   private state: LobbyPhase = { phase: "loading" };
 
-  /** Wired by Game: join this specific match. */
-  onJoin: (matchId: string) => void = () => {};
-  /** Wired by Game: start a new match on this server. */
+  /**
+   * Wired by Game: join this specific match, which is running this map.
+   *
+   * The map id travels WITH the id rather than being looked up later, because
+   * this row is where the two are known together — the client has to build the
+   * match's world and not its own, and a join that carried only the id would
+   * leave the game guessing until the welcome arrived.
+   */
+  onJoin: (matchId: string, mapId: string) => void = () => {};
+  /** Wired by Game: start a new match on this server, on the chosen map. */
   onCreate: () => void = () => {};
+  /**
+   * Wired by Game: the map row moved, to this index into `MAPS`.
+   *
+   * An index and not the choice itself: `Game` owns the pick (it is the same
+   * one the menu shows and the same one that is remembered), so this screen
+   * asks for it to move and is told what it became through `setMapChoice`. It
+   * never writes its own state — the rule every list-shaped screen here keeps.
+   */
+  onPickMap: (index: number) => void = () => {};
   /** Wired by Game: fetch the list again. */
   onRefresh: () => void = () => {};
   /** Wired by Game: leave the screen. */
@@ -122,12 +154,19 @@ export class LobbyScreen {
 
   show(): void {
     this.root.classList.remove("hidden");
-    // Raised anew every time, so the cursor starts at the top of a list the
-    // player has not seen. Unlike the main menu there is no row worth
-    // preserving across visits — the rows themselves differ each time.
+    // Raised anew every time, and never on the row the list happens to start
+    // with. Unlike the main menu there is nothing worth preserving across
+    // visits — the rows themselves differ each time — but the row it OPENS on
+    // matters for the same reason `MENU_DEFAULT` puts the menu's cursor on
+    // Deploy rather than on Map: the screen is raised to do something, and the
+    // first row is a picker that would answer a blind Enter by cycling a map.
+    // The identity rule then keeps the cursor here when the list lands under
+    // it.
     this.index = 0;
     this.state = { phase: "loading" };
     this.render();
+    const create = this.rows.findIndex((r) => r.kind === "create");
+    if (create >= 0) this.setIndex(create);
   }
 
   hide(): void {
@@ -149,6 +188,22 @@ export class LobbyScreen {
     this.state = { phase: "joining", matchId };
     this.render();
   }
+
+  /**
+   * Which map a new match would be started on, as an index into `MAPS`.
+   *
+   * Pushed in by `Game` both when the screen opens and after every pick, so the
+   * row and the game's own choice cannot disagree — the same one-way shape
+   * `SettingsScreen.setValues` has.
+   */
+  setMapChoice(index: number): void {
+    if (index === this.mapChoice) return;
+    this.mapChoice = index;
+    this.render();
+  }
+
+  /** The map row's selection. Index into `MAPS`; `Game` owns the value. */
+  private mapChoice = 0;
 
   moveRow(delta: number): void {
     if (this.rows.length === 0) return;
@@ -172,7 +227,13 @@ export class LobbyScreen {
         // worth more than a shorter list, and the server would refuse the
         // join anyway — this only saves the round trip.
         if (row.match.humans >= row.match.slots) return;
-        this.onJoin(row.match.id);
+        this.onJoin(row.match.id, row.match.mapId);
+        break;
+      // WRAPS, where left/right clamps — the same split the menu's map row
+      // keeps. A confirm that answers nothing is the thing a list screen is
+      // rebuilt to remove, so the button always moves the choice on.
+      case "map":
+        if (MAPS.length > 0) this.onPickMap((this.mapChoice + 1) % MAPS.length);
         break;
       case "create":
         this.onCreate();
@@ -187,11 +248,29 @@ export class LobbyScreen {
   }
 
   /**
+   * Left/right on the cursor's row.
+   *
+   * Only the map row has anything to step, and it CLAMPS where the confirm
+   * wraps. Every other row does one thing on Enter and deliberately nothing on
+   * a horizontal nudge: a match row's map belongs to that match, so there is
+   * nothing here for left and right to change.
+   */
+  stepRow(delta: number): void {
+    // A join in flight swallows this for the reason `activate` states — the
+    // screen is on its way out and the pick would be spent on nothing.
+    if (this.state.phase === "joining") return;
+    if (this.rows[this.index]?.kind !== "map") return;
+    this.onPickMap(this.mapChoice + delta);
+  }
+
+  /**
    * The rows this list currently has.
    *
    * The actions are always present, even when the fetch failed — a server that
    * did not answer is the case where Refresh matters most, and a screen with no
-   * Back is one that traps a pad player.
+   * Back is one that traps a pad player. The map row is one of them for the
+   * same reason: it is what a new match would be started on, and creating one
+   * is exactly what a player does when the list is empty.
    */
   private buildRows(): LobbyRow[] {
     const rows: LobbyRow[] = [];
@@ -202,7 +281,12 @@ export class LobbyScreen {
         for (const match of result.list.matches) rows.push({ kind: "match", match });
       }
     }
-    rows.push({ kind: "create" }, { kind: "refresh" }, { kind: "back" });
+    rows.push(
+      { kind: "map" },
+      { kind: "create" },
+      { kind: "refresh" },
+      { kind: "back" },
+    );
     return rows;
   }
 
@@ -242,6 +326,7 @@ export class LobbyScreen {
         </div>
         <p class="lb-nav">
           <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick / D-pad</kbd> move</span>
+          <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> map</span>
           <span><kbd>Enter</kbd><kbd class="pad">A</kbd> select</span>
           <span><kbd>Esc</kbd><kbd class="pad">B</kbd> back</span>
         </p>
@@ -267,8 +352,21 @@ export class LobbyScreen {
       el.onmouseenter = () => this.setIndex(i);
       el.onpointerdown = () => {
         this.setIndex(i);
-        this.activate();
+        // A row that PICKS rather than fires takes its clicks on the buttons
+        // inside it, which is the same split the main menu keeps: its map and
+        // difficulty rows are ordinary clicks and everything that LEAVES a
+        // screen is a pointerdown. Firing the map row here as well would cycle
+        // the choice on the way down and then set the clicked one on the way
+        // up, which lands in the right place by luck and flickers getting
+        // there.
+        if (this.rows[i]?.kind !== "map") this.activate();
       };
+    });
+    // Bound after the rows, so a click on a map button is not also the row's.
+    // `onclick` (mouse-UP) is what the menu's own map buttons use, and the row
+    // above deliberately does not act on the DOWN edge under them.
+    this.root.querySelectorAll<HTMLElement>("button[data-map]").forEach((btn) => {
+      btn.onclick = () => this.onPickMap(Number(btn.dataset.map));
     });
     this.applySelection();
   }
@@ -276,8 +374,16 @@ export class LobbyScreen {
   /** The two text cells of a row, both assigned rather than interpolated. */
   private fillRow(el: HTMLElement, row: LobbyRow): void {
     const name = el.querySelector<HTMLElement>(".lb-id");
+    if (!name) return;
+    // The map row's second cell is its buttons, which `rowMarkup` wrote from
+    // this build's own map table — there is no wire string in it, so there is
+    // nothing here to assign.
+    if (row.kind === "map") {
+      name.textContent = "Map";
+      return;
+    }
     const state = el.querySelector<HTMLElement>(".lb-state");
-    if (!name || !state) return;
+    if (!state) return;
     if (row.kind === "match") {
       name.textContent = mapName(row.match.mapId);
       state.textContent = stateLabel(row.match);
@@ -285,7 +391,14 @@ export class LobbyScreen {
     }
     const [label, hint] = ACTION_LABELS[row.kind];
     name.textContent = label;
-    state.textContent = hint;
+    // The one hint that is not a constant: the row states which map it would
+    // start a match on, so the choice one row above is visibly what this
+    // button spends. `MAPS` is this build's own table, but it reaches the DOM
+    // through `textContent` like every other cell here.
+    state.textContent =
+      row.kind === "create" && MAPS[this.mapChoice]
+        ? `${hint} on ${MAPS[this.mapChoice].name}`
+        : hint;
   }
 
   /** The line under the title: what happened, or what is running. */
@@ -304,6 +417,21 @@ export class LobbyScreen {
 
   private rowMarkup(row: LobbyRow, i: number): string {
     const sel = i === this.index ? " sel" : "";
+    // The map picker: one button per map, the chosen one lit, exactly the
+    // shape the menu's Map row has. The names are interpolated because they
+    // are THIS build's own constants — the rule at the top of the file is
+    // about strings that came off the wire, and a match's map id (which may be
+    // anything) goes through `fillRow` like every other one.
+    if (row.kind === "map") {
+      const buttons = MAPS.map(
+        (m, n) =>
+          `<button class="lb-pick${n === this.mapChoice ? " on" : ""}" data-map="${n}">${m.name}</button>`,
+      ).join("");
+      return `<div class="lb-row lb-action lb-mapline${sel}" data-row="${i}">
+          <span class="lb-id"></span><span class="lb-picks">${buttons}</span>
+          <span class="lb-count"></span>
+        </div>`;
+    }
     if (row.kind !== "match") {
       return `<div class="lb-row lb-action${sel}" data-row="${i}">
           <span class="lb-id"></span><span class="lb-state"></span>

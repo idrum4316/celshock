@@ -906,8 +906,14 @@ export class Game {
     this.overlayScreen.onOpenMultiplayer = () => this.openLobby();
     this.settingsScreen.onChange = (key, value) => this.setSetting(key, value);
     this.settingsScreen.onClose = () => this.closeSettings();
-    this.lobbyScreen.onJoin = (matchId) => this.joinMatch({ matchId });
+    // The row's own map travels with its id: a match is played on the map it is
+    // running, and the row the player picked is where that is already known.
+    this.lobbyScreen.onJoin = (matchId, mapId) => this.joinMatch({ matchId, mapId });
+    // A new match is the one join that DOES take this client's map — the map
+    // row on that screen is the same pick as the menu's, and `joinMatch` sends
+    // it for the server to spend on the match it builds.
     this.lobbyScreen.onCreate = () => this.joinMatch({ create: true });
+    this.lobbyScreen.onPickMap = (index) => this.setMap(index);
     this.lobbyScreen.onRefresh = () => void this.refreshLobby();
     this.lobbyScreen.onClose = () => this.closeLobby();
     this.overlayScreen.onPauseAction = (action) => {
@@ -1078,6 +1084,11 @@ export class Game {
   private openLobby(): void {
     if (this.state !== "menu") return;
     this.state = "lobby";
+    // The map row starts on whatever the menu underneath is offering — there is
+    // one map choice in this game and two places it is shown, so the screen is
+    // handed the standing one rather than keeping a second copy that could
+    // disagree with it.
+    this.lobbyScreen.setMapChoice(MAPS.indexOf(this.mapDef));
     this.lobbyScreen.show();
     void this.refreshLobby();
   }
@@ -1379,25 +1390,84 @@ export class Game {
   }
 
   /**
-   * Picks the map the next round is played on.
+   * The player PICKING the map: the menu's Map row, and the lobby's — which is
+   * the map a match this client creates will be started on.
    *
-   * **Only from the menu, and that guard is the whole safety argument.**
-   * `startRound` reads `mapDef` to apply the environment, paint the sky and
-   * build the map, and hands the result to battle, conquest, the flag markers
-   * and the minimap. Writing this field at any other time leaves all four
-   * pointing into a `GameMap` that `installMap` has already disposed — which
-   * throws nothing and renders last round's world over this one's.
+   * **Only from the menu or the lobby over it, and that guard is the whole
+   * safety argument.** `startRound` reads `mapDef` to apply the environment,
+   * paint the sky and build the map, and hands the result to battle, conquest,
+   * the flag markers and the minimap. Writing this field at any other time
+   * leaves all four pointing into a `GameMap` that `installMap` has already
+   * disposed — which throws nothing and renders last round's world over this
+   * one's. The lobby is safe for the same reason the menu is: it is a lid over
+   * it, no round is standing, and the next thing to read the field is a build.
+   *
+   * This is the PREFERENCE and is remembered as one. A map that arrives from a
+   * match server is not a pick and goes through `applyMatchMap`, which
+   * deliberately does not persist it — what you chose here is what the menu
+   * offers you again after the match, not the map somebody else's round
+   * happened to be on.
    *
    * The value assigned is an entry OUT OF `MAPS`; see `readMap`.
    */
   private setMap(index: number): void {
-    if (this.state !== "menu") return;
+    if (this.state !== "menu" && this.state !== "lobby") return;
     const n = MAPS.length;
     const next = index < 0 ? 0 : index >= n ? n - 1 : index;
     if (MAPS[next] === this.mapDef) return;
     this.mapDef = MAPS[next];
     writeMap(this.mapDef.id);
-    this.showMenu();
+    // Whichever of the two is on screen. The menu is redrawn whole because it
+    // owns its markup; the lobby is handed the new choice and repaints its own
+    // row — and the menu underneath it is redrawn by `closeLobby` anyway.
+    if (this.state === "lobby") this.lobbyScreen.setMapChoice(next);
+    else this.showMenu();
+  }
+
+  /**
+   * The map the AUTHORITY says a match is on, applied to the standing choice.
+   *
+   * **A client never picks the map of a match it joins.** Both sides build the
+   * world locally from the same layout module and nothing about it crosses the
+   * wire, so a client that builds a different one is not playing the same game:
+   * its walls, its flags and its spawns are somewhere else, and every position
+   * that arrives is nonsense in the world it is drawn into. The map is stated in
+   * the welcome and again on every rotation, and this is the one place that
+   * answer is spent.
+   *
+   * Three answers, because the callers do two different things with it:
+   *
+   * - `same` — the standing map is already the match's, which is the ordinary
+   *   case once the lobby has handed the row's map down to `joinMatch`.
+   * - `changed` — applied here, and the caller owes a BUILD. Nothing else may
+   *   write `mapDef` from a state that is not `menu`/`lobby`, and this is
+   *   allowed to only because every caller rebuilds within the same frame.
+   * - `unknown` — an id this build does not have (a server one version ahead).
+   *   Nothing is written, and the caller's answer is `leaveUnknownMap`: there is
+   *   no world to build, so there is no round to play.
+   *
+   * It does NOT persist the choice — see `setMap` for why.
+   */
+  private applyMatchMap(mapId: string): "same" | "changed" | "unknown" {
+    const def = MAPS.find((m) => m.id === mapId);
+    if (!def) return "unknown";
+    if (def === this.mapDef) return "same";
+    this.mapDef = def;
+    return "changed";
+  }
+
+  /**
+   * The authority is running a map this build does not have.
+   *
+   * The same three moves `NetSession.onRejected` makes and for the same reason:
+   * the round is torn down, the player is put back where they chose from, and
+   * the toast says what happened. A refusal that left them in a match would be
+   * worse than useless — they would be standing in a world nobody else is in.
+   */
+  private leaveUnknownMap(mapId: string): void {
+    this.enterMenu();
+    this.hud.toast(`this server is running "${mapId}", which this build does not have`);
+    this.openLobby();
   }
 
   private tick(): void {
@@ -1718,10 +1788,12 @@ export class Game {
   }
 
   /**
-   * The lobby. A list like the settings screen, and simpler: every row does one
-   * thing, so there is no left/right — a horizontal nudge on a match row has
-   * nothing to step, and spending it on anything would make the cursor's own
-   * edges feel like traps (the reasoning `stepMenuItem` states next door).
+   * The lobby. A list like the settings screen, and with one row that steps:
+   * the map a new match would be started on. Left/right is spent there and
+   * NOWHERE else — a horizontal nudge on a match row has nothing to change,
+   * because that match's map is the authority's, and a nudge that did something
+   * anyway would make the cursor's own edges feel like traps (the reasoning
+   * `stepMenuItem` states next door).
    */
   private updateLobbyScreen(): void {
     // B, Escape and `M` all leave, matching the settings screen's three ways
@@ -1740,6 +1812,11 @@ export class Game {
     }
     if (this.input.menuUpPressed) this.lobbyScreen.moveRow(-1);
     if (this.input.menuDownPressed) this.lobbyScreen.moveRow(1);
+    // Left/right CLAMP and the confirm WRAPS, the same pair the menu's own map
+    // row keeps: a slider you have to watch is worse than one you can feel, and
+    // a confirm that answers nothing is worse than one that always moves.
+    if (this.input.menuLeftPressed) this.lobbyScreen.stepRow(-1);
+    if (this.input.menuRightPressed) this.lobbyScreen.stepRow(1);
     if (this.input.menuConfirmPressed) this.lobbyScreen.activate();
   }
 
@@ -1935,6 +2012,12 @@ export class Game {
     // The lobby is that route, and without this the second join is refused by
     // `joinMatch`'s own guard and looks like a dead button.
     this.leaveMatch();
+    // The match's map went with it. A netplay round is played on whatever the
+    // authority is running (`applyMatchMap`), which is not a choice this player
+    // made and was deliberately never persisted — so the menu goes back to
+    // offering the one they did pick, rather than to whichever stranger's round
+    // they last dropped into. Legal here because the state is already `menu`.
+    this.mapDef = readMap();
     this.clearPause();
     this.deployScreen.hide();
     this.stowKit();
@@ -2237,6 +2320,20 @@ export class Game {
    * why the two are not one method.
    */
   private buildRound(): void {
+    // The welcome beat the build. Read here for the same reason the team is —
+    // it can land on either side of this method, and the half that arrives
+    // first has nothing on screen to correct. `NetSession.onSeated` is the
+    // other half and defers to this one while the state is `loading`.
+    //
+    // FIRST, before a single line of the build: everything below reads
+    // `mapDef` — the environment, the sky, `installMap` — so a map applied
+    // after any of them is a round half built out of each.
+    if (this.net?.seated) {
+      if (this.applyMatchMap(this.net.mapId) === "unknown") {
+        this.leaveUnknownMap(this.net.mapId);
+        return;
+      }
+    }
     // Re-draw skills for the chosen tier. The rig pool is never disposed, so
     // this is the only place the roster's difficulty can change.
     this.battle.setDifficulty(this.difficulty);
@@ -2593,9 +2690,24 @@ export class Game {
    * has the same layout and the same baked colliders, so the world both sides
    * reason about is the same one without a byte of it crossing the wire. What
    * comes over the wire is only what MOVES.
+   *
+   * **Which map that is belongs to the MATCH, never to this menu.** `opts.mapId`
+   * is the row's, straight off the list the lobby is showing, and it is applied
+   * before the build so the common case builds the right world first time. It is
+   * an optimisation and not the guarantee: an unnamed join has no row to read,
+   * and a match can rotate between the fetch and the pick, so the welcome is
+   * still what settles it — see `applyMatchMap`. What travels the other way is
+   * `map`, the map to start a match on if this join CREATES one.
    */
-  joinMatch(opts: { matchId?: string; create?: boolean } = {}): void {
+  joinMatch(opts: { matchId?: string; create?: boolean; mapId?: string } = {}): void {
     if (this.net) return;
+    // Refused before anything is built or connected, which is the cheapest of
+    // the three places this can be caught and the only one that leaves the
+    // player looking at the list they picked from.
+    if (opts.mapId !== undefined && this.applyMatchMap(opts.mapId) === "unknown") {
+      this.hud.toast(`that match is on "${opts.mapId}", which this build does not have`);
+      return;
+    }
     const net = new NetSession(this.scene, this.mats);
     this.net = net;
 
@@ -2634,6 +2746,21 @@ export class Game {
     // spawn the player is in the middle of choosing.
     net.onSeated = (team) => {
       if (this.state === "loading" || !this.map) return;
+      // The map before the team, because a map that disagrees rebuilds the
+      // whole round and `buildRound` deals the team itself on the way through.
+      // This is the case the lobby's row could not cover: an unnamed join, or a
+      // match that rotated between the list and the pick. The wasted build is
+      // the price of booking the round before the socket is open, and it is
+      // paid rarely — the welcome usually lands while `loading` is still up,
+      // where the branch above defers to `buildRound`.
+      switch (this.applyMatchMap(net.mapId)) {
+        case "unknown":
+          this.leaveUnknownMap(net.mapId);
+          return;
+        case "changed":
+          this.startRound();
+          return;
+      }
       if (team !== this.player.team) this.applyPlayerTeam(team, this.map);
       // A seat is a body the authority is holding until it is ASKED for, and
       // this callback is raised again on every reconnect — where the client is
@@ -2679,9 +2806,16 @@ export class Game {
     // A new round on a new map, same seat. The world is rebuilt LOCALLY from
     // the same layout the server is using — the map never crosses the wire —
     // and the server's spawn event puts the body back afterwards.
+    //
+    // Through `applyMatchMap` and not `setMap`, which is the player picking one
+    // and refuses to run outside the menu: a rotation arrives in `roundover`,
+    // so every one of them used to leave the client rebuilding the map it was
+    // already on while the server moved to the next.
     net.onRoundStart = (mapId) => {
-      const index = MAPS.findIndex((m) => m.id === mapId);
-      if (index >= 0) this.setMap(index);
+      if (this.applyMatchMap(mapId) === "unknown") {
+        this.leaveUnknownMap(mapId);
+        return;
+      }
       this.startRound();
     };
     net.onStateChange = (state) => {
@@ -2712,6 +2846,10 @@ export class Game {
       weapon: this.weapon,
       matchId: opts.matchId,
       create: opts.create,
+      // Sent on every join rather than only on a create, because "there is room
+      // somewhere" can end in a fresh match too — the server spends this only
+      // when it actually builds one, and ignores it otherwise.
+      map: this.mapDef.id,
     });
   }
 

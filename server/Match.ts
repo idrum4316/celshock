@@ -164,7 +164,15 @@ export class Match {
 
   private readonly peers = new Map<string, Peer>();
   private timer: ReturnType<typeof setInterval> | null = null;
-  private mapId = MAPS[0].id;
+  /**
+   * The map this match is on. The AUTHORITY's, from the moment it is built:
+   * every client that joins is told it in the welcome and builds that world
+   * locally, whatever its own menu had selected.
+   *
+   * Assigned in the constructor from what the creating peer asked for, and
+   * `rotate` is the only thing that moves it afterwards.
+   */
+  private mapId: string;
   private ticks = 0;
 
   /**
@@ -229,7 +237,17 @@ export class Match {
    */
   private sentScoreVersion = -1;
 
-  constructor(readonly id: string) {
+  /**
+   * `wantedMap` is the map id the peer whose join created this match asked for.
+   *
+   * RESOLVED against the real table rather than taken as sent, exactly as the
+   * weapon id is in `admit`: an id this build has never heard of — an older
+   * client, a newer one, or something a peer made up — falls back to the default
+   * map instead of standing up a match naming a world that does not exist here.
+   * Nothing downstream re-checks it, which is why this is the one door.
+   */
+  constructor(readonly id: string, wantedMap?: string) {
+    this.mapId = MAPS.find((m) => m.id === wantedMap)?.id ?? MAPS[0].id;
     // A bot went down, however it was done. The bearing and the size of the
     // killing blow ride along because a client throws its corpse with them —
     // `Bot.takeDamage` captured both before this fired, which is the same pair
