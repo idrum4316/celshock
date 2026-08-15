@@ -916,6 +916,71 @@ false — so a typo in a compose file does not fall back to the default, it
 deletes the cap and leaves a server that builds matches until it runs out of
 memory. A bound a typo can delete is not a bound.
 
+### The pong deadline, which is the one thing here that is not about spending
+
+**Every open socket is pinged every fifteen seconds and terminated on the sweep
+after the one it did not answer**, so a connection has between one and two
+intervals to prove it is still there. Everything else in this section bounds
+what a socket may *cost*; this is the only thing that notices a socket that has
+stopped existing without saying so.
+
+**Nothing else ever would.** A slot is released by `Match.drop`, which runs off
+the socket's `close` or `error`, and both of those need the far end or the
+kernel to speak. A laptop lid, a phone leaving wifi, a NAT that dropped the
+mapping: none of them says anything at all, and what eventually notices is TCP
+keepalive, which Node leaves at the OS default — **two hours** on Linux before
+the first probe. Until then that peer's roster slot is held, the bot that would
+have backfilled it stays benched (so its team plays the round with a statue in
+it), `HeadlessGame` keeps a `NetPlayer` nobody owns in the rewind history, and
+the socket counts against `MAX_SOCKETS_PER_IP` for the very address the player
+is reconnecting from. `IDLE_DISPOSE_MS` does not help: the match is not idle,
+it has a peer in it as far as anything there can tell.
+
+**It is one timer for the process, and deliberately not split the way the
+bounds above are.** Those live half in `server/index.ts` and half in `Match`
+because an anonymous socket and a seated one can spend different things; a dead
+connection is the same dead connection either side of the handshake, and
+`wss.clients` is the only place that holds every socket in the process. What
+terminating one releases *is* split, and needs no new code on either side: the
+roster slot goes back through `Match.drop`, already wired to `close`, and the
+per-address quota through the `close` handler that charged it.
+**`terminate`, not `close`** — `close` opens a handshake with a far end that has
+just proved it is not answering, and ws would hold the socket for its own
+thirty-second closing timeout before destroying it anyway.
+
+**The client owes nothing, and could not help if it wanted to.** Browser
+JavaScript cannot send a ping frame or write a pong; the browser answers below
+the page, which is what makes this the one liveness mechanism that needed
+neither a protocol version nor a line in `src/net/`.
+
+**What the deadline actually measures is whether the far end is still READING
+its socket**, and that is worth knowing exactly, because the obvious guess —
+"a pong comes from the network stack, so anything short of an unplugged cable
+answers it" — is only half true. Measured against headless Chromium, with a
+bare ws server pinging every three seconds and the page's main thread blocked
+solid for twenty:
+
+| the page's socket | pongs during the block |
+| --- | --- |
+| quiet (no data frames) | every one, on time |
+| fed 20 messages a second | on time until ~17 s in, then none until the block ended |
+
+So Chromium does answer from its network service — but only while the renderer
+is draining the pipe. A page that has stopped consuming back-pressures the
+read, the ping is never taken off the wire, and nothing answers it. A match
+socket carries twenty snapshots a second, so "stopped consuming" arrives within
+seconds of the page stalling: a real client blocked for thirty-five seconds
+against this server was dropped, and a client left alone rode out four sweeps
+untouched.
+
+That is the right question rather than a compromise on it. A client that is not
+reading snapshots is not drawing the round, whoever is at fault; a client that
+is merely paused, hidden or unfocused keeps reading, because `Game` steps the
+netplay frame under every lid (see "Pausing" in `CLAUDE.md`) and even a client
+that did not would still drain its socket. Fifteen seconds is picked against
+that: it is far past any hitch a page recovers from and far short of the two
+hours the alternative costs.
+
 ## What is not built yet
 
 Stated so nobody assumes otherwise:

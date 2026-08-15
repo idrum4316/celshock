@@ -2,8 +2,9 @@
  * server/index.ts — Process entry: the two HTTP endpoints, the WebSocket
  * listener, and the match registry.
  * Owns: accepting a socket, parsing the first message, routing the peer to a
- * `Match`, creating matches and bounding how many exist. It owns no simulation
- * and no game rules — everything past the handshake belongs to `Match`.
+ * `Match`, creating matches and bounding how many exist, and the liveness sweep
+ * every socket in the process is pinged by. It owns no simulation and no game
+ * rules — everything past the handshake belongs to `Match`.
  * Invariants: nothing here trusts a client. A socket that does not open with a
  * well-formed `join` at the right protocol version is closed, and a peer is
  * only ever given the slot the roster hands out. Never import a rendering
@@ -18,6 +19,11 @@
  * four, and the reason is the process: Node is single-threaded, so a socket
  * that can make this thread work without limit is a socket that can stall every
  * match on the box, not just its own.
+ *
+ * **The pong deadline is the one rule here that is not one of those**, and it
+ * is process-wide rather than split between this file and `Match` because a
+ * dead connection is the same dead connection either side of the handshake.
+ * See `PING_MS`.
  *
  * **This registry IS the lobby.** Matches live in this process's memory, so the
  * list it serves on `/matches` is authoritative for itself and needs nothing
@@ -106,6 +112,49 @@ const MAX_SOCKETS_PER_IP = envCount("MAX_SOCKETS_PER_IP", 16, 0);
 
 /** Live sockets per client address, for the cap above. */
 const socketsPerAddress = new Map<string, number>();
+
+/**
+ * How often every open socket is pinged, in milliseconds. Half the deadline:
+ * a socket is dropped on the sweep AFTER the one it did not answer, so a
+ * connection that dies the moment a ping goes out has between one and two
+ * intervals to say so.
+ *
+ * **This is the one thing here that is not a bound on spending, and it is the
+ * only one that notices a peer which stopped existing without saying so.**
+ * `close` and `error` both need the far end or the kernel to speak, and a
+ * laptop lid, a phone leaving wifi or a NAT that forgot the mapping says
+ * nothing at all: TCP keepalive is what eventually notices, and Node leaves
+ * that at the OS default, which on Linux is TWO HOURS before the first probe.
+ * For all of that time the peer's roster slot is held, the bot that would have
+ * backfilled it stays benched, `HeadlessGame` keeps a `NetPlayer` nobody owns
+ * in the rewind history, and the socket counts against `MAX_SOCKETS_PER_IP`
+ * for the very address the player is reconnecting from — the cap above makes
+ * the last of those worse than it was, which is what turned this from a known
+ * gap into a fix.
+ *
+ * **Tens of seconds rather than one, because it is a connection being
+ * measured and not a player.** A pong is written by the far end's network
+ * stack rather than by its JavaScript, so a blocked main thread, a paused
+ * game and a backgrounded tab all answer on time (verified against headless
+ * Chromium with the main thread blocked solid across a ping). What a longer
+ * deadline buys is tolerance for the network's worst minute, and fifteen
+ * seconds to answer two bytes is already far past anything a real connection
+ * needs.
+ */
+const PING_MS = 15_000;
+
+/**
+ * Sockets that have been pinged and have not answered yet. Emptied by the
+ * `pong` handler, and a socket still in it when the next sweep comes round is
+ * one whose far end is gone.
+ *
+ * Weak on purpose: `wss.clients` is what holds a socket alive, and this must
+ * not be a second thing that remembers one after it has closed.
+ */
+const awaitingPong = new WeakSet<WebSocket>();
+
+/** What each socket was counted against, so the deadline's log line can say. */
+const socketAddress = new WeakMap<WebSocket, string>();
 
 /**
  * How many matches this process will hold at once.
@@ -320,6 +369,43 @@ const wss = new WebSocketServer({
   maxPayload: MAX_MESSAGE_BYTES,
 });
 
+/**
+ * The liveness sweep: ping everything that is open, and drop whatever did not
+ * answer the last one.
+ *
+ * **One timer for the process rather than one per match, and it is deliberately
+ * not where the other bounds are.** Those are split between this file and
+ * `Match` because an anonymous socket and a seated one can spend different
+ * things; a dead connection is the same dead connection either side of the
+ * handshake, and `wss.clients` is the only place that holds every socket in the
+ * process. What terminating one releases is split the same way and needs both
+ * halves: the roster slot goes back through `Match.drop`, which is already
+ * wired to `close` and needs nothing new, and the per-address quota is released
+ * by the `close` handler below.
+ *
+ * `terminate` rather than `close`, because `close` opens a handshake with a far
+ * end that has just proved it is not answering — ws would hold the socket for
+ * its own 30-second closing timeout before destroying it anyway.
+ *
+ * Sockets that are not OPEN are left alone: they are already on their way out
+ * (a refusal, a close in flight) and ws bounds that itself. Pinging one is not
+ * an error worth raising — it would reach the `error` listener every socket
+ * gets below — but it is not a liveness question either.
+ */
+setInterval(() => {
+  for (const socket of wss.clients) {
+    if (socket.readyState !== socket.OPEN) continue;
+    if (awaitingPong.has(socket)) {
+      const key = socketAddress.get(socket) ?? "unknown";
+      console.warn(`[net] ${key} missed the pong deadline; socket dropped`);
+      socket.terminate();
+      continue;
+    }
+    awaitingPong.add(socket);
+    socket.ping();
+  }
+}, PING_MS);
+
 wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
   // FIRST, and before anything can throw. A `WebSocket` is an EventEmitter, so
   // an `error` with no listener is not swallowed — it is thrown, out of ws's
@@ -345,11 +431,19 @@ wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
     return;
   }
   socketsPerAddress.set(key, held + 1);
+  socketAddress.set(socket, key);
   socket.on("close", () => {
     const left = (socketsPerAddress.get(key) ?? 1) - 1;
     if (left > 0) socketsPerAddress.set(key, left);
     else socketsPerAddress.delete(key);
   });
+
+  // The far end answered, so it is still there. Nothing above the transport
+  // sees this: a browser writes the pong from its network stack without waking
+  // its JavaScript, which is what makes the sweep a question about the
+  // connection rather than about how busy the page is. `ws` answers our peers'
+  // pings the same way (`autoPong`), so a client owes nothing for this.
+  socket.on("pong", () => awaitingPong.delete(socket));
 
   // A peer is anonymous until it says `join`. Until then it holds no slot, so a
   // socket that opens and says nothing costs one entry in ws's own client set

@@ -10,8 +10,10 @@ server/               # The authoritative match server. Node, NullEngine, no
                       #   Process entry: /health, /matches, the ws listener and
                       #   the match registry — which IS the lobby, because
                       #   matches live in this process. Routes a join (named,
-                      #   create, or wherever there is room) and caps how many
-                      #   matches exist. Owns no game rules
+                      #   create, or wherever there is room), caps how many
+                      #   matches exist, and holds the pong deadline every
+                      #   socket in the process is swept against. Owns no
+                      #   game rules
   Match.ts            #   One match: fixed-step loop, snapshots, the gates on
                       #   what a client may claim, round rotation
   Roster.ts           #   The sixteen slots, team balance, human<->bot handover

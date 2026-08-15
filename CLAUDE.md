@@ -664,6 +664,19 @@ crash: a `ws` WebSocket is an EventEmitter, so an `error` with no listener is
 thrown out of ws's own callback and takes the process with every match in it —
 six bytes of malformed frame, from a socket that never joined.
 
+**Every socket is also on a pong deadline, and that one is about a peer that
+has stopped existing rather than about what it may spend.** `close` and `error`
+both need the far end or the kernel to speak, so a connection that dies
+silently — a laptop lid, a phone leaving wifi — holds its roster slot, keeps
+the bot that would have backfilled it benched and keeps its address's quota
+until TCP keepalive notices, which on Linux is two hours. One process-wide
+sweep pings every open socket every fifteen seconds and terminates whatever
+missed the last one; the slot goes back through the `close` path that was
+already there, so nothing else changes. **What it measures is whether the far
+end is still READING** — a browser answers a ping below its own JavaScript, but
+stops once the page is no longer draining the socket — which is the same
+question as whether anybody is still drawing the round.
+
 **The match registry in `server/index.ts` IS the lobby, and needs nothing
 central to check in with** — matches live in that one process's memory, so the
 list it serves on `GET /matches` is authoritative for itself. A master server is
