@@ -2,7 +2,9 @@
 
 The contract for `server/`, `src/net/`, and the parts of `Game`, `BattleSystem`
 and `CombatSystem` that a networked round changes. Read it before touching any
-of them.
+of them. [`CLAUDE.md`](../CLAUDE.md) keeps the summary — what a reader must not
+violate even if they never open this file; everything below is the argument
+under it.
 
 The shape in one sentence: **a dedicated Node server runs the real simulation
 under Babylon's NullEngine, clients render it, and a roster slot is a slot

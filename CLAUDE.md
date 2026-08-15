@@ -594,126 +594,54 @@ the phone-shaped details (fullscreen on the document element, `--ov-scale`, why
 
 A dedicated Node process runs the real simulation under Babylon's **NullEngine**
 — bots, flags, tickets and damage — and clients render it. There is no host
-client. A shooter's hitmarker is a **guess**: the round is reported, every target
-is rewound to what the shooter was looking at, and `CombatSystem.fire` runs again
-on the server, which is the only thing that deals damage. Movement is the
-exception and is client-simulated, then validated for speed, ground and solids;
-that trade is argued in the contract. **Health regeneration is the second
-exception**: the authority heals the pool and nothing on the wire says so, so the
-client predicts the same curve from the lock a `damage` event arms — assign that
-event's health without the lock and the client heals back to full underneath a
-server that never healed it.
+client. A shooter's hitmarker is a **guess**: every target is rewound and
+`CombatSystem.fire` runs again on the server, which is the only thing that deals
+damage. **Movement and health regeneration are the only two things a client
+predicts** — movement is validated on arrival for speed, ground and solids — and
+everything else it still steps in a netplay round is DRESSING: effects,
+grenades, ragdolls, all of which decide nothing.
 
-**The roster is sixteen slots, built once, never resized.** A match starts with
-one person in it and every unfilled slot is a bot; a human joining BENCHES the
-bot in their slot, and leaving un-benches it. Benching is not killing — joining
-and leaving must never charge a team a reinforcement. The bench lives in
-`BattleSystem` as a `Set<Bot>`, never as a flag on `Bot`, and every loop over the
-roster there must skip it. **A slot index IS a bot index**, because `Roster` and
-`BattleSystem` lay their sixteen out in the same order.
+**The roster is sixteen slots, built once, never resized**, and every slot
+nobody is sitting in is a bot: a human joining BENCHES the bot in their slot and
+leaving un-benches it. **Benching is not killing** — joining and leaving must
+never charge a team a reinforcement — the bench lives in `BattleSystem` as a
+`Set<Bot>` and never as a flag on `Bot`, **every loop over `bots` there must skip
+it**, and **a slot index IS a bot index**. On the client a bot and a remote human
+are the same object (`NetSoldier`), which is what makes "start without a full
+lobby" and "hand a leaver's slot back to a bot" one mechanism instead of two.
 
-**The local player's TEAM is the server's too, and only `Game.applyPlayerTeam`
-may write it.** Balance seats the second person into a match on team 1, so a
-hardcoded 0 turns every mine/theirs question — flags, tickets, minimap, deploy
-spawns, killfeed, the colours your own corpse falls in — backwards at once. It
-arrives in the welcome, which races the local map build: `buildRound` reads
-`NetSession.team` when it won and `NetSession.onSeated` applies it when it lost.
-
-On the client a bot and a remote human are the SAME object (`NetSoldier`), and
-the client is never told which is which — that is what makes "start without a
-full lobby" and "hand a leaver's slot back to a bot" one mechanism instead of
-two.
-
-**Coming into the world is an ASK, and nothing on the client may place a body.**
-A person picks their spawn in a match exactly as offline, and the deploy screen
-sends `deploy` rather than deploying: the authority puts them there, and does it
-only once they have BOTH waited out the reinforcement clock and asked, with no
-timeout into the world in either direction. What crosses the wire is an index
-into the MAP's spawn table and never into the offer, which is derived from flag
-ownership and renumbers as the round moves; `ConquestSystem.deployAt` is the
-authority's half and refuses anything that team may not use *now*, falling
-through to the pick a bot would get rather than leaving anybody dead. The one
-state outside a round that still steps the netplay frame is this screen
-(`Game.updateNetWorld`), because the flags it offers, the tickets under it and
-the bodies behind it all arrive from a frame.
-
-**A death is decided there and drawn here, and the ragdoll is on the DRAWN
-side.** A corpse decides nothing — not navigation, not cover, not hit detection
-— so `RagdollSystem` is stepped in a netplay round exactly as `CombatSystem` and
-`GrenadeSystem` are, and reading it as simulation is what left multiplayer with
-no ragdolls at all. The body is offered on the INTERPOLATED death rather than on
-the `kill` event, because the event is real time and the body is drawn
-`interpDelay` behind it; the event's job is to carry the blow that throws it.
-
-**The map belongs to the MATCH, and a client never picks the map of a match it
-joins.** Both sides build the world locally and none of it crosses the wire, so a
-client on a different map is not playing the same game. The authority states it in
-the welcome and in every `roundstart`; `Game.applyMatchMap` is the one funnel that
-spends either, and it rebuilds when they disagree. `Game.setMap` is the *player*
-choosing — menu or lobby only, remembered, and never written from the wire — and
-the only join that carries a map is one that CREATES a match (`Join.map`, resolved
-against the server's own table like the weapon id).
-
-**One core runs every match on the box, so everything an unproven socket can
-spend is bounded** — the frame size (`maxPayload`, against ws's 100 MB
-default), how long it may stay anonymous before saying `join`, how many sockets
-one address may hold, and, once seated, a per-peer inbound message allowance
-that `onShot`'s rate limit was never doing the job of. **Every socket also gets
-an `error` listener the instant it connects**, and that one is not a bound but a
-crash: a `ws` WebSocket is an EventEmitter, so an `error` with no listener is
-thrown out of ws's own callback and takes the process with every match in it —
-six bytes of malformed frame, from a socket that never joined.
-
-**Every socket is also on a pong deadline, and that one is about a peer that
-has stopped existing rather than about what it may spend.** `close` and `error`
-both need the far end or the kernel to speak, so a connection that dies
-silently — a laptop lid, a phone leaving wifi — holds its roster slot, keeps
-the bot that would have backfilled it benched and keeps its address's quota
-until TCP keepalive notices, which on Linux is two hours. One process-wide
-sweep pings every open socket every fifteen seconds and terminates whatever
-missed the last one; the slot goes back through the `close` path that was
-already there, so nothing else changes. **What it measures is whether the far
-end is still READING** — a browser answers a ping below its own JavaScript, but
-stops once the page is no longer draining the socket — which is the same
-question as whether anybody is still drawing the round.
-
-**The match registry in `server/index.ts` IS the lobby, and needs nothing
-central to check in with** — matches live in that one process's memory, so the
-list it serves on `GET /matches` is authoritative for itself. A master server is
-what a SECOND process would need, and the ceiling that forces one is CPU: Node
-is single-threaded, so every match shares one core (`MAX_MATCHES`, env, default
-4). A named join is **never substituted** — a peer that asked for `m3` and could
-be seated in `m4` is refused with a reason, because being quietly relocated is
-indistinguishable from the lobby being wrong. **A client's display name is the
-one string of theirs that other people's screens render**, so it is bounded on
-arrival exactly as the weapon id is resolved there, and every screen writes it
-with `textContent`.
-
-**The scoreboard is a line per SLOT and it is the authority's**, sent as state
-(`scores`) when it moves rather than added up on a client from the `kill` events
-that client happened to receive — those name a killer's *team*, a reconnect
-drops them, and a joiner never saw the ones before they arrived. A kill is
-counted at the KILLER's door and a death at the victim's, once each, because
-every death already arrives somewhere while who fired is known only to whatever
-pulled the trigger; that is why `battle.onBotKill` hands over the shooting bot
-and any victim, and why a grenade carries its thrower. Team totals are SUMMED
-from the rows on both sides and stored nowhere — offline and in a match alike.
+**Four things arrive from the authority and may only be written through their one
+funnel**, because a client that decides any of them for itself is playing a
+different game in the same window: the local player's **team**
+(`Game.applyPlayerTeam` — balance seats the second person on team 1, so a
+hardcoded 0 turns every mine/theirs question backwards at once), the match's
+**map** (`Game.applyMatchMap`; `Game.setMap` is the *player* choosing and is
+never written from the wire), a **body coming into the world** (an ASK — the
+deploy screen sends `deploy` and the authority places it, so nothing on the
+client may place one), and the **scoreboard** (state on the wire, a line per
+slot, with team totals summed from those rows and stored nowhere — offline and
+in a match alike).
 
 **The server cannot run `MapBuilder`**: it has no canvas, so `DynamicTexture`
 throws. It rebuilds the solid world from the generated
-`src/world/<map>/collision.ts` and picks against it with the same
-`SOLID_ONLY` ray the client uses. `npm run parity` proves the two agree and
-should be run after anything touching the world layer; `npm run build` refuses a
-bake older than its layout.
+`src/world/<map>/collision.ts` and picks against it with the same `SOLID_ONLY`
+ray the client uses, so **`npm run parity` should be run after anything touching
+the world layer**; `npm run build` refuses a bake older than its layout. What a
+socket may spend before it has proved it is a player is bounded in
+`server/index.ts`, along with the pong deadline that is the only thing there
+which notices a peer that stopped existing without saying so.
 
-→ **[`docs/multiplayer.md`](docs/multiplayer.md)** — the authority model and
-what it deliberately does not defend against, what a socket may spend before it
-has proved anything, the roster and the bench, the
-interpolation clock and the sign error that is easy to make in it, the rewind
-and why `resolve` takes a callback, what a death owes on each side and the one
-`kill` event per body that carries it, the per-slot scoreboard and why it is
-state on the wire rather than events added up on a client, what may never cross
-the wire, and the list of what is not built yet.
+→ **[`docs/multiplayer.md`](docs/multiplayer.md)** — the authority model and what
+it deliberately does not defend against, the roster and the bench, which side the
+local player is on and the race the welcome is in, the deploy ask and why the
+spawn index is into the map rather than into the offer, the map belonging to the
+match, what a death owes on each side and the one `kill` event per body that
+carries it, the interpolation clock and the sign error that is easy to make in
+it, the rewind and why `resolve` takes a callback, the per-slot scoreboard and
+why it is state on the wire rather than events added up on a client, the lobby
+and why there is no central registry, everything a socket may spend and the pong
+deadline beside it, the collision bake and what `npm run parity` actually
+compares, what may never cross the wire, and the list of what is not built yet.
 
 ## Conventions
 
