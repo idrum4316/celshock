@@ -26,6 +26,7 @@ import { input, rumble } from "./input";
 import { audio } from "./audio";
 import { graphics, effects } from "./graphics";
 import { minimap, damageIndicator } from "./hud";
+import { net } from "./net";
 import { lighting } from "./lighting";
 import { ao, map, water, grass } from "./world";
 import { sky, godRays } from "./sky";
@@ -56,6 +57,7 @@ export const CONFIG = {
   graphics,
   minimap,
   damageIndicator,
+  net,
   lighting,
   water,
   grass,

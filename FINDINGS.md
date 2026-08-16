@@ -453,3 +453,4 @@ Repeat the re-measure with the page's own frame loop rather than a synchronous
 `update` loop, on real hardware, and see which number it lands on. If the
 original stands, the lever is fewer substeps while several corpses are live —
 `hasSettled`'s velocity poll is now known not to be it.
+

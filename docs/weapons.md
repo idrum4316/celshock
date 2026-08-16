@@ -209,7 +209,12 @@ machine gun without a per-weapon number anywhere.
   `magOut`/`magSeat`/`bolt` are three of them to the frame. What makes the
   gesture legible is that what you see lands on what you hear; a magazine that
   falls half a beat off the clack releasing it is two unrelated things happening
-  at once. **Change a fraction in one file and change it in the other.**
+  at once. **Change a fraction in one file and change it in the other.** The
+  sound is hung off `Player.onReload` rather than fired at a call site, because
+  `startReload` is the one door a gesture begins through and it is reached two
+  ways — the key, and the last round leaving the magazine inside `tryShot`. In a
+  match that callback also announces the reload to the authority, so a second
+  call site would be a reload fifteen other players never hear.
 - **The magazine is the one part of a weapon that moves on its own**, and it can
   only move because the model merged it into a node of its own
   (`WeaponParts.magazine`, a second `merge` call exactly like an optic's).
@@ -780,12 +785,12 @@ rear aperture every optic here is built around. It still reports a `sightCenter`
 reference is not duplicated; only the geometry in front of it is the weapon's own.
 
 The kit screen (`src/ui/LoadoutScreen.ts`) owns its DOM under `#hud` and is a
-`loadout` game state — a lid over `menu` or `deploy` that remembers which
-(`loadoutFrom`). It is reachable from the **main menu and the deploy screen** (a
-button, `L`, or gamepad X) and deliberately not from the pause menu: a round you are
-already standing in is not somewhere you change what you are carrying. Nothing
-enforces that with a flag; the states that offer the button are the ones that read
-`loadoutPressed`. Every pick applies immediately through `Game.applyLoadout` and
+`loadout` game state — a lid over `menu` or `deploy`, which closing puts back. It
+is reachable from the **main menu and the deploy screen** (a button, `L`, or
+gamepad X) and deliberately not from the pause menu: a round you are already
+standing in is not somewhere you change what you are carrying. That is the
+`covers` list on `loadout`'s row in `SCREENS` (see [`states.md`](states.md)),
+which is what refuses the raise. Every pick applies immediately through `Game.applyLoadout` and
 persists to `localStorage` like the difficulty tier, so confirm just closes.
 
 - **The weapon on the stage is read against a CARD, and the card is in the scene**

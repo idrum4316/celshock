@@ -31,12 +31,22 @@ manifest of what was actually written to `dist/`, and emits `dist/sw.js`.
 - **The substitution anchors on the declaration, not on the placeholder.** The file's
   header comment names `__PRECACHE__` twice; a plain string replace puts the manifest in
   the prose and leaves the code undefined.
-- **`sw.js` must be served `no-cache`** (`docker/nginx.conf`). It is the update
-  mechanism: a cached copy is a client that can never learn a new build exists.
+- **`sw.js` must be served `no-cache`** (`docker/default.conf.template`). It is the
+  update mechanism: a cached copy is a client that can never learn a new build exists.
 - **Caching is cache-first over that precache**, because the bundle is a few
   megabytes of Babylon and every byte is needed before the first frame. The cost is that
   a returning player gets the previous build and the new one installs behind them, so a
   deploy takes effect on the launch *after* next.
+- **The match server's endpoints are exempt from all of it, by path.** The fetch
+  handler is cache-first over *everything* same-origin and fills the cache with what
+  comes back, and in a deployed build `/matches` is same-origin — nginx proxies it onto
+  the game's own domain. So without the exemption the lobby is answered from the cache
+  after its first ever fetch and shows one frozen list of matches for the life of the
+  build. `cache: "no-store"` on the request and `no-store` on the response do not save
+  it: the Cache API implements none of HTTP's caching semantics, and a `cache.put` is
+  a `cache.match` hit by URL forever. **This can only be seen on the deployed site** —
+  there is no worker in dev and none on a first load — which is what makes it worth
+  stating here rather than leaving to whoever reads `sw.js`.
 
 Registration happens in `main.ts` **before** the `Game` is constructed and is
 `import.meta.env.PROD`-gated: it must survive a Game that throws on a machine

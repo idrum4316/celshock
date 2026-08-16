@@ -1,7 +1,7 @@
 /**
- * Game.ts — Orchestrator: engine/scene init, state machine, main loop, and ALL
- * cross-system wiring. The only place systems meet — systems never import each
- * other; new cross-system behavior is a callback wired here.
+ * Game.ts — Orchestrator: engine/scene init, main loop, and ALL cross-system
+ * wiring. The only place systems meet — systems never import each other; new
+ * cross-system behavior is a callback wired here.
  * WHERE THINGS ARE, because this is a long file and a change should not need a
  * read of it: the constructor is CONSTRUCTION ONLY (a linear list of `new X`,
  * which has to stay there — those fields are what strictPropertyInitialization
@@ -15,7 +15,13 @@
  * The remembered difficulty/map/loadout live in `prefs.ts`, the display
  * settings in `settings.ts`; neither applies anything, that is this file's job.
  * State machine: menu -> deploy -> playing (deploy re-entered on each death)
- * -> roundover. The 3D scene renders live behind every state.
+ * -> roundover. The 3D scene renders live behind every state. The SHAPE of it
+ * is `ScreenStack.ts` and not this file: what a screen may cover, what it holds
+ * offline, what it owes a netplay round and whether the scoreboard is owed to
+ * it are one declared row per state there. This file holds one `ScreenStack`,
+ * moves it with `go`/`raiseLid`/`lowerLid`, and never assigns a state —
+ * `Game.state` is a getter. `takeDown` is the one place that knows what putting
+ * a screen away means, and every transition goes through it.
  * Load-bearing frame order at the end of updateGameplay: camera update ->
  * carried lights -> lighting.update() -> sfx.setListener(). The shader's eye
  * (mats.updateCamera) is NOT in that chain — it is pushed once per frame in
@@ -25,7 +31,9 @@
  * (spendMuzzleLightBudget) — new per-bot transient lights need the same
  * treatment; a grenade's blast light is deliberately outside it (seconds
  * apart, not eighty a second). A bot goes down through registerBotKill
- * whichever of the three things killed it — rifle, player rifle, grenade.
+ * whichever of the three things killed it — rifle, player rifle, grenade — and
+ * whoever put it there is credited through creditKill, one door each: the
+ * victim's death is known where it fell and the kill only where it was fired.
  * The map is a `MapDef` held in one field (`mapDef`) and built in one method
  * (`installMap`), which both a round start and an editor rebuild go through —
  * no map's layout or environment may be named anywhere else in here.
@@ -58,7 +66,11 @@ import { HorrorPost } from "../shaders/HorrorPost";
 import { MotionBlur } from "../shaders/MotionBlur";
 import { Bot } from "../entities/Bot";
 import { difficultyNames } from "../entities/BotSkill";
+import { callsign } from "../entities/callsigns";
 import type { Combatant, Team } from "../entities/Combatant";
+import { NetSession } from "../net/NetSession";
+import { fetchMatches } from "../net/lobby";
+import { SNAPSHOT_HZ, TICK_HZ, type ServerEvent } from "../net/protocol";
 import { Player } from "../entities/Player";
 import { type SightId } from "../entities/sights";
 import { VIEWMODEL_GROUP } from "../entities/ViewModel";
@@ -67,7 +79,7 @@ import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
 import { CaptureZoneSystem } from "../systems/CaptureZoneSystem";
-import { CombatSystem } from "../systems/CombatSystem";
+import { CombatSystem, type Hittable } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
 import { DeathCam } from "../systems/DeathCam";
 import { GrassSystem } from "../systems/GrassSystem";
@@ -82,10 +94,11 @@ import type { EditorSession } from "../editor";
 import { MAPS, type MapDef } from "../world/maps";
 import { MapBuilder, type BuildOptions, type GameMap } from "../world/MapBuilder";
 import { DeployScreen } from "../ui/DeployScreen";
-import { HUD, type CaptureStatus } from "../ui/HUD";
+import { HUD, type CaptureStatus, type ScoreRow } from "../ui/HUD";
 import { OverlayScreen } from "../ui/OverlayScreen";
 import { kitLabel, LoadoutScreen } from "../ui/LoadoutScreen";
 import { SettingsScreen } from "../ui/SettingsScreen";
+import { LobbyScreen } from "../ui/LobbyScreen";
 import { Minimap } from "../ui/Minimap";
 import { enterFullscreenOnTouch } from "../pwa/register";
 import { CameraSystem } from "./CameraSystem";
@@ -100,58 +113,14 @@ import {
   writeSight,
   writeWeapon,
 } from "./prefs";
+import {
+  ScreenStack,
+  type GameState,
+  type LidState,
+  type StepState,
+} from "./ScreenStack";
 import { readSettings, writeSettings, type Settings } from "./settings";
 import { Sfx } from "./Sfx";
-
-/**
- * `menu` -> `loading` -> `deploy` -> `playing` -> `dying` -> `deploy`, with
- * `roundover` when one side runs out of tickets.
- *
- * `loading` is the map being built, and it is a STEP for the same reason
- * `dying` is: it is a thing the game is doing, not a lid over one. It lasts
- * exactly one frame of wall clock and an indeterminate amount of it — the
- * build is ~0.7 s of synchronous work, which is a freeze if nothing says
- * otherwise (see `startRound`, which is the split that lets the card be drawn
- * first). It exists as a STATE rather than as a flag because the frame in
- * between belongs to nobody otherwise: `tick` would keep dispatching to the
- * menu it just left, and a second confirm in that window would start a second
- * round on top of the first. Nothing may simulate here — there is no map yet.
- *
- * `dying` is the death cam: the player is down, a body is falling where they
- * stood, and the camera has left the head to watch it. It is a STEP in the
- * cycle rather than a lid, and that distinction is the whole feature — the
- * fight carries on underneath it (`updateWorld` runs in full), where a lid
- * stops everything. It ends on its own clock, and the deploy screen it opens
- * subtracts the time already spent, so a life costs what it always did.
- *
- * `paused` is the other side state, and unlike the rest it remembers where it
- * came from (`pausedFrom`): a pause is a lid over `playing`, `dying` or
- * `deploy`, and resuming puts the state back exactly as it was rather than
- * moving the game on. Nothing simulates while it is up — the scene still
- * renders, which is what makes a paused round look held rather than gone.
- *
- * `loadout` and `settings` are lids of the same shape, each remembering what it
- * covered. The kit screen covers `menu` or `deploy`; the settings screen also
- * covers `paused`, because turning an effect off is something you judge against
- * the scene rather than from the title card — which makes it the one lid that
- * can be raised over another one.
- *
- * `editor` sits outside that cycle: it is a dev-only side state reachable from
- * anywhere with F2, and leaving it always restarts the round rather than
- * resuming, because the systems that cache the GameMap cannot be handed a map
- * that was rebuilt underneath them.
- */
-type GameState =
-  | "menu"
-  | "loading"
-  | "deploy"
-  | "playing"
-  | "dying"
-  | "paused"
-  | "loadout"
-  | "settings"
-  | "roundover"
-  | "editor";
 
 /** Grass bends around combatants; in the editor there are none. */
 const EMPTY_PUSHERS: readonly Combatant[] = [];
@@ -182,6 +151,7 @@ export class Game {
   private deployScreen: DeployScreen;
   private loadoutScreen: LoadoutScreen;
   private settingsScreen: SettingsScreen;
+  private lobbyScreen: LobbyScreen;
   private minimap: Minimap;
   private sfx: Sfx;
   private mapBuilder: MapBuilder;
@@ -254,9 +224,31 @@ export class Game {
    */
   private mapDef: MapDef = readMap();
 
-  private state: GameState = "menu";
-  /** Which state the pause menu is a lid over; where `resume()` puts it back. */
-  private pausedFrom: "playing" | "dying" | "deploy" = "playing";
+  /**
+   * The state machine: the step the game is on, and the screens raised over it.
+   *
+   * Everything about what a state IS — whether it is a step or a lid, what a lid
+   * may cover, whether the world under it is held, whether it owes the netplay
+   * frame, whether it is owed the scoreboard — is declared per state in
+   * `ScreenStack.ts` rather than written out at the call sites that ask. This
+   * file's three moves are `go`, `raiseLid` and `lowerLid`, and there is no
+   * fourth: nothing here assigns a state.
+   */
+  private screens = new ScreenStack();
+
+  /**
+   * The state this frame is in — the topmost screen, which is the step itself
+   * when nothing is over it.
+   *
+   * Read-only on purpose: the fifty-odd places that ASK are unchanged by the
+   * stack underneath, and the fifteen that used to ANSWER by assignment have to
+   * go through a move instead. What is under the lids is `screens.under` and is
+   * a different question — see `pushScoreboard` for a case that deliberately
+   * wants this one.
+   */
+  private get state(): GameState {
+    return this.screens.current;
+  }
   /**
    * Whether the pointer was locked as of the last `pointerlockchange`. Losing
    * the lock is what pauses the game, and only a *transition* out of it counts
@@ -292,18 +284,47 @@ export class Game {
    */
   private sight: SightId = readSight();
   private weapon: PrimaryWeaponId = readWeapon();
-  /** Which state the loadout screen is a lid over; where closing it returns. */
-  private loadoutFrom: "menu" | "deploy" = "menu";
-  /**
-   * The display settings, and which state their screen is a lid over.
-   *
-   * `paused` is in the list where the kit screen's is not: a round you are
-   * standing in is not somewhere you change what you carry, but it is exactly
-   * where you want to judge an effect you have just turned off.
-   */
+  /** The display settings. Which states their screen may cover is the table's. */
   private settings: Settings = readSettings();
-  private settingsFrom: "menu" | "deploy" | "paused" = "menu";
   /** Reused each frame: the player plus every bot, for objective occupancy. */
+  /**
+   * The networked round, or null offline.
+   *
+   * A field and a branch rather than a mode flag threaded through everything:
+   * with no session, every path below runs exactly as it always has, and
+   * nothing in `src/net/` is even constructed. What the branch buys is that the
+   * two authorities — this machine and the server — can never both be running,
+   * which is the failure that would be invisible and unfixable.
+   */
+  private net: NetSession | null = null;
+
+  /**
+   * Which match server to talk to, for both the lobby's list and the socket.
+   *
+   * `undefined` is the deployed case and means the page's own origin, which is
+   * where nginx answers `/ws` and `/matches`. It is only ever something else in
+   * DEV, from `?server=` or `?mp=` — the client is on Vite's port then and the
+   * server on its own, with nothing in between to make them one origin.
+   *
+   * One field for both because they are one server. Letting the list and the
+   * socket be aimed separately would make "browsing one server and joining
+   * another" representable, which is not a thing anybody wants and is a bug the
+   * moment it happens by accident.
+   */
+  private netUrl: string | undefined;
+
+  /**
+   * What to call this player on the wire. Server-side it is truncated and
+   * stripped (see `MAX_NAME_LENGTH`); this is only what gets offered.
+   *
+   * Still `?name=` and a default, because the menu has no text entry anywhere
+   * in it and adding one is its own feature — a focused input has to be kept
+   * from feeding the game's own key handling, and neither the pad nor the
+   * on-screen path exists. Named as a field rather than read at the join so
+   * there is one obvious place for that feature to land.
+   */
+  private playerName = "player";
+
   private readonly combatants: Combatant[] = [];
   /** Scratch for the shadow focus point — no per-frame allocation. */
   private readonly shadowFocus = new Vector3();
@@ -331,11 +352,32 @@ export class Game {
   private readonly grenadeHand = new Vector3();
   /** Counts down while the player is waiting to redeploy. */
   private respawnT = 0;
+  /**
+   * What this life owes before the next one, latched by `enterDying` and spent
+   * by `updateDeathCam` when the shot is over. Offline it is the config
+   * constant; in a networked round it is whatever the `died` event said.
+   */
+  private deathRespawnIn: number = CONFIG.conquest.respawnDelay;
   /** Where the player's feet were when they died — scratch for `enterDying`. */
   private readonly deathFeet = new Vector3();
-  /** Round scoreboard: kills and losses per team, plus the player's own line. */
-  private readonly kills: [number, number] = [0, 0];
-  private readonly losses: [number, number] = [0, 0];
+  /**
+   * The round's scoreboard, OFFLINE: one line per body, indexed by bot.
+   *
+   * Per body rather than per team, because the team totals are the sum of the
+   * rows and a second set of counters for them is a second set that can drift.
+   * The player is not in these — they are not in the bot pool — and their own
+   * two numbers are below, which is the same split every other list in this
+   * file makes between `battle.bots` and `this.player`.
+   *
+   * **Netplay writes none of this.** In a match the board is the authority's
+   * and arrives whole (`NetSession.slotKills`): this client runs no AI, its
+   * local `BattleSystem` is a pool of dead bodies nobody steps, and a client
+   * that added up the kill events it happened to receive would show a
+   * different board on every screen. `scoreRows` is where the two sources
+   * meet, and it is the only reader of either.
+   */
+  private readonly botKills: number[] = [];
+  private readonly botDeaths: number[] = [];
   private playerKills = 0;
   private playerDeaths = 0;
 
@@ -478,6 +520,7 @@ export class Game {
     this.deployScreen = new DeployScreen();
     this.loadoutScreen = new LoadoutScreen();
     this.settingsScreen = new SettingsScreen(this.settings);
+    this.lobbyScreen = new LobbyScreen();
     this.minimap = new Minimap();
     this.lighting = new LightingSystem();
     this.atmosphere = new Atmosphere(this.scene);
@@ -528,6 +571,7 @@ export class Game {
     this.showMenu();
     // Debug/test handle (used by automated smoke tests).
     (window as unknown as { __celshock: Game }).__celshock = this;
+    this.joinFromUrl();
     this.engine.runRenderLoop(() => this.tick());
   }
 
@@ -547,7 +591,16 @@ export class Game {
     this.player.onDamaged = (amount, died, from) =>
       this.onPlayerDamaged(amount, died, from);
     this.battle.setPlayer(this.player);
-    this.battle.onBotKilled = (bot, killer) => this.registerBotKill(bot, killer, false);
+    // A bot's round killed somebody. The two halves are taken separately
+    // because they are known in different places: the shooter is credited
+    // whoever it hit — including the player, which is the one kill on the board
+    // a bot used to be denied — while the ticket, the killfeed line and the
+    // corpse are owed only when a BOT fell. The player's own death goes through
+    // `onPlayerDamaged`, which `takeDamage` reached before this callback ran.
+    this.battle.onBotKill = (victim, by) => {
+      this.creditKill(by);
+      if (victim instanceof Bot) this.registerBotKill(victim, by.team, false);
+    };
     this.wireDeaths();
     this.wireGrenades();
     this.wireBattle();
@@ -600,8 +653,22 @@ export class Game {
     // same way a bullet does — so friendly fire is excluded by construction
     // here too, and this system never learns what a team is.
     this.grenades.hittablesFor = (team) => this.battle.hittablesAgainst(team);
-    this.grenades.onExploded = (at) => this.onExplosion(at);
-    this.grenades.onBlastHit = (victim, thrower, byPlayer, killed) => {
+    // Netplay: the blast belongs to the authority and arrives as an `explode`
+    // event, which reaches the thrower like everybody else. The local copy is
+    // the ARC — the thing the thrower watched leave their hand — and firing
+    // this as well would flash, bang and shake twice, a fraction of a second
+    // apart, at two points that agree only to within the round trip.
+    this.grenades.onExploded = (at) => {
+      if (!this.net) this.onExplosion(at);
+    };
+    this.grenades.onBlastHit = (victim, thrower, by, killed) => {
+      // "Was that ours" is a comparison against our own `Player`, which is why
+      // the grenade carries the thrower rather than a flag saying so — that
+      // system has no way to know what a player is.
+      const byPlayer = by === this.player;
+      // The killer's row, whoever fell, and before the victim filter below:
+      // a blast that finishes the player is still a kill somebody threw.
+      if (killed) this.creditKill(by);
       // The player's own death is already handled, all the way down to the
       // deploy screen, by `onPlayerDamaged` — `takeDamage` routed it there
       // before this callback ran. Only bots are this handler's business.
@@ -611,8 +678,8 @@ export class Game {
     };
     // A bot asking for a grenade on a position. The arm has the last word — a
     // solve it cannot make returns false and the bot spends nothing.
-    this.battle.throwGrenadeFor = (from, at, team) =>
-      this.grenades.throwAt(from, at, team, false);
+    this.battle.throwGrenadeFor = (bot, from, at) =>
+      this.grenades.throwAt(from, at, bot.team, bot);
   }
 
   /**
@@ -793,9 +860,29 @@ export class Game {
     this.loadoutScreen.onSight = (id) => this.setSight(id);
     this.loadoutScreen.onClose = () => this.closeLoadout();
     this.player.onCarryChanged = () => this.applyCarry();
+    // A reload beginning, however it began — the key, or the last round leaving
+    // the magazine inside `tryShot`. The clacks are keyed to the gesture's own
+    // length, and in a match the authority is told so that the people around
+    // this player hear the magazine change: a reload is the cue to push, and
+    // it is the one thing a person does that the server has no way to derive.
+    this.player.onReload = () => {
+      this.sfx.reload(this.player.reloadTime);
+      this.net?.sendReload();
+    };
     this.overlayScreen.onOpenSettings = () => this.openSettings();
+    this.overlayScreen.onOpenMultiplayer = () => this.openLobby();
     this.settingsScreen.onChange = (key, value) => this.setSetting(key, value);
     this.settingsScreen.onClose = () => this.closeSettings();
+    // The row's own map travels with its id: a match is played on the map it is
+    // running, and the row the player picked is where that is already known.
+    this.lobbyScreen.onJoin = (matchId, mapId) => this.joinMatch({ matchId, mapId });
+    // A new match is the one join that DOES take this client's map — the map
+    // row on that screen is the same pick as the menu's, and `joinMatch` sends
+    // it for the server to spend on the match it builds.
+    this.lobbyScreen.onCreate = () => this.joinMatch({ create: true });
+    this.lobbyScreen.onPickMap = (index) => this.setMap(index);
+    this.lobbyScreen.onRefresh = () => void this.refreshLobby();
+    this.lobbyScreen.onClose = () => this.closeLobby();
     this.overlayScreen.onPauseAction = (action) => {
       // Restart needs nothing put back by hand: `startRound` lifts the lid,
       // hides the overlay and ends in `enterDeploy`, which sets the state.
@@ -813,6 +900,19 @@ export class Game {
     // wiring, and is not what the guard should rest on.
     this.deployScreen.onDeploy = (spawn) => {
       if (this.state !== "deploy") return;
+      // In a netplay round this is a REQUEST and not a deployment. The
+      // authority owns the body: it decides whether that spawn is still one
+      // this team may use and when the reinforcement clock allows it, and the
+      // `spawn` event it answers with is what actually puts the player in the
+      // world — through the same `spawnPlayer` this line calls offline. Putting
+      // them there here as well would be the client deciding an outcome, and
+      // the outcome it would decide is the one thing on this screen the server
+      // cannot afford to have a second opinion about: where somebody is.
+      if (this.net) {
+        this.net.sendDeploy(this.conquest.spawnIndex(spawn));
+        this.deployScreen.setPending();
+        return;
+      }
       this.spawnPlayer(spawn);
     };
   }
@@ -863,20 +963,98 @@ export class Game {
   }
 
   /**
-   * Opens the loadout screen over whatever is on top of it, and remembers
-   * which so closing it puts that back — the same lid-and-return shape the
-   * pause menu has, and for the same reason: it is not a step in the
-   * menu -> deploy -> playing cycle, it is a thing laid over two of them.
+   * Moves the game on to a step, taking down every screen the player had raised
+   * over the last one.
+   *
+   * The three transitions that leave a round — the menu, a round starting, F2
+   * into the editor — each used to write out the same list of screens to put
+   * away, and the copies had already drifted: F2 from the lobby left the match
+   * list hanging over the editor's own panel, because that one list was written
+   * before the lobby existed. The other twelve transitions wrote none of it and
+   * were not merely untidy but broken, and only in a netplay round, where a step
+   * can be decided by the wire while a lid is up: a `died` landing under the
+   * settings screen used to overwrite `settings` with `deploy` and strand the
+   * screen on top — visible, uncloseable (`closeSettings` guards on a state that
+   * was gone), with the deploy screen live and taking input underneath it.
+   *
+   * So no caller decides which screens to take down. `ScreenStack.go` hands back
+   * what was up and `takeDown` knows what each one means, which is the same
+   * bargain the rest of this file makes with the table: the obligation is
+   * discharged once, here, for screens that did not exist when it was written.
+   */
+  private go(step: StepState): void {
+    for (const lid of this.screens.go(step)) this.takeDown(lid);
+  }
+
+  /**
+   * Raises a lid, if the table says it may cover what is on screen. `false` is
+   * "it may not" and every caller returns on it — the guard each `open*` used to
+   * write out for itself is `ScreenSpec.covers` now.
+   */
+  private raiseLid(lid: LidState): boolean {
+    return this.screens.raise(lid);
+  }
+
+  /**
+   * Takes the named lid off, and puts its screen away with it. `false` is "that
+   * is not what is on top" — the guard each `close*` used to open with.
+   */
+  private lowerLid(lid: LidState): boolean {
+    if (!this.screens.lower(lid)) return false;
+    this.takeDown(lid);
+    return true;
+  }
+
+  /**
+   * What putting one screen away MEANS. The elements are here rather than in
+   * `ScreenStack`, which knows the names of the screens and not one of the
+   * screens themselves.
+   *
+   * Exhaustive over `LidState`, and the `never` is what makes it so: a fifth
+   * screen does not compile until it says how it comes down, and every
+   * transition in the file above is then correct for it on the day it is
+   * written. That is the same guarantee the table gives, spent on the half of
+   * the problem that is DOM.
+   *
+   * Each arm undoes exactly what the matching `open*` did and decides nothing
+   * else — where the game goes next is the caller's, which is why `resume` and
+   * `go("menu")` can share this.
+   */
+  private takeDown(lid: LidState): void {
+    switch (lid) {
+      case "paused":
+        this.overlayScreen.hide();
+        this.clearPause();
+        return;
+      case "loadout":
+        this.stowKit();
+        return;
+      case "settings":
+        this.settingsScreen.hide();
+        return;
+      case "lobby":
+        this.lobbyScreen.hide();
+        return;
+      default: {
+        const unhandled: never = lid;
+        throw new Error(`no way down from screen ${String(unhandled)}`);
+      }
+    }
+  }
+
+  /**
+   * Opens the loadout screen over whatever is on top of it. Closing it puts that
+   * back — the same lid-and-return shape the pause menu has, and for the same
+   * reason: it is not a step in the menu -> deploy -> playing cycle, it is a
+   * thing laid over two of them.
    *
    * Deliberately unreachable from `playing` and from the pause menu: a round
    * you are already standing in is not somewhere you get to change what you
-   * are carrying. Nothing here enforces that — the states that offer the
-   * button are the states that read `loadoutPressed`.
+   * are carrying. That is `loadout`'s `covers` in `ScreenStack.ts`, which is
+   * what refuses the raise here.
    */
   private openLoadout(): void {
-    if (this.state !== "menu" && this.state !== "deploy") return;
-    this.loadoutFrom = this.state;
-    this.state = "loadout";
+    if (!this.raiseLid("loadout")) return;
     this.loadoutScreen.setFit(this.weapon, this.sight);
     this.loadoutScreen.show();
     // The weapon comes out to be looked at. It is the real viewmodel on the
@@ -890,11 +1068,11 @@ export class Game {
    * Puts the kit screen away — the screen, the weapon on its stage, and the
    * lamp lighting it — without saying where the game goes next.
    *
-   * Every exit owes all three, and there are four of them: the Done button,
-   * the main menu, F2 into the editor and a round starting. The lamp is the
-   * one that bites if it is missed. A carried light never loses its shader
-   * slot and survives `lighting.clear()` between rounds, so one left behind
-   * follows the player into the fight as a lantern nobody is holding.
+   * Every exit owes all three, and there is now exactly one — `takeDown`, which
+   * every way out of the screen goes through. The lamp is the one that bites if
+   * it is missed. A carried light never loses its shader slot and survives
+   * `lighting.clear()` between rounds, so one left behind follows the player
+   * into the fight as a lantern nobody is holding.
    */
   private stowKit(): void {
     this.loadoutScreen.hide();
@@ -914,27 +1092,60 @@ export class Game {
    * then the same element, not a redraw.
    */
   private openSettings(): void {
-    if (
-      this.state !== "menu" &&
-      this.state !== "deploy" &&
-      this.state !== "paused"
-    ) {
-      return;
-    }
-    this.settingsFrom = this.state;
-    this.state = "settings";
+    if (!this.raiseLid("settings")) return;
     this.settingsScreen.setValues(this.settings);
     this.settingsScreen.show();
   }
 
   private closeSettings(): void {
-    if (this.state !== "settings") return;
-    this.settingsScreen.hide();
-    this.state = this.settingsFrom;
+    if (!this.lowerLid("settings")) return;
     // The menu paints its own markup and was covered while the settings were
     // changed, so it is redrawn on the way out — the same reason
     // `closeLoadout` does it. The pause card was never taken down.
     if (this.state === "menu") this.showMenu();
+  }
+
+  /**
+   * Raises the lobby over the menu, and asks the server what it is running.
+   *
+   * The fetch is fired here rather than by the screen, which renders what it is
+   * handed and nothing else — the same split `SettingsScreen` keeps. It is not
+   * awaited: the screen goes up in its loading state on this frame, and the
+   * answer lands on whatever frame it lands on.
+   *
+   * Menu-only, unlike the settings lid. A lobby raised over a live round would
+   * be offering to join a second match while standing in one.
+   */
+  private openLobby(): void {
+    if (!this.raiseLid("lobby")) return;
+    // The map row starts on whatever the menu underneath is offering — there is
+    // one map choice in this game and two places it is shown, so the screen is
+    // handed the standing one rather than keeping a second copy that could
+    // disagree with it.
+    this.lobbyScreen.setMapChoice(MAPS.indexOf(this.mapDef));
+    this.lobbyScreen.show();
+    void this.refreshLobby();
+  }
+
+  private closeLobby(): void {
+    if (!this.lowerLid("lobby")) return;
+    // Redrawn on the way out, for the reason `closeSettings` states: the menu
+    // owns its markup and has been covered.
+    this.showMenu();
+  }
+
+  /**
+   * Fetches the match list and hands it to the screen.
+   *
+   * Guarded on the screen still being open, because the fetch has a timeout of
+   * several seconds and a player who pressed Back is entitled to have meant it
+   * — a late answer must not repaint a screen that is down, or worse, put one
+   * back up over the menu.
+   */
+  private async refreshLobby(): Promise<void> {
+    const result = await fetchMatches(this.netUrl);
+    if (this.state !== "lobby") return;
+    this.lobbyScreen.setList(result);
   }
 
   /**
@@ -1057,9 +1268,7 @@ export class Game {
   }
 
   private closeLoadout(): void {
-    if (this.state !== "loadout") return;
-    this.stowKit();
-    this.state = this.loadoutFrom;
+    if (!this.lowerLid("loadout")) return;
     // The menu paints the kit into its own markup and was covered while it
     // changed, so it is redrawn on the way out. The deploy screen's caption is
     // a text node `applyLoadout` already patched.
@@ -1211,25 +1420,84 @@ export class Game {
   }
 
   /**
-   * Picks the map the next round is played on.
+   * The player PICKING the map: the menu's Map row, and the lobby's — which is
+   * the map a match this client creates will be started on.
    *
-   * **Only from the menu, and that guard is the whole safety argument.**
-   * `startRound` reads `mapDef` to apply the environment, paint the sky and
-   * build the map, and hands the result to battle, conquest, the flag markers
-   * and the minimap. Writing this field at any other time leaves all four
-   * pointing into a `GameMap` that `installMap` has already disposed — which
-   * throws nothing and renders last round's world over this one's.
+   * **Only from the menu or the lobby over it, and that guard is the whole
+   * safety argument.** `startRound` reads `mapDef` to apply the environment,
+   * paint the sky and build the map, and hands the result to battle, conquest,
+   * the flag markers and the minimap. Writing this field at any other time
+   * leaves all four pointing into a `GameMap` that `installMap` has already
+   * disposed — which throws nothing and renders last round's world over this
+   * one's. The lobby is safe for the same reason the menu is: it is a lid over
+   * it, no round is standing, and the next thing to read the field is a build.
+   *
+   * This is the PREFERENCE and is remembered as one. A map that arrives from a
+   * match server is not a pick and goes through `applyMatchMap`, which
+   * deliberately does not persist it — what you chose here is what the menu
+   * offers you again after the match, not the map somebody else's round
+   * happened to be on.
    *
    * The value assigned is an entry OUT OF `MAPS`; see `readMap`.
    */
   private setMap(index: number): void {
-    if (this.state !== "menu") return;
+    if (this.state !== "menu" && this.state !== "lobby") return;
     const n = MAPS.length;
     const next = index < 0 ? 0 : index >= n ? n - 1 : index;
     if (MAPS[next] === this.mapDef) return;
     this.mapDef = MAPS[next];
     writeMap(this.mapDef.id);
-    this.showMenu();
+    // Whichever of the two is on screen. The menu is redrawn whole because it
+    // owns its markup; the lobby is handed the new choice and repaints its own
+    // row — and the menu underneath it is redrawn by `closeLobby` anyway.
+    if (this.state === "lobby") this.lobbyScreen.setMapChoice(next);
+    else this.showMenu();
+  }
+
+  /**
+   * The map the AUTHORITY says a match is on, applied to the standing choice.
+   *
+   * **A client never picks the map of a match it joins.** Both sides build the
+   * world locally from the same layout module and nothing about it crosses the
+   * wire, so a client that builds a different one is not playing the same game:
+   * its walls, its flags and its spawns are somewhere else, and every position
+   * that arrives is nonsense in the world it is drawn into. The map is stated in
+   * the welcome and again on every rotation, and this is the one place that
+   * answer is spent.
+   *
+   * Three answers, because the callers do two different things with it:
+   *
+   * - `same` — the standing map is already the match's, which is the ordinary
+   *   case once the lobby has handed the row's map down to `joinMatch`.
+   * - `changed` — applied here, and the caller owes a BUILD. Nothing else may
+   *   write `mapDef` from a state that is not `menu`/`lobby`, and this is
+   *   allowed to only because every caller rebuilds within the same frame.
+   * - `unknown` — an id this build does not have (a server one version ahead).
+   *   Nothing is written, and the caller's answer is `leaveUnknownMap`: there is
+   *   no world to build, so there is no round to play.
+   *
+   * It does NOT persist the choice — see `setMap` for why.
+   */
+  private applyMatchMap(mapId: string): "same" | "changed" | "unknown" {
+    const def = MAPS.find((m) => m.id === mapId);
+    if (!def) return "unknown";
+    if (def === this.mapDef) return "same";
+    this.mapDef = def;
+    return "changed";
+  }
+
+  /**
+   * The authority is running a map this build does not have.
+   *
+   * The same three moves `NetSession.onRejected` makes and for the same reason:
+   * the round is torn down, the player is put back where they chose from, and
+   * the toast says what happened. A refusal that left them in a match would be
+   * worse than useless — they would be standing in a world nobody else is in.
+   */
+  private leaveUnknownMap(mapId: string): void {
+    this.enterMenu();
+    this.hud.toast(`this server is running "${mapId}", which this build does not have`);
+    this.openLobby();
   }
 
   private tick(): void {
@@ -1241,6 +1509,15 @@ export class Game {
     // open a menu is a frame rate you cannot investigate. It takes the real
     // delta rather than the clamped one — see `HUD.setFps`.
     this.hud.setFps(this.engine.getFps(), real);
+
+    // A round running without you, drawn under whatever you have on screen —
+    // every state that owes it, asked once. Before the switch rather than after,
+    // because `dt` is time that has already passed and the screen that was up
+    // for it is the one this frame belongs to; and before the arms rather than
+    // inside four of them, because that was the arrangement nothing but prose
+    // held together. Offline, and in every state that is either IN the fight or
+    // has none behind it, this returns on its first line.
+    this.updateRoundBehind(dt);
 
     switch (this.state) {
       case "menu":
@@ -1264,6 +1541,15 @@ export class Game {
       case "settings":
         this.updateSettingsScreen();
         break;
+      case "lobby":
+        this.updateLobbyScreen();
+        break;
+      // The netplay frame a pause does not stop is `updateRoundBehind`'s, above.
+      // The lid stays on the half of the frame that is genuinely this client's:
+      // the player does not move, does not shoot, and reports nothing while the
+      // menu is up — `updateNet` sends no move sample because it asks for
+      // `state === "playing"`, so being paused is already indistinguishable on
+      // the wire from standing still.
       case "paused":
         this.updatePauseMenu();
         break;
@@ -1298,7 +1584,14 @@ export class Game {
     // damage vignette are all part of the frozen frame, and a fight fading off
     // the screen while nothing in the world moves is the tell that the pause
     // is only skin deep. Every other state passes the real dt.
-    this.hud.update(this.state === "paused" ? 0 : dt);
+    //
+    // A NETWORKED pause is not a frozen frame and the test inverts with it:
+    // the fight behind the card is live, kills keep arriving from the wire,
+    // and a killfeed held at zero would stack them unread and then fade the
+    // lot at once on the resume — the same tell, from the other side. So the
+    // question is not which screen is up but whether what is under it moves,
+    // which is what `worldHeld` answers.
+    this.hud.update(this.worldHeld ? 0 : dt);
     this.post.update(dt);
     this.sky.update(dt);
     // After every state has had its go at the camera, and before the render
@@ -1331,6 +1624,13 @@ export class Game {
     // it cannot: `updateCamera` guards on the position, so a still camera in
     // any state costs one comparison and no walk.
     this.mats.updateCamera(this.cameraSys.camera.position);
+    // In every state too, and AFTER the switch above rather than inside any of
+    // its arms: what decides whether the board is up is the state this frame
+    // ENDS in, so a frame that deployed the player, killed them or ended the
+    // round has already changed it by the time this reads it. That is what
+    // makes "the board goes away when the round does" a property of one line
+    // rather than a call every one of those boundaries has to remember.
+    this.pushScoreboard();
     this.scene.render();
   }
 
@@ -1372,6 +1672,10 @@ export class Game {
         this.openSettings();
         return;
       }
+      if (this.input.multiplayerPressed) {
+        this.openLobby();
+        return;
+      }
     }
     // What is left of the confirm is Enter, pad A and Start — no pointer
     // at all. On the menu card the first two have already been spent on the
@@ -1406,6 +1710,13 @@ export class Game {
       return;
     }
     this.respawnT -= dt;
+    // The round carries on without us, and this is the screen that reads it —
+    // the map below is drawn from `conquest.points`, which the wire keeps
+    // current, and the bodies behind the card and the tickets on the strip are
+    // stepped from a frame. That frame is `updateRoundBehind`'s and has already
+    // run when this arm is reached, which is what leaves this method with only
+    // the clock and the input that are its own.
+    //
     // Stepped before the redraw, so the marker and the status line move on
     // the frame the key was pressed. Both axes step the same list — the
     // spawns are a handful of points scattered over a map rather than a
@@ -1435,6 +1746,12 @@ export class Game {
    * there is nothing to confirm, each pick is already on the weapon behind.
    */
   private updateLoadoutScreen(dt: number): void {
+    // The lid that hides the most — the scrim is opaque except for the stage the
+    // weapon turns on — and it makes no difference to what is owed: the round is
+    // still being played by fifteen other people and the reinforcement clock is
+    // still running down. `updateRoundBehind` has already stepped both, on this
+    // screen's own say-so (`ScreenSpec.roundBehind`).
+    //
     // Two axes, two slots: up/down chooses which half of the kit is being
     // edited, left/right steps through it. Back, confirm and pause all
     // close — there is nothing to confirm here, every pick has already been
@@ -1464,6 +1781,14 @@ export class Game {
    * boolean has nothing to step through, so A and Enter flip the row.
    */
   private updateSettingsScreen(): void {
+    // The one lid that can be raised over another, and so the only one that can
+    // cover a round from two states away — which changes nothing about what it
+    // owes, because the round underneath does not care which screen is on top of
+    // it, only whether the authority is still running it. That is why the two
+    // gauges and the reinforcement clock are `updateRoundBehind`'s and not this
+    // method's: four screens deciding it for themselves is four chances to
+    // decide it differently.
+    //
     // Up/down picks the row, left/right and Enter flip it. The confirm is
     // NOT an exit here, which is the one place this screen departs from the
     // kit screen's shape: a boolean has nothing to step through, so A and
@@ -1490,6 +1815,39 @@ export class Game {
     if (this.input.menuLeftPressed) this.settingsScreen.stepRow(-1, false);
     if (this.input.menuRightPressed) this.settingsScreen.stepRow(1, false);
     if (this.input.menuConfirmPressed) this.settingsScreen.stepRow(1, true);
+  }
+
+  /**
+   * The lobby. A list like the settings screen, and with one row that steps:
+   * the map a new match would be started on. Left/right is spent there and
+   * NOWHERE else — a horizontal nudge on a match row has nothing to change,
+   * because that match's map is the authority's, and a nudge that did something
+   * anyway would make the cursor's own edges feel like traps (the reasoning
+   * `stepMenuItem` states next door).
+   */
+  private updateLobbyScreen(): void {
+    // B, Escape and `M` all leave, matching the settings screen's three ways
+    // out. Enter is spent on joining, which is what the screen is for.
+    if (
+      this.input.menuBackPressed ||
+      this.input.pausePressed ||
+      this.input.multiplayerPressed
+    ) {
+      // B is the pad's crouch toggle as well; the press that closed this screen
+      // has already flipped the latch behind it. The same correction the pause
+      // and settings branches make.
+      if (this.input.menuBackPressed) this.input.clearCrouchToggle();
+      this.closeLobby();
+      return;
+    }
+    if (this.input.menuUpPressed) this.lobbyScreen.moveRow(-1);
+    if (this.input.menuDownPressed) this.lobbyScreen.moveRow(1);
+    // Left/right CLAMP and the confirm WRAPS, the same pair the menu's own map
+    // row keeps: a slider you have to watch is worse than one you can feel, and
+    // a confirm that answers nothing is worse than one that always moves.
+    if (this.input.menuLeftPressed) this.lobbyScreen.stepRow(-1);
+    if (this.input.menuRightPressed) this.lobbyScreen.stepRow(1);
+    if (this.input.menuConfirmPressed) this.lobbyScreen.activate();
   }
 
   /**
@@ -1559,15 +1917,7 @@ export class Game {
    * already do, and it is why a paused round reads as held rather than gone.
    */
   private pause(): void {
-    if (
-      this.state !== "playing" &&
-      this.state !== "dying" &&
-      this.state !== "deploy"
-    ) {
-      return;
-    }
-    this.pausedFrom = this.state;
-    this.state = "paused";
+    if (!this.raiseLid("paused")) return;
     // A pause outranks a resume that never got its lock: a second pause taken
     // while one was still being chased must not have the round grab the mouse
     // out from under the menu it just raised.
@@ -1576,14 +1926,23 @@ export class Game {
     this.overlayScreen.showPause();
     // Suspends the audio clock, so the tail of the last shot is still there
     // when the round starts again instead of ringing out over the menu.
-    this.sfx.setSuspended(true);
+    //
+    // OFFLINE ONLY, and not merely because a live fight should be audible.
+    // Suspending stops `AudioContext.currentTime`, and a networked round goes
+    // on making noise the moment it is stopped: `hit`, `damage` and `explode`
+    // all sound straight off the wire, from the message handler, in whatever
+    // state the client happens to be in. Scheduled against a clock that is not
+    // running, none of them plays and none of them ENDS — so each holds a
+    // voice against the cap until the resume, at which point the whole
+    // pause-worth of them fires on the same instant. The choice is between a
+    // menu with gunfire behind it and a menu that saves the gunfire up.
+    if (!this.net) this.sfx.setSuspended(true);
     document.exitPointerLock();
   }
 
   /**
-   * Lifts the lid without deciding where the game goes next. Every exit from
-   * `paused` owes this — including F2 into the editor, which is why it is a
-   * method and not three lines repeated in `resume`.
+   * What a pause leaves running, undone. It is half of `takeDown("paused")` and
+   * is called from nowhere else — a lid is only ever lifted there.
    */
   private clearPause(): void {
     this.hud.setPaused(false);
@@ -1591,10 +1950,7 @@ export class Game {
   }
 
   private resume(): void {
-    if (this.state !== "paused") return;
-    this.overlayScreen.hide();
-    this.clearPause();
-    this.state = this.pausedFrom;
+    if (!this.lowerLid("paused")) return;
     // `dying` too. The death cam is a live frame that holds the lock, so a
     // pause over it has to give back what it took — the alternative is a cam
     // that resumes unlocked and a player who is silently mouse-free for the
@@ -1663,16 +2019,31 @@ export class Game {
    * round's `enterDeploy` happened to clear both.
    */
   private enterMenu(): void {
-    this.state = "menu";
-    this.clearPause();
+    // Takes down the pause card, the kit screen and the settings with it —
+    // whichever of them the player was looking at when they quit. All three used
+    // to be listed here by hand; see `go`.
+    this.go("menu");
+    // A networked round ends HERE, and the socket is closed rather than left to
+    // time out: a peer that merely goes quiet holds its roster slot until the
+    // server notices, and the bot that should have taken the seat back stays
+    // benched for as long as that takes.
+    //
+    // This was inert while `?mp` was the only way into a match — there was no
+    // route from the menu back into one, so a stale session could never be hit.
+    // The lobby is that route, and without this the second join is refused by
+    // `joinMatch`'s own guard and looks like a dead button.
+    this.leaveMatch();
+    // The match's map went with it. A netplay round is played on whatever the
+    // authority is running (`applyMatchMap`), which is not a choice this player
+    // made and was deliberately never persisted — so the menu goes back to
+    // offering the one they did pick, rather than to whichever stranger's round
+    // they last dropped into. Legal here because the state is already `menu`.
+    this.mapDef = readMap();
     this.deployScreen.hide();
-    this.stowKit();
-    this.settingsScreen.hide();
     this.deathCam.stop();
     this.hud.setDeathCam(false);
     this.minimap.setVisible(false);
     this.player.setBodyHidden(true);
-    this.hud.setScoreboard(false);
     this.hud.clearDamageDirections();
     this.hud.setCapture(null);
     this.battle.reset();
@@ -1753,18 +2124,18 @@ export class Game {
     // started underneath would have its build stomped to "editor" here.
     if (this.buildPending() || this.editor) return;
 
-    this.state = "editor";
+    // F2 is reachable from every screen in the game — the pause card, whose
+    // suspended audio context and hidden crosshair an editor session would
+    // otherwise inherit; the kit screen and the settings, either of which would
+    // sit over the editor's own panel; and the lobby, which used to be missing
+    // from the list here and did exactly that. `go` takes down whichever it was.
+    this.go("editor");
     const map = this.buildEditorMap();
+    // Not a lid: the menu's own card is on the same element and F2 is reachable
+    // from there too.
     this.overlayScreen.hide();
-    // F2 is reachable from the pause menu, and an editor session that inherited
-    // a suspended audio context and a hidden crosshair would be a puzzle.
-    this.clearPause();
     this.hud.setEditing(true);
     this.deployScreen.hide();
-    // F2 is reachable from the loadout screen too, and it would sit over the
-    // editor's own panel. The settings screen is above both and owes the same.
-    this.stowKit();
-    this.settingsScreen.hide();
     // And from the death cam, whose body would otherwise be left standing in
     // the map the editor is about to rebuild — `installMap` frees the ragdoll
     // slot underneath it, so the cam has to be told rather than find out.
@@ -1945,14 +2316,12 @@ export class Game {
     // leaves the systems holding a map the first one disposed, which is the
     // silent failure `installMap` exists to prevent.
     if (this.state === "loading") return;
+    // The menu's own card, which is not a lid and so is not `go`'s to take.
     this.overlayScreen.hide();
-    // Reachable from the menu, so either lid may still be up over it.
-    this.stowKit();
-    this.settingsScreen.hide();
-    // Reachable straight from the pause menu ("Restart round"), and harmless
-    // from anywhere else.
-    this.clearPause();
-    this.state = "loading";
+    // Reachable from the menu, so any lid may still be up over it — including
+    // the lobby, which is the one that got here on a networked round — and
+    // straight from the pause menu ("Restart round").
+    this.go("loading");
     this.overlayScreen.showBuilding(this.mapDef.name);
     requestAnimationFrame(() =>
       requestAnimationFrame(() => this.buildRound()),
@@ -1965,6 +2334,20 @@ export class Game {
    * why the two are not one method.
    */
   private buildRound(): void {
+    // The welcome beat the build. Read here for the same reason the team is —
+    // it can land on either side of this method, and the half that arrives
+    // first has nothing on screen to correct. `NetSession.onSeated` is the
+    // other half and defers to this one while the state is `loading`.
+    //
+    // FIRST, before a single line of the build: everything below reads
+    // `mapDef` — the environment, the sky, `installMap` — so a map applied
+    // after any of them is a round half built out of each.
+    if (this.net?.seated) {
+      if (this.applyMatchMap(this.net.mapId) === "unknown") {
+        this.leaveUnknownMap(this.net.mapId);
+        return;
+      }
+    }
     // Re-draw skills for the chosen tier. The rig pool is never disposed, so
     // this is the only place the roster's difficulty can change.
     this.battle.setDifficulty(this.difficulty);
@@ -1987,14 +2370,19 @@ export class Game {
     // and follow the same terrain the ring is drawn across.
     this.zones.build(map.controlPoints, map.terrain, map.nav, env);
     this.player.fullReset();
-    this.player.team = 0;
-    // Built here, not at the moment of death: nine merged meshes and their GL
-    // buffers is not a cost to pay on the frame the player is killed on. It is
-    // a no-op on every round after the first, since the team never changes.
-    this.deathCam.prepare(this.player.team);
-    this.minimap.setMap(map, this.player.team);
-    this.kills[0] = this.kills[1] = 0;
-    this.losses[0] = this.losses[1] = 0;
+    // Offline the player is team 0 for the life of the process. In a netplay
+    // round the side is the authority's, and the session has it whenever the
+    // welcome beat this build; when it did not, the welcome applies it itself.
+    // Either way it goes in through the one funnel — see `applyPlayerTeam`.
+    this.applyPlayerTeam(this.net?.seated ? this.net.team : 0, map);
+    // A new round is a new board. Sized from the pool here rather than at
+    // construction, so it is the roster that says how many rows there are.
+    this.botKills.length = 0;
+    this.botDeaths.length = 0;
+    for (let i = 0; i < this.battle.bots.length; i++) {
+      this.botKills.push(0);
+      this.botDeaths.push(0);
+    }
     this.playerKills = 0;
     this.playerDeaths = 0;
     // The building card comes down on the far side of the work it covered, and
@@ -2002,6 +2390,49 @@ export class Game {
     // HUD underneath it rather than hiding it.
     this.overlayScreen.hide();
     this.enterDeploy(0);
+  }
+
+  /**
+   * Which side the player is on, and everything already standing in its
+   * colours.
+   *
+   * Offline the answer is always team 0. In a netplay round it is the
+   * authority's — `Roster.claim` seats the second human on team 1 — and it
+   * arrives in the welcome, which can land on EITHER side of the local build
+   * because `joinMatch` books the round before the socket is open. So this is
+   * called from both ends: `buildRound` deals whatever the session already
+   * has, and `NetSession.onSeated` deals it again when it turns out to
+   * disagree. That is why nothing here may assume it is running on a fresh
+   * round.
+   *
+   * Almost everything downstream reads `player.team` live, every frame, and
+   * needs nothing from this. What it collects is the things that take a COPY
+   * and would otherwise wear the old side's colours for the rest of the round:
+   * the death cam's stand-in body is built once, the minimap's backdrop is
+   * prerendered once, and the HUD's strip is only re-read inside `playing` —
+   * which the deploy screen the welcome usually lands under is not.
+   */
+  private applyPlayerTeam(team: Team, map: GameMap): void {
+    this.player.team = team;
+    // Built here, not at the moment of death: nine merged meshes and their GL
+    // buffers is not a cost to pay on the frame the player is killed on. A
+    // change of side is the one thing that rebuilds it, and `prepare` is the
+    // one that knows how to do that safely — see there.
+    this.deathCam.prepare(team);
+    this.minimap.setMap(map, team);
+    this.hud.setTickets(
+      [CONFIG.teams[0].name, CONFIG.teams[1].name],
+      this.conquest.tickets,
+      team,
+    );
+    this.hud.setFlags(this.conquest.points, team);
+    // Only when it is already up. `enterDeploy` shows it a moment after a
+    // build, so doing it there too would be the same paint twice — and a team
+    // that changed UNDER a standing deploy screen has to go back through
+    // `show`, because the spawn list it is offering belongs to the other side.
+    if (this.deployScreen.visible) {
+      this.deployScreen.show(map, this.conquest, team);
+    }
   }
 
   private spawnPlayer(at?: { pos: Vector3; yaw: number }): void {
@@ -2033,7 +2464,7 @@ export class Game {
     // would clear it.
     this.input.clearCrouchToggle();
     this.input.clearSprintToggle();
-    this.state = "playing";
+    this.go("playing");
     // `enterDeploy` dropped the lock, and until now the only thing that ever
     // took it back was a click — the `pointerdown` handler in the constructor,
     // which is the deploy map's own click arriving a moment later. A pad player
@@ -2082,9 +2513,10 @@ export class Game {
         );
       }
     }
-    if (this.input.reloadPressed && this.player.startReload()) {
-      this.sfx.reload(this.player.reloadTime);
-    }
+    // The sound and, in a match, the announcement are `player.onReload`'s —
+    // wired once in `wireScreens`, because the key is only one of the two ways
+    // a reload begins and the other one is inside `tryShot`.
+    if (this.input.reloadPressed) this.player.startReload();
     // The weapon swap, asked for either way round: the wheel and pad Y want
     // "the other one", the number keys name a slot. Both land on the same
     // gesture, and `drawSlot` is what refuses a request for the weapon already
@@ -2129,10 +2561,23 @@ export class Game {
         spread,
         this.player.damage,
         muzzle,
-        this.battle.hittablesAgainst(this.player.team),
+        this.enemyTargets(),
         this.player.range,
         this.player.shotOptions,
       );
+      // Networked: report the round. Everything above stays exactly as it is —
+      // the local resolve is what draws the tracer, flashes the hitmarker and
+      // kicks the weapon, and none of that may wait on a round trip. What it
+      // no longer does is decide anything: in a netplay round `enemyTargets`
+      // answers with the `NetSoldier`s the roster is drawing, whose
+      // `takeDamage` returns false and changes nothing, so the hitmarker below
+      // is a PREDICTION and the server's `hit` event is the truth.
+      //
+      // `shot.dir` and not `cameraSys.forward`: the spread was rolled inside
+      // `fire`, and the server has to re-resolve this bullet rather than a
+      // differently-jittered one.
+      this.net?.sendShot(this.cameraSys.camera.position, shot.dir, 0);
+
       // Bots hear the player's rifle the same way they hear each other's. This
       // is the only place the player's own gunfire enters the world, so it is
       // the only place that can say so.
@@ -2176,16 +2621,26 @@ export class Game {
         this.hud.flashHitmarker(killed, shot.headshot);
         if (shot.headshot) this.sfx.headshot();
         else this.sfx.hit();
+        // Netplay: this marker is a guess, and remembering that it was made is
+        // what keeps the authority's answer from repeating it a round trip
+        // later. See `claimPredictedHit`.
+        if (this.net) this.creditPredictedHit(shot.headshot);
         this.input.rumble(
           killed ? haptic.killStrong : haptic.hitStrong,
           killed ? haptic.killWeak : haptic.hitWeak,
           killed ? haptic.killMs : haptic.hitMs,
         );
         if (killed && shot.target instanceof Bot) {
+          // Both doors, one line apart: our row, and the body's. Offline only
+          // — in a netplay round `killed` is false above, because the roster's
+          // bodies refuse local damage and the authority scores this round.
+          this.creditKill(this.player);
           this.registerBotKill(shot.target, this.player.team, true);
         }
       }
-      if (this.player.reloading) this.sfx.reload(this.player.reloadTime);
+      // Nothing here for the reload the last round in the magazine just
+      // started: `tryShot` began it, and `player.onReload` is what hears about
+      // it — sound and announcement together, from the one door.
     }
 
     if (!this.updateWorld(dt)) return;
@@ -2216,7 +2671,759 @@ export class Game {
    * construction rather than by keeping two copies of the sequence in step, the
    * same failure `installMap` exists to prevent one layer down.
    */
+  /**
+   * What the URL says about multiplayer, read once at construction.
+   *
+   * Three parameters, and only the first is needed in a deployed build:
+   *
+   * - `?name=` — what to call this player, until the lobby grows text entry.
+   * - `?server=ws://host:port/ws` — which match server the LOBBY should list
+   *   and join. Purely a dev affordance: the client is on Vite's port and the
+   *   server on its own, so same-origin does not reach it.
+   * - `?mp` — skip the menu and join immediately, optionally naming the server
+   *   the way `?server=` does. It predates the lobby and is kept because it is
+   *   how the smoke tests get into a networked round in one navigation; the
+   *   menu's Multiplayer row is the way a player gets there.
+   */
+  private joinFromUrl(): void {
+    const params = new URLSearchParams(location.search);
+    const name = params.get("name");
+    if (name) this.playerName = name;
+    const server = params.get("server");
+    if (server) this.netUrl = server;
+    const mp = params.get("mp");
+    if (mp === null) return;
+    // A value on `?mp` names the server too, so the one-navigation form does
+    // not also need `?server=`.
+    if (mp !== "") this.netUrl = mp;
+    this.joinMatch();
+  }
+
+  /**
+   * Joins a networked match: a specific one from the lobby, a fresh one, or
+   * whatever has room when neither is asked for.
+   *
+   * The map is built LOCALLY exactly as an offline round builds it — the server
+   * has the same layout and the same baked colliders, so the world both sides
+   * reason about is the same one without a byte of it crossing the wire. What
+   * comes over the wire is only what MOVES.
+   *
+   * **Which map that is belongs to the MATCH, never to this menu.** `opts.mapId`
+   * is the row's, straight off the list the lobby is showing, and it is applied
+   * before the build so the common case builds the right world first time. It is
+   * an optimisation and not the guarantee: an unnamed join has no row to read,
+   * and a match can rotate between the fetch and the pick, so the welcome is
+   * still what settles it — see `applyMatchMap`. What travels the other way is
+   * `map`, the map to start a match on if this join CREATES one.
+   */
+  joinMatch(opts: { matchId?: string; create?: boolean; mapId?: string } = {}): void {
+    if (this.net) return;
+    // Refused before anything is built or connected, which is the cheapest of
+    // the three places this can be caught and the only one that leaves the
+    // player looking at the list they picked from.
+    if (opts.mapId !== undefined && this.applyMatchMap(opts.mapId) === "unknown") {
+      this.hud.toast(`that match is on "${opts.mapId}", which this build does not have`);
+      return;
+    }
+    const net = new NetSession(this.scene, this.mats);
+    this.net = net;
+
+    // The server placed us. This is the only thing that spawns the local body
+    // in a networked round — there is no local respawn timer, because a
+    // reinforcement is the authority's to spend.
+    net.onSpawn = (pos, yaw) => {
+      this.spawnPlayer({ pos: pos.clone(), yaw });
+    };
+
+    // A rejected position. Small disagreements are eased so an occasional
+    // refusal is not a visible jerk; a large one is a genuine desync and
+    // easing it would mean spending seconds visibly inside a wall.
+    net.onCorrection = (pos, reason) => {
+      const off = Vector3.Distance(this.player.position, pos);
+      if (off > CONFIG.net.correctionSnap) {
+        this.player.placeAt(pos.clone());
+        this.hud.toast(`resynced (${reason})`);
+      } else {
+        this.player.nudgeTo(pos);
+      }
+    };
+
+    // The side the authority put us on, arriving after the round was booked.
+    // The build below is optimistic about everything, and about this it was
+    // wrong for the second person into a match: `Roster.claim` fills the
+    // thinner team, so they are on team 1 while every screen here is painted
+    // for team 0.
+    //
+    // Two cases and one of them is not this callback's: a welcome that beats
+    // the build has nothing on screen to correct and is read straight off the
+    // session by `buildRound`, which is what the `loading` test defers to. The
+    // team not having changed is the ordinary case — every first joiner, and
+    // every reconnect that lands back on the same side — and it repaints
+    // nothing there, because re-showing the deploy screen would throw away the
+    // spawn the player is in the middle of choosing.
+    net.onSeated = (team) => {
+      if (this.state === "loading" || !this.map) return;
+      // The map before the team, because a map that disagrees rebuilds the
+      // whole round and `buildRound` deals the team itself on the way through.
+      // This is the case the lobby's row could not cover: an unnamed join, or a
+      // match that rotated between the list and the pick. The wasted build is
+      // the price of booking the round before the socket is open, and it is
+      // paid rarely — the welcome usually lands while `loading` is still up,
+      // where the branch above defers to `buildRound`.
+      switch (this.applyMatchMap(net.mapId)) {
+        case "unknown":
+          this.leaveUnknownMap(net.mapId);
+          return;
+        case "changed":
+          this.startRound();
+          return;
+      }
+      if (team !== this.player.team) this.applyPlayerTeam(team, this.map);
+      // A seat is a body the authority is holding until it is ASKED for, and
+      // this callback is raised again on every reconnect — where the client is
+      // usually in the middle of the round it thinks it is still playing. Its
+      // old slot is gone, the new one is dead with a zero clock, and every
+      // movement sample it sends from here on is dropped as "a dead player
+      // reports nothing worth keeping": it would walk the map as a ghost that
+      // nobody can see, be hit by nothing, and hit nothing back.
+      //
+      // So the screen that asks goes back up. After the team above, so the
+      // spawns it offers belong to the new seat.
+      //
+      // `deploy` is deliberately not in this list: that screen is already up
+      // and asking, and re-showing it would reset a selection the player is in
+      // the middle of making — the same reason `applyPlayerTeam` re-shows it
+      // only when the side has actually changed. A request made before the
+      // reconnect is not lost with the socket either: `NetSession` holds it
+      // until the authority answers with a spawn, and re-sends it on the seat
+      // that answers.
+      //
+      // What is UNDER the screens and not what is on top of them, because a
+      // reconnect is the authority's news and does not wait for the player to
+      // close anything. Asked of `this.state`, a reseat taken while the pause
+      // card was up read as `paused`, matched neither arm, and left the client
+      // believing it was still playing — which is precisely the ghost the
+      // paragraph above exists to prevent, arrived at through the one door that
+      // was not watched. The lid comes down with the state, because `enterDeploy`
+      // goes through `go`: this screen has to be answered, so it cannot be
+      // raised behind one.
+      const under = this.screens.under;
+      if (under === "playing" || under === "dying") {
+        this.enterDeploy(0);
+      }
+    };
+
+    net.onEvent = (event) => this.onNetEvent(event);
+
+    // Somebody else's body went down. The same pool, the same offer and the
+    // same five refusals every bot's corpse goes through — the only difference
+    // is that offline `registerBotKill` reaches this line having just charged a
+    // ticket and written a killfeed line, and here the authority did both
+    // before the news arrived. A callback rather than a reach into the roster
+    // for the reason every other cross-system effect in this file is one.
+    //
+    // Not the priority offer: that is the death cam's alone, and a full pool
+    // refusing a body across the square is the pool working. The collapse tween
+    // the server is already driving through `EntityState.dead` is what a
+    // refusal falls back to, which is why that tween is load-bearing on this
+    // path exactly as it is on the bots'.
+    net.roster.onDeath = (soldier) =>
+      this.ragdolls.spawn(soldier, this.cameraSys.camera.position);
+    net.roster.onRetire = (soldier) => this.ragdolls.retire(soldier);
+
+    // Boots. The exact counterpart of `wireBattle`'s `onBotStepped`, down to
+    // the callback being handed the body rather than a position, and the one
+    // sound in a netplay round that crosses no wire at all: a footfall is a
+    // point on the walk cycle, and that cycle is already being integrated from
+    // the ground this body covers (see `NetSoldier.onStep`). It fires for all
+    // fifteen of them, so nothing here may do work per step — `Sfx.botStep`
+    // rejects the far ones, which is where that decision belongs.
+    net.roster.onStep = (soldier) => this.sfx.botStep(soldier.position);
+
+    // A new round on a new map, same seat. The world is rebuilt LOCALLY from
+    // the same layout the server is using — the map never crosses the wire —
+    // and the server's spawn event puts the body back afterwards.
+    //
+    // Through `applyMatchMap` and not `setMap`, which is the player picking one
+    // and refuses to run outside the menu: a rotation arrives in `roundover`,
+    // so every one of them used to leave the client rebuilding the map it was
+    // already on while the server moved to the next.
+    net.onRoundStart = (mapId) => {
+      if (this.applyMatchMap(mapId) === "unknown") {
+        this.leaveUnknownMap(mapId);
+        return;
+      }
+      this.startRound();
+    };
+    net.onStateChange = (state) => {
+      if (state === "closed") this.hud.toast("disconnected");
+    };
+
+    // The handshake was refused — a match that filled or retired between the
+    // list and the pick, or a server speaking a protocol this build does not.
+    // The round that was optimistically started is torn down and the player is
+    // put back where they chose from, with the server's own words for why.
+    net.onRejected = (reason) => {
+      // `enterMenu` drops the session and tears the round down; the lobby then
+      // goes back up over it and re-fetches, so the row that refused is gone
+      // from the list by the time the player reads why.
+      this.enterMenu();
+      this.hud.toast(reason);
+      this.openLobby();
+    };
+
+    // The screen stays up under the build, showing which row is being joined,
+    // and `startRound` takes it down on the way into `loading`.
+    if (opts.matchId) this.lobbyScreen.setJoining(opts.matchId);
+
+    this.startRound();
+    net.connect({
+      name: this.playerName,
+      url: this.netUrl,
+      weapon: this.weapon,
+      matchId: opts.matchId,
+      create: opts.create,
+      // Sent on every join rather than only on a create, because "there is room
+      // somewhere" can end in a fresh match too — the server spends this only
+      // when it actually builds one, and ignores it otherwise.
+      map: this.mapDef.id,
+    });
+  }
+
+  /**
+   * Drops the networked session, if there is one. Idempotent, and safe to call
+   * from a state that never had one — which is most of `enterMenu`'s callers.
+   */
+  private leaveMatch(): void {
+    this.net?.dispose();
+    this.net = null;
+    // Nothing can claim these now. They would time out on their own inside the
+    // second, and clearing them is what makes that a property of the boundary
+    // rather than of the window's length.
+    this.hitCredits.length = 0;
+  }
+
+  /** What a server event does to this client's screen. Presentation only. */
+  private onNetEvent(event: ServerEvent): void {
+    switch (event.e) {
+      case "kill": {
+        const killer = CONFIG.teams[event.killer].name;
+        const victimSlot = this.net?.roster.soldiers[event.victim];
+        const victim = victimSlot ? CONFIG.teams[victimSlot.team].name : "";
+        this.hud.addKill(killer, victim, event.killer === this.player.team);
+        // Arm the corpse with the round that felled it. It is SPENT later, by
+        // `NetRoster` when the interpolated death arrives — this event is real
+        // time and the body is drawn `interpDelay` behind it, so throwing it
+        // here would throw a body that has not visibly been hit yet.
+        if (victimSlot) {
+          victimSlot.deathFrom.set(event.from[0], event.from[1], event.from[2]);
+          victimSlot.deathDamage = event.amount;
+        }
+        // The flat "a body went down" cue, which offline every bot death gets
+        // through `registerBotKill` — this event is the authority's version of
+        // that call, raised once per death whoever fell. Our own is the one
+        // exception, exactly as offline: a player's own death is the death cam
+        // and `playerHurt`, not somebody else falling over.
+        if (event.victim !== this.net?.slot) this.sfx.enemyDie();
+        break;
+      }
+      // The same pair `wireConquest` plays offline, from the authority's
+      // version of the same event: a flag taken is worth hearing and a flag
+      // lost is worth hearing more, and neither `ConquestSystem` callback fires
+      // on a client that is not stepping one.
+      case "captured":
+        if (event.by === this.player.team) this.sfx.capture();
+        else this.sfx.flagLost();
+        this.hud.showMessage(
+          `${event.point.toUpperCase()} CAPTURED BY ${CONFIG.teams[event.by].name.toUpperCase()}`,
+          2.5,
+        );
+        break;
+      case "neutralised":
+        this.hud.toast(`${event.point} — neutralised`);
+        break;
+      case "roundover":
+        this.endRound(event.winner);
+        break;
+      // Our own round landed — or, as often, did not. The local hitmarker was
+      // a prediction made against interpolated bodies; this is the authority
+      // re-resolving it against what we were actually looking at. When the two
+      // disagree the server wins, and what is cued here is the CORRECTION and
+      // nothing else: a round the shooter has already been told about is
+      // claimed silently, because a marker and a tick arriving twice for one
+      // bullet — a round trip apart, so plainly a second event rather than an
+      // echo — reads as two hits and makes the cue worth less than it was.
+      //
+      // The server addresses this one to the shooter, so the slot test is a
+      // GUARD and not the filter it used to be. It stays because the two halves
+      // ship as separate images: during a rolling deploy this client may be
+      // talking to a server old enough to still broadcast the event, and a
+      // hitmarker for somebody else's round is exactly the failure a version
+      // check at the handshake cannot catch, since the shape did not change.
+      case "hit":
+        if (
+          event.shooter === this.net?.slot &&
+          !this.claimPredictedHit(event.killed, event.headshot)
+        ) {
+          this.hud.flashHitmarker(event.killed, event.headshot);
+          if (event.headshot) this.sfx.headshot();
+          else this.sfx.hit();
+        }
+        break;
+
+      // We were hit. Health is the server's, so it is assigned rather than
+      // subtracted — a client that decremented its own would drift out of step
+      // with the authority over a firefight and disagree about who is alive.
+      // `applyServerHealth` also arms the regen lock, which is the half of the
+      // hit that never crosses the wire: the server holds the health down for
+      // `regenDelay` and then heals it back, and the client runs the identical
+      // curve locally rather than being told about every point of it.
+      //
+      // Addressed to the victim by the server, so — exactly as with `hit` above
+      // — the slot test is a rolling-deploy guard rather than the filter it was.
+      case "damage":
+        if (event.victim === this.net?.slot) {
+          this.player.applyServerHealth(event.health);
+          this.netDamageFrom.set(event.from[0], event.from[1], event.from[2]);
+          this.netDamageAmount = event.amount;
+          this.onPlayerDamaged(event.amount, false, this.netDamageFrom);
+        }
+        break;
+
+      // A death, decided elsewhere. `killPlayer` is the local path and must not
+      // run here: it charges a ticket and starts a respawn clock, both of which
+      // the server already owns.
+      //
+      // What it DOES owe is the four seconds of watching, because a death cam
+      // decides nothing — it is a camera and a stand-in body, and the round
+      // carries on underneath it either way. The bearing and the size of the
+      // killing blow are the `damage` event's, which the server queues
+      // immediately ahead of this one and which is the only thing that knows
+      // them: `died` carries a slot and a clock and nothing to throw a body
+      // with. `enterDying` falls through to the deploy screen on its own if the
+      // cam cannot come up, so this is not a state that can strand a player.
+      case "died":
+        if (event.slot === this.net?.slot) {
+          this.player.health = 0;
+          this.player.alive = false;
+          if (this.state === "playing") {
+            this.enterDying(
+              this.netDamageFrom,
+              this.netDamageAmount,
+              event.respawnIn,
+            );
+          } else {
+            this.enterDeploy(event.respawnIn);
+          }
+        }
+        break;
+
+      // Somebody's weapon went off, and it is worth exactly what offline's
+      // `BattleSystem.onBotFired` is worth: a report to place by ear, and — for
+      // an enemy — a couple of seconds on the minimap. Both are `wireBattle`
+      // reading a callback offline, and that callback fires on nothing here,
+      // because this client runs no AI and never hears another person's
+      // trigger. So the authority says it instead.
+      //
+      // The two halves differ in who they are about, exactly as offline: every
+      // shot in the village is audible whoever fired it, while the reveal is
+      // the enemy's alone — a friendly is drawn on that map whether they are
+      // shooting or not.
+      //
+      // Our own slot is skipped outright. `sfx.shoot` already played that round
+      // at the player's own ear the frame the trigger went, and the roster's
+      // copy of this body is deliberately never sampled, so its position is
+      // wherever the pool was built.
+      //
+      // Public, and it may name a body across the map behind a wall — exactly
+      // as offline, where any enemy bot firing anywhere is revealed. It gives
+      // nothing away that the snapshot has not already handed over: every
+      // position is in there, and what the minimap withholds it withholds by
+      // choice rather than by ignorance.
+      case "fire": {
+        if (event.slot === this.net?.slot) break;
+        const shooter = this.net?.roster.soldiers[event.slot];
+        if (!shooter) break;
+        // The eye rather than the feet: a rifle goes off at a shoulder, and
+        // this is the only height on a net body that is near one. Offline the
+        // same sound is placed at the bot's own muzzle.
+        //
+        // One event carries every round that slot fired inside a snapshot
+        // interval, so they are laid back out across it rather than stacked on
+        // one instant — a burst played as a single louder shot reads as one
+        // shot, and the rate is most of what says which weapon is being fired
+        // at you. Bounded by the ticks in an interval, which is the most a
+        // rate-gated slot can physically have spent, because the count came off
+        // a socket.
+        const rounds = Math.min(Math.max(event.n ?? 1, 1), TICK_HZ / SNAPSHOT_HZ);
+        const spacing = 1 / SNAPSHOT_HZ / rounds;
+        for (let i = 0; i < rounds; i++) {
+          this.sfx.botShot(shooter.eyePos, i * spacing);
+        }
+        if (shooter.team !== this.player.team) this.minimap.reveal(shooter);
+        break;
+      }
+
+      // Somebody is changing a magazine. Spatialised, because knowing WHICH of
+      // the enemies in front of you has just gone dry is the whole point of
+      // hearing it, and it is the same `Sfx.botReload` offline hangs off
+      // `BattleSystem.onBotReloaded`.
+      //
+      // Our own is skipped for the reason our own fire is: `player.onReload`
+      // played it locally and sent the announcement that came back as this.
+      case "reload": {
+        if (event.slot === this.net?.slot) break;
+        const who = this.net?.roster.soldiers[event.slot];
+        if (who) this.sfx.botReload(who.position);
+        break;
+      }
+
+      // A round cracked past us. Not a hit and not a hit sound — the supersonic
+      // N-wave, which arrives before the report of the rifle that sent it and is
+      // the only thing that says the fire is meant for YOU rather than merely
+      // near you. Offline it is `CombatSystem.onNearMiss` finding the player
+      // inside the target loop of somebody else's shot; here no client resolves
+      // anybody else's rounds, so the authority is the only thing that can see
+      // one happen.
+      //
+      // Both halves of the offline handler, and they are a pair: the crack is
+      // what the player hears and `suppress` is what it does to their hands.
+      // Addressed to us by the server, so there is no slot to guard on — see
+      // the event's own note.
+      case "nearmiss":
+        this.netNearPoint.set(event.at[0], event.at[1], event.at[2]);
+        this.sfx.nearMiss(this.netNearPoint);
+        this.player.suppress();
+        break;
+
+      // A blast the authority resolved. The light, the noise and the
+      // concussion are `onExplosion`'s, exactly as they are offline — the
+      // difference is only who decided it happened.
+      case "explode":
+        this.netDamageFrom.set(event.at[0], event.at[1], event.at[2]);
+        this.onExplosion(this.netDamageFrom);
+        break;
+
+      case "spawn":
+        break;
+    }
+  }
+
+  /**
+   * Who the local player's own rounds may find: the bots offline, the bodies
+   * drawn from the wire in a netplay round.
+   *
+   * Two callers — the shot resolve and the gamepad aim assist — and the whole
+   * reason this is a method is that they must never be handed different lists:
+   * the assist's job is to hold an aim the rounds can use.
+   *
+   * `battle` is not merely the wrong list in a netplay round, it is an EMPTY
+   * one, and empty in a way no team check reveals. `buildRound` calls
+   * `battle.reset()`, which leaves every bot in the pool dead, and `updateWorld`
+   * returns before `battle.update` is ever reached, so nothing respawns them;
+   * the only other combatant that side knows about is the local player, whom the
+   * team check drops. Reading that list there cost the shooter every local cue a
+   * hit is owed — sparks landed on the wall behind the man who was hit, no
+   * hitmarker arrived until the server's `hit` event had made the round trip,
+   * and aim assist had nothing to hold on to at all.
+   *
+   * The result is a scratch array owned by whichever side answered. Consume it
+   * inside the call, exactly as `BattleSystem.hittablesAgainst`'s own contract
+   * requires — both callers do.
+   */
+  private enemyTargets(): Hittable[] {
+    return this.net
+      ? this.net.roster.hittablesAgainst(this.player.team)
+      : this.battle.hittablesAgainst(this.player.team);
+  }
+
+  /**
+   * Every body but the local player's, as the minimap draws them.
+   *
+   * The same substitution `enemyTargets` makes, for the same reason and with
+   * the same failure behind it: in a netplay round `battle.bots` is a pool
+   * `battle.reset()` left dead and `updateWorld` never steps again, so the map
+   * drew no friendlies at all and a reveal had nobody to name. It was not a
+   * missing feature so much as a list that had quietly gone empty — the panel
+   * still drew, the flags still moved, and only the blips were gone.
+   *
+   * Unlike `enemyTargets` this is a plain READ — no shot is resolved against
+   * it, no team is filtered out of it — so it hands back the array as it
+   * stands rather than a scratch list, and both teams are in it because the
+   * minimap decides for itself which half it may draw.
+   *
+   * The local player's own slot IS in the netplay array, and is left dead by
+   * `NetRoster.applyRoster` for the life of the session (its snapshots are
+   * skipped, so nothing revives it). That is what keeps a friendly blip from
+   * sitting under the arrow that already stands for the player.
+   */
+  private mapBodies(): readonly Combatant[] {
+    return this.net ? this.net.roster.soldiers : this.battle.bots;
+  }
+
+  /**
+   * Rounds this client has already cued a hitmarker for, waiting on the
+   * authority to say whether it agrees.
+   *
+   * The pair of methods below is the whole of the rule that a landed round is
+   * announced ONCE. Both ends have an opinion about the same bullet — the local
+   * resolve the instant the trigger went, the server's `hit` a round trip later
+   * — and the second is worth a marker and a noise only when it carries
+   * something the first did not.
+   *
+   * A queue rather than a counter because several rounds are in flight at
+   * automatic rates, and each is claimed in the order it was fired: the server
+   * re-resolves them in that order and reports them down one socket, so
+   * first-in-first-out pairs them without the protocol carrying a shot id.
+   * Entries expire on their own, which is what stops a round the authority
+   * scored as a MISS — no event ever arrives for one — from leaving a credit
+   * standing to swallow the next real correction.
+   *
+   * Only bullets are ever in here: `Match` raises `hit` from the shot path and
+   * from nowhere else, so a blast can neither leave a credit nor claim one.
+   */
+  private readonly hitCredits: { headshot: boolean; until: number }[] = [];
+
+  /** Drops credits the authority never claimed. Ordered, so the front is oldest. */
+  private pruneHitCredits(now: number): void {
+    while (this.hitCredits.length > 0 && this.hitCredits[0].until <= now) {
+      this.hitCredits.shift();
+    }
+  }
+
+  /** A local resolve says this round landed, and the marker is already up. */
+  private creditPredictedHit(headshot: boolean): void {
+    const now = performance.now();
+    this.pruneHitCredits(now);
+    this.hitCredits.push({
+      headshot,
+      until: now + CONFIG.net.hitCreditWindow * 1000,
+    });
+  }
+
+  /**
+   * The authority's verdict on a round. True when this client has already said
+   * everything the verdict has to say, and the event owes no second cue.
+   *
+   * The credit is spent either way — this round's answer has arrived, whatever
+   * it is. Two things override agreement:
+   *
+   * - **A kill.** The prediction cannot make that claim (`NetSoldier.takeDamage`
+   *   returns false, so the local resolve never reports one), and the red marker
+   *   is the one that means STOP SHOOTING — the most useful thing a hitmarker
+   *   ever says, and never a repetition.
+   * - **A headshot the prediction missed.** The bodies here are drawn
+   *   `interpDelay` behind, so the head zone the server found on its rewound
+   *   copy is not always the one this client tested against.
+   *
+   * The other direction — this client called a headshot and the server scored a
+   * body hit — is deliberately silent. It is a hit either way, the marker for it
+   * is already on screen, and correcting the flavour downward is worth less than
+   * the doubled cue it would cost.
+   */
+  private claimPredictedHit(killed: boolean, headshot: boolean): boolean {
+    this.pruneHitCredits(performance.now());
+    const credit = this.hitCredits.shift();
+    if (!credit) return false;
+    if (killed) return false;
+    return !(headshot && !credit.headshot);
+  }
+
+  /** Scratch for a networked damage bearing; never allocated per hit. */
+  private readonly netDamageFrom = new Vector3();
+  /**
+   * The same, for where a round came closest on its way past.
+   *
+   * Its own vector rather than a share of the one above, because a near miss
+   * and a hit are different events that can land in the same tick's message —
+   * and `netDamageFrom` has to survive until the `died` that reads it.
+   */
+  private readonly netNearPoint = new Vector3();
+  /**
+   * How much the last networked hit was for, kept alongside the bearing so the
+   * `died` event that follows it has something to throw the corpse with.
+   */
+  private netDamageAmount = 0;
+
+  /**
+   * The networked half of a frame.
+   *
+   * Called from `updateWorld` after the local player has moved, so what is
+   * uploaded is this frame's position rather than last frame's, and before
+   * anything reads where the other bodies are. `updateWorld` and not
+   * `updateGameplay` because the death cam runs the former and not the latter,
+   * and a death cam over sixteen bodies frozen mid-stride is the screenshot
+   * that split is there to prevent.
+   */
+  private updateNet(dt: number): void {
+    if (!this.net) return;
+    this.net.update(
+      dt,
+      {
+        position: this.player.position,
+        yaw: this.cameraSys.aimYaw,
+        pitch: this.cameraSys.aimPitch,
+        crouching: this.player.crouching,
+        sprinting: this.player.sprinting,
+      },
+      this.conquest.points,
+      this.cameraSys.camera.position,
+      // Only a player who is actually IN the round reports where they are. The
+      // health flag alone is not that question any more, now that this runs
+      // under the deploy screen too: a round opens with a live `Player` that
+      // has never been placed, so a bare `alive` would upload the last round's
+      // position — or the origin — on behalf of a body the authority holds as
+      // dead and has not deployed yet. The server drops those samples anyway
+      // (`onMove` returns on a dead player), which is exactly why the client
+      // should not be sending them.
+      this.state === "playing" && this.player.alive,
+    );
+    // The mirrored ticket counts, so the HUD strip reads the server's round
+    // rather than a local `ConquestSystem` that is no longer being stepped.
+    this.conquest.tickets[0] = this.net.tickets[0];
+    this.conquest.tickets[1] = this.net.tickets[1];
+  }
+
+  /**
+   * The half of a netplay frame that is this client's rather than the
+   * authority's: everybody else's bodies, and the effects nobody else advances.
+   *
+   * One method because it has two callers that must never drift apart —
+   * `updateWorld` for the states that are IN the round, and the deploy screen
+   * for the one state that is not. A player waiting to come back is watching a
+   * fight that has not stopped for them, and this screen is a live view of it
+   * with a top-down map of the flags over the top; left unstepped, sixteen
+   * bodies stand frozen behind the card and then snap to wherever they really
+   * are on the frame the player deploys.
+   *
+   * `RagdollSystem` is in here for a reason sharper than symmetry: `updateNet`
+   * is what raises an interpolated death, and a death raised while the pool is
+   * not being stepped is a corpse that takes a rig, parents its joints to
+   * proxies nothing writes, and hangs in the air for the rest of the round.
+   * Stepping the roster without stepping the pool is not half the feature, it
+   * is a haunting.
+   *
+   * This is still not simulation and may never become it. Nothing here decides
+   * an outcome, which is what keeps it callable from a state that owns none —
+   * and it stays out of `paused` and `menu` for the reason it belongs in
+   * `deploy`: those two are a round that is not running, and this is a round
+   * running without you.
+   */
+  private updateNetWorld(dt: number): void {
+    this.updateNet(dt);
+    this.combat.update(dt);
+    this.grenades.update(dt);
+    this.ragdolls.update(dt);
+  }
+
+  /**
+   * That same frame, plus the two gauges, for a card the round is running
+   * behind. Offline both callers are a game genuinely held; in netplay neither
+   * is, and the difference is the whole of this method.
+   *
+   * The two HUD pushes are `updateGameplay`'s, made here because the deploy
+   * screen and the pause card are the two overlays that deliberately do NOT
+   * hide the gauges under them: a flag falling while you pick where to drop in
+   * — or while you sit in a menu — changes both, and a strip that only
+   * refreshes once you are back in the world spends the whole of that showing
+   * the round you left.
+   *
+   * One method rather than the same eight lines twice, for the reason
+   * `updateNetWorld` is one method: two copies of a frame drift, and the way
+   * they drift is that a screen added to one keeps drawing while the other
+   * stands still.
+   */
+  private updateNetUnderCard(dt: number): void {
+    if (!this.net) return;
+    this.updateNetWorld(dt);
+    this.hud.setTickets(
+      [CONFIG.teams[0].name, CONFIG.teams[1].name],
+      this.conquest.tickets,
+      this.player.team,
+    );
+    this.hud.setFlags(this.conquest.points, this.player.team);
+  }
+
+  /**
+   * True while the world on screen is genuinely stopped — an offline pause, and
+   * whatever is raised over one. It is what the HUD's own clock keys off: the
+   * killfeed and the toasts belong to the frame, so they freeze with it and fade
+   * with it, and the failure either way round is a fight fading off a still
+   * screen or a still screen catching up in one jump.
+   *
+   * The session test is the whole of the online half: in a netplay round nothing
+   * on this client holds anything, because the authority never heard the key.
+   * Which screens hold the world OFFLINE is `ScreenSpec.holdsWorld`, asked of
+   * the whole stack — the deploy screen is deliberately not one of them even
+   * though it holds the world just as hard, because the gauges under it are the
+   * ones a player reads while choosing and the countdown on the card is a clock
+   * of its own.
+   */
+  private get worldHeld(): boolean {
+    return !this.net && this.screens.holdsWorld;
+  }
+
+  /**
+   * The authority's round, carried on behind whatever this client has on screen:
+   * the frame, the gauges, and the reinforcement clock when what is under the
+   * stack is the deploy screen.
+   *
+   * Called once from `tick` for every state, which is the point of it. This was
+   * four calls — one per screen that happened to know it owed one — and the rule
+   * that kept them honest was a comment saying the next screen owed the same. Now
+   * the screen answers `ScreenSpec.roundBehind` and `tick` does the asking, so a
+   * fifth screen cannot be written without an answer and cannot be written with
+   * the wrong one silently: the row is next to the four that are right.
+   *
+   * The clock is here rather than in `updateDeployScreen` because it is the
+   * ROUND's and not the screen's. The authority runs `NetPlayer.respawnT` down
+   * whatever this client has on top, and the local copy is a countdown drawn on
+   * the card plus the gate on its own Deploy button — so a lid that stops it
+   * makes a player wait out time the server has already given them back, and the
+   * number on the card is wrong the whole while. Offline that same lid genuinely
+   * holds the round and the clock is right to stop with it. Under no lid the
+   * deploy screen runs its own, which is why this asks for both.
+   */
+  private updateRoundBehind(dt: number): void {
+    if (!this.net || !this.screens.roundBehind) return;
+    this.updateNetUnderCard(dt);
+    if (!this.screens.lidUp || this.screens.under !== "deploy") return;
+    this.respawnT -= dt;
+    this.deployScreen.update(this.respawnT);
+  }
+
   private updateWorld(dt: number): boolean {
+    // A networked round is somebody else's simulation. Everything below this
+    // decides an outcome — who owns a flag, where a bot is going, who died —
+    // and the authority has already decided all of it, so the client draws what
+    // it was told and runs none of it. The bodies, the flags and the tickets
+    // all arrive through `NetSession`, which is stepped from `updateGameplay`
+    // where the local player's own frame is.
+    //
+    // What it still owes is the DRESSING on what it was told, and that is a
+    // shorter list than "everything below": a tracer, the impact at the end of
+    // it and the grenade the thrower watched leave their own hand decide
+    // nothing, are owned by this client alone, and are stepped by nobody else.
+    // Left out they do not merely stop moving — a tracer is spawned AT the
+    // muzzle a hundredth of a metre long and it is `update` that flies it and
+    // hides it again, so every shot left a lit dot hanging in the air where
+    // the muzzle had been, and a thrown grenade hung at the release point with
+    // a fuse that never ran down. Nothing in here may decide an outcome; that
+    // is what keeps this from growing back into the simulation below.
+    //
+    // The bodies are drawn from here rather than from `updateGameplay` so that
+    // the DEATH CAM gets them too. Every line of this method is what a death
+    // cam needs and none of what surrounds it — that is the split the header
+    // above argues — and a networked round left `updateNet` on the other side
+    // of it, so the four seconds spent watching your own body fall were four
+    // seconds during which nobody else moved. The order is unchanged: this is
+    // still the first thing after the local player has been simulated and
+    // before anything reads where anybody is.
+    if (this.net) {
+      this.updateNetWorld(dt);
+      return true;
+    }
+
     // --- objectives ---
     // Runs before the bots so their think tick sees this frame's ownership.
     this.combatants.length = 0;
@@ -2282,7 +3489,7 @@ export class Game {
     // depending on all of them continuing to.
     const dc = CONFIG.player.deathCam;
     if (!this.deathCam.active || this.deathCam.elapsed >= dc.time) {
-      this.enterDeploy(Math.max(0, CONFIG.conquest.respawnDelay - dc.time));
+      this.enterDeploy(Math.max(0, this.deathRespawnIn - dc.time));
     }
   }
 
@@ -2327,12 +3534,24 @@ export class Game {
         this.grenadeHand,
         forward,
         this.player.team,
-        true,
+        this.player,
       )
     ) {
       return;
     }
     this.player.spendGrenade();
+    // Networked: the authority throws its own copy and owns the blast. The
+    // local one above still flies — it is what the thrower watches arc — but
+    // it hurts nobody, because `hittablesFor` is wired to `battle`, and in a
+    // netplay round that list is empty: the local bot pool is reset dead and
+    // never stepped. A bullet is given the roster's bodies instead
+    // (`enemyTargets`) because a shot owes the shooter an immediate tracer and
+    // hitmarker; a blast owes nothing of the kind — its light, noise and
+    // concussion all arrive on the server's `explode` event — so pointing this
+    // at them would buy a line-of-sight ray per body within the radius and
+    // nothing else. The pouch is the server's count too; spending here only
+    // keeps the HUD honest.
+    this.net?.sendGrenade(this.grenadeHand, this.cameraSys.forward);
     this.sfx.grenadeThrow();
     // The body's own follow-through, through the spring the landing and the
     // blast concussion already share — one integrator on the eye, never a
@@ -2367,15 +3586,17 @@ export class Game {
       this.cameraSys.aimYaw,
       this.cameraSys.aimPitch,
       this.cameraSys.stickYawRate,
-      this.battle.hittablesAgainst(this.player.team),
+      this.enemyTargets(),
     );
     // First person: the camera goes to the eye the bots shoot at, so what a
     // bot can see of you is exactly what you can see of it.
     this.cameraSys.update(dt, this.input, this.player.eyePos, assist);
     // Shadows follow the player (biased a little along the view so the
     // window covers what's ahead); outline ink thins with the same camera.
+    // From the body's CENTRE, not its feet: the shadow window is placed around
+    // this point and it should sit in the middle of the body it follows.
     this.shadowFocus
-      .copyFrom(this.player.position)
+      .copyFrom(this.player.center)
       .addInPlace(this.cameraSys.forwardToRef(this.shadowForward).scaleInPlace(8));
     this.updateSceneForCamera(dt, this.shadowFocus, this.player, this.combatants);
   }
@@ -2421,10 +3642,13 @@ export class Game {
       if (lampIntensity > 0) {
         this.lighting.setCarried(
           "player-lamp",
+          // Above the body's CENTRE. `lampHeight` is measured from there — a
+          // lamp is carried, so it rides the chest and drops with a crouch
+          // rather than being pinned to the ground the player stands on.
           this.lampPos.set(
-            player.position.x,
-            player.position.y + lc.lampHeight,
-            player.position.z,
+            player.center.x,
+            player.center.y + lc.lampHeight,
+            player.center.z,
           ),
           lc.lampColor,
           lc.lampRange,
@@ -2497,25 +3721,6 @@ export class Game {
     // in, and a body on the ground is not standing in one — a panel counting a
     // capture nobody is contributing to is worse than no panel.
     this.hud.setCapture(dying ? null : this.captureStatus());
-    // Assembled only while the board is actually up. The payload is an object
-    // and two arrays, and `flagsHeld` counts the control points twice — all of
-    // it built every frame of every round to be handed to a call that returned
-    // at its first line for all but the seconds a player holds Tab.
-    if (this.input.scoreboard) {
-      this.hud.setScoreboard(true, {
-        map: this.mapDef.name,
-        teams: [CONFIG.teams[0].name, CONFIG.teams[1].name],
-        tickets: this.conquest.tickets,
-        flags: [this.conquest.flagsHeld(0), this.conquest.flagsHeld(1)],
-        kills: this.kills,
-        deaths: this.losses,
-        playerTeam: this.player.team,
-        playerKills: this.playerKills,
-        playerDeaths: this.playerDeaths,
-      });
-    } else {
-      this.hud.setScoreboard(false);
-    }
     this.hud.setLockHint(!this.input.pointerLocked && !this.input.gamepadConnected);
     this.minimap.update(
       dt,
@@ -2524,7 +3729,7 @@ export class Game {
       // above it while the camera orbits away from the player's last heading.
       dying ? this.deathCam.yaw : this.cameraSys.yaw,
       this.conquest.points,
-      this.battle.bots,
+      this.mapBodies(),
       this.player.team,
     );
   }
@@ -2577,18 +3782,25 @@ export class Game {
     // stood where it fell; a rifle stuck to the camera has to be put away.
     this.player.setBodyHidden(true);
     this.hud.clearDamageDirections();
-    this.hud.setScoreboard(false);
     // updateHud stops running outside `playing`, so the panel has to be told
-    // to go — otherwise the zone the player died in stays on screen.
+    // to go — otherwise the zone the player died in stays on screen. The
+    // SCOREBOARD is deliberately not told anything here: it is pushed from
+    // `tick` in every state that has a round behind it, and this screen is one
+    // of them — a player waiting out a reinforcement is exactly who wants it.
     this.hud.setCapture(null);
     if (this.map) this.deployScreen.show(this.map, this.conquest, this.player.team);
     this.deployScreen.update(this.respawnT);
-    this.state = "deploy";
+    // A netplay death is decided by the wire and arrives in whatever state this
+    // client is in — including under a lid, which is where this used to leave a
+    // screen stranded over a live deploy screen. `go` takes it down.
+    this.go("deploy");
     document.exitPointerLock();
   }
 
   private endRound(winner: Team): void {
-    this.state = "roundover";
+    // Ends under a lid for the same reason a death does: the authority's
+    // `roundover` does not wait for the player to close their settings.
+    this.go("roundover");
     // The round can end on a frame the death cam is up — a squad taking the
     // last flag while the player watches their own body — and the result card
     // is not somewhere a corpse follows them to.
@@ -2596,7 +3808,6 @@ export class Game {
     this.hud.setDeathCam(false);
     this.deployScreen.hide();
     this.player.setBodyHidden(true); // same reason as enterDeploy
-    this.hud.setScoreboard(false);
     this.hud.clearDamageDirections();
     this.hud.setCapture(null);
     // `updateGameplay` stops running here, so push the final state once more —
@@ -2656,7 +3867,8 @@ export class Game {
     );
     if (died) {
       this.conquest.registerDeath(this.player.team);
-      this.losses[this.player.team] += 1;
+      // Our own row's death, offline: the victim's door, and the bot that shot
+      // us was credited at its own by `battle.onBotKill`.
       this.playerDeaths += 1;
       this.hud.addKill(
         CONFIG.teams[1 - this.player.team].name,
@@ -2680,8 +3892,21 @@ export class Game {
    * — this falls straight through to the deploy screen at the full delay. A
    * state whose exit condition is a clock that never starts is a game that
    * never respawns you, and that is the one failure here worth spelling out.
+   *
+   * `respawnIn` is how long this life owes before the next one, and it is a
+   * parameter rather than the config constant because in a networked round the
+   * clock is the SERVER's. It happens to be the same number today — both sides
+   * read `conquest.respawnDelay` — and the point of taking it here is that
+   * nothing breaks quietly on the day one of them stops.
    */
-  private enterDying(from: Vector3 | undefined, amount: number): void {
+  private enterDying(
+    from: Vector3 | undefined,
+    amount: number,
+    // Annotated, because `CONFIG` is `as const` and the bare default would give
+    // this parameter the literal type `8` — see the convention in CLAUDE.md.
+    respawnIn: number = CONFIG.conquest.respawnDelay,
+  ): void {
+    this.deathRespawnIn = respawnIn;
     this.deathFeet.set(
       this.player.position.x,
       this.player.floorY,
@@ -2696,7 +3921,7 @@ export class Game {
       amount,
     );
     if (!this.deathCam.active) {
-      this.enterDeploy(CONFIG.conquest.respawnDelay);
+      this.enterDeploy(respawnIn);
       return;
     }
     // The weapon is parented to the camera, so it would ride the cam out of
@@ -2708,17 +3933,22 @@ export class Game {
     // has stopped being the player's.
     this.hud.setDeathCam(true);
     this.hud.clearDamageDirections();
-    this.state = "dying";
+    this.go("dying");
   }
 
   /**
-   * A bot went down: the sound, the ticket, the scoreboard and the killfeed.
+   * A bot went down: the sound, the ticket, its line on the board and the
+   * killfeed.
    *
    * One method rather than three copies because there are now three ways to
    * kill one — a bot's rifle, the player's rifle, and either side's grenade —
    * and they disagree about nothing except whose name goes on the line.
    * `byPlayer` is what separates the player's own kill from their team's, and
    * it is the only thing the three callers pass differently.
+   *
+   * This is the VICTIM's door, so it counts the death and not the kill: the
+   * killer is credited by `creditKill` at whichever call site actually knows
+   * who they were. Every caller here raises both, one line apart.
    *
    * Deliberately NOT the hitmarker or the rumble: those are about the shot
    * that landed rather than the body that fell, and they belong with whichever
@@ -2732,14 +3962,152 @@ export class Game {
     this.ragdolls.spawn(bot, this.cameraSys.camera.position);
     this.sfx.enemyDie();
     this.conquest.registerDeath(bot.team);
-    this.kills[killer] += 1;
-    this.losses[bot.team] += 1;
-    if (byPlayer) this.playerKills += 1;
+    const slot = this.battle.bots.indexOf(bot);
+    if (slot >= 0) this.botDeaths[slot] = (this.botDeaths[slot] ?? 0) + 1;
     this.hud.addKill(
       byPlayer ? "YOU" : CONFIG.teams[killer].name,
       CONFIG.teams[bot.team].name,
       byPlayer,
     );
+  }
+
+  /**
+   * The scoreboard, pushed once per frame from `tick` in EVERY state that has a
+   * round behind it — playing, the death cam, and the deploy screen.
+   *
+   * It is here rather than in `updateHud` for the reason `mats.updateCamera` is
+   * in `tick`: `updateHud` runs while you are alive and holding a weapon, and
+   * this panel is owed to two states that are neither. **The deploy screen is
+   * where a player most wants it** — it is the one screen in the game you sit
+   * on while the round carries on without you, for a reinforcement clock's
+   * worth of every death in a match, and it is where you decide where to come
+   * back in. A board that goes dark exactly then is dark for a good share of
+   * the round.
+   *
+   * `ScreenSpec.inRound` is answered by the state the frame is IN and
+   * deliberately not by what is under the lids: a lid is a screen the player
+   * ASKED for and put in front of the round, so every lid answers `false` and
+   * the board goes away under one without anything having to remember to hide
+   * it. That is the whole reason this is a per-frame push rather than a call at
+   * each boundary: the six ways out of a round (deploying, dying, the round
+   * ending, a pause, the kit screen, the menu) each used to owe a
+   * `setScoreboard(false)`, and the one that forgot would leave last round's
+   * numbers hanging over the next screen.
+   *
+   * Assembled only while the board is actually up: the payload is an object
+   * and three arrays, and `flagsHeld` counts the control points twice.
+   */
+  private pushScoreboard(): void {
+    if (!this.screens.inRound || !this.input.scoreboard) {
+      this.hud.setScoreboard(false);
+      return;
+    }
+    const rows = this.scoreRows();
+    // The team totals are SUMMED from the rows rather than counted beside
+    // them, so the header and the columns under it cannot disagree — one
+    // number that is wrong and one that is right is worse than two that are
+    // wrong together, because nothing on screen shows which is which.
+    const kills: [number, number] = [0, 0];
+    const deaths: [number, number] = [0, 0];
+    for (const r of rows) {
+      kills[r.team] += r.kills;
+      deaths[r.team] += r.deaths;
+    }
+    this.hud.setScoreboard(true, {
+      map: this.mapDef.name,
+      teams: [CONFIG.teams[0].name, CONFIG.teams[1].name],
+      tickets: this.conquest.tickets,
+      flags: [this.conquest.flagsHeld(0), this.conquest.flagsHeld(1)],
+      kills,
+      deaths,
+      playerTeam: this.player.team,
+      rows,
+    });
+  }
+
+  /**
+   * One row per body in the round, for the scoreboard.
+   *
+   * **The two sources meet HERE and nowhere else.** Offline the board is this
+   * client's own — the player's two numbers plus a line per bot in the pool.
+   * In a match it is the authority's, read off the session: a slot's name from
+   * the roster, its kills and deaths from the last `scores` message, and the
+   * row order straight from the roster, because a slot index is the same number
+   * on both sides of the wire and on both sides of this branch.
+   *
+   * A bot's name is DERIVED rather than sent (`callsign`), which is what keeps
+   * "a bot and a person are the same body on screen" true while still letting
+   * this one screen tell them apart: nothing about the row changes how anything
+   * is drawn, and the server spends no bandwidth naming sixteen bodies that
+   * already have a number each.
+   *
+   * Assembled only while Tab is held — see the caller.
+   */
+  private scoreRows(): ScoreRow[] {
+    const rows: ScoreRow[] = [];
+    if (this.net) {
+      for (const slot of this.net.slots) {
+        const occupant = slot.occupant;
+        rows.push({
+          name:
+            occupant.kind === "human" ? occupant.name : callsign(slot.index),
+          team: slot.team,
+          kills: this.net.slotKills[slot.index] ?? 0,
+          deaths: this.net.slotDeaths[slot.index] ?? 0,
+          you: slot.index === this.net.slot,
+        });
+      }
+      return rows;
+    }
+    // Offline the player is not in the pool — they are the seventeenth body in
+    // a sixteen-bot round — so their line is pushed rather than found.
+    rows.push({
+      name: "YOU",
+      team: this.player.team,
+      kills: this.playerKills,
+      deaths: this.playerDeaths,
+      you: true,
+    });
+    for (let i = 0; i < this.battle.bots.length; i++) {
+      rows.push({
+        name: callsign(i),
+        team: this.battle.bots[i].team,
+        kills: this.botKills[i] ?? 0,
+        deaths: this.botDeaths[i] ?? 0,
+        you: false,
+      });
+    }
+    return rows;
+  }
+
+  /**
+   * Somebody put a body down: one kill on their own row, OFFLINE.
+   *
+   * **The kill is counted at the killer's door and the death at the victim's,
+   * once each**, because the two are known in different places. Every death in
+   * the game already arrives somewhere — `registerBotKill` for a bot,
+   * `onPlayerDamaged` for the player — while who fired is known only to
+   * whatever pulled the trigger, and a single door would mean one of the two
+   * inventing the half it cannot see. It is also what lets a bot be credited
+   * for killing the PLAYER, which no bot-shaped kill callback could carry.
+   *
+   * Silent in a netplay round by the same rule that empties every other local
+   * count there: the board is the authority's, this is only ever the offline
+   * one, and a kill is credited to a bot the server is not simulating. Nothing
+   * gates it — the callers that could fire in a match are the ones whose local
+   * `takeDamage` returns false, so no kill is ever raised to be counted.
+   */
+  private creditKill(by: Combatant | null): void {
+    if (by === this.player) {
+      this.playerKills += 1;
+      return;
+    }
+    const slot = by instanceof Bot ? this.battle.bots.indexOf(by) : -1;
+    // `?? 0` rather than a bare increment, for the reason the authority's copy
+    // takes the same care: the rows are sized at the round's build, and one
+    // that is somehow not there yet starts at one rather than at `NaN`, which
+    // would spread through the team totals on the way to the screen.
+    if (slot >= 0) this.botKills[slot] = (this.botKills[slot] ?? 0) + 1;
   }
 
   /**

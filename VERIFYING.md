@@ -265,6 +265,101 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   session on it, since a leaked quaternion or scale shows up there and nowhere
   else.
 
+- **Multiplayer needs a server, and the client reaches it with `?mp`.** Build and
+  start it (`npm run build:server`, then `PORT=8097 node dist-server/index.js`)
+  and load the page as `?mp=ws://localhost:8097/ws` to skip the menu and join
+  straight in, or `?server=ws://localhost:8097/ws` to aim the LOBBY at it and
+  drive the menu. Three things about driving it that have already cost time. **A test cannot place a player anywhere** —
+  the validator refuses it as a teleport, correctly — so a script that wants two
+  players near each other has to WALK them, and one that dead-reckons from the
+  server's last reported position never advances, because that report lags the
+  sends by up to a snapshot. Track the position locally and take only `y` from
+  the server. **A walker has no ground probe** (the real client runs `Player`'s),
+  so it stops dead at the first rise unless it raises `y` on a `ground`
+  rejection. And **the straight line between two home spawns runs through the
+  village**: walk to the map centre instead, which is the control point every
+  road leads to.
+- **`?mp` no longer lands you in the world — it lands you on the deploy
+  screen.** A netplay round deploys nobody unasked, so a script that waits for
+  `state === "playing"` after joining waits forever. Confirm first
+  (`g.deployScreen.confirm()`), optionally after steering the pick
+  (`g.deployScreen.selected` / `selectedSpawn`, which is the list's identity and
+  has to move with it), and the state changes when the SERVER's spawn event
+  lands rather than on the call. Client-side clocks are the ones the ~2 fps
+  budget wrecks: the local reinforcement countdown takes ~80 s of wall clock to
+  run out, so force `g.respawnT = 0` rather than waiting for it. The server's
+  clock is real and is the one that actually gates the deploy.
+- **To stage a map change, push the MESSAGE, not the callback.** `g.net.onRoundStart("greyfen")`
+  looks like a rotation and is not one: `NetSession.mapId` is written by `receive`,
+  so calling the callback directly leaves the session still naming the old map and
+  `buildRound` — which reads it as the authority's answer — quietly puts the map
+  back on the way through. `g.net.conn.onMessage({t:"roundstart", mapId, now:
+  Date.now()})` goes through the real path, and the same trick stages a reconnect
+  onto a rotated match with a `welcome`. Both are the only way to see a rotation at
+  all without playing a round out: `ROUND_OVER_MS` is 8 s on top of a full ticket
+  bleed. To record which world each build actually got, wrap `g.installMap` and push
+  `g.mapDef.id` — the end state alone cannot tell one build from two.
+- **The whole of spawn selection is testable without a browser, and two of the
+  three ways are faster than one.** `dist-server/assets/HeadlessGame-*.js`
+  exports the simulation (`H`) and the world chunk exports `MAPS`/`CONFIG`
+  (`M`/`C`), so a scratch `.mjs` can `addPlayer`, set `deployRequest`, step at
+  `1/60` and assert on the clock in milliseconds of wall time — including
+  `takeDamage(999)` for a death the rules actually dealt. A raw `ws` client
+  covers the protocol half (join, refuse, fall back) with no rendering at all.
+  Keep the browser for what only it has: the screen, the offer and the state
+  machine. Note that a scratch script outside the repo cannot `import "ws"` or
+  `"playwright"` by name — resolve them by absolute path into `node_modules`.
+- **A stationary body at a REAR flag is not killed, and that reads exactly like
+  a broken death path.** Four minutes at the chapel spawn drew nothing; the
+  square kills one in about forty seconds, which `does-a-human-die`-style
+  stepping of a `HeadlessGame` will tell you in three. Bots do engage a person
+  — check where you parked before believing anything else.
+- **`page.waitForFunction(fn, { timeout })` silently uses the DEFAULT 30 s.**
+  The second parameter is the argument passed INTO the page function; options
+  are third. Every wait written that way expires in thirty seconds however large
+  the number reads, which turns "the bots never killed us" and "the round never
+  ended" into confident, wrong conclusions about the game.
+- **To stage a remote body's death, seize its sample buffer with a FUTURE
+  timestamp.** `NetSoldier.receive` drops anything not newer than its newest
+  sample and `bracket` clamps below its oldest, so one sample at
+  `Date.now() + 1e9` both freezes the slot against the live stream and becomes
+  the pose. Put the body where you want it alive, call `s.update(t)` to place
+  the rig, then `s.samples.length = 0` and push a single dead sample at `t + 1`
+  — the roster's own `alive` edge does the rest, so what is under test is the
+  real wiring rather than a hand-called `spawn`. The timestamp must beat the
+  SERVER's clock (`snap.now` is `Date.now()` on its box, ~1.7e12): a round
+  number like `1e12` is *below* it, every real sample keeps landing, and the
+  body simply walks away while the test reports nothing ragdolled.
+- **A ragdoll refused in a netplay round is usually the fog gate, not the fix.**
+  `bots.death.maxDistance` is `FOG_WALL` (78 m) and a client sitting at its home
+  spawn is further than that from every death in the village — so a run can
+  report a dozen death edges, all correctly armed, and zero corpses. Assert on
+  the edge count and the offer separately, or stage the body near the camera.
+- **Restart the match server between runs, and do not trust a hang.** Matches
+  outlive the client that made them by a minute (`IDLE_DISPOSE_MS`), so a script
+  run three times leaves three worlds simulating at 60 Hz on the box that is
+  also running SwiftShader — and the symptom is not a slow test but a handshake
+  that never completes, which reads exactly like a broken join. A `curl
+  localhost:PORT/matches` before the run tells you whether the registry is
+  clean. It also breaks any assertion of the form "there is exactly one match".
+- **Playwright's `click()` does not reach the interface: the canvas fills the
+  viewport and is read as intercepting**, even though `#hud` is
+  `pointer-events: none` and each control opts back in. Every button that leaves
+  a screen binds `onpointerdown`, so `locator.dispatchEvent("pointerdown")` is
+  both the reliable path and the true one.
+- **Do not monkey-patch `window.WebSocket` without carrying its statics.**
+  `Connection.send` compares `readyState` against `WebSocket.OPEN`, so a wrapper
+  function without `OPEN` on it makes every send a silent no-op — the socket
+  opens, the state reads `open`, and the join is never sent. It costs an hour
+  because everything looks connected.
+- **`npm run simulate` is the fastest way to see the rules work at all** — a
+  whole round with no clients and no rendering, in seconds of wall clock. It is
+  not a balance oracle: sixteen bots is not eight bots and eight people.
+- **Assertions about hits are worthless until one lands.** A "shot fired
+  backwards is refused" check passes trivially when nothing is hitting anything,
+  and so does a rate limit. Order them after a passing hit, or they are
+  measuring silence.
+
 To inspect a model in isolation, drop a throwaway `modelviewer.html` + `.ts` at
 the repo root (Vite serves it as a second page) with an `ArcRotateCamera` driven
 by `camera.setPosition`.

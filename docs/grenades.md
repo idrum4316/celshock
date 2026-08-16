@@ -136,3 +136,36 @@ shake of its own would be a second integrator writing the same offset; and **a
 blast kills through `Game.registerBotKill`**, the one place a bot's death reaches
 the scoreboard, tickets and killfeed from all three causes (the hitmarker and rumble
 stay with the weapon, being about the shot that landed rather than the body).
+
+**What a grenade LOOKS like is `entities/GrenadeModel.ts` and not this system**,
+for the reason the bot rig is `SoldierModel`: two things build one now. This
+system builds the pool it simulates, and `net/NetGrenades` builds the ones a
+client only draws, from positions the multiplayer authority sent. Both the
+meshes and the pip's blink live there — the blink because it is the only warning
+a grenade gives and it must read the same whoever threw it, so both sides run
+`pipLit` over the same remaining fraction rather than each describing the
+pattern. Three things about the meshes are load-bearing and stay in that file:
+the pip must stand proud of the body's outline shell or the ink swallows it, the
+body is inked at all because a dark green sphere at night is invisible against
+the ground it is rolling across, and neither mesh is a collider — no `solid`, no
+`WorldBox`, not pickable. A grenade is dressing with a timer.
+
+**A grenade in the air is replicated as STATE in a networked round**, on the
+snapshot with the bodies and interpolated on their clock, and `Grenade.id` is
+what names one flight across frames: monotonic, never reused, because a client
+keying on a pool index would take the next grenade's samples as a continuation
+of the last one's. `forEachLive` is the whole of what leaves this system for
+that, and `docs/multiplayer.md` is where the argument lives — including why the
+thrower goes on drawing their own local copy and skips the wire's.
+
+**A grenade carries its THROWER, not a flag about them.** The slot holds a
+`Combatant` (`by`), which is what a kill is credited to at either end of the
+wire, and it replaced a `byPlayer` boolean that was this system answering a
+question about `Game`'s own `Player` — a thing it has never had any way to ask.
+The consumer compares `by` against whatever it considers "us" and gets the same
+answer for the hitmarker. **Its team is never read here**: the target list is
+still fetched against the slot's own `team` at detonation, so this file keeps
+knowing nothing about sides, and friendly fire stays excluded by construction
+rather than by a check. `reset` drops the reference, because a pooled slot is
+the one thing in here that would otherwise outlive the round its thrower fought
+in.

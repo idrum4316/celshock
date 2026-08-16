@@ -284,7 +284,8 @@
   outline-offset: 5px;
 }
 #overlay .ov-settings > div.sel button.kit-open,
-#overlay .ov-settings > div.sel button.settings-open {
+#overlay .ov-settings > div.sel button.settings-open,
+#overlay .ov-settings > div.sel button.mp-open {
   color: var(--hot);
   background: rgba(255, 230, 128, 0.12);
   box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.55);

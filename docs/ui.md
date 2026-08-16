@@ -1,16 +1,17 @@
-# The interface: four screens and the chrome
+# The interface: five screens and the chrome
 
-What each UI class owns, where a stylesheet lives, and how the three screens
-between the title and the world are driven by a pointer and a pad alike. Split out
+What each UI class owns, where a stylesheet lives, and how the screens between
+the title and the world are driven by a pointer and a pad alike. Split out
 of [`CLAUDE.md`](../CLAUDE.md), which keeps the summary; this file is the
 contract for everything under `src/ui/`.
 
-## The interface is four screens and the chrome
+## The interface is five screens and the chrome
 
 `src/ui/` holds one class per thing on screen, and `HUD` is not where a new one
 goes: `OverlayScreen` owns the four full-screen cards, `DeployScreen` the deploy
-map, `LoadoutScreen` the kit, `SettingsScreen` the settings list, `Minimap` the
-corner map, and `HUD` **only** the gameplay chrome.
+map, `LoadoutScreen` the kit, `SettingsScreen` the settings list, `LobbyScreen`
+the match browser, `Minimap` the corner map, and `HUD` **only** the gameplay
+chrome.
 
 **The boot screen is the one piece of interface that is not in this directory**,
 and the exception is what defines it: it covers the stretch before any module
@@ -27,8 +28,32 @@ it belongs here with a stylesheet of its own.
 Each screen builds its own root element and appends it to `#hud`, which is why
 construction order in `Game`'s constructor matters exactly once: `HUD` writes
 `#hud.innerHTML` and would wipe anything already appended, so it is built first.
-Stacking is not DOM order — `#overlay` (10) and `#loadout` (11) carry z-indices,
-because a pause can be taken with the deploy map on screen.
+Stacking is not DOM order — `#overlay` (10), `#loadout` and `#lobby` (11) and
+`#settings` (12) carry z-indices, because a pause can be taken with the deploy
+map on screen. The kit and the lobby share a rung on purpose: both are lids
+raised from the main menu and the two can never be up together.
+
+**A list-shaped screen keeps its cursor by IDENTITY, not by index.** The lobby
+is the one whose rows come and go under it — a refresh inserts matches ABOVE the
+actions — and an index carried across a rebuild silently means a different row:
+press Refresh, let a match appear, press Enter and you have created a match
+instead, with the highlight having moved under your hand to say so. `sameRow`
+matches an action by kind and a match by id, never by anything that changes
+(a count going 3 → 4 is the same row). The settings screen is spared this only
+because its rows are a static table.
+
+**A row that PICKS is not a row that FIRES, and the pointer has to tell them
+apart.** The lobby's rows fire on pointer-DOWN — that is the edge everything
+which leaves a screen uses — but its Map row only steps a choice, and the map
+buttons inside it take ordinary clicks on the way UP, exactly as the menu's own
+map and difficulty rows do. Firing the row on the down edge as well would cycle
+the choice under the finger and then set the clicked one, which lands in the
+right place by luck and flickers getting there. The row is above **New match**
+rather than below it for the reason the menu puts Map above Deploy: the
+parameter, then the button that spends it. It is the map a match this client
+CREATES will be started on and says nothing about the matches listed above it —
+see [`docs/multiplayer.md`](multiplayer.md) for why joining one takes that
+match's map instead.
 
 **The four cards are one class because they are one element** — they share the
 shell, the title block, the controls table and the Deploy button. The bar for a
@@ -104,6 +129,36 @@ multipliers.
 goes up and the crosshair comes down, and they are not the same decision —
 `.overlaid` would take the tickets and vitals with it, which under a pause are
 still true.
+
+**The scoreboard is the one markup rebuild left in `HUD`, and its rows are BUILT
+rather than interpolated.** Tab is a held key, so `Game.updateHud` pushes the
+panel on every frame it is up; a key over everything the markup says is what
+keeps that to a rebuild per change, and the per-body rows are in that key
+because a kill anywhere reorders the column it lands in. The team summary is a
+template literal — a map name and two names out of `CONFIG` — while every row
+under it goes through `document.createElement` and `textContent`, because one of
+its fields is **a name another player typed**. The server bounds that string's
+length; nothing bounds what is in it, and this file is where it is finally
+drawn. A bot's name is not on the wire at all: `entities/callsigns.ts` derives
+one from the roster index, which is the same number on every screen.
+
+**It is pushed from `tick`, in every state with a round behind it** — playing,
+the death cam, and the DEPLOY SCREEN, which is where a player most wants it: in
+a match that screen is where you sit out every reinforcement clock while the
+round carries on without you. The push is one line after the state switch and
+before the render, so the state a frame ENDS in decides, and the six ways out of
+a round no longer each owe a `setScoreboard(false)` — the one that forgot would
+leave the numbers hanging over the next screen. It goes away under a lid
+(`paused`, `loadout`, `settings`) because a lid is a screen the player asked
+for. `#scoreboard` carries a `z-index` for exactly one reason: every screen
+appends itself after `#hud`, so DOM order alone would bury it under the deploy
+screen it is meant to be read over.
+
+**Your side is the LEFT column, whichever side you were seated onto.** A board is
+read from where the reader is standing, and a column that changes ends between
+matches is one a player has to find before they can read it. The rows are sorted
+by kills and then by fewer deaths, on a stable sort, so bodies level on both keep
+roster order instead of trading places while somebody is looking at them.
 
 **The magazine strip is markup the WEAPON TABLE sizes**, and it is the one place
 a number in `CONFIG.weapons` reaches the DOM. `HUD.setAmmo` builds one `<i>` per
@@ -199,8 +254,12 @@ change moved no content-hashed filename. Three rules keep it that way:
 
 ## Getting into a round
 
-Three screens stand between the title and the world, each driven by a pointer *and*
-by a pad, with no path that needs the other.
+Four screens stand between the title and the world, each driven by a pointer
+*and* by a pad, with no path that needs the other. The fourth is the lobby, and
+it is the one that is optional: it is how a NETWORKED round is chosen, and
+picking a match out of it leaves through `startRound` exactly as Deploy does —
+a networked round and a single-player one are the same `loading -> deploy ->
+playing` cycle, differing only in whether `Game.net` exists.
 
 **Every screen here is a LIST: move the cursor, A picks, B backs out.** That
 replaced a screen per verb — left/right for difficulty, `L`/Y for the kit, `O` for
@@ -258,7 +317,15 @@ the map's edges). The two big titles are the deliberate exception.
 - **Only the controls opt into pointer events, never the rows.** `#hud` is
   `pointer-events: none` and the menu's confirm is a mouse-down anywhere, so a row
   that claimed events would turn its labels, hints and the grid's gaps into dead zones
-  where a click does nothing instead of starting the round.
+  where a click does nothing instead of starting the round. **The cost is that a new
+  control is unclickable until it names itself**, and the failure is quiet from both
+  sides: the keyboard fires it through `activateMenu`, which never touches the DOM, so
+  the row works perfectly for whoever is testing with a pad and is dead under the
+  mouse. The screen-openers share one list in `base.css` (`kit-open`,
+  `settings-open`, `mp-open`, `#deploy-kit`) and the selection ring is a second list
+  in `overlay.css` — a fifth opener goes in **both**, not just the first. The
+  multiplayer button shipped in neither and read as a bug in the button rather than a
+  missing rule.
 - **`#deploy-actions` wraps.** The map is height-led, so on a 768-tall laptop it is
   430 px across and the longest kit ("Marksman rifle · Scope") does not fit beside a
   Deploy button. Both buttons grow, so a broken row gives two full-width buttons

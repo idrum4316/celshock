@@ -34,8 +34,9 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import type { Team } from "../entities/Combatant";
-import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
+import type { Combatant, Team } from "../entities/Combatant";
+import { buildGrenade, pipLit } from "../entities/GrenadeModel";
+import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { EnvironmentSpec } from "../world/environment";
 import { TerrainField } from "../world/TerrainField";
 import { SOLID_ONLY } from "../world/solid";
@@ -46,13 +47,38 @@ interface Grenade {
   mesh: Mesh;
   /** The fuse tell — blinks faster as the fuse runs out. */
   pip: Mesh;
+  /**
+   * What this FLIGHT is called, for anything outside that has to follow one
+   * grenade across frames — today the multiplayer server, which replicates the
+   * live ones so every client can watch them arrive.
+   *
+   * Monotonic and never reused, which is the whole reason it is not simply the
+   * pool index: a slot is claimed the instant the last grenade in it went off,
+   * so a client keying on the index would take the new grenade's samples as a
+   * continuation of the old one's and draw a streak from the detonation to
+   * somebody's hand.
+   */
+  id: number;
   vel: Vector3;
   /** Seconds of fuse left; <= 0 while the slot is free. */
   fuse: number;
   live: boolean;
   team: Team;
-  /** Whether the player threw it — the scoreboard needs to know. */
-  byPlayer: boolean;
+  /**
+   * Who threw it, for whoever has to be credited with what it does.
+   *
+   * A reference and not a team, because a scoreboard counts BODIES: the team
+   * is already on the slot next door (it is what the target list is fetched
+   * against) and the thrower's identity is the part that cannot be recovered
+   * three seconds and two bounces later. It also replaces the `byPlayer` flag
+   * this field grew out of — "was it the player" is a question only `Game` can
+   * answer, and it answers it by comparing this against its own `Player`.
+   *
+   * Null is a grenade nobody owns, which nothing throws today; the field is
+   * optional so that this system never has to invent a thrower to satisfy a
+   * type. Its team is NEVER read here — see the note on `hittablesFor`.
+   */
+  by: Combatant | null;
   /** Set once it has settled, so a resting grenade stops paying for a ray. */
   resting: boolean;
 }
@@ -76,14 +102,26 @@ const _normal = new Vector3();
 const _tangent = new Vector3();
 const _launch = new Vector3();
 
+/** Construction-time choices. Today: whether this instance can draw. */
+export interface GrenadeOptions {
+  /**
+   * Build the blast dust. Default true; the multiplayer server passes false
+   * because a NullEngine has neither a canvas nor WebGL2, and the dust needs
+   * both. Nothing about where a grenade goes or what it hurts depends on it.
+   */
+  dust?: boolean;
+}
+
 export class GrenadeSystem {
   private grenades: Grenade[] = [];
   private blasts: Blast[] = [];
   private embers: Ember[] = [];
   /** The dust half of a blast — see `BlastDust`. */
-  private dust: BlastDust;
+  private dust: BlastDust | null;
   /** Reused by the flight and the line-of-sight tests alike. */
   private readonly ray = new Ray(new Vector3(), new Vector3(0, -1, 0), 1);
+  /** Names the next flight. Never reset — see `Grenade.id`. */
+  private nextId = 0;
   /** The map's floor, as a backstop under the collider proxies. */
   private terrain: TerrainField = new TerrainField();
 
@@ -104,64 +142,51 @@ export class GrenadeSystem {
 
   /**
    * Wired by Game: the blast hurt someone. `killed` is whether it finished
-   * them, `thrower` is the team to credit, and `byPlayer` separates the
-   * player's own kills from their team's.
+   * them, `thrower` is the team to credit, and `by` is the combatant who threw
+   * it — the one thing a kill needs that cannot be worked out at the far end.
+   *
+   * `by` is where the retired `byPlayer` flag went. The flag was this system
+   * carrying an answer to a question about `Game`'s own `Player`, which it has
+   * never had any way to ask; a consumer compares the thrower against whatever
+   * it considers "us" and gets the same answer without this file knowing there
+   * is such a thing as a player.
    */
   onBlastHit: (
     victim: Hittable,
     thrower: Team,
-    byPlayer: boolean,
+    by: Combatant | null,
     killed: boolean,
   ) => void = () => {};
 
   constructor(
     private scene: Scene,
     mats: CelMaterialFactory,
+    opts?: GrenadeOptions,
   ) {
     const g = CONFIG.grenade;
-    this.dust = new BlastDust(scene);
-    const body = mats.get("#3f4a33");
-    const pipMat = mats.getEmissive("#ff5a4f");
+    // The dust is the one part of this system that cannot exist without GL:
+    // it builds a `DynamicTexture` (which needs a canvas) and a
+    // `GPUParticleSystem` (which needs WebGL2), and under Babylon's NullEngine
+    // the first of those throws `OffscreenCanvas is not defined` before the
+    // constructor returns. The multiplayer server runs the BALLISTICS — where a
+    // grenade lands and who it hurts is a rule, not a picture — so it asks for
+    // the system without the dust. Everything else here is spheres and
+    // materials, which are inert without a renderer and cost nothing to keep.
+    this.dust = opts?.dust === false ? null : new BlastDust(scene);
     const fireMat = mats.getEmissive("#ffb45a");
     const emberMat = mats.getEmissive("#ffd07a");
 
     for (let i = 0; i < g.poolSize; i++) {
-      const mesh = MeshBuilder.CreateSphere(
-        `grenade${i}`,
-        { diameter: g.radius * 2, segments: 6 },
-        scene,
-      );
-      mesh.material = body;
-      mesh.isVisible = false;
-      // A grenade is a thing in the world, not a collider: it carries no
-      // `solid` flag and no WorldBox, so nothing shoots it, walks into it or
-      // treats it as cover — it is dressing with a timer.
-      mesh.isPickable = false;
-      const pip = MeshBuilder.CreateSphere(
-        `grenadePip${i}`,
-        { diameter: g.radius * 0.62, segments: 4 },
-        scene,
-      );
-      pip.parent = mesh;
-      // The pip has to stand proud of the body's outline shell or the ink
-      // swallows it — the same rule the player's visor slit follows. At this
-      // size that is a fine line, hence the deliberately thin outline below.
-      pip.position.y = g.radius;
-      pip.material = pipMat;
-      pip.metadata = { noOutline: true };
-      pip.isPickable = false;
-      // Ink, or a dark green sphere in a night game is invisible against the
-      // ground it is rolling across — which for the one object the player has
-      // to notice arriving is the whole ball game.
-      addOutline(mesh, 0.02);
+      const { mesh, pip } = buildGrenade(scene, mats, `grenade${i}`);
       this.grenades.push({
         mesh,
         pip,
+        id: 0,
         vel: new Vector3(),
         fuse: 0,
         live: false,
         team: 0,
-        byPlayer: false,
+        by: null,
         resting: false,
       });
     }
@@ -206,7 +231,29 @@ export class GrenadeSystem {
    * against.
    */
   setEnvironment(env: EnvironmentSpec): void {
-    this.dust.setEnvironment(env);
+    this.dust?.setEnvironment(env);
+  }
+
+  /**
+   * Every grenade in the air right now, for whoever has to say where they are.
+   *
+   * The multiplayer server is the caller: a grenade is the one thing in this
+   * game that takes seconds to arrive, so the authority replicates the live
+   * ones in its snapshot and every client draws them arcing in rather than
+   * being handed the explosion. `by` goes with the position because the
+   * thrower is already watching their OWN copy of it fly — see
+   * `net/NetGrenades`.
+   *
+   * A visitor rather than an array, so the hot path allocates nothing and
+   * nobody outside can hold on to a pooled slot: `at` is the live mesh
+   * position and is valid only for the length of the call.
+   */
+  forEachLive(
+    fn: (id: number, at: Vector3, fuse: number, by: Combatant | null) => void,
+  ): void {
+    for (const n of this.grenades) {
+      if (n.live) fn(n.id, n.mesh.position, n.fuse, n.by);
+    }
   }
 
   /**
@@ -221,14 +268,14 @@ export class GrenadeSystem {
     from: Vector3,
     dir: Vector3,
     team: Team,
-    byPlayer: boolean,
+    by: Combatant | null,
   ): boolean {
     // Tilting a unit direction up by an angle and renormalising: cheaper than
     // building a rotation, and the axis is always world up.
     _launch.copyFrom(dir).normalize();
     _launch.y += Math.tan(CONFIG.grenade.throwLift);
     _launch.normalize().scaleInPlace(CONFIG.grenade.throwSpeed);
-    return this.throwFrom(from, _launch, team, byPlayer);
+    return this.throwFrom(from, _launch, team, by);
   }
 
   /**
@@ -246,7 +293,12 @@ export class GrenadeSystem {
    * spends longer in the air, which is longer for the target to walk out of it,
    * and it is the one that catches the eaves on the way over.
    */
-  throwAt(from: Vector3, to: Vector3, team: Team, byPlayer: boolean): boolean {
+  throwAt(
+    from: Vector3,
+    to: Vector3,
+    team: Team,
+    by: Combatant | null,
+  ): boolean {
     const cfg = CONFIG.grenade;
     const dx = to.x - from.x;
     const dz = to.z - from.z;
@@ -264,7 +316,7 @@ export class GrenadeSystem {
       Math.sin(angle) * cfg.throwSpeed,
       (dz / d) * horizontal,
     );
-    return this.throwFrom(from, _launch, team, byPlayer);
+    return this.throwFrom(from, _launch, team, by);
   }
 
   /** Claims a pool slot and puts the grenade in the air. */
@@ -272,17 +324,18 @@ export class GrenadeSystem {
     from: Vector3,
     velocity: Vector3,
     team: Team,
-    byPlayer: boolean,
+    by: Combatant | null,
   ): boolean {
     const slot = this.grenades.find((n) => !n.live);
     if (!slot) return false;
+    slot.id = ++this.nextId;
     slot.mesh.position.copyFrom(from);
     slot.vel.copyFrom(velocity);
     slot.fuse = CONFIG.grenade.fuse;
     slot.live = true;
     slot.resting = false;
     slot.team = team;
-    slot.byPlayer = byPlayer;
+    slot.by = by;
     slot.mesh.rotation.set(
       Math.random() * 3,
       Math.random() * 3,
@@ -302,14 +355,9 @@ export class GrenadeSystem {
         this.detonate(n);
         continue;
       }
-      // The tell: a pip that blinks faster the closer the fuse gets to zero, so
-      // a grenade at your feet is readable without a timer on the HUD. It is
-      // the only warning there is, and it has to be visible from the side a
-      // grenade is most likely to arrive from — hence a separate mesh rather
-      // than a colour change on a body the ink already darkens.
-      const left = n.fuse / g.fuse;
-      n.pip.isVisible =
-        Math.sin((1 - left) * (1 - left) * 90) > 0 || left > 0.75;
+      // The tell, from the model file so that a grenade drawn off the wire
+      // blinks in step with this one — see `pipLit`.
+      n.pip.isVisible = pipLit(n.fuse / g.fuse);
       if (n.resting) continue;
 
       n.vel.y -= g.gravity * dt;
@@ -411,7 +459,7 @@ export class GrenadeSystem {
           ? 1
           : 1 - (dist - g.innerRadius) / (g.blastRadius - g.innerRadius);
       const killed = target.takeDamage(g.damage * falloff, at);
-      this.onBlastHit(target, n.team, n.byPlayer, killed);
+      this.onBlastHit(target, n.team, n.by, killed);
     }
 
     this.spawnBlast(at);
@@ -444,7 +492,7 @@ export class GrenadeSystem {
 
     // The dust goes up with the flash and outlives it by a second — the
     // fireball is the event and the cloud is what the event left behind.
-    this.dust.burst(at);
+    this.dust?.burst(at);
 
     // Embers, thrown out of the blast on an even-ish spread rather than a
     // random one — a handful of random directions clumps, and a clump reads as
@@ -469,7 +517,7 @@ export class GrenadeSystem {
 
   private updateEffects(dt: number): void {
     const g = CONFIG.grenade;
-    this.dust.update(dt);
+    this.dust?.update(dt);
     for (const b of this.blasts) {
       if (b.t <= 0) continue;
       b.t -= dt;
@@ -509,6 +557,10 @@ export class GrenadeSystem {
       n.resting = false;
       n.mesh.isVisible = false;
       n.pip.isVisible = false;
+      // Dropped rather than left to be overwritten by the next throw: a round
+      // is over, and a pooled slot holding a reference to last round's thrower
+      // is the one thing in here that would outlive it.
+      n.by = null;
     }
     for (const b of this.blasts) {
       b.t = 0;
@@ -518,7 +570,7 @@ export class GrenadeSystem {
       e.t = 0;
       e.mesh.isVisible = false;
     }
-    this.dust.reset();
+    this.dust?.reset();
   }
 }
 

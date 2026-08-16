@@ -14,6 +14,11 @@
  * `completeSwap` is the one place the hands change, partway through it and
  * behind the bottom of the frame. Nothing fires while it is in flight.
  * Invariants: probeGround and step-up ray tests filter metadata.solid === true.
+ * `position` is the FEET, as `Combatant` requires, and is NOT `root.position`
+ * — the capsule's centre, half a body higher. Anything wanting the middle of
+ * the body wants `center`. The three exported points (`position`, `center`,
+ * `eyePos`) are derived in `syncCombatant` and are the only ones anything
+ * outside this file may read.
  * Crouch moves `eyePos` AND `center` on one blend — the eye is the camera, the
  * LOS target and the bots' aim point at once, so lowering it without lowering
  * the hit sphere makes crouching a liability rather than cover.
@@ -179,6 +184,20 @@ export class Player implements Combatant {
   root: Mesh;
   /** Which side the player fights for. Set by Game when a round starts. */
   team: Team = 0;
+  /**
+   * FEET, as `Combatant` requires — NOT `root.position`, which is the collider
+   * capsule's centre and sits `groundY` above them.
+   *
+   * The distinction is invisible offline, where nothing outside this file reads
+   * the `y` at all, and it is the whole ballgame over a wire: the server and
+   * every other client take a combatant's `position.y` as the ground under it
+   * and build the body, the centre and the eye up from there. Handed a capsule
+   * centre they build all three half a body too high — the remote body floats,
+   * its hit spheres float with it, and the movement validator asks whether
+   * there is room for a player standing 0.9 m in the air, which is how a door
+   * lintel becomes a wall. Kept in sync beside `center` and `eyePos`.
+   */
+  readonly position = new Vector3();
   /** Body centre and eye line, kept in sync each frame for hitscan and LOS. */
   readonly center = new Vector3();
   readonly eyePos = new Vector3();
@@ -241,6 +260,21 @@ export class Player implements Combatant {
    * cannot reach.
    */
   onCarryChanged: () => void = () => {};
+  /**
+   * Wired by Game: a reload gesture has just begun.
+   *
+   * `startReload` is the only thing that begins one, and it is reached two ways
+   * — the reload key, and `tryShot` firing the last round in the magazine — so
+   * a caller that wanted to react to a reload had to catch both and would go on
+   * having to catch the next one. The sound is hung off this for that reason,
+   * and in a networked round so is the announcement that lets fifteen other
+   * players hear it: an unannounced reload is a cue the whole match loses, and
+   * the auto-reload is exactly the case a call site would forget.
+   *
+   * The counterpart of `Bot.onReload`, which `BattleSystem` wires for the same
+   * cue on every bot in the pool.
+   */
+  onReload: () => void = () => {};
   /**
    * Seconds into the swap gesture, or -1 when neither hand is busy. Counts UP
    * like the throw's clock and for the same reason: there is an event in the
@@ -489,10 +523,10 @@ export class Player implements Combatant {
     // ordinary rendering group and is occluded by geometry like anything else.
 
     this.applyVisibility();
-  }
-
-  get position(): Vector3 {
-    return this.root.position;
+    // `position`, `center` and `eyePos` are read by things that run before the
+    // player has ever been placed — the shadow focus and the carried lamp are
+    // both live under the menu — so they start correct rather than at origin.
+    this.syncCombatant();
   }
 
   /** Whatever is in the hands right now. Everything weapon-shaped reads this. */
@@ -956,6 +990,23 @@ export class Player implements Combatant {
     // first probe runs — without this the blob shadow spends the frame the
     // player appears on at whatever floor the last life ended over.
     this.floorY = spawn.y;
+    this.syncCombatant();
+  }
+
+  /**
+   * Moves the body to `feet` without touching what it is doing.
+   *
+   * This is the small end of a networked correction, and the difference from
+   * `placeAt` is the point: a spawn is a body arriving on solid ground, so it
+   * lands stopped and grounded, while a correction is the authority disagreeing
+   * with a body that is still living its life. Zeroing `velY` here would eat a
+   * jump or a fall, and every accepted step near a wall would strip the arc off
+   * a player who is merely brushing it.
+   *
+   * `feet`, like everything else that crosses the wire — see `position`.
+   */
+  nudgeTo(feet: Vector3): void {
+    this.root.position.set(feet.x, feet.y + this.groundY, feet.z);
     this.syncCombatant();
   }
 
@@ -1568,6 +1619,9 @@ export class Player implements Combatant {
     this.reloading = true;
     this.reloadT = this.weapon.reloadTime;
     this.reloadPhase = 0;
+    // Raised AFTER the state is set, so a handler reading `reloadTime` or
+    // `reloading` sees the gesture that has begun rather than the one before it.
+    this.onReload();
     return true;
   }
 
@@ -1606,6 +1660,7 @@ export class Player implements Combatant {
     const eyeH =
       CONFIG.camera.eyeHeight +
       (c.crouchEyeHeight - CONFIG.camera.eyeHeight) * this.crouchBlend;
+    this.position.set(p.x, feet, p.z);
     this.center.set(p.x, feet + centerH, p.z);
     this.eyePos.set(p.x, feet + eyeH, p.z);
   }
@@ -1627,6 +1682,28 @@ export class Player implements Combatant {
 
   heal(amount: number): void {
     this.health = Math.min(this.maxHealth, this.health + amount);
+  }
+
+  /**
+   * The networked half of `takeDamage`: health the authority decided, plus the
+   * regen lock that came with it.
+   *
+   * A multiplayer round assigns health rather than subtracting it, for the
+   * reason `Game.onNetEvent` gives — but the LOCK is the other half of the same
+   * event and the client still has to arm it, because regen is PREDICTED here.
+   * Nothing on the wire carries a health except a hit, so a client that took
+   * the number without the lock healed straight back to full over the next few
+   * seconds off a server that had never healed it, and the lie held until the
+   * next round landed and knocked it back down to what it had always been.
+   *
+   * Everything else a hit does — the vignette, the arc, the flinch — is
+   * `Game`'s and stays there; the callback is deliberately NOT raised, because
+   * the authority already told `Game` what happened and this is only the
+   * bookkeeping that goes with it.
+   */
+  applyServerHealth(health: number): void {
+    this.health = health;
+    this.regenLockT = CONFIG.player.regenDelay;
   }
 
   /**

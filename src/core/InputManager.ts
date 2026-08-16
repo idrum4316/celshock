@@ -210,6 +210,14 @@ export class InputManager {
    * turning the blur off is a thing you judge against a live scene.
    */
   settingsPressed = false;
+  /**
+   * The multiplayer lobby's key, `M`. Keyboard-only for the same reason
+   * `settingsPressed` is: the menu cursor reaches the row, so a dedicated key
+   * is an accelerator rather than the only way in, and a pad has no button
+   * spare that is not already a menu verb. Read in the `menu` state alone —
+   * the lobby is a lid over the title card and nowhere else.
+   */
+  multiplayerPressed = false;
   pointerLocked = false;
   gamepadConnected = false;
   /**
@@ -257,6 +265,7 @@ export class InputManager {
   private prevPause = false;
   private prevLoadout = false;
   private prevSettings = false;
+  private prevMultiplayer = false;
   private prevPadSprint = false;
   private prevCrouchToggle = false;
   /** Latched L3 sprint state — toggled on each L3 press, cleared on blur. */
@@ -563,6 +572,11 @@ export class InputManager {
     const settingsNow = this.keys.has("KeyO");
     this.settingsPressed = settingsNow && !this.prevSettings;
     this.prevSettings = settingsNow;
+
+    // The lobby's key. No pad binding, same reason.
+    const multiplayerNow = this.keys.has("KeyM");
+    this.multiplayerPressed = multiplayerNow && !this.prevMultiplayer;
+    this.prevMultiplayer = multiplayerNow;
   }
 
   /**

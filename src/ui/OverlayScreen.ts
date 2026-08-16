@@ -75,7 +75,13 @@ const PAUSE_ITEMS: readonly [PauseAction, string][] = [
  * what it is on, and the dedicated keys survive as accelerators rather than as
  * the only way in.
  */
-type MenuItem = "map" | "difficulty" | "loadout" | "settings" | "start";
+type MenuItem =
+  | "map"
+  | "difficulty"
+  | "loadout"
+  | "settings"
+  | "multiplayer"
+  | "start";
 
 /**
  * Everything the menu card draws itself from.
@@ -112,11 +118,19 @@ const COUNT_WORDS = [
   "nine",
 ];
 const spellCount = (n: number) => COUNT_WORDS[n] ?? String(n);
+/**
+ * `multiplayer` sits with the other two screen-openers rather than beside
+ * Deploy, because that is what it IS — a button that leaves this card for
+ * another one. Deploy stays alone at the bottom as the only row that ends the
+ * menu in a round, and the rows above it are, in order, what that round will be
+ * made of and then the two places you can go instead.
+ */
 const MENU_ITEMS: readonly MenuItem[] = [
   "map",
   "difficulty",
   "loadout",
   "settings",
+  "multiplayer",
   "start",
 ];
 /**
@@ -158,6 +172,8 @@ export class OverlayScreen {
   onOpenLoadout: () => void = () => {};
   /** Wired by Game: the player asked for the settings screen. */
   onOpenSettings: () => void = () => {};
+  /** Wired by Game: the player asked for the multiplayer lobby. */
+  onOpenMultiplayer: () => void = () => {};
   /** Wired by Game: the player asked to start a round. */
   onStart: () => void = () => {};
   /** Wired by Game: the player picked something from the pause list. */
@@ -277,6 +293,11 @@ export class OverlayScreen {
           <button class="settings-open"><b>Settings</b><i>Counter &middot; effects</i></button>
           <span class="hint">O</span>
         </div>
+        <div class="kit" data-menu="multiplayer">
+          <span class="label">Online</span>
+          <button class="mp-open"><b>Multiplayer</b><i>Browse matches</i></button>
+          <span class="hint">M</span>
+        </div>
       </div>
       <button class="ov-start" data-menu="start"><b>Deploy</b><i>Enter &middot; A &middot; Start</i></button>
       <p class="ov-nav">
@@ -314,6 +335,8 @@ export class OverlayScreen {
     if (kitBtn) kitBtn.onpointerdown = () => this.onOpenLoadout();
     const setBtn = this.root.querySelector<HTMLElement>("button.settings-open");
     if (setBtn) setBtn.onpointerdown = () => this.onOpenSettings();
+    const mpBtn = this.root.querySelector<HTMLElement>("button.mp-open");
+    if (mpBtn) mpBtn.onpointerdown = () => this.onOpenMultiplayer();
     this.bindStart();
   }
 
@@ -382,6 +405,9 @@ export class OverlayScreen {
         break;
       case "settings":
         this.onOpenSettings();
+        break;
+      case "multiplayer":
+        this.onOpenMultiplayer();
         break;
       case "start":
         this.onStart();

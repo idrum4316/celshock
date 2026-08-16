@@ -36,6 +36,7 @@ import {
   animateSoldier,
   buildSoldier,
   resetSoldierPose,
+  STRIDE,
   type SoldierRig,
 } from "./SoldierModel";
 import { profileFor, type BotProfile } from "./BotSkill";
@@ -205,6 +206,48 @@ export class Bot implements Combatant {
 
   /** Everything this bot has noticed and not yet forgotten. */
   readonly memory = new BotMemory();
+
+  // --- replication view ---------------------------------------------------
+  //
+  // What the multiplayer server puts on the wire so a client can draw this bot
+  // without running its FSM. Read-only, derived, and deliberately the SAME five
+  // values `update` hands `animateSoldier` — a remote client poses the identical
+  // rig from the identical numbers, so a bot on screen over the network is the
+  // bot the authority is simulating rather than an impression of one.
+  //
+  // Accessors rather than making the fields public: these are outputs of the
+  // AI, and nothing outside this class may write them. `walkPhase` is
+  // deliberately NOT among them — it is a free-running cycle with no meaning
+  // beyond "where in a stride", so a client integrates its own from `moveAmount`
+  // and spends no bandwidth on it. See `src/net/protocol.ts`.
+
+  /** Where the bot LOOKS. What the view cone reads, and what a client aims its head with. */
+  get lookYaw(): number {
+    return this.yaw;
+  }
+
+  /** Where its feet point. Kept apart from `lookYaw` so a strafing bot does not walk sideways. */
+  get feetYaw(): number {
+    return this.bodyYaw;
+  }
+
+  /** 0..1 walk-cycle weight — how much of a stride to play. */
+  get moveAmount(): number {
+    return this.moveBlend;
+  }
+
+  /** Torso pitch toward the current target, radians. Zero with no target. */
+  get aimAngle(): number {
+    return this.aimPitch();
+  }
+
+  /** Collapse tween progress, 0 while alive and 1 once fully down. */
+  get deathProgress(): number {
+    return this.state === "dead"
+      ? Math.min(1, this.deadT / CONFIG.bots.death.collapseTime)
+      : 0;
+  }
+
   /** Seconds spent in the current state; gates dropping to a lower priority. */
   private stateT = 0;
   /** Seconds left sweeping at a searched-out position before giving up. */
@@ -686,7 +729,7 @@ export class Bot implements Combatant {
       // as sin(walkPhase), so a foot is planted forward at each half turn —
       // pi/2 and 3pi/2, which is every pi offset by pi/2.
       const wasStride = Math.floor((this.walkPhase - Math.PI / 2) / Math.PI);
-      this.walkPhase += (speed * dt) / 0.9;
+      this.walkPhase += (speed * dt) / STRIDE;
       if (Math.floor((this.walkPhase - Math.PI / 2) / Math.PI) !== wasStride) {
         this.onStep();
       }

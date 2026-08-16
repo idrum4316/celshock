@@ -24,6 +24,83 @@ npm run icons    # regenerate the install icons under public/icons (committed)
 
 Requires Node 18+ and a WebGL2-capable browser (Chrome/Edge/Firefox/Safari).
 
+## Multiplayer
+
+Single player needs nothing but the page. Multiplayer needs a second process —
+an authoritative server that runs the real simulation and hands clients what
+moves — and **Multiplayer** on the main menu is the way to it: a list of the
+matches that server is running, with a row per match and a button to start a
+fresh one. A match is always 8v8; every seat nobody is sitting in is a bot, so a
+round starts with one person in it and fills up as people arrive.
+
+**A new match is started on the map you pick in that screen's Map row; joining
+one puts you on the map it is already running**, whichever map the menu happens
+to be showing. Every row names its match's map, and the server rotates to the
+next one when a round ends.
+
+Locally:
+
+```bash
+npm run build:server   # bundle the server to dist-server/
+npm run server         # run it (PORT, default 8080; MAX_MATCHES, default 4)
+npm run dev            # the client, in another terminal
+```
+
+The dev client is on a different origin from the server, so point it at one:
+`http://localhost:5173/?server=ws://localhost:8080/ws`. Deployed, the game and
+the server share an origin and the menu needs no help.
+
+Everything wired up, in two containers:
+
+```bash
+docker compose up --build
+open http://localhost:8080
+```
+
+## Hosting it
+
+The deployment is those same two containers from published images, behind
+whatever already terminates HTTPS for the domain:
+
+```bash
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+`web` (nginx and the game) listens on `127.0.0.1:8080` and `match-server` is not
+published at all — the only route to the simulation is nginx's `/ws` proxy on
+the compose network. Point the reverse proxy at `127.0.0.1:8080` and give it one
+thing it did not need while this was a static site: **`/ws` is a WebSocket, so
+the Upgrade must survive the hop.**
+
+```nginx
+location /ws {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 1h;
+}
+
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+}
+```
+
+Caddy carries WebSockets by itself, so it is one line:
+`reverse_proxy 127.0.0.1:8080`.
+
+Nothing else needs configuring: the client asks its own origin for the match
+list and opens the socket there, so the game does not know or care what the
+domain is. Two settings are worth a look — `MAX_MATCHES` on the server (default
+4, and one process's matches all share one core) and `MATCH_SERVER` on `web`
+(default `match-server:8080`, the compose service name).
+
+The single-player game still deploys on its own: bring up `web` without the
+server and it plays exactly as it always has — the socket never opens, and the
+lobby says it could not reach a match server.
+
 ## Installing it
 
 The build is an installable app (a PWA): a web app manifest, generated icons,
@@ -144,16 +221,20 @@ the top.
   vehicles**, and the sidearm is not a choice.
 - Nav cells hold up to three surfaces, so unusually deep stacks of walkable
   geometry would need `MAX_SURFACES` raised.
-- One map. The system supports more, but only Hollowmere is authored.
-- **Single-player only.** There is no netcode; every other combatant on the map
-  is a bot and always will be without one.
+- Two maps, Hollowmere and Greyfen. The system supports more; a third is one
+  layout file plus an environment.
+- **Multiplayer is one server process, and the lobby lists only that one.**
+  Matches live in its memory, so it cannot be scaled by running a second copy
+  behind the same address — that needs a shared matchmaker, which is not built.
+  There is also no way to choose your name in the interface yet (`?name=` on the
+  URL), and no reconnecting into the seat you left.
 - **No touch controls.** The game installs and runs on a phone, but every input
   is keyboard, mouse or gamepad — a touch is only good for the menus' "tap to
   continue", so playing on a phone means pairing a controller.
 
 ## Next steps for expansion
 
-- A second map: one new `layout.ts` plus an `EnvironmentSpec`.
+- A third map: one new `layout.ts` plus an `EnvironmentSpec`.
 - Player-issued squad orders. Bots already plan their objectives as squads;
   what is missing is a way for you to tell one which flag to take.
 - A sixth weapon or a sixth optic — both are a config entry plus a builder.

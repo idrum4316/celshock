@@ -2,10 +2,16 @@
  * vite.config.ts — Dev-server plumbing for the map editor, and nothing else.
  *
  * NOTE: this file is deliberately kept OUT of tsconfig.json's `include`
- * (which is ["src", "main.ts"]). @types/node is not installed, so `node:fs`
- * would fail `npm run typecheck`. The trade is that this file is not
- * typechecked — so it stays trivial, and all the real logic lives in
- * src/editor/serialize.ts where the compiler does cover it.
+ * (which is ["src", "main.ts"]), so `node:fs` here does not have to typecheck
+ * against a browser compile. The trade is that this file is not typechecked —
+ * so it stays trivial, and all the real logic lives in src/editor/serialize.ts
+ * where the compiler does cover it.
+ *
+ * That guarantee used to rest on @types/node simply not being installed. It is
+ * installed now, for `server/`, so the root tsconfig pins `"types": []`
+ * instead: the browser compile still sees no Node globals, and the reason is
+ * now written down rather than being a happy accident of the dependency list.
+ * `server/tsconfig.json` opts back in. See `server/README.md`.
  *
  * The plugin is `apply: "serve"`, so it does not exist in a production build.
  */

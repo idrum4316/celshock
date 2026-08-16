@@ -121,7 +121,11 @@ export class Sfx {
   }
 
   /**
-   * Freezes or thaws the whole graph — the pause menu, and nothing else.
+   * Freezes or thaws the whole graph — an OFFLINE pause menu, and nothing
+   * else. A networked round is still being played by everybody else and is
+   * still sounding off the wire while its card is up, so `Game.pause` leaves
+   * this alone there: a stopped clock would neither play those nor let them
+   * end, and they would all arrive together on the resume.
    *
    * Suspending the context rather than muting a gain is what makes this
    * correct for free: anything already scheduled (the tail of the shot that
@@ -472,8 +476,15 @@ export class Sfx {
    * the crack long before the shot gets quiet, and the reverb send climbs, so
    * a shot across the valley is nearly all tail. The result is that a rifle at
    * 15 m and one at 60 m are different *sounds*, not the same sound twice.
+   *
+   * `after` is extra seconds on the audio clock, on top of the propagation
+   * delay, and it exists for one caller: a netplay round is told what a remote
+   * weapon did once per snapshot, so two rounds fired inside the same 50 ms
+   * arrive as one message and have to be laid back out in time. Scheduled on
+   * the audio clock rather than through a `setTimeout`, so the spacing is
+   * sample-accurate and unaffected by the frame rate.
    */
-  botShot(at: Vector3): void {
+  botShot(at: Vector3, after = 0): void {
     const a = CONFIG.audio;
     const dist = this.distanceToListener(at);
     // Beyond maxDistance the linear rolloff has already reached silence, so
@@ -483,7 +494,7 @@ export class Sfx {
     const panner = this.panner(at);
     if (!panner) return;
     const far = dist / a.maxDistance;
-    const delay = dist / a.speedOfSound;
+    const delay = after + dist / a.speedOfSound;
     const send = a.reverbMix * (0.4 + far * a.reverbDistanceSend);
     const v = 0.9 + Math.random() * 0.2;
     this.burst({

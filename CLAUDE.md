@@ -15,6 +15,7 @@ substitute: read the companion before changing that subsystem.
 | --- | --- |
 | [`docs/weapons.md`](docs/weapons.md) | the viewmodel, the aim path, the two slots, an optic or a weapon model |
 | [`docs/grenades.md`](docs/grenades.md) | anything about the one projectile in the game |
+| [`docs/states.md`](docs/states.md) | a new screen, a new game state, anything about what a lid holds or lets run |
 | [`docs/ui.md`](docs/ui.md) | any screen, any stylesheet, anything under `src/ui/` |
 | [`docs/rendering.md`](docs/rendering.md) | lights, shadows, fog, outlines, the post chain, the sky |
 | [`docs/world.md`](docs/world.md) | a map, a layout, a builder, the terrain or the rim |
@@ -22,6 +23,7 @@ substitute: read the companion before changing that subsystem.
 | [`docs/bots.md`](docs/bots.md) | navigation, perception, cover, squads, bot cost |
 | [`docs/deaths.md`](docs/deaths.md) | ragdolls, Havok, the death cam |
 | [`docs/pwa.md`](docs/pwa.md) | `public/`, `src/pwa/`, the service worker |
+| [`docs/multiplayer.md`](docs/multiplayer.md) | anything under `server/` or `src/net/`, the roster, the collision bake, the two images and the proxy in front of them |
 
 Three more companions carry what is looked up rather than reasoned about:
 
@@ -80,7 +82,7 @@ tuning fixes either. **A production build resolves the asset itself, so `vite
 preview` works with or without the exclusion; testing only there will not catch
 this.** Deployed nginx needs nothing (`application/wasm` is in its bundled
 `mime.types`; the web app manifest is not, which is why only that has a block in
-`docker/nginx.conf`).
+`docker/default.conf.template`).
 
 **The same optimizer bites from the other side: never add a deep static import
 into `@babylonjs/core`.** A new subpath entry (`@babylonjs/core/Shaders/...`)
@@ -144,7 +146,7 @@ table at the top names for that subsystem.
 ### Ownership and wiring
 
 `src/core/Game.ts` is the only place systems meet. Systems never import each
-other; `Game` wires them with callbacks (`battle.onBotKilled/onBotFired`,
+other; `Game` wires them with callbacks (`battle.onBotKill/onBotFired`,
 `conquest.onCaptured/onNeutralised`, `player.onDamaged`, `deployScreen.onDeploy`)
 and hands bot AI a `BattleCtx` (in `entities/Bot.ts`) built once rather than
 rebuilt per frame. New cross-system behavior belongs in that wiring, not in an
@@ -175,71 +177,39 @@ round alone owns what is about a *fight* — battle, conquest, flag markers, min
 `Game`'s state machine is `menu -> loading -> deploy -> playing -> dying ->
 deploy`, with `roundover` when a side runs out of tickets. The 3D scene renders
 in **every** state, which is what lets the deploy screen and the menu sit over a
-live view.
+live view. `loading` is the map being built, and it is a **STEP, not a lid**:
+nothing may simulate there because there is no map yet, and the **two**
+`requestAnimationFrame`s between `startRound` and `buildRound` are what put the
+building card on the glass before the freeze rather than after it. `dying` is the
+death cam and is a step too — `updateWorld` runs in full underneath it.
 
-**`loading` is the map being built, and the split that creates it is the whole
-feature.** Building one is the better part of a second of synchronous work —
-merges, the occlusion bake, the nav grid — and a browser paints between TASKS,
-never inside one, so a `startRound` that built the map where it stood froze the
-card the player had just confirmed for the entire build and then jumped to the
-deploy screen. Nothing was slow that is not slow now; what was missing was any
-sign the game had heard the button. So `Game.startRound` raises the building
-card and hands the work to `Game.buildRound` **two** `requestAnimationFrame`s
-later, and the count is load-bearing: a frame runs its animation callbacks and
-*then* paints, so a single rAF booked from ordinary task code fires before the
-card has ever been on the glass and the freeze happens under the old screen
-exactly as before. One is enough from inside the render loop, which is where
-the real callers are — the second is what stops that being a property of the
-call site. It is a **STEP, not a lid**: nothing may simulate there (`tick` has
-a deliberately empty arm) because there is no map yet, and `startRound` guards
-on it so a second build can never be queued over a pending one.
+**A LID is a screen laid over a state, which taking it off puts back rather than
+moving the game on — and which state is which, and what each one owes, is
+DECLARED rather than described.** `SCREENS` in
+[`src/core/ScreenStack.ts`](src/core/ScreenStack.ts) is a
+`Record<GameState, ScreenSpec>` with one row per state, so **a new screen does not
+compile until it has answered all four questions**: what it may cover, whether the
+world under it is held offline, whether it owes the netplay frame the authority
+keeps running behind it, and whether the scoreboard is owed to it. `Game.tick`
+asks the table rather than trusting each screen to volunteer, `Game` has exactly
+three moves (`go` a step, `raiseLid`, `lowerLid`), and **nothing in the codebase
+assigns a game state** — `Game.state` is a getter. `go` hands back whatever lids
+were up and `Game.takeDown` (exhaustive over `LidState`, enforced with a `never`)
+is the one place that knows what putting a screen away means, which is why no
+transition carries its own list of screens to hide any more.
 
-**`dying` is the death cam and is a STEP, not a lid** — `updateWorld` runs in full
-underneath it. **`loadout` and `paused` are lids**: each records which state it
-covered (`loadoutFrom` / `pausedFrom`) and puts it back. The loadout screen covers
-`menu` or `deploy`; a pause covers `playing`, `dying` or `deploy`, so a pause taken
-while waiting out a respawn returns to the deploy map rather than dropping the
-player into the world.
+**The question a lid raises is never which screen is up, but whether what is
+under it is moving.** Offline a pause genuinely holds the world (the audio clock
+stops, the HUD is ticked with `dt = 0`); in a netplay round it holds nothing,
+because the authority never heard the key. Both halves are the table's
+`holdsWorld` and `roundBehind`, and `Game.worldHeld` adds the one thing the table
+cannot know — whether there is a session at all.
 
-Pausing is just `tick` not calling `updateGameplay` — everything else still
-renders, so the round reads as held rather than gone — plus two things that would
-leak past it: `Sfx.setSuspended` stops the audio clock (the tail of the last shot
-is still there on return, and the voice counter stays honest because nothing ends
-while the clock is stopped), and the HUD is ticked with `dt = 0` so the killfeed
-and toasts freeze with the world instead of fading off a frozen screen.
-
-**Losing the pointer lock is the trigger, and it has to be.** Escape belongs to
-the browser — it is the UA's gesture for dropping the lock and the keydown behind
-it is not reliably delivered — so `Game` pauses on the *transition* out of the
-lock, which also covers alt-tab and any focus loss. A player who never took the
-lock (a pad player) has none to lose, hence the transition test rather than a bare
-"not locked". `Escape` and gamepad Start are the second trigger, through
-`input.pausePressed`; Start also raises `confirmPressed` (it is the menus' deploy
-button), so the paused branch handles pause first and breaks. Gamepad **B** resumes
-(`menuBackPressed`). The list is confirmed with `menuConfirmPressed` — Enter and
-pad A but *not* the mouse — because a click on the empty half of a pause screen is
-not a menu choice.
-
-**Re-taking the lock on resume is deferred, retried, and never pauses on its own
-failure** — the one key that ends a pause is the one key the browser reads as
-"drop the lock", so asking for it back in the same breath loses three ways.
-Chrome refuses outright for about a second after an Escape-exit; a lock granted
-while Escape is still down is taken away again by the key's auto-repeat; and
-that revocation arrives as a `pointerlockchange` the pause trigger would read as
-a player leaving, putting the menu back up a split second after it was
-dismissed. So `resume` only *marks* the lock as owed, `updatePendingLock` waits
-for the key to come up and then asks on an interval until the lock lands or the
-window runs out, and a loss inside `CONFIG.input.lockGrace` of taking it is read
-as a refusal rather than a departure. If the browser holds out, the round is
-still running with the CLICK hint up and the next click gets it.
-
-`#hud.paused` is deliberately **not** `.overlaid`: the menu and round-over card
-hide the gauges because what is under them is last round's, while under a pause the
-tickets, flags and vitals are current and frozen with the scene. It hides what
-would be lying — crosshair, hitmarker, damage arcs, mouse hint. It is also the one
-overlay taking pointer events across its whole area, because the deploy screen
-underneath takes them too and a click through the backdrop would land on its map or
-Deploy button.
+→ **[`docs/states.md`](docs/states.md)** — the full cycle and why `loading` is a
+state rather than a flag, the four spec fields and what each replaced, why a step
+transition takes down the lids and the stranded-screen bug that says so, pausing
+and the netplay inversion of it, the pointer-lock trigger and the deferred
+re-take, and what `#hud.paused` shows that `.overlaid` hides.
 
 `Game.updateGameplay` has a load-bearing order at the end of the frame: camera
 update → carried-light updates → `lighting.update(dt, camera.position, mats)` →
@@ -257,6 +227,15 @@ one comparison; and because a new material is seeded with that same eye
 (`CelShader.applyCamera`), a map built under the building card comes out of
 `installMap` already correct.
 
+**`Game.pushScoreboard` is the other thing pushed from `tick` rather than from a
+state's own arm**, and for the mirror reason: the Tab board is owed to `playing`,
+`dying` and `deploy` alike, so it belongs to the ROUND rather than to the states
+that simulate one. It runs after the switch and before the render, so the state
+a frame ends in decides — which is what makes "the board goes when the round
+does" one line instead of a `setScoreboard(false)` owed by every one of the six
+ways out of a round. A lid takes it away, because a lid is a screen the player
+asked for.
+
 `ConquestSystem.update` runs *before* `BattleSystem.update`, so a bot's think tick
 sees this frame's flag ownership rather than last frame's.
 
@@ -269,54 +248,40 @@ shadow. Crouch is that one point moving, and `Player.center` must come down the
 same half metre or the feature inverts and crouching makes you *easier* to kill.
 
 Two tables carry the kit and neither knows about the other: `CONFIG.weapons` owns
-the round, `CONFIG.sights` owns the picture, and `entities/weapons.ts` /
+the round and `CONFIG.sights` owns the picture, and `entities/weapons.ts` /
 `entities/sights.ts` derive their ids from those tables so each is declared in
-exactly one place. **The aimed pose is derived, never authored** — `applyFit`
-cancels the fitted sight's own `sightCenter` so its reticle lands on the axis
-`CombatSystem` sends bullets down, and it owes a re-derivation on every loadout
-change, *including a change of weapon*. **The aimed hold sway is on the AIM, not
-the rendered camera**: applied to the camera it would slide the world behind a
-reticle still welded to the bore, and the sight picture would lie.
+exactly one place.
 
-**The trigger is two questions, not one**: `semiAuto` asks whether it has to come
-up between pulls and `burst` asks what one pull spends. `Player.tryShot` owns both,
-and the burst is the one thing in the game that fires with the trigger *released* —
-the rounds are owed by the pull, so a reload, a swap, an empty magazine or a death
-must ABANDON what is left rather than bank it.
+**Everything about an aimed weapon is arranged so that the reticle cannot lie,
+and every rule here is that one rule.** The aimed pose is DERIVED and never
+authored — `applyFit` cancels the fitted sight's own `sightCenter` so its reticle
+lands on the axis `CombatSystem` sends bullets down, and it owes a re-derivation
+on every loadout change, *including a change of weapon*. The aimed hold sway is
+on the AIM rather than on the rendered camera, which would slide the world behind
+a reticle still welded to the bore. The kick spring's off-axis terms are damped
+hard while aimed and its longitudinal travel is not, because anything that
+rotates or laterally shifts the model while aimed takes the sight off that axis —
+and the reload breaks the aim outright rather than posing an aimed weapon.
 
-**The reload is a timeline keyed to its own sound, and the magazine is the one
-part of a weapon that moves.** `CONFIG.viewmodel.reload` lays the gesture out in
-fractions of the weapon's `reloadTime`, and three of them are `Sfx.reload`'s
-clacks to the frame — change one and change the other. The magazine can move at
-all only because the model merged it into a node of its own (`WeaponParts.magazine`);
-everything else on a weapon is inside one merged mesh per colour and cannot be
-animated without the same split. The gesture is a CANT rather than a lift, and it
-**breaks the aim** (`reload.aimBreak`) rather than posing the weapon where it
-stands: an aimed weapon is on the camera axis, so any reload pose applied there
-puts the receiver across the middle of the screen.
+**What is left is springs and timelines with one owner each.** The punch is a
+SPRING the shot hands a velocity to: `Player` owns the integrator and `ViewModel`
+reads it, the shape the bob phase has (`CameraSystem` owns it, the other two
+read) and for the same reason. The reload is a timeline keyed to `Sfx.reload`'s
+clacks to the frame — change a fraction in one file and change it in the other —
+and the magazine moves only because the model merged it into a node of its own,
+which is the one way any part is let out of a weapon. **The trigger is two
+questions**: `semiAuto` asks whether it must come up between pulls, `burst` asks
+what one pull spends, and a reload, a swap, an empty magazine or a death must
+ABANDON what a burst still owes rather than bank it.
 
-**The weapon punch is a SPRING the shot hands a velocity to, not a level the
-shot sets.** `Player` owns it and `ViewModel` reads it — one integrator with one
-owner and one reader, the same shape as the bob phase (which `CameraSystem` owns
-and both of the others read) — so a round travels, overshoots the carry on the way home and settles,
-and a round arriving on a weapon that has not come home adds to what is there.
-Its lateral, roll and yaw take the shot's own `kickDrift`, so the model leans the
-way the muzzle actually walked, and its whole reach is scaled by a **compressed**
-`recoilMult` (`kick.compress`) because 2.2 is a defensible thing to do to an aim
-and an indefensible thing to do to a pose in centimetres. **The off-axis terms
-are damped hard while aimed and the longitudinal travel is not**: the weapon
-carries the sight, so anything that rotates or laterally shifts it while aimed
-takes the reticle off the axis the rounds fly down, and a reticle that moves
-where the bullets do not is the failure the aimed hold sway is arranged to avoid
-from the other side.
-
-→ **[`docs/weapons.md`](docs/weapons.md)** — the viewmodel's own rendering group
-and pose stack, the bob phase's single integrator, the reload's four beats and
-the magazine that leaves the weapon on them, the kick spring and the recoil
-pattern's two envelopes, the two slots and their holsters, the five weapons and
-the three fire modes, how an optic's size and its eye relief are one number, and
-the procedural-model rules (merge per colour; a second merge is how a part is let
-out of the weapon; never scale a part non-uniformly).
+→ **[`docs/weapons.md`](docs/weapons.md)** — the crouch latch and what spends it,
+the viewmodel's own rendering group and pose stack, the bob phase's single
+integrator, the reload's four beats and the magazine that leaves the weapon on
+them, the kick spring's compressed reach and the recoil pattern's two envelopes,
+the two slots and their holsters, the five weapons and the three fire modes, the
+head zone, how an optic's size and its eye relief are one number, and the
+procedural-model rules (merge per colour; a second merge is how a part is let out
+of the weapon; never scale a part non-uniformly).
 
 ### Grenades
 
@@ -333,7 +298,7 @@ backstop rules, the GPU dust pool (the one place a particle system may be spawne
 per event, and why `addColorGradient` would take the scene down), the throw
 timeline, and the bots' range band.
 
-### The interface is four screens and the chrome
+### The interface is five screens and the chrome
 
 `src/ui/` holds one class per thing on screen, and `HUD` is not where a new one
 goes — it owns **only** the gameplay chrome. Each screen builds its own root and
@@ -346,19 +311,25 @@ interface: the black background, and the boot screen `main.ts` takes down once a
 frame has been drawn (or turns into the "needs WebGL2" message). Nothing that
 reacts to game state may join them.
 
+**Every screen here is a LIST, and a list whose rows can change under the cursor
+keeps its place by IDENTITY rather than by index.** The lobby is the one that
+can: a refresh inserts match rows above the actions, and a carried index means
+the highlight moves onto a different row while the player's hand is still on
+Enter.
+
 → **[`docs/ui.md`](docs/ui.md)** — the four cards and why they are one class, the
 menu cursor and the list-shaped screens, why **the pointer deploys only through
 the Deploy button**, the deploy map, the kit turntable that is the real viewmodel
-in a hole in the scrim, and the short-viewport scaling.
+in a hole in the scrim, the lobby's row identity, and the short-viewport scaling.
 
 ### The scene has (almost) no Babylon lights
 
-Cel materials carry their own `lightDir`/`lightColor`/`ambientColor`/
-`skyLightColor` and a packed array of up to `MAX_POINT_LIGHTS` (16) point lights
-as uniforms; `LightingSystem` is the sole owner of dynamic light and uploads the
-winning slots once per frame. **Adding a `PointLight` or `HemisphericLight` to the
-scene will not affect any cel-shaded mesh.** The one exception is `ShadowSystem`'s
-`DirectionalLight`, which no material reads — it exists to define the shadow
+Cel materials carry their own light as uniforms — key, ambient and sky fill, plus
+a packed array of up to `MAX_POINT_LIGHTS` (16) point lights — and
+`LightingSystem` is the sole owner of dynamic light, uploading the winning slots
+once per frame. **Adding a `PointLight` or `HemisphericLight` to the scene will
+not affect any cel-shaded mesh.** The one exception is `ShadowSystem`'s
+`DirectionalLight`, which no material reads: it exists to define the shadow
 camera.
 
 **Nothing drawn outside the cel shader gets fog for free, and everything that
@@ -368,23 +339,22 @@ every unlit emissive material. Nothing may describe different weather from the
 wall it hangs in front of.
 
 **The world carries a VERTEX COLOUR buffer and its neutral values are the GL
-defaults, not ours.** `world/ambientOcclusion.ts` bakes per-vertex ambient
-occlusion into the buffer's **alpha** and marks world geometry in its **green**,
-because a mesh with no such buffer reads the disabled attrib's `(0, 0, 0, 1)` —
-alpha 1 (unoccluded) and green 0 (not world). That is what lets the rigs, the
-viewmodel and every effect mesh stay correct while carrying nothing, and it is
-why AO is in alpha rather than in a channel that would have needed a fourth cel
-material variant. The bake runs **after every merge**: `VertexData.merge` throws
-outright when one mesh in a group has `colors` and another does not.
+defaults, not ours** — baked ambient occlusion in the **alpha**, a world marker
+in the **green**, because a mesh with no such buffer reads the disabled attrib's
+`(0, 0, 0, 1)`: alpha 1 (unoccluded) and green 0 (not world). That is what lets
+the rigs, the viewmodel and every effect mesh stay correct while carrying
+nothing. The bake runs **after every merge**, and cannot be moved earlier:
+`VertexData.merge` throws outright when one mesh in a group has `colors` and
+another does not.
 
 → **[`docs/rendering.md`](docs/rendering.md)** — the four light terms and the
-baked occlusion that modifies two of them, the three light flavours and the
-muzzle-flash budget, the per-pixel/per-mesh fog split and `OutlineFog`'s three
-cache-invalidation rules, the shadow window, its four-tap lookup and the
-registry that lets grass and water share it, why the dither is in the surface
-shaders rather than the grade, the constraints that look like bugs if you undo
-them (image processing, rendering group 1, thick boxes under walked surfaces,
-coplanar faces), and the painted sky.
+baked occlusion that modifies two of them (and the three further rules that
+buffer carries), the three light flavours and the muzzle-flash budget, the
+per-pixel/per-mesh fog split and `OutlineFog`'s three cache-invalidation rules,
+the shadow window, its four-tap lookup and the registry that lets grass and water
+share it, why the dither is in the surface shaders rather than the grade, the
+constraints that look like bugs if you undo them (image processing, rendering
+group 1, thick boxes under walked surfaces, coplanar faces), and the painted sky.
 
 ### The map is data, not code
 
@@ -560,6 +530,79 @@ screen keeps the `start_url` it installed with. The service worker is a
 the `no-cache` requirement, cache-first and what it costs a returning player, and
 the phone-shaped details (fullscreen on the document element, `--ov-scale`, why
 `#loadout` is excluded from it).
+
+### Multiplayer: the server is the authority, and a slot is a slot
+
+A dedicated Node process runs the real simulation under Babylon's **NullEngine**
+— bots, flags, tickets and damage — and clients render it. There is no host
+client. A shooter's hitmarker is a **guess**: every target is rewound and
+`CombatSystem.fire` runs again on the server, which is the only thing that deals
+damage. **Movement and health regeneration are the only two things a client
+predicts** — movement is validated on arrival for speed, ground and solids — and
+everything else it still steps in a netplay round is DRESSING: effects,
+grenades, ragdolls, all of which decide nothing.
+
+**The roster is sixteen slots, built once, never resized**, and every slot
+nobody is sitting in is a bot: a human joining BENCHES the bot in their slot and
+leaving un-benches it. **Benching is not killing** — joining and leaving must
+never charge a team a reinforcement — the bench lives in `BattleSystem` as a
+`Set<Bot>` and never as a flag on `Bot`, **every loop over `bots` there must skip
+it**, and **a slot index IS a bot index**. On the client a bot and a remote human
+are the same object (`NetSoldier`), which is what makes "start without a full
+lobby" and "hand a leaver's slot back to a bot" one mechanism instead of two.
+
+**Four things arrive from the authority and may only be written through their one
+funnel**, because a client that decides any of them for itself is playing a
+different game in the same window: the local player's **team**
+(`Game.applyPlayerTeam` — balance seats the second person on team 1, so a
+hardcoded 0 turns every mine/theirs question backwards at once), the match's
+**map** (`Game.applyMatchMap`; `Game.setMap` is the *player* choosing and is
+never written from the wire), a **body coming into the world** (an ASK — the
+deploy screen sends `deploy` and the authority places it, so nothing on the
+client may place one), and the **scoreboard** (state on the wire, a line per
+slot, with team totals summed from those rows and stored nowhere — offline and
+in a match alike).
+
+**The server cannot run `MapBuilder`**: it has no canvas, so `DynamicTexture`
+throws. It rebuilds the solid world from the generated
+`src/world/<map>/collision.ts` and picks against it with the same `SOLID_ONLY`
+ray the client uses, so **`npm run parity` should be run after anything touching
+the world layer**; `npm run build` refuses a bake older than its layout. What a
+socket may spend before it has proved it is a player is bounded in
+`server/index.ts`, along with the pong deadline that is the only thing there
+which notices a peer that stopped existing without saying so.
+
+**A client hears the fight from the authority, and each cue comes from whichever
+side actually knows.** A remote weapon and a remote magazine are EVENTS (`fire`,
+carrying the rounds it stands for, and `reload`); a footstep is DERIVED from the
+body being drawn and crosses no wire at all; and the crack of a round going past
+is ADDRESSED to the one player it happened to, never broadcast — it says
+somebody was nearly hit, which is the read a wallhack wants. The `reload` is the
+one thing a client announces about itself, and it is allowed only because it
+decides nothing: anything that decides something is the server's.
+
+**`decode` proves only that a frame is JSON with a `t` on it, so a
+`ClientMessage` is a CLAIM about a well-behaved client and never a fact.**
+`server/wire.ts` is the one door that makes it one — both callers read a frame
+through `readClientMessage`, nothing else on the server may, and a new client
+message type owes an arm in its switch. Skipping it does not fail softly:
+destructuring a `Vec3` that is not there throws out of the socket listener and
+takes every match in the process down with it, and a non-numeric field walks
+through every check downstream, because each of those is a comparison and every
+comparison against `NaN` is false.
+
+→ **[`docs/multiplayer.md`](docs/multiplayer.md)** — the authority model and what
+it deliberately does not defend against, the roster and the bench, which side the
+local player is on and the race the welcome is in, the deploy ask and why the
+spawn index is into the map rather than into the offer, the map belonging to the
+match, what a death owes on each side and the one `kill` event per body that
+carries it, the interpolation clock and the sign error that is easy to make in
+it, the rewind and why `resolve` takes a callback, what a match SOUNDS like and
+which side each of the four cues comes from, the per-slot scoreboard and
+why it is state on the wire rather than events added up on a client, the lobby
+and why there is no central registry, everything a socket may spend and the pong
+deadline beside it, the collision bake and what `npm run parity` actually
+compares, what may never cross the wire, and the list of what is not built yet.
 
 ## Conventions
 

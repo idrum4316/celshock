@@ -5,6 +5,33 @@ The module map, one line per file, stating what it owns. Split out of
 subsystem contracts under [`docs/`](docs/) that it points to carry the rules
 these modules obey; this file is for finding your way to the right one.
 
+server/               # The authoritative match server. Node, NullEngine, no
+  index.ts            #   rendering and no canvas — see server/README.md.
+                      #   Process entry: /health, /matches, the ws listener and
+                      #   the match registry — which IS the lobby, because
+                      #   matches live in this process. Routes a join (named,
+                      #   create, or wherever there is room), caps how many
+                      #   matches exist, and holds the pong deadline every
+                      #   socket in the process is swept against. Owns no
+                      #   game rules
+  Match.ts            #   One match: fixed-step loop, snapshots, the gates on
+                      #   what a client may claim, round rotation
+  Roster.ts           #   The sixteen slots, team balance, human<->bot handover
+  HeadlessGame.ts     #   The simulation: the server's answer to core/Game.ts,
+                      #   wired by the same rules
+  NetPlayer.ts        #   A connected human as the simulation sees one — the
+                      #   only position anything on the server trusts
+  world.ts            #   Rebuilds the solid world from the baked boxes: the
+                      #   collider half of MapBuilder and nothing else
+  lagComp.ts          #   Position history + the rewind around a shot. `resolve`
+                      #   takes a callback so the restore cannot be skipped
+  wire.ts             #   Is a client message shaped like what it claims to be?
+                      #   The one door a frame becomes a ClientMessage through,
+                      #   so no handler past it re-checks a field
+  validate.ts         #   Is a reported step physically possible? speed, ground,
+                      #   solid — and nothing else
+  simulate.ts         #   `npm run simulate`: a whole round, headless, no clients
+  parity.ts           #   Fingerprint dump for `npm run parity`
 ```
 index.html          # The head, and NO interface CSS beyond the two things shown
                     #   while there IS no interface: a black background (so a
@@ -44,10 +71,18 @@ src/
     sky.ts              # The painted sky and moon shafts (sky, godRays)
     teams.ts            # The two sides; index 0 is the player's
   core/
-    Game.ts             # Orchestrator + state machine + main loop. Constructor
-                        #   is construction only; wiring is wireSystems (+ four
-                        #   subject methods), installDomListeners, wireScreens;
-                        #   tick dispatches one method per screen
+    Game.ts             # Orchestrator + main loop + all cross-system wiring.
+                        #   Constructor is construction only; wiring is
+                        #   wireSystems (+ four subject methods),
+                        #   installDomListeners, wireScreens; tick dispatches
+                        #   one method per screen. Holds ONE ScreenStack and
+                        #   never assigns a state — go/raiseLid/lowerLid, and
+                        #   takeDown for what a screen means on screen
+    ScreenStack.ts      # The state machine's shape as data: GameState, the
+                        #   SCREENS table (what a lid covers, what holds the
+                        #   world offline, what owes the netplay frame, what is
+                        #   owed the scoreboard), and the raised-lid stack. A
+                        #   new state does not compile without a row
     InputManager.ts     # Keyboard/mouse + gamepad state + rumble
     CameraSystem.ts     # First-person cam at the eye; ADS zooms and slows by
                         #   the fitted optic, at the weapon's own rate
@@ -84,12 +119,20 @@ src/
     weapons.ts          # WeaponId + WeaponSetup, + SIDEARM/PRIMARY_WEAPON_IDS
     sights.ts           # SightId + magnification -> FOV, sensitivity, zoomComp
     Combatant.ts        # Team + the shared shootable/shooter interface
+    callsigns.ts        # What to call an AI on the scoreboard: roster index ->
+                        #   phonetic name, derived on both sides, never sent
     Bot.ts              # Bot FSM (advance/hunt/engage/takeCover/suppressed/
                         #   retreat/capture) + movement, aim, magazine, peek
     BotMemory.ts        # One bot's decaying picture of the fight
     BotSkill.ts         # skill scalar -> BotProfile; difficulty tiers
     SoldierModel.ts     # Merged bot rig + procedural animation, and the
                         #   RagdollSubject interface
+    NetSoldier.ts       # Somebody else, drawn from the wire: one rig, the
+                        #   interpolation buffer behind it, the gait its boots
+                        #   are heard off, no behaviour at all
+    GrenadeModel.ts     # What a grenade looks like — body, fuse pip, and the
+                        #   blink that reads the fuse. Built by the system that
+                        #   simulates them and by the one that only draws them
   systems/
     BattleSystem.ts     # Bot pool, AI scheduling, LOS, distance LOD
     ConquestSystem.ts   # Flags, meters, tickets, bleed, spawns, planSquads
@@ -180,15 +223,23 @@ src/
     environment.ts      # EnvironmentSpec + applyEnvironment
     maps.ts             # MapDef + the MAPS registry. The only EXISTING file a
                         #   new map has to touch (plus vite.config's WRITABLE)
+    collision.ts        # MapCollision: the shape of a baked collider set, and
+                        #   the tuple->WorldBox expansion the server rebuilds
+                        #   from. Names no map; reached via MapDef.collision,
+                        #   which is a LAZY import so the client never ships it
+    fingerprint.ts      # A comparable summary of a built world — the nav graph,
+                        #   not the boxes. What `npm run parity` diffs
     hollowmere/layout.ts      # A MAP — every placement, flag and spawn
     hollowmere/heights.ts     # GENERATED floor heights (editor terrain mode)
     hollowmere/environment.ts # Palette, fog, mist, particles — night
+    hollowmere/collision.ts   # GENERATED collider boxes (`npm run collision`)
     greyfen/layout.ts         # The second map, being built: the jungle manor
                               #   on C, a stilt-hut settlement and a temple on
                               #   the other flags, and the trestle over the river
     greyfen/heights.ts        # GENERATED floor heights — a Y-shaped river,
                               #   wadeable everywhere (banks grade at 0.22)
     greyfen/environment.ts    # Palette, fog, sun, sky — overcast dawn
+    greyfen/collision.ts      # GENERATED collider boxes (`npm run collision`)
   ui/                   # One .css beside each module that writes markup
     base.css            #   Reset, canvas, #hud root, and ONLY primitives two
                         #   or more screens share. Imported by main.ts
@@ -196,9 +247,11 @@ src/
                         #   vitals, ammo, the stowed slot, crosshair, killfeed,
                         #   scoreboard, damage arcs, + .paused/.editing/.dying
     OverlayScreen.ts    # The four cards — menu, round-over, pause, building —
-      overlay.css       #   and the .overlaid class they raise
-    DeployScreen.ts     # Top-down deploy map + the deploy and kit buttons
-      deploy.css
+      overlay.css       #   and the .overlaid class they raise. The menu is a
+                        #   LIST: MENU_ITEMS is the cursor's whole world
+    DeployScreen.ts     # Top-down deploy map + the deploy and kit buttons. The
+      deploy.css        #   offer is live, so the highlight is held by IDENTITY;
+                        #   in a netplay round a confirm is a REQUEST and says so
     LoadoutScreen.ts    # Kit screen: two slots, a stat chart derived from
       loadout.css       #   CONFIG.weapons, and the turntable stage
     SettingsScreen.ts   # Controls built from a ROW TABLE — a button group, or
@@ -206,8 +259,34 @@ src/
                         #   thumb picks an option INDEX, so both are the same
                         #   choice). Owns no setting: picks leave through
                         #   onChange and return as setValues
+    LobbyScreen.ts      # The match browser: one row per match on the server,
+      lobby.css         #   plus map/new/refresh/back. Rows are DERIVED from
+                        #   the list, and everything off the wire is written
+                        #   with textContent. Fetches nothing — Game hands it a
+                        #   result and takes onJoin/onCreate/onPickMap back.
+                        #   The Map row is what a match CREATED here starts on;
+                        #   joining one takes that match's map, and onJoin
+                        #   carries it
     Minimap.ts          # Corner minimap: flags, friendlies, firing enemies
       minimap.css
+  net/                # Multiplayer, client side. Nothing here is constructed
+    protocol.ts       #   in an offline round.
+                      #   The wire format — the ONLY module the server also
+                      #   imports. Pure types + the rates both ends must agree
+                      #   on. No Babylon, no DOM, no CONFIG
+    Connection.ts     #   Socket lifetime, reconnect, and the server-clock
+                      #   offset every interpolated body is drawn against
+    NetSession.ts     #   One networked round: the seam between Game and the
+                      #   wire. Game gains a field and a branch, not a protocol
+    NetRoster.ts      #   The pool of NetSoldiers + mirrored flags/tickets.
+                      #   The client's stand-in for BattleSystem: same job on
+                      #   screen, none of the job underneath
+    NetGrenades.ts    #   Everybody else's grenades in the air, interpolated on
+                      #   the same clock as the bodies. The thrower's own is
+                      #   skipped — they are watching their local copy
+    lobby.ts          #   GET /matches, and the one bit of arithmetic behind
+                      #   it: the ws:// URL's origin -> the HTTP one. The only
+                      #   part of multiplayer that is not the WebSocket
   pwa/
     register.ts         # SW registration + the touch fullscreen gesture.
                         #   Knows nothing about the game

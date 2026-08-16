@@ -179,7 +179,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 #hud { --ov-scale: 1; }
 @media (max-height: 620px) { #hud { --ov-scale: 0.75; } }
 @media (max-height: 430px) { #hud { --ov-scale: 0.45; } }
-#overlay, #deploy, #settings {
+#overlay, #deploy, #settings, #lobby {
   width: calc(100% / var(--ov-scale));
   height: calc(100% / var(--ov-scale));
   transform: scale(var(--ov-scale));
@@ -187,18 +187,23 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 }
 
 /* --- the screen-opening buttons on the menu and the deploy screen ---
-   The loadout button (both screens) and the settings button (the menu).
-   All of them open a screen from a settings row, so all of them read the
-   same: a label, what is currently chosen, and the key that gets there.
-   Shared here rather than in one screen's sheet because two screens draw
-   the kit one, which is the bar base.css is for.
+   The loadout button (both screens) and the settings and multiplayer
+   buttons (the menu). All of them open a screen from a settings row, so
+   all of them read the same: a label, what is currently chosen, and the
+   key that gets there. Shared here rather than in one screen's sheet
+   because two screens draw the kit one, which is the bar base.css is for.
 
    The menu's `#overlay` is pointer-events:none (inherited from #hud), so
    each button claims them for itself — the same carve-out the tier
    buttons and the pause actions get. #deploy already opts in for its
-   whole area. */
+   whole area. **A screen-opener left off these lists is unclickable**, and
+   silently so: the keyboard still fires it through `activateMenu`, which
+   never touches the DOM, so it reads as a mouse bug rather than a missing
+   rule. That is exactly what the multiplayer button shipped as. Add a new
+   opener to every list here, not just the first. */
 #overlay button.kit-open,
 #overlay button.settings-open,
+#overlay button.mp-open,
 #deploy-kit {
   font: inherit;
   pointer-events: auto;
@@ -217,6 +222,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 }
 #overlay button.kit-open b,
 #overlay button.settings-open b,
+#overlay button.mp-open b,
 #deploy-kit b {
   font-size: 12px;
   font-weight: 700;
@@ -225,6 +231,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 }
 #overlay button.kit-open i,
 #overlay button.settings-open i,
+#overlay button.mp-open i,
 #deploy-kit i {
   font-style: normal;
   font-size: 10px;
@@ -234,6 +241,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 }
 #overlay button.kit-open:hover,
 #overlay button.settings-open:hover,
+#overlay button.mp-open:hover,
 #deploy-kit:hover {
   background: rgba(255, 230, 128, 0.18);
   color: var(--hot);
@@ -248,6 +256,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
    wrapped caption makes the button taller than the one beside it. */
 #overlay button.kit-open,
 #overlay button.settings-open,
+#overlay button.mp-open,
 #deploy-kit {
   flex-direction: row;
   align-items: baseline;
@@ -256,8 +265,10 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 }
 #overlay button.kit-open b,
 #overlay button.settings-open b,
+#overlay button.mp-open b,
 #overlay button.kit-open i,
 #overlay button.settings-open i,
+#overlay button.mp-open i,
 #deploy-kit b,
 #deploy-kit i,
 #deploy-kit .lbl { white-space: nowrap; }

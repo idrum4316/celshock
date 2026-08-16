@@ -19,7 +19,9 @@
  *   activate  drop every other cache — a version that is no longer current is
  *             a few megabytes of a build nobody will load again.
  *   fetch     same-origin GETs come from the cache when they are there, and
- *             fill it when they are not. Everything else is passed through.
+ *             fill it when they are not. Everything else — including the match
+ *             server's `/matches` and `/health`, which are live state and not
+ *             assets — is passed through.
  *
  * Freshness comes from the worker's own update check rather than from the
  * fetch handler: the precache manifest is part of this file, so any change to
@@ -28,8 +30,8 @@
  * old one. `skipWaiting`/`clients.claim` then make the launch after that one
  * the current build. That is one launch behind, which is the price of not
  * waiting on the network to start, and it is why `sw.js` itself MUST be served
- * no-cache (see docker/nginx.conf) — a cached worker can never notice it is
- * out of date.
+ * no-cache (see docker/default.conf.template) — a cached worker can never notice
+ * it is out of date.
  */
 
 /** Replaced at build time with `{ version, urls }`. */
@@ -71,6 +73,24 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+
+  // The match server's two endpoints are LIVE STATE on the game's own origin,
+  // and this handler is cache-first over everything same-origin — so without
+  // this line the lobby is answered from the cache after its first ever fetch
+  // and shows one frozen list for the life of the build. It is not enough that
+  // `fetchMatches` asks with `cache: "no-store"` and the server answers
+  // `no-store`: the Cache API implements none of HTTP's caching semantics, so
+  // `cache.put` stores what it is given and `cache.match` returns it by URL.
+  //
+  // Returning without calling `respondWith` hands the request back to the
+  // browser untouched, which is what makes it network-only. Offline it fails,
+  // and that is correct — there is no multiplayer offline, and a cached list is
+  // a menu full of rooms that stopped existing.
+  //
+  // Named as paths rather than tested against the socket's URL because these
+  // are proxied independently of `/ws` and only agree by convention, which is
+  // the reason `net/lobby.ts` names `/matches` outright too.
+  if (url.pathname === "/matches" || url.pathname === "/health") return;
 
   // A navigation is always the app shell. Answering it from the precache by
   // path (rather than by the request, which carries the query string and any

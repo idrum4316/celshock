@@ -148,9 +148,13 @@ export class DeathCam {
    * that moment, whose proxy nodes are the PARENTS of the joints about to be
    * disposed — a slot left pointing at freed nodes would go on writing them for
    * the rest of the corpse's life and hand back a hierarchy that no longer
-   * exists. Nothing reaches this today (`Game` deals the player team 0 every
-   * round, so every call after the first is the early return above), which is
-   * exactly why it would be found the hard way if it ever did.
+   * exists. Offline nothing reaches it: the player is team 0 every round, so
+   * every call after the first is the early return above. A netplay welcome is
+   * what reaches it — the authority can seat this client on team 1, and it can
+   * say so with the cam already up, which is the case `stop()` covers. The cam
+   * going down under `Game`'s `dying` state is safe by construction:
+   * `updateDeathCam` ends that state on a cam that is no longer active exactly
+   * as it does on one whose clock ran out.
    */
   prepare(team: Team): void {
     if (this.builtFor === team && this.corpse) return;
