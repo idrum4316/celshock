@@ -44,7 +44,9 @@ public/             # Copied to dist/ VERBATIM — unhashed URLs named by hand
   regions.json      # Which match servers this deployment offers, by host. The
                     #   one file a deployer edits on the box: adding, moving or
                     #   draining a region is not a rebuild. no-cache in nginx
-                    #   and exempt in the service worker, for that reason
+                    #   and exempt in the service worker, for that reason.
+                    #   docker-compose.prod.yml bind-mounts the box's own copy
+                    #   over this one, which is what makes "on the box" true
 src/
   config/           # ALL tunable constants (no magic numbers in code).
                     #   One module per subsystem; import `CONFIG` from "…/config"

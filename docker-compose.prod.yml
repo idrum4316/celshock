@@ -23,10 +23,18 @@
 # **A REGION is this same file on a box somewhere else.** There is no
 # region-aware image and nothing in the server knows which region it is: bring
 # this up, point a hostname of its own at it (`us-east-1.example.com`, with the
-# same `/ws` Upgrade forwarding), and name that host in `public/regions.json`
-# where the game is served from. The client asks each region directly and shows
-# the round trip to each, so nothing here has to know about the others. See
-# `docs/multiplayer.md`.
+# same `/ws` Upgrade forwarding), and name that host in the `regions.json`
+# mounted below — on whichever box SERVES THE PAGE, since a client reads that
+# list from its own origin and from nowhere else. The client then asks each
+# region directly and shows the round trip to each, so nothing here has to know
+# about the others. See `docs/multiplayer.md`.
+#
+# **Every box runs BOTH containers, including the ones that only host a region.**
+# `web` is not just the bundle — it is the nginx that proxies `/ws` and
+# `/matches` to the match server beside it, which is published nowhere else. A
+# region box needs it exactly as much as the origin box does, and the copy of
+# the bundle it serves to nobody is the failover for the day the origin box is
+# the one that is down.
 
 services:
   web:
@@ -42,6 +50,29 @@ services:
       # it is written out because this file is the one a deployer reads, and a
       # setting they cannot see is one they cannot move.
       MATCH_SERVER: match-server:8080
+    volumes:
+      # The region list — the ONE file a deployer is expected to edit on the box.
+      # It ships inside the image (it is `public/regions.json`, copied into the
+      # bundle), so without this mount "edit it, no rebuild" is a promise nothing
+      # keeps: an edit made inside a container dies on the next `pull && up -d`,
+      # which is the moment you would least like to lose it. Read-only, because
+      # nothing in the container writes it.
+      #
+      # **Create the file before the first `up`.** Docker answers a bind mount
+      # whose source does not exist by creating a DIRECTORY at it, and this URL
+      # then answers with anything but a region list — which does not merely
+      # break the lobby: `/regions.json` is in the precache manifest, and
+      # `cache.addAll` fails whole if one entry 404s, so the service worker
+      # cannot install at all. The shipped single-region file is:
+      #
+      #   { "regions": [{ "id": "local", "name": "This server" }] }
+      #
+      # **Edit it IN PLACE.** A bind mount of a single file binds the inode, so
+      # an editor that writes a new file and renames over it (vim's default,
+      # `sed -i`) leaves this container serving the old one from an inode nothing
+      # can see any more. Write over it (`cat >`, `tee`), or accept the mystery
+      # once and `docker compose restart web` afterwards.
+      - ./regions.json:/usr/share/nginx/html/regions.json:ro
     depends_on:
       - match-server
     restart: unless-stopped

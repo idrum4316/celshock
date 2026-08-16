@@ -1381,8 +1381,8 @@ talking to the clients that chose it.
    the same `/ws` Upgrade forwarding the main domain needs. Everything under
    "the edge proxy" applies to every region host, because for the players who
    pick it, it *is* the edge.
-3. **Add it to `public/regions.json`** wherever the game is served from, with
-   `host` set to that authority and no scheme:
+3. **Add it to the `regions.json` on the box that serves the page**, with `host`
+   set to that authority and no scheme:
    ```json
    {
      "regions": [
@@ -1391,15 +1391,23 @@ talking to the clients that chose it.
      ]
    }
    ```
-   No rebuild: it is a static file the running container serves, `no-cache` in
-   nginx and exempt from the service worker's cache-first, so an edit is live on
-   the next page load. **Edit it, do not delete it** — it is in the precache
+   That file is `public/regions.json` in the tree and it is baked into the `web`
+   image, which is why `docker-compose.prod.yml` **bind-mounts a copy from beside
+   itself** over the built one: without the mount there is no box copy to edit,
+   and an edit made inside the container dies on the next `pull && up -d`.
+   **Create the file before the first `up`** — a bind mount whose source is
+   missing makes Docker create a *directory* at that path, which is the one
+   reliable way to make this URL fail. With the mount there, no rebuild: it is
+   `no-cache` in nginx and network-only in the service worker, so an edit is live
+   on the next page load. **Edit it, do not delete it** — it is in the precache
    manifest, and `cache.addAll` fails whole if any precached URL 404s, which
    would leave the worker unable to install at all.
-4. **Serve the game from wherever you like.** It is static; the region hosts
-   answer `/ws` and `/matches` and nothing about a region has to be the origin
-   the page came from. A region that also serves the bundle (which the `web`
-   container does anyway) is fine and costs nothing.
+4. **Serve the game from ONE of them.** It is static; the region hosts answer
+   `/ws` and `/matches` and nothing about a region has to be the origin the page
+   came from. A region that also serves the bundle (which the `web` container
+   does anyway) is fine and costs nothing — the worked layout at the end of this
+   section is exactly that. What the origin's hostname must not resolve to is
+   more than one box, and that is what the layout is mostly about.
 
 **The `/matches` response carries two headers a region depends on**, both from
 `server/index.ts`, and an edge proxy that strips response headers will break the
@@ -1474,3 +1482,75 @@ and the Cache API ignores `no-store` on both the request and the response — so
 the list is served from cache forever after the first fetch. `sw.js` exempts
 `/matches` and `/health` by path. It reproduces on the live site only: there is
 no worker in dev and none on a first load.
+
+### Two boxes, one origin: the worked layout
+
+**Every box runs BOTH containers, and which one serves the page is a DNS fact
+rather than a different deployment.** `web` is not just the bundle — it is the
+nginx that proxies `/ws` and `/matches` to the match server beside it, which is
+published nowhere else — so a box that only hosts a region needs it exactly as
+much as the box the page comes from. Two boxes, one in Oregon and one in
+Virginia:
+
+```
+hollowmere.example.com            → Oregon     the page, and regions.json
+us-west-1.hollowmere.example.com  → Oregon     same box, same two containers
+us-east-1.hollowmere.example.com  → Virginia
+```
+
+Oregon answers to two names and does double duty; Virginia serves a copy of the
+bundle that nobody loads. That copy is not waste, it is the failover: if Oregon
+goes down the origin's name moves to Virginia and the page is back, no image to
+and nothing to rebuild. Which is the reason to mount `regions.json` on **both**
+boxes even though only the origin one is ever asked for it — a failover should
+not also be a hunt for what that file said.
+
+**Point the origin hostname at ONE box, not at both.** Round-robin across the
+two is the arrangement that suggests itself, and it costs three things that a
+single origin simply does not have:
+
+- **The fallback becomes the forbidden arrangement.** `loadRegions` answers
+  every failure — a missing file, a half-edited one, a proxy that 200s the wrong
+  thing — with `originRegion()`, which is this page's own origin for BOTH urls.
+  Behind a round-robin origin that is two match servers behind one hostname: the
+  lobby lists one box's matches and the join lands on the other's. It is the one
+  case where a `regions.json` mistake gets *worse* instead of degrading.
+- **Build skew during a rolling deploy.** A client can take `index.html` from one
+  box and then ask the other for an `/assets/<hash>.js` it has not got yet. On a
+  content-hashed URL that is a 404, so it fails `cache.addAll` too and the worker
+  cannot install. It heals on the next load and it is still an evening.
+- **ACME on a name with two A records.** An HTTP-01 challenge is validated
+  against whichever address the CA picks, so a renewal driven from one box fails
+  when the CA reaches the other. DNS-01 is the way around it; one origin is the
+  way around needing DNS-01.
+
+**Make the origin a CNAME to the region host it lives on** —
+`hollowmere.example.com CNAME us-west-1.hollowmere.example.com`. Both names are
+then one certificate on one box, moving the page to the other box later is a
+one-line DNS change, and the `originRegion()` fallback lands on a single process
+BY CONSTRUCTION rather than by nobody having exercised it.
+
+**What one origin costs is that the page has one box under it, and it is worth
+being exact about how much that is.** Round-robin only fails over when a box is
+properly dead — browsers do retry the other address on a refused connection, but
+a box answering slowly, or with 502s, keeps getting picked — so what is traded
+away is partial and unreliable failover, in exchange for a DNS flip. And a
+returning player with the app installed does not touch the origin to launch at
+all: the precache is cache-first and a navigation is answered from the shell, so
+the origin is what an UPDATE needs rather than what a launch needs.
+
+**Which box serves the page does not distort the lobby.** The ping is
+`responseStart - requestStart` and excludes the DNS, TCP and TLS a first request
+pays for (see "The ping is the list fetch"), so a player far from the origin
+still reads both regions honestly — being far from the origin costs them one
+bundle download per build and nothing at all on the screen built for comparing
+servers. Two hostnames on one address under one certificate will have their
+HTTP/2 connections coalesced by the browser, and that is fine for the same
+reason: the reading starts after the connection either way.
+
+**A release that moves `PROTOCOL_VERSION` wants both match servers moved first,
+or in the same breath.** With one origin the new bundle is live the moment that
+box's `web` container updates, and a client holding it is refused by any region
+still speaking the old number — including the one on the very box that served
+it. The refusal is legible and a reload fixes it once the servers are level (see
+above), but the width of that window should be something somebody chose.
