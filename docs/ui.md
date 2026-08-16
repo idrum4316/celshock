@@ -142,6 +142,19 @@ length; nothing bounds what is in it, and this file is where it is finally
 drawn. A bot's name is not on the wire at all: `entities/callsigns.ts` derives
 one from the roster index, which is the same number on every screen.
 
+**The ping column exists only in a match, and whether it does is TOLD rather
+than derived.** Offline there is no server to be any distance from, so the
+column is not there at all — a fourth grid track added by a class on the panel.
+In a match it is there from the first frame, because the authority's first table
+arrives a second into the round and a column that grew when the first number
+landed would reflow every name on the board under a player already reading them.
+A body with no connection behind it (every bot, and a peer whose first ping has
+not come back) gets an em dash and never a zero, which would read as the best
+connection in the round. The number and the band its colour comes from are
+`ui/ping.ts`, which the lobby's own reading also goes through — the same
+connection is measured on both screens, and a player told "fine" on one and
+"poor" on the other at the same number learns to trust neither.
+
 **It is pushed from `tick`, in every state with a round behind it** — playing,
 the death cam, and the DEPLOY SCREEN, which is where a player most wants it: in
 a match that screen is where you sit out every reinforcement clock while the

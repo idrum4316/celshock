@@ -481,6 +481,41 @@ export interface ScoresMessage {
   deaths: number[];
 }
 
+/**
+ * How long the round trip to each seated peer is, in milliseconds, in slot
+ * order.
+ *
+ * **Measured by the authority and stated by it, for the same reason the
+ * scoreboard is.** A ping is a fact about a connection to the server, and only
+ * the server is on both ends of every one of them: a client can time its own
+ * round trip and has no way at all to learn anybody else's, so a board where
+ * every row but yours was blank is what a client-measured version buys. It is
+ * measured with the WebSocket's own ping/pong frames rather than with a message
+ * pair invented here — a browser answers those from its network stack without
+ * waking its JavaScript, so the number is about the connection rather than about
+ * how busy the far end's page is, and nothing is added to `ClientMessage` for a
+ * client to get wrong or to lie about.
+ *
+ * Indexed by slot and always the full roster's length, like `ScoresMessage`, and
+ * **-1 for a slot with nobody on a connection in it** — every bot, and a slot
+ * whose peer has not answered its first ping yet. A client reads -1 as "there is
+ * no ping here", never as a fast one.
+ *
+ * Sent on a fixed cadence (about once a second) rather than when it changes,
+ * which is the opposite of `scores` and deliberately so: a score moves a few
+ * times a minute and a latency moves on every sample, so "when it changes" would
+ * mean every time. Sixteen small numbers a second is nothing beside a snapshot
+ * stream of twenty a second.
+ *
+ * Additive, like `fire` and `scores`: an older client ignores a message type it
+ * has no case for and a newer client against an older server shows a board with
+ * no ping column filled in, so this arrived without a version bump.
+ */
+export interface PingsMessage {
+  t: "pings";
+  ms: number[];
+}
+
 export type ServerMessage =
   | Welcome
   | RoundStart
@@ -488,6 +523,7 @@ export type ServerMessage =
   | Snapshot
   | EventsMessage
   | ScoresMessage
+  | PingsMessage
   | Correction
   | Rejected;
 

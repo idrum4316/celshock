@@ -22,6 +22,7 @@ import "./lobby.css";
 import type { MatchSummary } from "../net/protocol";
 import type { LobbyResult } from "../net/lobby";
 import { MAPS } from "../world/maps";
+import { pingQuality, pingText } from "./ping";
 
 /**
  * One line, in screen order.
@@ -320,7 +321,7 @@ export class LobbyScreen {
     this.root.innerHTML = `
       <div class="lb-panel frame">
         <h2>Multiplayer</h2>
-        <p class="lb-sub"></p>
+        <p class="lb-sub"><span class="lb-status"></span><span class="lb-ping"></span></p>
         <div class="lb-body">
           ${this.rows.map((row, i) => this.rowMarkup(row, i)).join("")}
         </div>
@@ -337,8 +338,9 @@ export class LobbyScreen {
     // string and a row carries a possibly-unknown map id, and `textContent` is
     // the whole of the defence — the same rule `HUD` states at the top of its
     // own file for the strings it writes every frame.
-    const sub = this.root.querySelector<HTMLElement>(".lb-sub");
+    const sub = this.root.querySelector<HTMLElement>(".lb-status");
     if (sub) sub.textContent = this.subtitle();
+    this.fillPing();
 
     // `Array.from`, not a spread: the root tsconfig's `lib` has DOM but not
     // DOM.Iterable, so a `NodeListOf` is not statically iterable here.
@@ -413,6 +415,37 @@ export class LobbyScreen {
     const n = result.list.matches.length;
     if (n === 0) return "No matches running — start one.";
     return `${n} match${n === 1 ? "" : "es"} on this server`;
+  }
+
+  /**
+   * The round trip to this server, beside the count of what it is running.
+   *
+   * **One reading for the screen and not one per row**, because there is one
+   * server behind every row on it: the same number printed four times would
+   * read as though picking a row picked a connection, when what a match row
+   * chooses is a round on a machine the player has already reached. It is the
+   * fetch's own round trip — see `fetchMatches` — so it refreshes when the list
+   * does and there is no timer on this screen.
+   *
+   * A fetch that failed leaves the cell EMPTY rather than showing a zero or a
+   * dash: the subtitle beside it is already saying the server did not answer,
+   * and a second cell saying so in numbers is a reading nobody took.
+   */
+  private fillPing(): void {
+    const el = this.root.querySelector<HTMLElement>(".lb-ping");
+    if (!el) return;
+    // A join in flight keeps drawing the list the player picked from, so it
+    // keeps that list's reading with it — the same `lastOk` the rows fall back
+    // to.
+    const result =
+      this.state.phase === "ready"
+        ? this.state.result
+        : this.state.phase === "joining"
+          ? this.lastOk
+          : null;
+    const ping = result?.ok ? result.ping : -1;
+    el.className = `lb-ping ${pingQuality(ping)}`;
+    el.textContent = ping < 0 ? "" : `ping ${pingText(ping)} ms`;
   }
 
   private rowMarkup(row: LobbyRow, i: number): string {

@@ -59,6 +59,23 @@ interface Peer {
    */
   budget: number;
   budgetAt: number;
+  /**
+   * The round trip to this peer in ms, smoothed, or -1 before its first pong
+   * has come back. See `pingPeer`.
+   */
+  ping: number;
+  /** When the outstanding ping went out, or 0 when there is not one. */
+  pingAt: number;
+  /**
+   * What that ping carried, so a pong is matched to the ping it answers.
+   *
+   * The process-wide liveness sweep in `server/index.ts` pings the very same
+   * sockets, and its pongs arrive here too — without a token this class would
+   * time its own ping against somebody else's answer. The payload of a pong is
+   * the payload of the ping that caused it (RFC 6455), so the token is the
+   * whole of the test.
+   */
+  pingToken: number;
 }
 
 /**
@@ -192,6 +209,34 @@ const SHOT_DIR = new Vector3();
  * see the note on those constants for why a fractional ratio is not allowed.
  */
 const TICKS_PER_SNAPSHOT = TICK_HZ / SNAPSHOT_HZ;
+
+/**
+ * Ticks between one sweep of transport pings, and between the tables reporting
+ * what the last sweep measured.
+ *
+ * A second. It is a number a player glances at between deaths rather than
+ * anything the game reads, so measuring it twenty times a second would buy
+ * nothing but traffic; and it is a round trip per peer per second, which is two
+ * frames of nothing next to the snapshot going the same way.
+ *
+ * Written as snapshots-per-second rather than as `TICK_HZ` so it is a MULTIPLE
+ * of `TICKS_PER_SNAPSHOT` by construction: the sweep runs inside
+ * `broadcastSnapshot`, and an interval that is not one would simply never come
+ * round.
+ */
+const TICKS_PER_PING = TICKS_PER_SNAPSHOT * SNAPSHOT_HZ;
+
+/**
+ * How much of a new round-trip sample replaces the running estimate.
+ *
+ * One sample is one packet that may have queued behind anything — a burst of
+ * snapshots, a wifi retransmit, the far end's kernel — so a display fed the raw
+ * number jumps between 40 and 180 and back on a connection that is genuinely
+ * fine. Half is mild: two samples of a real change and the reading is most of
+ * the way there, which at this cadence is two seconds behind a connection that
+ * actually deteriorated and nobody has ever needed it sooner.
+ */
+const PING_SMOOTHING = 0.5;
 
 /** What an unusable name falls back to, so a slot always has something to say. */
 const NAME_FALLBACK = "operative";
@@ -479,6 +524,9 @@ export class Match {
       seq: 0,
       budget: MESSAGE_BURST,
       budgetAt: Date.now(),
+      ping: -1,
+      pingAt: 0,
+      pingToken: 0,
     };
     this.peers.set(id, peer);
     // Somebody came back before the world was thrown away.
@@ -505,6 +553,17 @@ export class Match {
     });
     socket.on("close", () => this.drop(peer));
     socket.on("error", () => this.drop(peer));
+    // The far end answered a ping, and the gap is what the scoreboard shows.
+    // A pong with any other payload is the liveness sweep's in `index.ts`,
+    // which pings the same socket on its own clock and would otherwise be
+    // timed against a ping this class sent at a different moment.
+    socket.on("pong", (data) => {
+      if (peer.pingAt === 0 || data.toString() !== String(peer.pingToken)) return;
+      const sample = Date.now() - peer.pingAt;
+      peer.pingAt = 0;
+      peer.ping =
+        peer.ping < 0 ? sample : peer.ping + (sample - peer.ping) * PING_SMOOTHING;
+    });
 
     // The round is built on the first arrival, not at construction: building a
     // world costs a couple of hundred milliseconds and a match nobody has joined
@@ -560,6 +619,10 @@ export class Match {
     // zeros until somebody happens to die — and in a quiet minute that is a
     // screen confidently reporting that nothing has happened all round.
     this.send(peer, this.scores());
+    // Started now rather than on the next sweep, so this peer's own row has a
+    // real number on it by the time the first table reaches them — a second of
+    // "—" against your own name reads as a connection that is not working.
+    this.pingPeer(peer);
     console.log(
       `[${this.id}] ${name} (${id}) took slot ${slot.index} on team ${slot.team}`,
     );
@@ -905,6 +968,15 @@ export class Match {
     if (this.game.scoreVersion !== this.sentScoreVersion) {
       this.broadcast(this.scores());
       this.sentScoreVersion = this.game.scoreVersion;
+    }
+
+    // What each connection is costing, once a second: the last sweep's answers
+    // go out, and then the next sweep leaves. In that order because the table
+    // is a report of round trips that have COME BACK — sending it after the
+    // pings would report the same numbers a second later and nothing else.
+    if (this.ticks % TICKS_PER_PING === 0) {
+      this.broadcast(this.pings());
+      for (const peer of this.peers.values()) this.pingPeer(peer);
     }
 
     // Everyone who fired during the interval this snapshot closes, one event
@@ -1388,6 +1460,63 @@ export class Match {
       kills: [...this.game.slotKills],
       deaths: [...this.game.slotDeaths],
     };
+  }
+
+  /**
+   * The round trip to every seated peer, as one message.
+   *
+   * A full-roster array with -1 in every slot nobody is connected in, which is
+   * the shape `scores` already has and for the same reason: a client indexes it
+   * with the number it indexes everything else with, and a bot's row has nothing
+   * to put in the column rather than a zero that would read as a perfect
+   * connection.
+   */
+  private pings(): ServerMessage {
+    const ms = this.roster.slots.map(() => -1);
+    for (const peer of this.peers.values()) ms[peer.slot] = this.pingFor(peer);
+    return { t: "pings", ms };
+  }
+
+  /**
+   * Starts one round trip to a peer, on the WebSocket's own ping frame.
+   *
+   * A transport ping rather than a message pair of our own, which is the whole
+   * reason this costs no protocol surface: a browser answers one from its
+   * network stack without waking its JavaScript (the argument
+   * `server/index.ts` already makes for its liveness sweep), so nothing is
+   * added to `ClientMessage` for a client to send wrong, to flood with, or to
+   * lie about — a peer cannot claim a ping it does not have.
+   *
+   * **A ping still outstanding is not replaced.** That peer has already failed
+   * to answer inside the interval, `pingFor` is reporting the wait instead of
+   * the stale number, and pinging again would restart that clock and hide
+   * exactly the connection worth showing. Nothing is leaked by leaving it: a
+   * peer that never answers again is dropped by the process-wide deadline in
+   * `server/index.ts`, which is the one thing here that terminates a socket.
+   */
+  private pingPeer(peer: Peer): void {
+    if (peer.socket.readyState !== peer.socket.OPEN) return;
+    if (peer.pingAt > 0) return;
+    peer.pingAt = Date.now();
+    peer.socket.ping(String(++peer.pingToken));
+  }
+
+  /**
+   * What to report for a peer: the measured round trip, or the wait for an
+   * answer that has not come back yet when that is already longer.
+   *
+   * The second half is the point. A connection that has gone quiet still holds
+   * whatever it last measured, and a board frozen at 38 ms over a peer who is
+   * halfway through a four-second stall is precisely the lie this column exists
+   * to prevent — so a ping in flight past the last estimate reads as the number
+   * it has already reached, and climbs. Before the first pong there is nothing
+   * measured at all and the answer is -1, because "at least 12 ms so far" is a
+   * number a player would read as a measurement.
+   */
+  private pingFor(peer: Peer): number {
+    if (peer.ping < 0) return -1;
+    const waiting = peer.pingAt > 0 ? Date.now() - peer.pingAt : 0;
+    return Math.round(Math.max(peer.ping, waiting));
   }
 
   private send(peer: Peer, msg: ServerMessage): void {

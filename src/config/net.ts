@@ -53,6 +53,24 @@ export const net = {
   hitCreditWindow: 0.5,
 
   /**
+   * Where a round trip stops reading as fine, and where it starts reading as a
+   * problem, in milliseconds.
+   *
+   * Presentation and nothing else: the two thresholds colour the ping in the
+   * lobby and on the scoreboard and change no rule in the game — every shot is
+   * re-resolved against rewound bodies whatever the connection is doing. They
+   * are here rather than in either screen because BOTH screens read them, and
+   * two colours disagreeing about one number is worse than either.
+   *
+   * `pingFair` is a little above `interpDelay`'s hundred milliseconds, which is
+   * the point at which the round trip is no longer hidden by the delay other
+   * bodies are already drawn behind. `pingPoor` is where a duel stops being
+   * winnable rather than where a connection stops working.
+   */
+  pingFair: 120,
+  pingPoor: 220,
+
+  /**
    * How far the local body may be from the server's idea of it before a
    * correction snaps rather than eases (metres).
    *

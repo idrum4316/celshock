@@ -71,12 +71,30 @@
    holds its height when empty so the list below does not jump between a
    fetch and its answer. */
 #lobby .lb-sub {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
   min-height: 14px;
   font-size: 11px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.42);
 }
+
+/* The round trip to this server, on the status line rather than in a row of
+   its own: it is one fact about the machine every row is running on, and the
+   line above the list is where the screen already talks about the server as a
+   whole. Empty when the fetch failed, which collapses the gap with it. */
+#lobby .lb-ping {
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.5);
+}
+#lobby .lb-ping:empty { display: none; }
+/* A good connection is the ordinary case and says nothing; the two that are
+   worth a player's attention are the two that are coloured. */
+#lobby .lb-ping.fair { color: var(--hot); }
+#lobby .lb-ping.poor { color: var(--theirs); }
 
 #lobby .lb-body {
   display: flex;

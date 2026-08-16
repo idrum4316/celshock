@@ -51,8 +51,48 @@ function listUrl(wsUrl: string): string {
 
 /** What a lobby got back, or why it got nothing. */
 export type LobbyResult =
-  | { ok: true; list: MatchList }
+  | {
+      ok: true;
+      list: MatchList;
+      /**
+       * How long the round trip to the match server took, in ms.
+       *
+       * The only ping available on this screen and an honest one: there is no
+       * socket yet, so what is measured is the request that fetched this list —
+       * same host, same network path, and the endpoint itself does no work
+       * beyond walking a Map of at most a handful of matches. What a player
+       * reads it for is whether this server is near them, and it answers that.
+       */
+      ping: number;
+    }
   | { ok: false; error: string };
+
+/**
+ * The transport's own timing for a request that has just finished, or the
+ * wall-clock measurement it falls back to.
+ *
+ * **The fallback is the whole reason this exists.** A `fetch` measured with a
+ * clock either side of it includes whatever the connection cost to establish,
+ * and the FIRST list a player asks for is exactly the request that pays for DNS,
+ * TCP and TLS — so a lobby that timed it naively would report three round trips
+ * as one on the one look that forms the player's impression of the server, and
+ * then quietly report a third of it on every Refresh. `responseStart -
+ * requestStart` is the transport's own answer to "how long did the far end take
+ * to start replying", with the setup already excluded.
+ *
+ * It is not always there: the buffer fills, and a cross-origin server (a dev
+ * client pointed at another port) exposes zeros without a `Timing-Allow-Origin`
+ * header. Both come back as the wall-clock figure, which is the honest thing to
+ * do with a measurement that was not available — an inflated first reading is
+ * worse than the alternative only when there is a better one to be had.
+ */
+function requestRtt(url: string, elapsed: number): number {
+  const entries = performance.getEntriesByName(url);
+  const last = entries[entries.length - 1] as PerformanceResourceTiming | undefined;
+  if (!last) return elapsed;
+  const rtt = last.responseStart - last.requestStart;
+  return rtt > 0 ? rtt : elapsed;
+}
 
 /**
  * Fetches the match list from the server the given socket URL points at.
@@ -65,6 +105,7 @@ export type LobbyResult =
  */
 export async function fetchMatches(wsUrl?: string): Promise<LobbyResult> {
   const url = listUrl(wsUrl ?? "");
+  const started = performance.now();
   try {
     const res = await fetch(url, {
       // The server sends `no-store`, but a client that asks for a fresh copy
@@ -82,7 +123,14 @@ export async function fetchMatches(wsUrl?: string): Promise<LobbyResult> {
     if (!Array.isArray(list?.matches)) {
       return { ok: false, error: "match server sent something unreadable" };
     }
-    return { ok: true, list };
+    // Read after the body, not before it: the resource timing entry is filed
+    // when the fetch finishes, so asking any earlier is asking for the previous
+    // request's — or for nothing at all on the first one.
+    return {
+      ok: true,
+      list,
+      ping: Math.round(requestRtt(url, performance.now() - started)),
+    };
   } catch (err) {
     // `AbortSignal.timeout` rejects with a `TimeoutError`; a server that is not
     // listening rejects with a `TypeError` that says only "Failed to fetch".

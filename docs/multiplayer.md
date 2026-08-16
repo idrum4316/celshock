@@ -676,6 +676,63 @@ the eye is 0.05 below, not the centre, and reading that comment as a centre put
 the authority's idea of a player 0.6 m up their own chest — so the client drew a
 body where the server had none and hitmarkers stopped meaning anything.
 
+## The ping column, and who is holding the stopwatch
+
+**A ping is the authority's MEASUREMENT and not a client's report, for the
+reason the scoreboard beside it is state rather than events.** A client can time
+its own round trip and has no way whatsoever to learn anybody else's, so the
+column a client measures for itself is one row filled in and fifteen blanks —
+while the server is on both ends of all sixteen connections and already knows
+every one of them. `PingsMessage` is that table, broadcast whole: a number per
+slot in slot order, and **-1 wherever there is nobody on a connection**, which
+is every bot and a peer whose first ping has not come back. Never 0 for a bot: a
+zero is the best connection on the board, and a body that has none should not be
+sitting at the top of a column measuring them.
+
+**It is measured with the WebSocket's own ping/pong frames, which is why it
+costs no protocol surface at all.** Nothing is added to `ClientMessage` — there
+is no ping for a client to send wrong, to flood with, or to answer dishonestly,
+and nothing new for `server/wire.ts` to gate. It also measures the better thing:
+a browser writes the pong from its network stack without waking its JavaScript,
+which is the property `server/index.ts`'s liveness sweep already rests on, so
+the number is about the CONNECTION rather than about how busy the far end's page
+is. Nothing downstream reads it — every round is still re-resolved against
+rewound bodies whatever the column says.
+
+Three details in `Match` are load-bearing, and each is a way of not lying:
+
+- **The ping carries a token and the pong is matched against it.** The
+  process-wide sweep in `server/index.ts` pings the very same sockets on its own
+  fifteen-second clock, and its pongs arrive at this handler too — untokened,
+  this class would time its own ping against somebody else's answer. A pong
+  echoes the payload of the ping that caused it (RFC 6455), so the token is the
+  whole of the test, and the sweep's own pongs (which carry none) are ignored
+  here and still clear its deadline where they are read.
+- **One outstanding ping per peer, and a peer that has not answered is not
+  re-pinged.** Re-pinging would restart the clock on exactly the connection
+  worth showing. Instead `pingFor` reports the WAIT once it passes the last
+  estimate, so a peer halfway through a four-second stall reads as four seconds
+  and climbing rather than as the 38 ms it last managed. A peer that never
+  answers again is dropped by that same process-wide deadline, which is the one
+  thing on this server that terminates a socket.
+- **The estimate is smoothed by half a sample and the table goes out on a
+  CADENCE.** One round trip is one packet that queued behind whatever was in
+  front of it, and a display fed the raw number swings between 40 and 180 on a
+  connection that is fine. The cadence is the opposite of `scores` and for the
+  opposite reason: a score moves a few times a minute, and a latency moves on
+  every sample, so "only when it changes" would mean every time.
+
+**The lobby's ping is a different measurement of the same thing, because there
+is no socket yet.** `fetchMatches` times its own request — same host, same path,
+and an endpoint that does nothing but stringify a Map of at most a handful of
+matches. It is taken from the transport's own resource timing
+(`responseStart - requestStart`) and falls back to a clock either side of the
+`fetch`, and that is not fussiness: the FIRST list a player asks for is the
+request that pays for DNS, TCP and TLS, so a naive reading reports three round
+trips as one on the one look that forms their impression of the server, and a
+third of it on every Refresh after. One reading for the screen and not one per
+row, since there is one server behind every row on it.
+
 ## The world the server stands in
 
 The server has no canvas. `DynamicTexture.getContext()` throws

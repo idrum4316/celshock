@@ -33,6 +33,7 @@
 import "./hud.css";
 import { CONFIG } from "../config";
 import type { ControlPoint } from "../systems/ConquestSystem";
+import { pingQuality, pingText } from "./ping";
 
 /**
  * Geometry of one damage arc, in the pixels of its own SVG box. Art constants,
@@ -185,6 +186,15 @@ export interface ScoreRow {
   deaths: number;
   /** The local player's own row, which the board picks out. */
   you: boolean;
+  /**
+   * Round trip to the server in ms, or -1 where there is no connection to
+   * measure — every bot on the board, and every row of an offline round.
+   *
+   * The authority's own measurement, mirrored: see `PingsMessage` for why a
+   * client cannot produce this column for anybody but itself. Rendered by
+   * `ui/ping.ts`, which is also what the lobby's reading goes through.
+   */
+  ping: number;
 }
 
 /**
@@ -1142,6 +1152,18 @@ export class HUD {
       deaths: readonly number[];
       playerTeam: number;
       /**
+       * Whether the board has a ping column at all — true in a match, false
+       * offline, where there is no server to be any distance from.
+       *
+       * Stated by the caller rather than derived from the rows, and that is the
+       * difference between a column and a flicker: the authority's first table
+       * arrives a second into the round, so a board that grew its column when
+       * the first number turned up would reflow every name on it under a player
+       * already reading them. Told outright, the column is there from the first
+       * frame with an em dash in it, and the dashes fill in.
+       */
+      pings: boolean;
+      /**
        * One line per body in the round, in roster order. Summed for the team
        * totals above by the caller, and split into two columns here.
        */
@@ -1171,10 +1193,17 @@ export class HUD {
     // and reorders the column it is in, and a board that redraws only when the
     // TOTALS move would sit there showing the wrong order for the rest of the
     // round every time two people traded.
+    //
+    // The pings are in it too, which is a rebuild about once a second for as
+    // long as Tab is held — the cadence the authority measures them on, and the
+    // same cost as a kill landing. A column left out of the key would be a
+    // column frozen at whatever it read when somebody last died.
     const key =
       `${rows.map}|${rows.playerTeam}|${rows.teams}|${rows.tickets}|` +
-      `${rows.flags}|${rows.kills}|${rows.deaths}|` +
-      rows.rows.map((r) => `${r.name}:${r.team}:${r.kills}:${r.deaths}`).join(",");
+      `${rows.flags}|${rows.kills}|${rows.deaths}|${rows.pings}|` +
+      rows.rows
+        .map((r) => `${r.name}:${r.team}:${r.kills}:${r.deaths}:${r.ping}`)
+        .join(",");
     if (key === this.lastScoreboardKey) return;
     this.lastScoreboardKey = key;
     const max = CONFIG.conquest.tickets;
@@ -1211,6 +1240,11 @@ export class HUD {
         <div class="sb-col" data-side="theirs"></div>
       </div>
     `;
+    // The column's width lives in CSS, so whether there IS one is a class on
+    // the panel rather than a template branch per row. Set after the rebuild
+    // because the rebuild does not touch the root's own classes, and read by
+    // every `.sb-prow` inside it.
+    this.scoreboard.classList.toggle("pinged", rows.pings);
     const columns = this.scoreboard.querySelectorAll<HTMLElement>(".sb-col");
     // Your side on the left, always — the board is read from where you are
     // standing, and a column that swaps ends with the team you were seated
@@ -1222,7 +1256,7 @@ export class HUD {
       const mine = team === rows.playerTeam;
       column.classList.add(mine ? "mine" : "theirs");
       column.appendChild(
-        this.scoreHeading(rows.teams[team].toUpperCase()),
+        this.scoreHeading(rows.teams[team].toUpperCase(), rows.pings),
       );
       // Sorted by kills, then by the fewer deaths. `sort` is stable, so bodies
       // level on both keep roster order and a row does not jitter between two
@@ -1230,12 +1264,12 @@ export class HUD {
       const side = rows.rows
         .filter((r) => r.team === team)
         .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-      for (const r of side) column.appendChild(this.scoreRow(r));
+      for (const r of side) column.appendChild(this.scoreRow(r, rows.pings));
     }
   }
 
   /** The column header over one team's rows. */
-  private scoreHeading(team: string): HTMLElement {
+  private scoreHeading(team: string, pings: boolean): HTMLElement {
     const el = document.createElement("div");
     el.className = "sb-prow sb-phead";
     const name = document.createElement("span");
@@ -1246,6 +1280,11 @@ export class HUD {
     const d = document.createElement("span");
     d.textContent = "D";
     el.append(name, k, d);
+    if (pings) {
+      const ms = document.createElement("span");
+      ms.textContent = "MS";
+      el.append(ms);
+    }
     return el;
   }
 
@@ -1258,7 +1297,7 @@ export class HUD {
    * other screen in the game writes one. The server bounds its length; nothing
    * bounds its contents.
    */
-  private scoreRow(r: ScoreRow): HTMLElement {
+  private scoreRow(r: ScoreRow, pings: boolean): HTMLElement {
     const el = document.createElement("div");
     el.className = r.you ? "sb-prow sb-pyou" : "sb-prow";
     const name = document.createElement("span");
@@ -1270,6 +1309,16 @@ export class HUD {
     deaths.className = "sb-pd";
     deaths.textContent = String(r.deaths);
     el.append(name, kills, deaths);
+    // The connection behind the row, in the band that says how bad it is. A
+    // bot's is an em dash rather than a zero — it has no connection at all, and
+    // a zero would read as the best one on the board. Both the number and the
+    // band come from `ui/ping.ts`, which the lobby's reading also goes through.
+    if (pings) {
+      const ping = document.createElement("span");
+      ping.className = `sb-ping ${pingQuality(r.ping)}`;
+      ping.textContent = pingText(r.ping);
+      el.append(ping);
+    }
     return el;
   }
 

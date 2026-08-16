@@ -274,6 +274,20 @@
   white-space: nowrap;
 }
 #scoreboard .sb-pd { color: rgba(255, 255, 255, 0.45); }
+/* The ping column exists only in a match — offline there is no server to be
+   any distance from — so the fourth track is added by a class on the panel
+   rather than sitting empty in every single-player round. */
+#scoreboard.pinged .sb-prow { grid-template-columns: 1fr 34px 34px 46px; }
+#scoreboard .sb-ping {
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.45);
+}
+/* Three bands and one of them is silence: a good connection is the ordinary
+   case and shouting it in green would put sixteen coloured numbers on a board
+   whose whole job is that the one bad row stands out. */
+#scoreboard .sb-ping.fair { color: var(--hot); }
+#scoreboard .sb-ping.poor { color: var(--theirs); }
+#scoreboard .sb-ping.none { color: rgba(255, 255, 255, 0.22); }
 #scoreboard .sb-phead {
   color: inherit;
   font-size: 10px;

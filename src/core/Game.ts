@@ -4021,6 +4021,10 @@ export class Game {
       kills,
       deaths,
       playerTeam: this.player.team,
+      // Whether there is a connection to report at all, which is a fact about
+      // the ROUND rather than about the rows: the column is there for every
+      // frame of a match, dashes and all, and never offline.
+      pings: this.net !== null,
       rows,
     });
   }
@@ -4055,18 +4059,26 @@ export class Game {
           kills: this.net.slotKills[slot.index] ?? 0,
           deaths: this.net.slotDeaths[slot.index] ?? 0,
           you: slot.index === this.net.slot,
+          // The authority's own measurement of the connection to that slot,
+          // and -1 for a bot — which is also what a slot reads as before the
+          // first table has arrived. See `PingsMessage` for why this is the
+          // server's to state rather than each client's to measure.
+          ping: this.net.slotPings[slot.index] ?? -1,
         });
       }
       return rows;
     }
     // Offline the player is not in the pool — they are the seventeenth body in
     // a sixteen-bot round — so their line is pushed rather than found.
+    // Every offline row's ping is -1 and the board draws no column for it:
+    // there is no server in a single-player round to be any distance from.
     rows.push({
       name: "YOU",
       team: this.player.team,
       kills: this.playerKills,
       deaths: this.playerDeaths,
       you: true,
+      ping: -1,
     });
     for (let i = 0; i < this.battle.bots.length; i++) {
       rows.push({
@@ -4075,6 +4087,7 @@ export class Game {
         kills: this.botKills[i] ?? 0,
         deaths: this.botDeaths[i] ?? 0,
         you: false,
+        ping: -1,
       });
     }
     return rows;

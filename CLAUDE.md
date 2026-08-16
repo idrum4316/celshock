@@ -599,8 +599,9 @@ match, what a death owes on each side and the one `kill` event per body that
 carries it, the interpolation clock and the sign error that is easy to make in
 it, the rewind and why `resolve` takes a callback, what a match SOUNDS like and
 which side each of the four cues comes from, the per-slot scoreboard and
-why it is state on the wire rather than events added up on a client, the lobby
-and why there is no central registry, everything a socket may spend and the pong
+why it is state on the wire rather than events added up on a client, the ping
+column and why the AUTHORITY holds the stopwatch (a client can time only its
+own), the lobby and why there is no central registry, everything a socket may spend and the pong
 deadline beside it, the collision bake and what `npm run parity` actually
 compares, what may never cross the wire, and the list of what is not built yet.
 

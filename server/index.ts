@@ -185,6 +185,14 @@ const PING_MS = 15_000;
  * `pong` handler, and a socket still in it when the next sweep comes round is
  * one whose far end is gone.
  *
+ * **A seated peer is pinged from `Match` as well, once a second, for the
+ * scoreboard's ping column — and those pongs land here too.** Nothing is
+ * weakened by that: any pong is the far end's network stack answering, which is
+ * the whole of what this deadline asks, and a peer that has stopped existing
+ * produces neither kind. The traffic goes only one way — `Match` tags its own
+ * pings so an untagged pong from THIS sweep is not mistaken for an answer to
+ * one of its measurements.
+ *
  * Weak on purpose: `wss.clients` is what holds a socket alive, and this must
  * not be a second thing that remembers one after it has closed.
  */

@@ -94,6 +94,18 @@ export class NetSession {
   readonly slotKills: number[] = [];
   readonly slotDeaths: number[] = [];
 
+  /**
+   * The round trip to each slot's peer in ms, as the authority last measured
+   * it, and -1 wherever there is no connection to measure — every bot, and a
+   * peer whose first ping has not come back.
+   *
+   * Mirrored like the board next door, and for a sharper version of the same
+   * reason: this client can time its own round trip and has no way whatsoever
+   * to learn anybody else's, so a locally-measured column would be your own row
+   * and fifteen blanks. See `PingsMessage`.
+   */
+  readonly slotPings: number[] = [];
+
   /** Wired by Game: the server has placed us. */
   onSpawn: (pos: Vector3, yaw: number) => void = () => {};
   /** Wired by Game: the server rejected our position and this is the truth. */
@@ -355,6 +367,15 @@ export class NetSession {
         this.slotDeaths.length = 0;
         this.slotKills.push(...msg.kills);
         this.slotDeaths.push(...msg.deaths);
+        break;
+
+      // The latencies, whole, and copied in for the reason the board above is.
+      // Deliberately NOT cleared on a `roundstart`: a ping is a fact about a
+      // connection and not about a round, and the connection is the one thing a
+      // rotation does not touch.
+      case "pings":
+        this.slotPings.length = 0;
+        this.slotPings.push(...msg.ms);
         break;
 
       case "snap":

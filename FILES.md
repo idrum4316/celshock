@@ -270,6 +270,10 @@ src/
                         #   carries it
     Minimap.ts          # Corner minimap: flags, friendlies, firing enemies
       minimap.css
+    ping.ts             # What a latency LOOKS like — the text and the quality
+                        #   band, shared by the scoreboard's column and the
+                        #   lobby's reading so the two cannot disagree. No
+                        #   markup and no stylesheet of its own
   net/                # Multiplayer, client side. Nothing here is constructed
     protocol.ts       #   in an offline round.
                       #   The wire format — the ONLY module the server also
@@ -287,7 +291,8 @@ src/
                       #   skipped — they are watching their local copy
     lobby.ts          #   GET /matches, and the one bit of arithmetic behind
                       #   it: the ws:// URL's origin -> the HTTP one. The only
-                      #   part of multiplayer that is not the WebSocket
+                      #   part of multiplayer that is not the WebSocket. Times
+                      #   its own request, which is the lobby's ping
   pwa/
     register.ts         # SW registration + the touch fullscreen gesture.
                         #   Knows nothing about the game
