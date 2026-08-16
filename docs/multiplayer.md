@@ -46,6 +46,12 @@ sand.
   letting a laggy honest player through, because a legitimate player yanked
   backwards has a worse experience than everyone has from a cheat worth 19%
   speed.
+- **A player who reloads quietly.** The `reload` message is the one thing a
+  client tells the authority about itself that nothing can check, so a client
+  that simply never sends one changes its magazine in silence and loses the cue
+  that says "push me now". It is worth exactly what it costs to take: the
+  server would have to own every player's ammunition to close it, and what a
+  cheat buys is that fifteen people do not hear a noise.
 - **A flood from many addresses at once.** The bounds below are per socket and
   per address, so what they stop is one host spending this process; a thousand
   hosts sending one connection each is a network-layer problem and there is
@@ -375,13 +381,14 @@ delivered, on a different clock, and could only disagree with the body being
 drawn. `Match.noteFire` is the one door — `onBotFired` for a bot, an accepted
 `shot` message for a person, so neither this side nor the far side can tell the
 two apart — and it is noted BEFORE the ray is re-run, because a miss gives a
-shooter away exactly as loudly as a hit. It is **coalesced to one per slot per
-snapshot**: the client turns it into a timer rather than a count, so a second
-event inside the same 50 ms says nothing the first did not, and sixteen
-automatic weapons at 600 rpm would put ten times the traffic on the wire to say
-it. Nothing is given away by making it public that the snapshot has not already
-handed over — every position is in there, and what the minimap withholds it
-withholds by choice rather than by ignorance.
+shooter away exactly as loudly as a hit. It is **one event per slot per
+snapshot, carrying the rounds that slot spent in the interval**: the message
+count is bounded by the roster rather than by the rate of fire (sixteen
+automatic weapons at 600 rpm would otherwise be ten times the traffic), while
+the count is what keeps the report honest — see the next section, which is the
+other half of what this event is for. Nothing is given away by making it public
+that the snapshot has not already handed over — every position is in there, and
+what the minimap withholds it withholds by choice rather than by ignorance.
 
 **Both ends have an opinion about the same bullet, and it is announced once.**
 The local resolve cues the marker and the tick the instant the trigger goes; the
@@ -413,6 +420,96 @@ and the authority wins: **`onExploded` is suppressed in a netplay round**. Every
 client — the thrower included — gets the explosion from the server's `explode`
 event, so firing the local one as well would flash, bang and shake twice, a
 round trip apart, at two points that agree only to within that trip.
+
+## The sound of somebody else
+
+**Offline, everything a body gives off is a callback on `BattleSystem`, and in a
+match not one of those callbacks fires.** No client runs the AI that pulled a
+trigger and no client hears another person's, so a networked round was silent in
+four ways at once: nobody else's weapon, nobody else's boots, nobody else's
+magazine, and — the one that decides fights — no crack past your own ear. The
+four are answered by whichever side actually knows, and that is deliberately not
+the same side in each case. Two flatter cues were missing beside them and are
+covered at the end.
+
+**A shot is the authority's, and it rides the `fire` event the minimap reveal
+was already getting.** The client plays `Sfx.botShot` at the shooter's own
+`eyePos` — the body it is already drawing, which is why no position belongs on
+the wire: a report from anywhere else would come from somewhere the rifle
+visibly is not. Its own slot is skipped, because `sfx.shoot` played that round at
+the player's own ear the frame the trigger went, and the roster's copy of the
+local body is never sampled. Both teams are audible and only the enemy is
+revealed, which is the split `wireBattle` already makes offline.
+
+**The count on that event is what stops coalescing costing the report its
+rate.** A reveal is a timer being refreshed, so one event is as good as three; a
+string of shots is three rounds and has to sound like three. So `n` rides along
+and the client lays the rounds back out across the snapshot interval it covers,
+on the audio clock — a burst played on one instant is one louder shot, and the
+rate is most of what says which weapon is being fired at you. It cannot exceed
+`TICK_HZ / SNAPSHOT_HZ` by construction, since a slot fires at most once a tick;
+the client bounds it there anyway, because the number came off a socket.
+
+**A footfall is nobody's news — it is DERIVED, on the machine that draws it.**
+`NetSoldier` already integrates its walk cycle from ground actually covered
+(that is what `EntityState.moving` is for), so a stride crossing is exactly the
+test `Bot` makes on its own phase, against the same shared `STRIDE`. Sending
+steps instead would be sixteen bodies' worth of event at two or three a second
+to say something both ends can already compute, for a sound the far end rejects
+on distance anyway. The one thing it needs is that a corpse's position is not
+somewhere the next frame may measure travel FROM: a body that died at one flag
+and respawned at another would otherwise spend the whole distance on its walk
+cycle in a single frame, which was a phantom bootfall as well as a half second
+of sprinting animation.
+
+**A magazine is the shooter's own, and it is the only thing in this protocol a
+client announces about itself.** A bot's reload is the authority's
+(`BattleSystem.onBotReloaded`, which only the server runs), but a person's
+happens entirely on their own machine — the server counts grenades and not
+rounds — so there is nothing for it to re-derive and the client sends a
+`reload`. That is acceptable HERE and would not be anywhere else, because a
+reload decides nothing: it cannot buy the sender a round, a position or a hit,
+and the worst a lie does is make a noise. What is gated is the noise —
+`Match.onReload` allows one per shortest reload the peer could plausibly be
+performing, primary or sidearm — so a client cannot turn a magazine catch into a
+forty-a-second rattle in fifteen people's ears. `Player.onReload` is the one
+door on the client, and it exists because a reload begins two ways (the key, and
+the last round leaving the magazine inside `tryShot`) and the second is exactly
+the one a call site forgets.
+
+**A round going past you is ADDRESSED to you, and the authority is the only
+thing that can see one.** Offline the crack is `CombatSystem.onNearMiss` finding
+the player inside the target loop of somebody else's shot; in a match no client
+resolves anybody else's rounds at all, so `HeadlessGame` wires that callback and
+`Match` sends a `nearmiss` to the one person it happened to. It carries the
+point of CLOSEST APPROACH and no victim field — the only client it is ever sent
+to is the one it is about — and the client spends it on both halves of the
+offline handler, the crack and `Player.suppress`. Broadcasting it would say in
+public that a named player was very nearly hit, which is the read a wallhack
+wants; a filter on the far side would be a promise about the client rather than
+a property of the server, which is the argument `hit` and `damage` already make
+next door.
+
+**Two flat cues were missing for the plainer reason that the events carrying
+them were already arriving.** Offline, `registerBotKill` plays `enemyDie` for
+every body that goes down and `wireConquest` plays `capture`/`flagLost` when a
+flag changes hands; in a match neither of those callbacks runs, because no
+client registers a kill or steps a `ConquestSystem`. Both now hang off the
+authority's own `kill` and `captured` events, which were already on screen as a
+killfeed line and a banner. The local player's own death is the one exception,
+exactly as offline: that is the death cam and `playerHurt`, not somebody else
+falling over.
+
+**Two things were missing on the server side of the near-miss path as well, and
+neither was about sound.** `HeadlessGame` never wired `onNearMiss` at all, so
+the sixteen bots in a match were the only ones in the game that could be sprayed
+all day and never flinch — `BattleSystem.suppress` had no caller. And a person's
+round reached `CombatSystem.fire` through `resolveShot`, which never called
+`hearGunshot`, so bots were deaf to human gunfire specifically: you could empty
+a magazine into a squad's backs and nothing would look for you. Both are one
+line, both are what the client's `wireBattle` has always done, and both are
+invisible until you go looking for them — a bot that does not flinch reads as a
+bot that is good.
 
 ## Interpolation, and the clock underneath it
 
@@ -527,8 +624,10 @@ the server (`npm run simulate` prints it); `Game.updateHud` does the same on the
 client, over the same rows the columns under it are drawn from.
 
 **The client sends** its position at `INPUT_HZ`, and — per event — the round it
-fired and the grenade it threw. Every one of those is gated before it is acted
-on. The shot's `dir` is the direction the round *actually* flew, spread already
+fired, the grenade it threw, the spawn it picked and the reload it started.
+Every one of those is gated before it is acted on. The reload is the only one
+the authority cannot re-derive and the only one that decides nothing; see "The
+sound of somebody else" for why those two facts are the same fact. The shot's `dir` is the direction the round *actually* flew, spread already
 applied, because `CombatSystem.fire` jitters internally and the server has to
 re-resolve that bullet rather than a differently jittered one.
 
@@ -1049,13 +1148,11 @@ Stated so nobody assumes otherwise:
   text entry anywhere in it: a focused input has to be kept from feeding the
   game's own key handling, and neither that nor a pad path exists. `Game.playerName`
   is where it lands.
-- **Hearing anybody else's weapon.** A remote body is silent: the shot, the
-  reload and the boots are `Sfx.botShot`/`botReload`/`botStep` hung off
-  `BattleSystem` callbacks offline, and none of those fires on a client here.
-  The `fire` event is not that feature waiting to be plugged in — it is
-  coalesced to one per slot per snapshot, which is right for a reveal and wrong
-  for a report, and a shot a player can place by ear needs the muzzle's position
-  and the rounds' own timing rather than a slot and a 50 ms bucket.
+- **A muzzle flash on somebody else's weapon.** The `fire` event is enough to
+  hear a shot and to light the minimap with it, and `EntityState.fired` is
+  still the unspent field a remote flash would ride — but a flash is a light
+  and a pose on a rig that is drawn `interpDelay` behind the event, so it is a
+  question about which clock it belongs on rather than about the wire.
 - **Reconnect into your own slot.** A dropped player rejoins as a new peer and
   takes whatever slot is free — on either team, and into a body that is dead
   until it asks, which is why the deploy screen goes back up on a re-seat. The

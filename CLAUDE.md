@@ -616,6 +616,15 @@ socket may spend before it has proved it is a player is bounded in
 `server/index.ts`, along with the pong deadline that is the only thing there
 which notices a peer that stopped existing without saying so.
 
+**A client hears the fight from the authority, and each cue comes from whichever
+side actually knows.** A remote weapon and a remote magazine are EVENTS (`fire`,
+carrying the rounds it stands for, and `reload`); a footstep is DERIVED from the
+body being drawn and crosses no wire at all; and the crack of a round going past
+is ADDRESSED to the one player it happened to, never broadcast — it says
+somebody was nearly hit, which is the read a wallhack wants. The `reload` is the
+one thing a client announces about itself, and it is allowed only because it
+decides nothing: anything that decides something is the server's.
+
 **`decode` proves only that a frame is JSON with a `t` on it, so a
 `ClientMessage` is a CLAIM about a well-behaved client and never a fact.**
 `server/wire.ts` is the one door that makes it one — both callers read a frame
@@ -632,7 +641,8 @@ local player is on and the race the welcome is in, the deploy ask and why the
 spawn index is into the map rather than into the offer, the map belonging to the
 match, what a death owes on each side and the one `kill` event per body that
 carries it, the interpolation clock and the sign error that is easy to make in
-it, the rewind and why `resolve` takes a callback, the per-slot scoreboard and
+it, the rewind and why `resolve` takes a callback, what a match SOUNDS like and
+which side each of the four cues comes from, the per-slot scoreboard and
 why it is state on the wire rather than events added up on a client, the lobby
 and why there is no central registry, everything a socket may spend and the pong
 deadline beside it, the collision bake and what `npm run parity` actually

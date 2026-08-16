@@ -93,6 +93,22 @@ export class NetSoldier implements Combatant, RagdollSubject {
   ragdolling = false;
 
   /**
+   * Wired by `NetRoster`: a boot went down.
+   *
+   * DERIVED here rather than sent, and that is the point: the walk cycle is
+   * already integrated from ground actually covered (see `update`), so a
+   * footfall is a point on it exactly as it is for a `Bot` — the same test on
+   * the same phase, because `STRIDE` is shared. A body slowed to a walk steps
+   * more slowly for free and a stopped one stops stepping, with nothing on the
+   * wire to say any of it.
+   *
+   * The alternative would be an event per step: sixteen bodies at two or three
+   * a second, to say something both ends can already compute, for a sound that
+   * is rejected on distance at the far end anyway.
+   */
+  onStep: () => void = () => {};
+
+  /**
    * Which roster slot this draws. Fixed for the life of the pool entry — the
    * slot's OCCUPANT changes, the slot does not.
    */
@@ -201,7 +217,14 @@ export class NetSoldier implements Combatant, RagdollSubject {
     this.stepped = this.hasPosition
       ? Math.hypot(x - this.position.x, z - this.position.z)
       : 0;
-    this.hasPosition = true;
+    // Only a LIVING body's position is one the next frame may measure travel
+    // from. A corpse's is wherever it fell and its respawn is somewhere else
+    // entirely, so carrying the flag across a death spends the whole distance
+    // between the two on the walk cycle in a single frame — which is a
+    // half-second of sprinting animation and, now that a stride crossing makes
+    // a noise, a phantom bootfall at the far end of the map. The same reason
+    // the ragdoll branch above clears it, arrived at from the other side.
+    this.hasPosition = this.alive;
     this.position.set(x, y, z);
 
     // `centerHeight` and `eyeHeight` resolved the same way `Bot.syncTransform`
@@ -232,7 +255,18 @@ export class NetSoldier implements Combatant, RagdollSubject {
     // speed swing their legs at the same rate, and nothing on screen gives away
     // which slots are AI. `dt` is unused here on purpose: distance already
     // carries the time.
+    //
+    // A footfall is a point on that cycle and never a timer, which is `Bot`'s
+    // test copied exactly: the legs swing as sin(walkPhase), so a foot is
+    // planted forward at each half turn — pi/2 and 3pi/2, every pi offset by
+    // pi/2. Sharing the phase is what keeps the boots in step with the legs
+    // that are drawn, and sharing the test is what keeps a remote human's gait
+    // from sounding different from a bot's.
+    const wasStride = Math.floor((this.walkPhase - Math.PI / 2) / Math.PI);
     this.walkPhase += this.stepped / STRIDE;
+    if (Math.floor((this.walkPhase - Math.PI / 2) / Math.PI) !== wasStride) {
+      this.onStep();
+    }
     animateSoldier(
       this.rig,
       this.walkPhase,

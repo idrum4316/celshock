@@ -64,7 +64,7 @@ import { callsign } from "../entities/callsigns";
 import type { Combatant, Team } from "../entities/Combatant";
 import { NetSession } from "../net/NetSession";
 import { fetchMatches } from "../net/lobby";
-import type { ServerEvent } from "../net/protocol";
+import { SNAPSHOT_HZ, TICK_HZ, type ServerEvent } from "../net/protocol";
 import { Player } from "../entities/Player";
 import { type SightId } from "../entities/sights";
 import { VIEWMODEL_GROUP } from "../entities/ViewModel";
@@ -902,6 +902,15 @@ export class Game {
     this.loadoutScreen.onSight = (id) => this.setSight(id);
     this.loadoutScreen.onClose = () => this.closeLoadout();
     this.player.onCarryChanged = () => this.applyCarry();
+    // A reload beginning, however it began — the key, or the last round leaving
+    // the magazine inside `tryShot`. The clacks are keyed to the gesture's own
+    // length, and in a match the authority is told so that the people around
+    // this player hear the magazine change: a reload is the cue to push, and
+    // it is the one thing a person does that the server has no way to derive.
+    this.player.onReload = () => {
+      this.sfx.reload(this.player.reloadTime);
+      this.net?.sendReload();
+    };
     this.overlayScreen.onOpenSettings = () => this.openSettings();
     this.overlayScreen.onOpenMultiplayer = () => this.openLobby();
     this.settingsScreen.onChange = (key, value) => this.setSetting(key, value);
@@ -2499,9 +2508,10 @@ export class Game {
         );
       }
     }
-    if (this.input.reloadPressed && this.player.startReload()) {
-      this.sfx.reload(this.player.reloadTime);
-    }
+    // The sound and, in a match, the announcement are `player.onReload`'s —
+    // wired once in `wireScreens`, because the key is only one of the two ways
+    // a reload begins and the other one is inside `tryShot`.
+    if (this.input.reloadPressed) this.player.startReload();
     // The weapon swap, asked for either way round: the wheel and pad Y want
     // "the other one", the number keys name a slot. Both land on the same
     // gesture, and `drawSlot` is what refuses a request for the weapon already
@@ -2623,7 +2633,9 @@ export class Game {
           this.registerBotKill(shot.target, this.player.team, true);
         }
       }
-      if (this.player.reloading) this.sfx.reload(this.player.reloadTime);
+      // Nothing here for the reload the last round in the magazine just
+      // started: `tryShot` began it, and `player.onReload` is what hears about
+      // it — sound and announcement together, from the one door.
     }
 
     if (!this.updateWorld(dt)) return;
@@ -2803,6 +2815,15 @@ export class Game {
       this.ragdolls.spawn(soldier, this.cameraSys.camera.position);
     net.roster.onRetire = (soldier) => this.ragdolls.retire(soldier);
 
+    // Boots. The exact counterpart of `wireBattle`'s `onBotStepped`, down to
+    // the callback being handed the body rather than a position, and the one
+    // sound in a netplay round that crosses no wire at all: a footfall is a
+    // point on the walk cycle, and that cycle is already being integrated from
+    // the ground this body covers (see `NetSoldier.onStep`). It fires for all
+    // fifteen of them, so nothing here may do work per step — `Sfx.botStep`
+    // rejects the far ones, which is where that decision belongs.
+    net.roster.onStep = (soldier) => this.sfx.botStep(soldier.position);
+
     // A new round on a new map, same seat. The world is rebuilt LOCALLY from
     // the same layout the server is using — the map never crosses the wire —
     // and the server's spawn event puts the body back afterwards.
@@ -2882,9 +2903,21 @@ export class Game {
           victimSlot.deathFrom.set(event.from[0], event.from[1], event.from[2]);
           victimSlot.deathDamage = event.amount;
         }
+        // The flat "a body went down" cue, which offline every bot death gets
+        // through `registerBotKill` — this event is the authority's version of
+        // that call, raised once per death whoever fell. Our own is the one
+        // exception, exactly as offline: a player's own death is the death cam
+        // and `playerHurt`, not somebody else falling over.
+        if (event.victim !== this.net?.slot) this.sfx.enemyDie();
         break;
       }
+      // The same pair `wireConquest` plays offline, from the authority's
+      // version of the same event: a flag taken is worth hearing and a flag
+      // lost is worth hearing more, and neither `ConquestSystem` callback fires
+      // on a client that is not stepping one.
       case "captured":
+        if (event.by === this.player.team) this.sfx.capture();
+        else this.sfx.flagLost();
         this.hud.showMessage(
           `${event.point.toUpperCase()} CAPTURED BY ${CONFIG.teams[event.by].name.toUpperCase()}`,
           2.5,
@@ -2969,14 +3002,22 @@ export class Game {
         }
         break;
 
-      // Somebody's weapon went off. Gunfire gives an enemy away on the minimap
-      // for a couple of seconds, which offline is `wireBattle` reading
-      // `BattleSystem.onBotFired` — a callback that fires on nothing here,
+      // Somebody's weapon went off, and it is worth exactly what offline's
+      // `BattleSystem.onBotFired` is worth: a report to place by ear, and — for
+      // an enemy — a couple of seconds on the minimap. Both are `wireBattle`
+      // reading a callback offline, and that callback fires on nothing here,
       // because this client runs no AI and never hears another person's
-      // trigger. So the authority says it instead, and the two paths make the
-      // same team test at the same point: a friendly is drawn on that map
-      // whether they are shooting or not, and our own slot is the player, who
-      // is the arrow in the middle of it.
+      // trigger. So the authority says it instead.
+      //
+      // The two halves differ in who they are about, exactly as offline: every
+      // shot in the village is audible whoever fired it, while the reveal is
+      // the enemy's alone — a friendly is drawn on that map whether they are
+      // shooting or not.
+      //
+      // Our own slot is skipped outright. `sfx.shoot` already played that round
+      // at the player's own ear the frame the trigger went, and the roster's
+      // copy of this body is deliberately never sampled, so its position is
+      // wherever the pool was built.
       //
       // Public, and it may name a body across the map behind a wall — exactly
       // as offline, where any enemy bot firing anywhere is revealed. It gives
@@ -2984,12 +3025,60 @@ export class Game {
       // position is in there, and what the minimap withholds it withholds by
       // choice rather than by ignorance.
       case "fire": {
+        if (event.slot === this.net?.slot) break;
         const shooter = this.net?.roster.soldiers[event.slot];
-        if (shooter && shooter.team !== this.player.team) {
-          this.minimap.reveal(shooter);
+        if (!shooter) break;
+        // The eye rather than the feet: a rifle goes off at a shoulder, and
+        // this is the only height on a net body that is near one. Offline the
+        // same sound is placed at the bot's own muzzle.
+        //
+        // One event carries every round that slot fired inside a snapshot
+        // interval, so they are laid back out across it rather than stacked on
+        // one instant — a burst played as a single louder shot reads as one
+        // shot, and the rate is most of what says which weapon is being fired
+        // at you. Bounded by the ticks in an interval, which is the most a
+        // rate-gated slot can physically have spent, because the count came off
+        // a socket.
+        const rounds = Math.min(Math.max(event.n ?? 1, 1), TICK_HZ / SNAPSHOT_HZ);
+        const spacing = 1 / SNAPSHOT_HZ / rounds;
+        for (let i = 0; i < rounds; i++) {
+          this.sfx.botShot(shooter.eyePos, i * spacing);
         }
+        if (shooter.team !== this.player.team) this.minimap.reveal(shooter);
         break;
       }
+
+      // Somebody is changing a magazine. Spatialised, because knowing WHICH of
+      // the enemies in front of you has just gone dry is the whole point of
+      // hearing it, and it is the same `Sfx.botReload` offline hangs off
+      // `BattleSystem.onBotReloaded`.
+      //
+      // Our own is skipped for the reason our own fire is: `player.onReload`
+      // played it locally and sent the announcement that came back as this.
+      case "reload": {
+        if (event.slot === this.net?.slot) break;
+        const who = this.net?.roster.soldiers[event.slot];
+        if (who) this.sfx.botReload(who.position);
+        break;
+      }
+
+      // A round cracked past us. Not a hit and not a hit sound — the supersonic
+      // N-wave, which arrives before the report of the rifle that sent it and is
+      // the only thing that says the fire is meant for YOU rather than merely
+      // near you. Offline it is `CombatSystem.onNearMiss` finding the player
+      // inside the target loop of somebody else's shot; here no client resolves
+      // anybody else's rounds, so the authority is the only thing that can see
+      // one happen.
+      //
+      // Both halves of the offline handler, and they are a pair: the crack is
+      // what the player hears and `suppress` is what it does to their hands.
+      // Addressed to us by the server, so there is no slot to guard on — see
+      // the event's own note.
+      case "nearmiss":
+        this.netNearPoint.set(event.at[0], event.at[1], event.at[2]);
+        this.sfx.nearMiss(this.netNearPoint);
+        this.player.suppress();
+        break;
 
       // A blast the authority resolved. The light, the noise and the
       // concussion are `onExplosion`'s, exactly as they are offline — the
@@ -3126,6 +3215,14 @@ export class Game {
 
   /** Scratch for a networked damage bearing; never allocated per hit. */
   private readonly netDamageFrom = new Vector3();
+  /**
+   * The same, for where a round came closest on its way past.
+   *
+   * Its own vector rather than a share of the one above, because a near miss
+   * and a hit are different events that can land in the same tick's message —
+   * and `netDamageFrom` has to survive until the `died` that reads it.
+   */
+  private readonly netNearPoint = new Vector3();
   /**
    * How much the last networked hit was for, kept alongside the bearing so the
    * `died` event that follows it has something to throw the corpse with.

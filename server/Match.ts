@@ -33,6 +33,7 @@ import { CONFIG } from "../src/config";
 import {
   DEFAULT_WEAPON,
   isPrimaryWeaponId,
+  SIDEARM,
   weaponSetup,
   WEAPON_IDS,
   type WeaponSetup,
@@ -121,6 +122,18 @@ const MAX_ORIGIN_SLIP = 2;
 const FASTEST_FIRE_HZ = Math.max(
   ...WEAPON_IDS.map((id) => CONFIG.weapons[id].fireRate),
 );
+
+/**
+ * How long the sidearm takes to reload.
+ *
+ * The floor under the reload announcement's rate gate, alongside whatever
+ * primary the peer picked: everyone carries the pistol whatever else is in the
+ * kit, and the server is not told which of the two is in the hands. Derived
+ * from the table rather than written down, for the reason `FASTEST_FIRE_HZ`
+ * above is — a faster sidearm would otherwise make everybody's second reload
+ * silent, and the symptom would look like anything but a constant in this file.
+ */
+const SIDEARM_RELOAD = CONFIG.weapons[SIDEARM].reloadTime;
 
 /**
  * Inbound messages one peer may send per second, sustained.
@@ -275,19 +288,25 @@ export class Match {
   /** When each slot last fired, for the rate limit. */
   private readonly lastShot: number[] = [];
 
+  /** …and last announced a reload, for that message's own gate. */
+  private readonly lastReload: number[] = [];
+
   /**
-   * Who has fired since the last snapshot went out — a SET, because one `fire`
-   * event per slot per snapshot is the whole of what that event means.
+   * How many rounds each slot has fired since the last snapshot went out.
    *
-   * A set rather than a queued event per round for the reason the event's own
-   * comment argues: the client turns this into a timer, so the second round
-   * inside one snapshot interval carries nothing, and the difference on the
-   * wire between a burst and a held trigger is the difference between one small
-   * event and thirty. Drained in `broadcastSnapshot`, which is also the only
-   * place `pending` is flushed, so a fire raised on any tick of the interval
-   * leaves on the same message as everything else that happened in it.
+   * One `fire` event per slot per snapshot is still the whole of what goes on
+   * the wire — the difference between a burst and a held trigger must not be
+   * the difference between one small event and thirty — but the COUNT rides
+   * along on it, because the client makes a report out of this as well as a
+   * minimap reveal. A reveal is a timer being refreshed and does not care how
+   * many rounds refreshed it; a string of shots the player is meant to place by
+   * ear is three rounds and has to sound like three.
+   *
+   * Drained in `broadcastSnapshot`, which is also the only place `pending` is
+   * flushed, so a fire raised on any tick of the interval leaves on the same
+   * message as everything else that happened in it.
    */
-  private readonly firedSlots = new Set<number>();
+  private readonly firedRounds = new Map<number, number>();
 
   /**
    * The `scoreVersion` the clients have been told about, or -1 for "tell them".
@@ -333,6 +352,17 @@ export class Match {
     // shot is otherwise silent and invisible on every machine but this one.
     this.game.battle.onBotFired = (bot) =>
       this.noteFire(this.game.battle.bots.indexOf(bot));
+    // A bot working its magazine, taken here for exactly the reason its trigger
+    // is: the fact belongs to the authority (no client runs the AI) and what it
+    // is FOR belongs to a screen — or in this case an ear, since a reload is
+    // the cue to push whoever has just gone dry.
+    this.game.battle.onBotReloaded = (bot) =>
+      this.noteReload(this.game.battle.bots.indexOf(bot));
+    // A round that went past somebody. Addressed to the one person it happened
+    // to, and the copy is not optional: `at` is `CombatSystem`'s module scratch
+    // and the next round in the firefight overwrites it.
+    this.game.onNearMiss = (player, at) =>
+      this.queueTo(player.slot, { e: "nearmiss", at: [at.x, at.y, at.z] });
     this.game.conquest.onCaptured = (point, by) =>
       this.queue({ e: "captured", point: point.def.id, by });
     this.game.conquest.onNeutralised = (point) =>
@@ -548,6 +578,7 @@ export class Match {
     this.game.removePlayer(peer.slot);
     this.loadouts.delete(peer.slot);
     delete this.lastShot[peer.slot];
+    delete this.lastReload[peer.slot];
     delete this.lastSeen[peer.slot];
     const slot = this.roster.release(peer.id);
     if (slot) {
@@ -877,12 +908,19 @@ export class Match {
     }
 
     // Everyone who fired during the interval this snapshot closes, one event
-    // each. Queued here and not where the trigger went, so the count on the
-    // wire is bounded by the roster rather than by the rate of fire — see
-    // `firedSlots`. After the snapshot's own `push`es and before the flush,
-    // which puts a shot in the same message as the kill it may have caused.
-    for (const slot of this.firedSlots) this.queue({ e: "fire", slot });
-    this.firedSlots.clear();
+    // each and the rounds they spent on it. Queued here and not where the
+    // trigger went, so the number of MESSAGES is bounded by the roster rather
+    // than by the rate of fire — see `firedRounds`. After the snapshot's own
+    // `push`es and before the flush, which puts a shot in the same message as
+    // the kill it may have caused.
+    //
+    // `n` is left off the single-round case, which is most of them: the client
+    // reads a missing count as one, and so does every build that predates the
+    // field.
+    for (const [slot, n] of this.firedRounds) {
+      this.queue(n > 1 ? { e: "fire", slot, n } : { e: "fire", slot });
+    }
+    this.firedRounds.clear();
 
     this.flushEvents();
   }
@@ -897,7 +935,21 @@ export class Match {
    * somehow is not in the pool must not queue an event for a slot that isn't.
    */
   private noteFire(slot: number): void {
-    if (slot >= 0) this.firedSlots.add(slot);
+    if (slot >= 0) this.firedRounds.set(slot, (this.firedRounds.get(slot) ?? 0) + 1);
+  }
+
+  /**
+   * A magazine is being changed in this slot, whoever is holding it — the same
+   * one door `noteFire` is, for the same reason.
+   *
+   * Queued straight rather than coalesced like a shot: a reload is seconds
+   * long, so there is never a second one inside a snapshot interval to fold
+   * into it, and the rate at which either kind of shooter can reach this is
+   * bounded on its own side (a bot by `Bot`'s own reload timer, a person by the
+   * gate in `onReload`).
+   */
+  private noteReload(slot: number): void {
+    if (slot >= 0) this.queue({ e: "reload", slot });
   }
 
   /** Queues an event for every client. */
@@ -988,13 +1040,16 @@ export class Match {
       case "move":
       case "shot":
       case "grenade":
-        // The three that reach into the world, gated on the same fact `step`
-        // is: between a round ending and the next one being built there is a
-        // window in which `game.map` is the map `startRound` has already
+      case "reload":
+        // The four that belong to a round in progress, gated on the same fact
+        // `step` is: between a round ending and the next one being built there
+        // is a window in which `game.map` is the map `startRound` has already
         // disposed, and a message is the one thing that can arrive inside it —
         // a client whose own round is over still has a socket, and its last
         // shots are in flight. Dropping them is right on its own terms as well:
-        // a round fired into a fight that has finished has nothing left to hit.
+        // a round fired into a fight that has finished has nothing left to hit,
+        // and a reload announced across a rotation is a noise from last round's
+        // world arriving over the next one's.
         //
         // `deploy` below is deliberately NOT here. It touches no geometry — it
         // writes an integer a later tick spends — and refusing it would drop a
@@ -1002,7 +1057,8 @@ export class Match {
         if (this.rotating) break;
         if (msg.t === "move") this.onMove(peer, msg);
         else if (msg.t === "shot") this.onShot(peer, msg);
-        else this.onGrenade(peer, msg);
+        else if (msg.t === "grenade") this.onGrenade(peer, msg);
+        else this.onReload(peer);
         break;
       case "deploy":
         this.onDeploy(peer, msg);
@@ -1271,6 +1327,36 @@ export class Match {
     ) {
       player.grenades--;
     }
+  }
+
+  /**
+   * A client saying it has started a reload, so the people around it can hear
+   * one.
+   *
+   * The whole of what this can do is queue a noise on fifteen other machines —
+   * a magazine is not on the wire and this cannot buy the sender a round, a
+   * position or a hit — which is why it is accepted on the client's word at all
+   * (see `ReloadMessage`). What it is gated for is the noise itself: a message
+   * a client can send at `MESSAGE_RATE` is one it could turn into a magazine
+   * catch clattering forty times a second in everybody's ears.
+   *
+   * The gate is the shortest reload this peer could actually be performing —
+   * their primary or the sidearm they are also carrying, whichever is quicker,
+   * with the same 0.9 of slack `onShot` allows a rate. That leaves an honest
+   * player announcing every real reload and a dishonest one no faster than a
+   * player who genuinely reloaded that often.
+   */
+  private onReload(peer: Peer): void {
+    const player = this.game.players.get(peer.slot);
+    if (!player || !player.alive) return;
+    const weapon = this.loadouts.get(peer.slot);
+    if (!weapon) return;
+
+    const now = Date.now();
+    const soonest = Math.min(weapon.reloadTime, SIDEARM_RELOAD) * 1000 * 0.9;
+    if (now - (this.lastReload[peer.slot] ?? 0) < soonest) return;
+    this.lastReload[peer.slot] = now;
+    this.noteReload(peer.slot);
   }
 
   /**

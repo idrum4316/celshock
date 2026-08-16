@@ -299,6 +299,29 @@ export type ServerEvent =
    */
   | { e: "damage"; victim: number; amount: number; from: Vec3; health: number }
   /**
+   * A round cracked past this client's own head without connecting.
+   *
+   * **Addressed to the victim**, and the most private thing in the protocol
+   * after `damage`: it says a named player was very nearly hit, which is the
+   * read a wallhack wants and is nobody's business but theirs. It carries no
+   * victim field for that reason — the only client it is ever sent to is the
+   * one it happened to, so there is nothing for a guard to compare. (`hit` and
+   * `damage` keep theirs because they predate being addressed and an older
+   * server still broadcasts them; nothing has ever broadcast this.)
+   *
+   * `at` is the round's point of CLOSEST APPROACH, which is what the crack past
+   * an ear physically is — not the shooter, and not wherever the round
+   * eventually stopped. Offline this is `CombatSystem.onNearMiss`'s third
+   * argument, and it is the same number here: the authority is the only thing
+   * in a match that resolves anybody else's rounds, so it is the only thing
+   * that can say a round went past you. Without it a networked player has no
+   * warning at all that the fire is meant for them.
+   *
+   * Additive: an older client has no case for it, a newer one against an older
+   * server simply never hears one.
+   */
+  | { e: "nearmiss"; at: Vec3 }
+  /**
    * A round the authority agrees landed — the shooter's own hitmarker, arriving
    * a round trip after the prediction it either claims or corrects.
    *
@@ -317,26 +340,51 @@ export type ServerEvent =
    * A weapon went off in this slot. Public, and the only thing on the wire that
    * says a shot was fired at all.
    *
-   * It carries a slot and nothing else, because where that body is has already
-   * arrived in the snapshot every client holds — a position here would be a
-   * second copy of one, on a different clock, that could only disagree with the
-   * one being drawn. What the client does with it is the minimap reveal, the
-   * offline rule that gunfire gives an enemy away; a client cannot reach that
-   * rule on its own, because the trigger was pulled by an AI it does not run
-   * or by a person it never hears from.
+   * It carries a slot and no POSITION, and that is still right now that the
+   * client makes a noise out of it as well as a minimap reveal: where that body
+   * is has already arrived in the snapshot every client holds, so a position
+   * here would be a second copy of one on a different clock, and the report
+   * would come from somewhere the rifle visibly is not. Placing the sound on the
+   * body being drawn makes the two agree by construction. A client cannot reach
+   * either rule on its own, because the trigger was pulled by an AI it does not
+   * run or by a person it never hears from.
    *
-   * **At most once per slot per snapshot, not once per round.** A reveal is a
-   * timer being refreshed rather than a count, so a second event inside the
-   * same 50 ms says nothing the first did not — and sixteen automatic weapons
-   * at 600 rpm would put ten times the traffic on the wire to say it. `Match`
-   * coalesces; a client may still receive several in a row for one slot after a
-   * dropped frame and must treat each as "still firing".
+   * **One event per slot per snapshot, carrying `n` — the rounds that slot fired
+   * during the interval.** The coalescing is what keeps the wire cost bounded by
+   * the roster instead of by the rate of fire (sixteen automatic weapons at 600
+   * rpm would otherwise be ten times the traffic), and the count is what stops
+   * that costing the report its rate: a reveal is a timer being refreshed, so
+   * one event is as good as three, but a burst the player is supposed to place
+   * by ear is three shots and has to sound like three. Absent means one, which
+   * is what an older server means by it and what all but the fastest weapons
+   * produce.
+   *
+   * `n` is bounded by construction rather than by a clamp on the wire: a slot
+   * may fire at most once per tick (`Match.onShot`'s rate gate for a person, one
+   * shot per think for a bot), so it can never exceed `TICK_HZ / SNAPSHOT_HZ`.
+   * A client that spends it in a loop should still bound it there — the number
+   * came off a socket.
    *
    * Additive: a client that has never heard of it ignores it, and a new client
    * against an older server simply gets no reveals, so this arrived without a
    * `PROTOCOL_VERSION` bump.
    */
-  | { e: "fire"; slot: number }
+  | { e: "fire"; slot: number; n?: number }
+  /**
+   * This slot is working its magazine. Public, like `fire` and for the same
+   * reason: knowing WHICH of the enemies in front of you has just gone dry is
+   * the cue to push, and offline it is a sound every bot makes.
+   *
+   * Rare — a few per player per minute — so it is one event per reload rather
+   * than anything coalesced, and it carries a slot for the same reason `fire`
+   * does: the body it belongs to is already being drawn.
+   *
+   * A bot reaches this through `BattleSystem.onBotReloaded`, which only the
+   * authority runs. A person reaches it through the `reload` message they send,
+   * which is the one thing in this protocol a client announces about itself with
+   * nothing for the server to re-derive — see `ReloadMessage`.
+   */
+  | { e: "reload"; slot: number }
   | { e: "explode"; at: Vec3 }
   | { e: "captured"; point: string; by: NetTeam }
   | { e: "neutralised"; point: string }
@@ -594,11 +642,41 @@ export interface DeployMessage {
   spawn: number;
 }
 
+/**
+ * "I have started a reload", so the fifteen other clients can hear it.
+ *
+ * The one message in this protocol that announces something the authority has
+ * no way to re-derive, and it is worth being plain about why that is acceptable
+ * here and nowhere else: a reload decides NOTHING. Ammunition is the client's
+ * own — a magazine is not on the wire, and the only thing the server counts is
+ * grenades — so this cannot buy the sender a round, a position or a hit. What
+ * it buys is a noise on somebody else's machine, and the cost of getting it
+ * wrong is that a noise happens or does not.
+ *
+ * It carries no fields at all. `Match` knows which peer sent it, the weapon it
+ * would be reloading, and how long that takes, so everything a handler could
+ * read off this message is something the server already has a better copy of —
+ * and a rate gate derived from the real reload time is what stops a client
+ * turning it into a noise generator.
+ *
+ * A client that simply never sends it is silent while reloading, which is a
+ * small advantage nothing here can take away — see the list of what is not
+ * defended against in `docs/multiplayer.md`.
+ *
+ * Additive in both directions and so no version bump: an older server refuses
+ * an unknown `t` in `readClientMessage` and drops the frame, and an older
+ * client never sends one.
+ */
+export interface ReloadMessage {
+  t: "reload";
+}
+
 export type ClientMessage =
   | Join
   | MoveMessage
   | ShotMessage
   | GrenadeMessage
+  | ReloadMessage
   | DeployMessage;
 
 // --- encoding -------------------------------------------------------------

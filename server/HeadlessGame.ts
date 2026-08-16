@@ -210,17 +210,23 @@ export class HeadlessGame {
    * Everything the bots need from the rest of the game.
    *
    * The client's `Game.wireBattle` installs sounds and minimap reveals here
-   * too; none of those exist on a server, so what is left is the three
-   * callbacks that are actually about the fight. Their absence is the point —
-   * a server that had to stub `Sfx` would be a server that had imported it.
+   * too; none of those exist on a server, so what is left is the callbacks
+   * that are actually about the fight. Their absence is the point — a server
+   * that had to stub `Sfx` would be a server that had imported it.
    *
-   * One of those presentation callbacks is nonetheless taken, and by `Match`
-   * rather than here: `onBotFired`. The reveal it feeds belongs to a screen,
-   * but the FACT belongs to the authority — no client runs the AI that pulled
-   * the trigger — so `Match` wires it straight to the event queue, which is
-   * the same place it takes `conquest.onCaptured` from and for the same
-   * reason. Nothing about the fight is decided by it, which is why it is not
-   * here.
+   * Two of those presentation callbacks are nonetheless taken, because the
+   * FACT under each of them belongs to the authority and to nothing else — no
+   * client runs the AI that pulled a trigger, and none of them resolves
+   * anybody else's rounds. They are taken at different doors, and the
+   * difference is whether the fight cares:
+   *
+   * - **`onBotFired` and `onBotReloaded` are `Match`'s**, wired straight to the
+   *   event queue exactly as `conquest.onCaptured` is. Nothing here decides
+   *   anything on them, so nothing here has to see them.
+   * - **`onNearMiss` is this method's**, because half of it is suppression —
+   *   which is the fight, and which had no caller on this side at all until it
+   *   was wired. The other half is a person's crack past the ear, and that
+   *   leaves through `onNearMiss` below for `Match` to address to them.
    */
   private wire(): void {
     // A death costs the dying side a reinforcement. This is the whole of what
@@ -240,6 +246,23 @@ export class HeadlessGame {
     this.battle.onBotKill = (victim, by) => {
       this.creditKill(by);
       if (victim instanceof Bot) this.onKill(victim, by.team);
+    };
+    // A round that went past somebody without connecting, which is two
+    // different pieces of news and neither of them reaches anyone otherwise.
+    //
+    // For a BOT it is suppression, and the client's `Game.wireBattle` has
+    // always wired this — but a bot in a match is simulated here and nowhere
+    // else, so without this line the sixteen bots on a server were the only
+    // ones in the game that could be sprayed at all day and never flinch.
+    //
+    // For a PERSON it is the crack past the ear, and the authority is the only
+    // thing that can report it: no client resolves anybody else's rounds, so a
+    // networked player had no warning whatever that the fire was meant for
+    // them. `at` is `CombatSystem`'s module scratch and must be read inside the
+    // call, which is what `Match` does with it.
+    this.combat.onNearMiss = (near, from, at) => {
+      this.battle.suppress(near, from);
+      if (near instanceof NetPlayer) this.onNearMiss(near, at);
     };
     this.battle.spawnPointFor = (bot) => this.spawnPointFor(bot.team);
     this.battle.planSquads = (team, centroids, previous) =>
@@ -297,6 +320,13 @@ export class HeadlessGame {
   ): ShotResult | null {
     if (!this.map || !shooter.alive) return null;
     const targets = this.battle.hittablesAgainst(shooter.team);
+
+    // Bots hear a person's rifle exactly as they hear each other's. This is the
+    // only place a person's gunfire enters the world on this side, so it is the
+    // only place that can say so — `BattleSystem.botFire` calls the same method
+    // for a bot's round, and a match without this line is one where half the
+    // roster can shoot at a squad from behind and never be looked for.
+    this.battle.hearGunshot(origin, shooter.team);
 
     const result = this.lag.resolve(renderTime, shooter, () =>
       this.combat.fire(
@@ -501,6 +531,15 @@ export class HeadlessGame {
 
   /** Wired by `Match`: a grenade went off here. */
   onExplosion: (at: Vector3) => void = () => {};
+
+  /**
+   * Wired by `Match`: a round passed close to this person without hitting them.
+   *
+   * `at` is the point of closest approach and is `CombatSystem`'s module
+   * scratch vector — read it inside the call or copy it; it is overwritten by
+   * the next near miss, which in a firefight is the next round.
+   */
+  onNearMiss: (player: NetPlayer, at: Vector3) => void = () => {};
 
   /** Wired by `Match`: a person took a hit. */
   onPlayerDamaged: (

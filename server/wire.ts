@@ -86,9 +86,11 @@ function optionalString(v: unknown): boolean {
  * the message.
  *
  * The `default` arm returns null, so an unknown `t` is refused rather than
- * ignored. That is not a compatibility hazard — a client new enough to have a
- * message type this server has never heard of is refused at the version check
- * before it can send one.
+ * ignored, and neither way a newer client can reach it is a hazard. A type that
+ * came with a `PROTOCOL_VERSION` bump cannot arrive at all — the handshake
+ * refuses that client first. An ADDITIVE one (`reload` is the first) is
+ * dropped, which is precisely what "this server does not have that feature"
+ * should look like from the far side.
  */
 export function readClientMessage(raw: string): ClientMessage | null {
   const msg = decode(raw) as ClientMessage | null;
@@ -129,6 +131,12 @@ export function readClientMessage(raw: string): ClientMessage | null {
       return isNum(m.seq) && isNum(m.time) && isVec3(m.origin) && isVec3(m.dir)
         ? msg
         : null;
+
+    // Nothing on it to check, and it still owes this arm: the `default` below
+    // refuses what it does not recognise, so a message type with no fields is
+    // the one shape that would be dropped for having nothing wrong with it.
+    case "reload":
+      return msg;
 
     case "deploy":
       // An INDEX, so integer rather than merely finite. `onDeploy` asks the

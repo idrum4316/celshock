@@ -120,7 +120,8 @@ src/
     SoldierModel.ts     # Merged bot rig + procedural animation, and the
                         #   RagdollSubject interface
     NetSoldier.ts       # Somebody else, drawn from the wire: one rig, the
-                        #   interpolation buffer behind it, no behaviour at all
+                        #   interpolation buffer behind it, the gait its boots
+                        #   are heard off, no behaviour at all
     GrenadeModel.ts     # What a grenade looks like — body, fuse pip, and the
                         #   blink that reads the fuse. Built by the system that
                         #   simulates them and by the one that only draws them

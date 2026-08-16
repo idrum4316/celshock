@@ -209,7 +209,12 @@ machine gun without a per-weapon number anywhere.
   `magOut`/`magSeat`/`bolt` are three of them to the frame. What makes the
   gesture legible is that what you see lands on what you hear; a magazine that
   falls half a beat off the clack releasing it is two unrelated things happening
-  at once. **Change a fraction in one file and change it in the other.**
+  at once. **Change a fraction in one file and change it in the other.** The
+  sound is hung off `Player.onReload` rather than fired at a call site, because
+  `startReload` is the one door a gesture begins through and it is reached two
+  ways — the key, and the last round leaving the magazine inside `tryShot`. In a
+  match that callback also announces the reload to the authority, so a second
+  call site would be a reload fifteen other players never hear.
 - **The magazine is the one part of a weapon that moves on its own**, and it can
   only move because the model merged it into a node of its own
   (`WeaponParts.magazine`, a second `merge` call exactly like an optic's).

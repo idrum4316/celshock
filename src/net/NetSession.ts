@@ -219,6 +219,25 @@ export class NetSession {
   }
 
   /**
+   * Announces a reload, so the people around this player can hear one.
+   *
+   * The one thing this client tells the authority about itself that the
+   * authority has no way to re-derive, and it is safe to be exactly that
+   * because it decides nothing: a magazine is the client's own, so this cannot
+   * buy a round, a position or a hit — only a noise on somebody else's machine.
+   * The server bounds the rate against the real reload times; see
+   * `ReloadMessage` and `Match.onReload`.
+   *
+   * Fire-and-forget, unlike `sendDeploy`: a reload that was dropped by a socket
+   * is a sound nobody heard, and by the time a reconnect could re-send it the
+   * magazine is in.
+   */
+  sendReload(): void {
+    if (!this.seated) return;
+    this.conn.send({ t: "reload" });
+  }
+
+  /**
    * Asks to be deployed at one of the map's spawns.
    *
    * `spawn` is an index into `GameMap.spawns` — see `DeployMessage` for why it

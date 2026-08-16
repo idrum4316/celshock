@@ -261,6 +261,21 @@ export class Player implements Combatant {
    */
   onCarryChanged: () => void = () => {};
   /**
+   * Wired by Game: a reload gesture has just begun.
+   *
+   * `startReload` is the only thing that begins one, and it is reached two ways
+   * — the reload key, and `tryShot` firing the last round in the magazine — so
+   * a caller that wanted to react to a reload had to catch both and would go on
+   * having to catch the next one. The sound is hung off this for that reason,
+   * and in a networked round so is the announcement that lets fifteen other
+   * players hear it: an unannounced reload is a cue the whole match loses, and
+   * the auto-reload is exactly the case a call site would forget.
+   *
+   * The counterpart of `Bot.onReload`, which `BattleSystem` wires for the same
+   * cue on every bot in the pool.
+   */
+  onReload: () => void = () => {};
+  /**
    * Seconds into the swap gesture, or -1 when neither hand is busy. Counts UP
    * like the throw's clock and for the same reason: there is an event in the
    * middle of it (the weapons changing places) and "how long ago" is the only
@@ -1604,6 +1619,9 @@ export class Player implements Combatant {
     this.reloading = true;
     this.reloadT = this.weapon.reloadTime;
     this.reloadPhase = 0;
+    // Raised AFTER the state is set, so a handler reading `reloadTime` or
+    // `reloading` sees the gesture that has begun rather than the one before it.
+    this.onReload();
     return true;
   }
 

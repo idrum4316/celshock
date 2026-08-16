@@ -67,20 +67,35 @@ export class NetRoster {
    */
   onRetire: (soldier: NetSoldier) => void = () => {};
 
+  /**
+   * Wired by `Game`: this body put a boot down.
+   *
+   * The counterpart of `BattleSystem.onBotStepped`, and it fires for every body
+   * but the local player's — `Sfx.botStep` rejects the far ones on distance,
+   * which is where that decision belongs, so nothing on this side should do
+   * work per step.
+   *
+   * Raised by the soldier's own gait rather than by anything on the wire; see
+   * `NetSoldier.onStep` for why a footfall is derived and not sent.
+   */
+  onStep: (soldier: NetSoldier) => void = () => {};
+
   constructor(scene: Scene, mats: CelMaterialFactory) {
     for (let team = 0; team < 2; team++) {
       const spec = CONFIG.teams[team];
       for (let i = 0; i < CONFIG.bots.perTeam; i++) {
-        this.soldiers.push(
-          new NetSoldier(
-            scene,
-            mats,
-            this.soldiers.length,
-            team as Team,
-            spec.color,
-            spec.eyeColor,
-          ),
+        const soldier = new NetSoldier(
+          scene,
+          mats,
+          this.soldiers.length,
+          team as Team,
+          spec.color,
+          spec.eyeColor,
         );
+        // Wired once, at construction, because the pool is built once and never
+        // disposed — the same lifetime `BattleSystem` gives a bot's own hooks.
+        soldier.onStep = () => this.onStep(soldier);
+        this.soldiers.push(soldier);
       }
     }
   }
