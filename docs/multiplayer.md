@@ -624,6 +624,29 @@ is the one nothing on screen can check. `HeadlessGame.teamScore` is that sum on
 the server (`npm run simulate` prints it); `Game.updateHud` does the same on the
 client, over the same rows the columns under it are drawn from.
 
+**Flag OCCUPANCY travels beside the meter, because nothing steps
+`ConquestSystem` on a client.** `ControlPoint.present` — bodies in the zone this
+tick, per team — is written by the occupancy pass at the top of `update`, and in
+a netplay round that pass never runs: `updateWorld` hands the frame to
+`updateNetWorld` and returns above it. So the pair sat at the `[0, 0]` that
+`start` left there while three things read it, and each of them drew a fact the
+meter next to it could have contradicted: the capture panel's enemy count — a
+contest announced against *nobody*, which is what this was found as — the
+CAPTURING/LOSING word under it, since `0 >= 0` reads as "mine" and a flag being
+taken off you claimed you were taking it, and the ring's capturing pulse, which
+simply never lit. `Match` puts the counts in `PointState` and `applyPoints`
+mirrors them exactly where it mirrors `owner`, `meter` and `contested`.
+
+**The authority counts them, for the same reason it holds the stopwatch.** A
+client could run the same `pointAt` over the bodies it is drawing, and it would
+be counting a picture `INTERP_DELAY_MS` behind the tick that decided
+`contested` — so its tally and that flag would disagree in exactly the frames
+the panel exists to explain. Nor is it a new leak: `contested` already says both
+sides are standing on that flag, and a snapshot puts every body's position on
+every screen regardless. Additive on the wire, like `fire` and `grenades`, so it
+carries no version bump — a client that has never heard of the field ignores it,
+and a new client against an older server counts the zero it counted before.
+
 **The client sends** its position at `INPUT_HZ`, and — per event — the round it
 fired, the grenade it threw, the spawn it picked and the reload it started.
 Every one of those is gated before it is acted on. The reload is the only one

@@ -37,7 +37,16 @@ export interface ControlPoint {
    * hands — you cannot steal one by briefly outnumbering the defender.
    */
   meter: number;
-  /** Bodies inside the zone this tick, per team. */
+  /**
+   * Bodies inside the zone this tick, per team.
+   *
+   * Written by the occupancy pass at the top of `update` — which a CLIENT in a
+   * netplay round never runs, because the authority owns the meter. There it
+   * is mirrored off the snapshot (`PointState.present`) alongside `owner` and
+   * `meter`, so anything new that reads this is reading the server's count and
+   * must not be given a local one to fall back on: a client's own tally is a
+   * picture an interpolation delay behind the tick that decided `contested`.
+   */
   present: [number, number];
   /** True while both teams are inside and the meter is frozen. */
   contested: boolean;

@@ -233,6 +233,25 @@ export interface PointState {
   owner: NetTeam | null;
   meter: number;
   contested: boolean;
+  /**
+   * Bodies inside the zone this tick, per team — the authority's count, for
+   * the same reason the ping is: a client can see only what it is drawing,
+   * and what it is drawing is a tenth of a second behind the tick that
+   * decided `contested`.
+   *
+   * It carries no more than `contested` already does — that flag says both
+   * sides are standing on the flag, and a snapshot puts every body's position
+   * on every screen regardless — but three things on the client read
+   * occupancy rather than the flag: the capture panel's enemy count, the
+   * CAPTURING/LOSING word beside it, and the ring's capturing pulse. Without
+   * it they read a `[0, 0]` no netplay frame ever writes, and the panel
+   * announces a contest against nobody.
+   *
+   * Additive, like `fire` and `grenades`: an older client ignores it, and a
+   * newer client against an older server counts the zero it counted before
+   * the field existed — so no `PROTOCOL_VERSION` bump.
+   */
+  present?: [number, number];
 }
 
 export interface Snapshot {

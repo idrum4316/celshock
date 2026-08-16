@@ -244,5 +244,11 @@ function applyPoints(points: ControlPoint[], states: readonly PointState[]): voi
     point.owner = state.owner;
     point.meter = state.meter;
     point.contested = state.contested;
+    // Occupancy is mirrored for the same reason the meter is: nothing steps
+    // `ConquestSystem.update` in a netplay round, so these counts are whatever
+    // the wire last put in them. A server too old to send them leaves the zero
+    // that field held before it existed.
+    point.present[0] = state.present ? state.present[0] : 0;
+    point.present[1] = state.present ? state.present[1] : 0;
   }
 }

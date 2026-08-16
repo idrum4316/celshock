@@ -927,6 +927,10 @@ export class Match {
       owner: p.owner,
       meter: p.meter,
       contested: p.contested,
+      // Copied rather than aliased: `present` is a live tuple the next tick's
+      // occupancy pass zeroes in place, and this object outlives the call when
+      // a snapshot is held for anything.
+      present: [p.present[0], p.present[1]],
     }));
 
     // Everything in the air. A grenade is the one thing here that takes
