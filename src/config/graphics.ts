@@ -244,6 +244,29 @@ export const graphics = {
     amount: 0.14,
   },
   /**
+   * The same weathering for a TEXTURED ground, and it is a separate entry
+   * because it is answering a different question.
+   *
+   * On a flat colour the drift is fighting a 48 m block arriving in one tone.
+   * On the valley floor it is fighting the TILE: a ground texture repeats every
+   * few metres by construction, and the one thing a tile can never carry is
+   * variation at a scale larger than itself — paint a damp patch into it and
+   * the patch is what advertises the period. So the tile is authored with
+   * nothing in it bigger than about a quarter of its width (see
+   * `world/textures.ts`), and the big slow change of soil across a valley comes
+   * from here instead, in world space, where it has no period at all.
+   *
+   * Hence the cell: three tiles wide against `dirt`'s 4 m repeat, so what it
+   * adds cannot be mistaken for part of the pattern. And hence the swing, which
+   * is wider than the flat colours' — a ground texture is already broken up by
+   * its own grain, so it takes more before the eye reads a lighting error, and
+   * the whole point is to be seen across open ground.
+   */
+  groundVariation: {
+    metersPerCell: 12,
+    amount: 0.2,
+  },
+  /**
    * Cobblestone bump: fake relief height (metres) of a sett dome at
    * height-map value 1.0. The light bands ripple across individual
    * stones; too high and the street reads as rubble.

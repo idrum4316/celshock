@@ -351,7 +351,21 @@ wastes slots and flattens the darkness.
   shader and goes off with it, leaving the HUD's damage arcs to tell the player where a
   hit came from.
 - The cobblestone texture is 512² over a 1.5 m tile (`textures.ts`), sized for a
-  camera **1.55 m above the street**.
+  camera **1.55 m above the street**. 512 is also written into the shader —
+  `perturbNormal` takes its taps at a hard-coded `1.0 / 512.0` — so the two move
+  together or every surface's relief is silently rescaled.
+- **A world-mapped ground albedo gets the weathering drift too, and there it is
+  load-bearing rather than a nicety.** The flat-colour path multiplies `base` by
+  a slow world-space value noise so a 48 m merged block stops arriving in one
+  tone; the ground path does the same with its own pair of numbers
+  (`graphics.groundVariation`, a cell three tiles wide and a wider swing) for a
+  different reason — a ground texture REPEATS, every 4 m on the valley floor and
+  every 1.5 m on the street, and the eye finds a period in a ground plane faster
+  than anywhere else in the frame. A drift keyed on world position has none to
+  find. It is also why the tiles are painted with no feature larger than a
+  quarter of their width: the big variation is this, and a tile carrying its own
+  would only be advertising where it ends. The ground path skips the `vBaked.y`
+  mask the flat path needs, because nothing that moves is ever ground.
 - **A world-mapped height map's slope is measured in WORLD space, never in
   screen space**, and a band edge's smoothstep is **at least one pixel wide**.
   The two are the same artefact seen from both ends and both were exposed by

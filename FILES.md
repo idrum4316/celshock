@@ -217,7 +217,8 @@ src/
                         #   boulders, brambles, barrels, and the understory —
                         #   ferns, fallen buttress logs, carved stelae
     textures.ts         # Generated canvas textures: the cobbles, and the floor
-                        #   surfaces — grain painted from the map's floorColor
+                        #   surfaces — noise fields posterized onto a ramp of
+                        #   the map's floorColor, albedo and height in one pass
     floorSurfaces.ts    # What the valley floor is MADE of: the surface roster
                         #   and the ONE place a floor material is built
     environment.ts      # EnvironmentSpec + applyEnvironment

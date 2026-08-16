@@ -300,6 +300,10 @@ varying vec2 vUv;
 // needed and the pattern keeps a constant real-world size across placements.
 uniform sampler2D baseColorTex;
 uniform float texScale;
+// The tile's own weathering — see graphics.groundVariation in the config for
+// why a ground texture gets a wider cell and a wider swing than a flat colour.
+uniform float groundVariationScale;
+uniform float groundVariationAmount;
 #ifdef CEL_BUMP
 // Height map matching the albedo texel-for-texel (domed setts, dark mortar).
 uniform sampler2D bumpTex;
@@ -495,6 +499,22 @@ void main() {
   #else
   #ifdef CEL_GROUND_TEX
   vec3 base = texture2D(baseColorTex, vPosW.xz * texScale).rgb;
+  // The same world-space drift the flat colours get below, and here it is
+  // load-bearing rather than a nicety: this albedo REPEATS, every 4 m on the
+  // valley floor and every 1.5 m on the street, and the eye finds a period in a
+  // ground plane faster than in anything else in the frame. A drift keyed on
+  // world position has no period to find, so the repeat stops being the most
+  // legible thing about the ground the moment there is a slower change laid
+  // over it. It is also why the tiles themselves are painted with no feature
+  // larger than a quarter of their width — the big variation is THIS, and a
+  // tile that carried its own would only be advertising where it ends.
+  //
+  // No vBaked.y branch, unlike the flat path. That mask exists because a flat
+  // cel colour is worn by the rigs, the viewmodel and every effect mesh, and a
+  // world-keyed term on a moving mesh shimmers as it walks. Nothing that moves
+  // is ever ground: getGroundTextured is reached only from the terrain and from
+  // the kit's paved surfaces, both of them baked map geometry.
+  base *= 1.0 + groundVariationAmount * (valueNoise(vPosW * groundVariationScale) - 0.5);
   #else
   vec3 base = baseColor;
   // Weathering: a slow value drift over world space, so a 48 m merged block
@@ -915,6 +935,8 @@ export class CelMaterialFactory {
           uniforms: [
             ...CelMaterialFactory.UNIFORMS,
             "texScale",
+            "groundVariationScale",
+            "groundVariationAmount",
             ...(bump ? ["bumpScale"] : []),
           ],
           samplers: [
@@ -930,6 +952,15 @@ export class CelMaterialFactory {
       );
       mat.setTexture("baseColorTex", tex);
       mat.setFloat("texScale", texScale);
+      // Set once here rather than in `applyEnvironment` beside the flat
+      // colours' pair: these two come from CONFIG and not from the map, so
+      // nothing an environment change carries could move them.
+      const groundVar = CONFIG.graphics.groundVariation;
+      mat.setFloat(
+        "groundVariationScale",
+        1 / Math.max(0.001, groundVar.metersPerCell),
+      );
+      mat.setFloat("groundVariationAmount", groundVar.amount);
       if (bump) {
         mat.setTexture("bumpTex", bump);
         mat.setFloat("bumpScale", opts.bumpScale ?? 0.1);

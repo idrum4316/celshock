@@ -24,20 +24,17 @@ export const HollowmereEnvironment: EnvironmentSpec = {
    * single quad, so there was no shading variation either. Looking at your own
    * feet returned a featureless wash.
    *
-   * **`turf` is the surface this wants and it is not usable as authored.** It
-   * is the one pattern no map had ever selected, so it had never been judged
-   * from a camera 1.55 m up: its grains run to 22 units of radius against
-   * `dirt`'s 13, which at any tile scale that keeps the repeat invisible puts
-   * half-metre discs under the player, and its albedo spread (0.84–1.28 of
-   * `floorColor`) lands that contrast on a base far less saturated than
-   * Greyfen's brown. It reads as overlapping pale scales, which is worse than
-   * the wash it replaces. Retuning it is a real change to a shared pattern and
-   * belongs with whoever wants a grass valley, not here.
+   * **`turf` is arguably the surface this wants, and `dirt` is what it states.**
+   * When the surfaces were a scatter of painted discs `turf` was the one pattern
+   * no map had ever selected and it was not usable at all — half-metre pale
+   * scales under the player's feet. It has since been rebuilt like the rest of
+   * them (`world/textures.ts`) and is now a real choice, so this is a question
+   * about the MAP rather than about the pattern: a valley this dead is soil and
+   * ash, and ground cover would argue with the place.
    *
-   * So `dirt`, which Greyfen already ships and which is therefore the one
-   * pattern tuned against this camera height. It costs the god-ray threshold
-   * nothing: its brightest tone is `shadeOf(floorColor, 1.26)`, still under the
-   * cobbled street the 0.78 in `config/sky.ts` is calibrated against.
+   * `dirt` also costs the god-ray threshold nothing: the top of its ramp is
+   * 1.26 of `floorColor`, still under the cobbled street the 0.78 in
+   * `config/sky.ts` is calibrated against.
    */
   floorSurface: "dirt",
   ridgeColor: "#2c2f2e",

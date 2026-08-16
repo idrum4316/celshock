@@ -237,6 +237,23 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   is what separates "the grass now takes shadows" from "the ground under the grass
   always did" — and at a downsampled resolution it does NOT work, because every
   blade pixel is a blend of grass and ground. Grab at full canvas size.
+- **A generated texture is inspectable in a second, without booting the game**,
+  and the ground surfaces should be looked at both ways. Bundle
+  `src/world/textures.ts` with esbuild against a **stub `@babylonjs/core`**
+  (`--alias:@babylonjs/core=...`) exporting a `DynamicTexture` that wraps a real
+  `<canvas>` and answers `getContext()`/`update()`, load the bundle into an
+  `about:blank` page with `addScriptTag`, and `toDataURL()` whatever the module
+  hands back — the REAL recipes, no engine, no map build, ~1 s for every surface
+  at every tint. Draw them 4x4 as well: a tile that looks right on its own can
+  still carry a blotch big enough to advertise its own period, and that is only
+  visible repeated. Counting distinct colours in the result is the cheap check
+  that a posterized ramp is actually being used — a surface spending 98% of its
+  texels on two of six levels has five-sixths of a palette and one of a look.
+  **Neither view replaces standing on it**: the shader's quantized bands over the
+  height map are most of what the player sees, so finish in-engine, looking down
+  (`cameraSys.pitch` is NEGATIVE downward) with `player.view` disabled — and
+  point a run at the surfaces no map ships, since `turf` rotted precisely because
+  nothing ever selected it.
 - **The ash field is frozen for a pixel diff with `stop()` + `reset()`** on
   `g.atmosphere.system`. That works on `GPUParticleSystem` only because
   `Atmosphere` constructs it with `emitRateControl: true`; Babylon's legacy GPU

@@ -73,18 +73,20 @@ otherwise be born with the shipped night sheen and never revisited.
 `EnvironmentSpec.floorSurface` names a pattern out of `src/world/floorSurfaces.ts`
 — `flat` (the default, and the plain cel colour the floor has always been), `dirt`,
 `gravel`, `sand` or `turf` — and every tone that pattern paints is *derived* from
-`floorColor` by `shadeOf`. That is the rule holding the two apart: `floorColor` is
+`floorColor` by `ramp`, which quantizes the pattern's tone field onto a handful of
+flat multiples of it. That is the rule holding the two apart: `floorColor` is
 already what the untextured floor is, what `ridgeScreeColor` is asked to melt into
 and what a grass field's roots are matched against, so a surface carrying a palette
 of its own would be a second answer to one question and the two would drift the
 first time a map was re-tinted. Switching a map's surface changes the grain of its
 ground, never the colour of it. Three consequences:
 
-- **The albedo cache key carries the colour and the bump's does not.** Grain
-  layouts are seeded per surface and read no colour, so one height map serves every
+- **The albedo cache key carries the colour and the bump's does not.** A surface's
+  field is seeded per pattern and reads no colour, so one height map serves every
   tint of `dirt` — while two maps on `dirt` in different soils must be two albedo
   textures rather than whichever asked first, the same trap `setGroundSpec` exists
-  to close.
+  to close. The field itself is memoized one deep, which is enough because
+  `floorMaterial` asks for the albedo and the bump one line apart.
 - **The floor material is deliberately MATTE and must stay that way.**
   `getGroundTextured` only registers a material for `setGroundSpec` to re-apply to
   when the caller asked for a spec at all, and that sheen is the wet *cobble* one —
@@ -95,16 +97,24 @@ ground, never the colour of it. Three consequences:
   is why the editor treats a floor edit as a full rebuild and why `workLight.ts`
   refuses to touch `floorColor` alongside the two rim colours.
 
-**`turf` is in the roster and is not usable as authored, which is worth knowing
-before reaching for it.** It was the one pattern no map had ever selected, so it
-had never been judged from a camera 1.55 m up: its grains run to 22 units of
-radius against `dirt`'s 13, and its albedo spread is 0.84–1.28 of `floorColor`.
-At any tile scale that keeps the repeat invisible across an open valley that puts
-half-metre pale discs under the player's feet — it reads as overlapping scales,
-which is worse than the flat colour it replaces. Hollowmere therefore states
-`dirt`, the pattern Greyfen already ships and so the only one tuned against this
-camera height. Retuning `turf` is a change to a shared pattern and belongs to
-whoever wants a grass valley.
+**A surface is a FIELD sampled per texel, and nothing in one may be bigger than
+about a quarter of the tile.** Every pattern is a noise recipe — folded octaves
+for crumb, cellular noise over a warped domain for anything made of pieces —
+evaluated into a tone plane and a height plane that are painted out together, so
+a crown always sits on the grain it belongs to. Two rules come out of the version
+this replaced, which scattered a few hundred filled ellipses per tile:
+
+- **No silhouettes.** At any tile scale that keeps the repeat invisible across an
+  open valley, a painted disc lands at 10–30 cm — and the eye reads a circle that
+  size as an object, so the floor came back as a heap of pancakes and the height
+  map turned each one into a coin. Cell borders are irregular polygons and cover
+  the plane, which is why they replaced it. This is what made `turf` unusable
+  (half-metre pale scales) and it was never a tuning problem.
+- **No landmarks.** A tile cannot carry variation at a scale larger than itself:
+  paint a damp patch across it and the patch is what advertises the period. The
+  slow change of soil across a valley is `graphics.groundVariation` instead — the
+  same world-space drift the flat cel colours get, applied to the ground texture
+  path in `CelShader`, where it has no period to find.
 
 **The finished visuals also carry BAKED AMBIENT OCCLUSION**, written after the
 merge by `src/world/ambientOcclusion.ts` from the collider boxes and the terrain.
