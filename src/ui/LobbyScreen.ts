@@ -71,8 +71,18 @@ type LobbyRow =
    */
   | { kind: "map" }
   | { kind: "create" }
-  | { kind: "refresh" }
-  | { kind: "back" };
+  | { kind: "refresh" };
+/**
+ * There is deliberately no `back` row. Leaving is not one of the things this
+ * list is FOR — the rows are matches to join and the two parameters a new one
+ * would be started with — and a row that leaves has the wrong shape twice
+ * over: it sits under a list whose length is whatever the servers happen to be
+ * running, so the one control every visitor eventually wants is the one whose
+ * position nothing can predict, and it wears the same highlight and the same
+ * Enter as "join this match". It is a button in the footer instead
+ * (`.ui-foot` / `.ui-back` in base.css), where the settings and kit screens
+ * have always kept theirs.
+ */
 
 /** What the screen is doing, which decides what stands in for the list. */
 type LobbyPhase =
@@ -87,10 +97,9 @@ type LobbyPhase =
  * would start a match on, which is `fillRow`'s job because the answer is a
  * field. What is here is the fallback for a screen that has not been told one.
  */
-const ACTION_LABELS: Record<"create" | "refresh" | "back", [string, string]> = {
+const ACTION_LABELS: Record<"create" | "refresh", [string, string]> = {
   create: ["New match", "Start a fresh round"],
   refresh: ["Refresh", "Ask every server again"],
-  back: ["Back", "Return to the menu"],
 };
 
 /**
@@ -344,9 +353,6 @@ export class LobbyScreen {
       case "refresh":
         this.onRefresh();
         break;
-      case "back":
-        this.onClose();
-        break;
     }
   }
 
@@ -376,10 +382,11 @@ export class LobbyScreen {
    * The rows this list currently has.
    *
    * The actions are always present, even when every fetch failed — a server
-   * that did not answer is the case where Refresh matters most, and a screen
-   * with no Back is one that traps a pad player. The two picker rows are among
-   * them for the same reason: they are what a new match would be started with,
-   * and creating one is exactly what a player does when the list is empty.
+   * that did not answer is the case where Refresh matters most. The two picker
+   * rows are among them for the same reason: they are what a new match would
+   * be started with, and creating one is exactly what a player does when the
+   * list is empty. Leaving is not among them; that is the footer's, and the
+   * reason is at the top of this file.
    *
    * Matches are grouped BY REGION in the order the file names them, rather than
    * sorted by ping or by how full they are. The file's order is a deployment's
@@ -417,12 +424,7 @@ export class LobbyScreen {
       }
     }
     if (multi) rows.push({ kind: "region" });
-    rows.push(
-      { kind: "map" },
-      { kind: "create" },
-      { kind: "refresh" },
-      { kind: "back" },
-    );
+    rows.push({ kind: "map" }, { kind: "create" }, { kind: "refresh" });
     return rows;
   }
 
@@ -452,11 +454,11 @@ export class LobbyScreen {
         <div class="lb-body">
           ${this.rows.map((row, i) => this.rowMarkup(row, i)).join("")}
         </div>
-        <p class="lb-nav">
+        <p class="ui-foot">
           <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick / D-pad</kbd> move</span>
           <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> pick</span>
           <span><kbd>Enter</kbd><kbd class="pad">A</kbd> select</span>
-          <span><kbd>Esc</kbd><kbd class="pad">B</kbd> back</span>
+          <button class="ui-back"><kbd>Esc</kbd><kbd class="pad">B</kbd> Back</button>
         </p>
       </div>
     `;
@@ -501,6 +503,14 @@ export class LobbyScreen {
     this.root.querySelectorAll<HTMLElement>("button[data-region]").forEach((btn) => {
       btn.onclick = () => this.onPickRegion(Number(btn.dataset.region));
     });
+    // The way out, in the footer rather than in the list — see the note on
+    // `LobbyRow`. Rebound on every render because this screen rebuilds its
+    // markup wholesale, unlike the other two, whose footers are written once
+    // in the constructor. `click` and not pointerdown, the same edge their
+    // Back buttons take: this screen is already up, so there is no mouse-down
+    // confirm underneath for it to race.
+    const back = this.root.querySelector<HTMLElement>("button.ui-back");
+    if (back) back.onclick = () => this.onClose();
     this.applySelection();
   }
 

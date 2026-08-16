@@ -280,6 +280,96 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   color: rgba(255, 255, 255, 0.42);
 }
 
+/* --- the footer every lid screen ends with ---
+   The settings list, the kit screen and the lobby all finish on the same
+   line: what the keys and the stick do, and then the way out at the
+   right-hand end of it.
+
+   **THE WAY OUT OF A SCREEN IS A BUTTON IN THIS FOOTER, never a row in the
+   screen's own list**, and that is the rule this block exists to make
+   mechanical. The lobby's Back was a row for a while and it was the wrong
+   shape twice over: it sat under a list whose length is whatever the
+   servers are running, so the one control every visitor eventually wants
+   was the one whose position nothing could predict; and it made "leave"
+   look like "join this match" — same row, same highlight, same Enter —
+   when the two are not the same kind of act at all. A footer button is
+   where the eye already goes for it, it is in the same place on all three
+   screens, and it does not move when a match appears.
+
+   The pad and the keyboard never needed it: Esc and B leave all three
+   screens through `Game`, which is what the chips on the button say. The
+   button is the POINTER's route, and the chips are the hint that there is
+   a faster one.
+
+   Here rather than in three sheets because two of them already carried
+   this rule verbatim, which is the bar base.css states at the top of the
+   file. A screen adds `class="ui-foot"` to its footer and `ui-back` to the
+   button in it; anything it needs on top of that (the kit screen wants a
+   width) goes in its own sheet. */
+.ui-foot {
+  display: flex;
+  align-items: center;
+  /* Wraps, because the widest of these carries four hint blocks and a
+     button and the panels they sit in are a fraction of a viewport that
+     can be a landscape phone. A row that breaks is two short lines; one
+     that cannot puts the button past the panel's edge. */
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  width: 100%;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+}
+/* One hint: its key chips and the word they mean, kept together on a line
+   of their own so a wrap never splits a chip from its label. */
+.ui-foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ui-foot kbd {
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 3px 7px;
+  /* Wide enough that an arrow glyph makes the same plate a word does —
+     otherwise a row of hints is a row of chips at four different widths. */
+  min-width: 22px;
+  text-align: center;
+  color: #cfd6e2;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+/* Pad glyphs are tinted, the same tell the controls table uses, so the two
+   keys on a hint read as alternatives rather than as a chord. */
+.ui-foot kbd.pad {
+  color: var(--hot);
+  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
+}
+/* `margin-left: auto` is what puts it at the far end of the line whatever
+   the hints beside it come to — the one place on the screen the eye is
+   already looking for the way out. */
+.ui-foot button.ui-back {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  color: var(--hot);
+  background: rgba(255, 230, 128, 0.1);
+  border: 0;
+  cursor: pointer;
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+}
+.ui-foot button.ui-back:hover { background: rgba(255, 230, 128, 0.22); }
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }

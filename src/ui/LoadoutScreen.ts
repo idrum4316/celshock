@@ -246,10 +246,10 @@ export class LoadoutScreen {
       <div class="lo-panel">
         <h2>LOADOUT</h2>
         <div class="lo-body"></div>
-        <p class="lo-foot">
+        <p class="lo-foot ui-foot">
           <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd class="pad">Stick</kbd> choose</span>
           <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick</kbd> slot</span>
-          <button class="lo-back"><kbd>Enter</kbd><kbd class="pad">B</kbd> Done</button>
+          <button class="ui-back"><kbd>Esc</kbd><kbd class="pad">B</kbd> Back</button>
         </p>
       </div>
       <div class="lo-stage">
@@ -261,11 +261,19 @@ export class LoadoutScreen {
     this.body = this.root.querySelector(".lo-body")!;
     this.stageCap = this.root.querySelector(".lo-stage-cap")!;
     this.bindStage(this.root.querySelector<HTMLElement>(".lo-stage")!);
-    // A pick is applied the moment it is made, so this closes and nothing
-    // else. `click` is safe here where the buttons that OPEN this screen need
+    // The pointer's way off this screen, in the footer every lid screen ends
+    // with (`.ui-foot` / `.ui-back` in base.css). It reads "Back" and not
+    // "Done" for the reason it is shared at all: a pick is applied the moment
+    // it is made, exactly as on the settings screen, so there is nothing here
+    // to be finished with — and two screens that leave the same way should not
+    // use two words for it. Enter and A still close this one (they have
+    // nothing else to do here, where settings spends them on the row's value),
+    // and the chips name the pair that works on all three.
+    //
+    // `click` is safe here where the buttons that OPEN this screen need
     // pointerdown: the state under it takes its confirm from a mouse-down,
     // and by the time a click fires that button is already back up.
-    this.root.querySelector<HTMLElement>("button.lo-back")!.onclick = () =>
+    this.root.querySelector<HTMLElement>("button.ui-back")!.onclick = () =>
       this.onClose();
     this.draw();
   }

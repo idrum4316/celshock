@@ -341,34 +341,8 @@
   opacity: 0.6;
 }
 
-#lobby .lb-nav {
-  display: flex;
-  gap: 18px;
-  align-items: center;
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.32);
-}
-#lobby .lb-nav span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-#lobby kbd {
-  font: inherit;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  padding: 3px 6px;
-  min-width: 22px;
-  text-align: center;
-  color: #cfd6e2;
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
-  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
-}
-#lobby kbd.pad {
-  color: var(--hot);
-  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
-}
+/* The footer — the hint line and the Back button at the end of it — is
+   `.ui-foot` / `.ui-back` in base.css, shared with the settings and kit
+   screens. Back is a button THERE rather than a row in the list above,
+   which is the whole reason that block exists: see base.css. This screen
+   adds nothing to it. */

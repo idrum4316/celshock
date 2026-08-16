@@ -375,59 +375,13 @@
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.38);
 }
-/* Sized like `.lo-body`, because it is the same column: centred on its
-   own contents it started and stopped nowhere near the panel it sits
-   under. The Done button then goes to the column's right edge, where the
-   eye is already looking for the way out. */
-#loadout .lo-foot {
-  display: flex;
-  /* Wraps for the reason the deploy screen's action row does: this line
-     carries four blocks now (the two axes, the pad chip and the Done
-     button) and the panel column is a fraction of a viewport that can be
-     a landscape phone. A row that breaks is two short lines; one that
-     cannot puts the button over the stage's edge. */
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 20px;
-  width: 100%;
-  max-width: 780px;
-  font-size: 10px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.35);
-}
-#loadout kbd {
-  font: inherit;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  padding: 3px 7px;
-  margin-right: 4px;
-  color: #cfd6e2;
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
-  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
-}
-/* Pad glyphs are tinted, the same tell the controls table uses, so the
-   two keys on the Done button read as alternatives rather than a chord. */
-#loadout kbd.pad {
-  color: var(--hot);
-  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
-}
-#loadout button.lo-back {
-  margin-left: auto;
-  font: inherit;
-  font-size: 10px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  padding: 6px 14px;
-  color: var(--hot);
-  background: rgba(255, 230, 128, 0.1);
-  border: 0;
-  cursor: pointer;
-  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
-}
-#loadout button.lo-back:hover { background: rgba(255, 230, 128, 0.22); }
+/* The footer is `.ui-foot` / `.ui-back` in base.css, shared with the
+   settings screen and the lobby — everything about the hint chips and the
+   Back button at the end of the line is there. What is left here is the one
+   thing this screen does not share: the WIDTH. It is sized like `.lo-body`
+   because it is the same column, and centred on its own contents it started
+   and stopped nowhere near the panel it sits under. */
+#loadout .lo-foot { max-width: 780px; }
 /* `#loadout` is the one overlay deliberately left out of `--ov-scale`
    (its stage is a hole the 3D turntable is placed through, so a transform
    would move the hole and leave the weapon behind it) — which means it is
@@ -457,7 +411,7 @@
    of buttons in each of two slots is height this viewport has not got
    either. The title is what goes, for the reason the prose went one step
    up: it names a screen the player has just pressed a button to open, on
-   the one device where the space it takes is the Done button falling off
+   the one device where the space it takes is the Back button falling off
    the bottom. */
 @media (max-height: 430px) {
   #loadout h2 { display: none; }
@@ -469,7 +423,7 @@
      anything is allowed to shrink — so 96 puts only two of these on a 290 px
      row and the five weapons land as 2 + 2 + 1. At 84 they land as 3 + 2 and
      each slot costs two rows instead of three, which is the difference
-     between the Done button being on this screen and being under it. */
+     between the Back button being on this screen and being under it. */
   #loadout .lo-detail { padding: 8px 12px; }
   #loadout .lo-stats { gap: 3px; }
   #loadout button.lo-opt { flex-basis: 84px; min-height: 34px; padding: 6px 8px; }

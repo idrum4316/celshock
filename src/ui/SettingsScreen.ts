@@ -184,19 +184,23 @@ export class SettingsScreen {
       <div class="se-panel frame">
         <h2>SETTINGS</h2>
         <div class="se-body"></div>
-        <p class="se-foot">
+        <p class="ui-foot">
           <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick</kbd> row</span>
           <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>Enter</kbd><kbd class="pad">A</kbd> change</span>
-          <button class="se-back"><kbd>Esc</kbd><kbd class="pad">B</kbd> Back</button>
+          <button class="ui-back"><kbd>Esc</kbd><kbd class="pad">B</kbd> Back</button>
         </p>
       </div>
     `;
     document.getElementById("hud")!.appendChild(this.root);
     this.body = this.root.querySelector(".se-body")!;
+    // The pointer's way off this screen, in the footer every lid screen ends
+    // with (`.ui-foot` / `.ui-back` in base.css) — same place, same chips,
+    // same weight on all three, which is the point of it being shared.
+    //
     // `click` is safe on a button INSIDE a screen that is already up: the
     // pointerdown rule the menu's kit button documents is about buttons that
     // race the overlay's own mouse-down confirm on the way in.
-    this.root.querySelector<HTMLElement>("button.se-back")!.onclick = () =>
+    this.root.querySelector<HTMLElement>("button.ui-back")!.onclick = () =>
       this.onClose();
     this.draw();
   }

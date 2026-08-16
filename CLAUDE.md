@@ -317,10 +317,17 @@ can: a refresh inserts match rows above the actions, and a carried index means
 the highlight moves onto a different row while the player's hand is still on
 Enter.
 
+**The way OUT of one of those screens is a button in its footer, never a row in
+its own list** — `.ui-foot` / `.ui-back` in `base.css`, shared by the settings
+screen, the kit screen and the lobby, in the same place with the same chips and
+the same label on all three. A list is what a screen is *for*; a row that leaves
+it moves as the list grows and wears the same Enter as the rows that act.
+
 → **[`docs/ui.md`](docs/ui.md)** — the four cards and why they are one class, the
-menu cursor and the list-shaped screens, why **the pointer deploys only through
-the Deploy button**, the deploy map, the kit turntable that is the real viewmodel
-in a hole in the scrim, the lobby's row identity, and the short-viewport scaling.
+menu cursor and the list-shaped screens, the shared footer and why Back is not a
+row, why **the pointer deploys only through the Deploy button**, the deploy map,
+the kit turntable that is the real viewmodel in a hole in the scrim, the lobby's
+row identity, and the short-viewport scaling.
 
 ### The scene has (almost) no Babylon lights
 

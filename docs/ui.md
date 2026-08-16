@@ -55,6 +55,27 @@ CREATES will be started on and says nothing about the matches listed above it �
 see [`docs/multiplayer.md`](multiplayer.md) for why joining one takes that
 match's map instead.
 
+**THE WAY OUT OF A SCREEN IS A BUTTON IN ITS FOOTER, never a row in its own
+list.** The settings screen, the kit screen and the lobby all end on the same
+line — what the keys and the stick do, then Back at the right-hand end of it —
+and it is `.ui-foot` / `.ui-back` in `base.css` rather than three copies, so a
+fourth list-shaped screen gets the whole convention by naming it. The lobby's
+Back was a row for a while and it was the wrong shape twice over: it sat under a
+list whose length is whatever the servers happen to be running, so the one
+control every visitor eventually wants was the one whose position nothing could
+predict; and it wore the same highlight and the same Enter as *join this match*,
+when leaving and joining are not the same kind of act. The pad and the keyboard
+never needed the row — Esc and B leave all three screens through `Game`, which
+is what the chips on the button say — so what it cost a pointer to reach was the
+whole of what it bought.
+
+The label is **Back** on all three, including the kit screen, which said "Done"
+until this was shared. Every one of them applies a pick the moment it is made,
+so there is nothing on any of them to be finished with, and two screens that
+leave the same way must not use two words for it. Where the keys genuinely
+differ, the screen's own hints say so: Enter changes a settings row and closes
+the kit screen, and only the pair that works everywhere is on the button.
+
 **The four cards are one class because they are one element** — they share the
 shell, the title block, the controls table and the Deploy button. The bar for a
 screen of its own is *state*: the deploy map has a selection and a canvas, the kit
@@ -251,8 +272,9 @@ change moved no content-hashed filename. Three rules keep it that way:
 
 - **`base.css` is for what two or more screens share** — the reset, the canvas, the
   `#hud` root, `.frame`, `.brackets`, `.hidden`, the `--ov-scale` short-viewport
-  block, `@keyframes pulse`, and the kit button. A rule only one screen uses belongs
-  in that screen's sheet however tempting the shared file is.
+  block, `@keyframes pulse`, the kit button, and `.ui-foot`/`.ui-back` (the hint
+  line and the Back button three screens end with). A rule only one screen uses
+  belongs in that screen's sheet however tempting the shared file is.
 - **A screen's state rules go with whoever sets the class**, not whoever owns the
   element: `#hud.paused #deploy { opacity: 0.18 }` is in `hud.css` because
   `HUD.setPaused` puts `.paused` on, even though `#deploy` is the deploy screen's.
