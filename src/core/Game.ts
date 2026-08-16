@@ -2797,7 +2797,18 @@ export class Game {
       // reconnect is not lost with the socket either: `NetSession` holds it
       // until the authority answers with a spawn, and re-sends it on the seat
       // that answers.
-      if (this.state === "playing" || this.state === "dying") {
+      //
+      // What is UNDER the screens and not what is on top of them, because a
+      // reconnect is the authority's news and does not wait for the player to
+      // close anything. Asked of `this.state`, a reseat taken while the pause
+      // card was up read as `paused`, matched neither arm, and left the client
+      // believing it was still playing — which is precisely the ghost the
+      // paragraph above exists to prevent, arrived at through the one door that
+      // was not watched. The lid comes down with the state, because `enterDeploy`
+      // goes through `go`: this screen has to be answered, so it cannot be
+      // raised behind one.
+      const under = this.screens.under;
+      if (under === "playing" || under === "dying") {
         this.enterDeploy(0);
       }
     };
