@@ -97,6 +97,30 @@ domain is. Two settings are worth a look — `MAX_MATCHES` on the server (defaul
 4, and one process's matches all share one core) and `MATCH_SERVER` on `web`
 (default `match-server:8080`, the compose service name).
 
+### More than one region
+
+Players can be offered a choice of match server, with the round trip to each one
+shown beside it in the lobby. A region is **this same pair of containers on a box
+somewhere else, behind a hostname of its own** — there is no region-aware build
+and nothing in the server knows which region it is. Stand the stack up there,
+point `us-east-1.example.com` at it with the same `/ws` Upgrade forwarding, and
+name it in `public/regions.json` where the game is served from:
+
+```json
+{
+  "regions": [
+    { "id": "us-west-1", "name": "US West", "host": "us-west-1.example.com" },
+    { "id": "us-east-1", "name": "US East", "host": "us-east-1.example.com" }
+  ]
+}
+```
+
+That file is served unhashed and uncached, so adding a region — or dropping an
+unhealthy one — is an edit on the box rather than a rebuild. `host` is an
+authority and never a URL: the scheme comes from the page. Leave the file alone
+and the game behaves exactly as it always has, as one server on its own origin.
+See [`docs/multiplayer.md`](docs/multiplayer.md) for the whole of it.
+
 The single-player game still deploys on its own: bring up `web` without the
 server and it plays exactly as it always has — the socket never opens, and the
 lobby says it could not reach a match server.

@@ -70,6 +70,15 @@ server {
         add_header Cache-Control "no-cache";
     }
 
+    # The region list: which match servers this deployment offers. Unhashed and
+    # hand-edited on the box — it is what a region being added or drained is
+    # written into — so a cached copy is a client that keeps pointing players at
+    # a server somebody has already taken out. The service worker exempts it for
+    # the same reason; this is the HTTP half of that.
+    location = /regions.json {
+        add_header Cache-Control "no-cache";
+    }
+
     # nginx's bundled mime.types may predate the web app manifest, and served
     # as anything else it is ignored — no install prompt, no app.
     location = /manifest.webmanifest {

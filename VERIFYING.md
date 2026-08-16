@@ -296,6 +296,25 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   rejection. And **the straight line between two home spawns runs through the
   village**: walk to the map centre instead, which is the control point every
   road leads to.
+- **To drive the REGION lobby, edit `public/regions.json` — and put it back.**
+  It is a plain static file the dev server hands over unhashed, so two or three
+  entries pointed at `localhost:8097`, `:8098` and a port with nothing on it
+  cover the whole screen: the merged list, a ping per region, the note row a
+  dead one leaves, and the picker. `?server=`/`?mp=<url>` REPLACE that list with
+  one synthetic region, which is also how the single-region form of the screen
+  is checked. Two readings that mean something: `localStorage["hollowmere.region"]`
+  is written only by a real pick (a preselection by ping deliberately is not),
+  and `g.net.conn.socket.url` after a join is the proof that the row's region
+  and not the standing one is what opened the socket.
+- **The lobby's four-second list timeout is WALL clock, so a headless page that
+  has built a map can miss it against a server on the same machine.** Every
+  region then renders as "could not reach the match server" with nothing wrong
+  anywhere — the fetch resolves late because the main thread is at ~2 fps, and
+  `AbortSignal.timeout` does not care that the thread was busy. Open the lobby
+  before building a round when you can; when the test needs a round first, allow
+  a couple of refreshes rather than reading one failed fan-out as a result. The
+  pings on a fresh page are honest (1–8 ms to localhost) and are the ones to
+  assert on.
 - **`?mp` no longer lands you in the world — it lands you on the deploy
   screen.** A netplay round deploys nobody unasked, so a script that waits for
   `state === "playing"` after joining waits forever. Confirm first

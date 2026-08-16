@@ -23,7 +23,7 @@ substitute: read the companion before changing that subsystem.
 | [`docs/bots.md`](docs/bots.md) | navigation, perception, cover, squads, bot cost |
 | [`docs/deaths.md`](docs/deaths.md) | ragdolls, Havok, the death cam |
 | [`docs/pwa.md`](docs/pwa.md) | `public/`, `src/pwa/`, the service worker |
-| [`docs/multiplayer.md`](docs/multiplayer.md) | anything under `server/` or `src/net/`, the roster, the collision bake, the two images and the proxy in front of them |
+| [`docs/multiplayer.md`](docs/multiplayer.md) | anything under `server/` or `src/net/`, the roster, the collision bake, the regions, the two images and the proxy in front of them |
 
 Three more companions carry what is looked up rather than reasoned about:
 
@@ -591,6 +591,22 @@ takes every match in the process down with it, and a non-numeric field walks
 through every check downstream, because each of those is a comparison and every
 comparison against `NaN` is false.
 
+**There is more than one match server, the CLIENT holds the list of them, and
+none of them knows another exists.** `public/regions.json` is a deploy-time file
+naming each region's host — edited on the box, never rebuilt — and `net/regions.ts`
+turns an entry into a `Region` carrying BOTH its urls, resolved together, because
+browsing one server and joining another must not be representable. Each server is
+still the only authority on its own matches, so there is nothing central and
+nothing to keep in step. **A match id is minted per process, so every region has
+an `m1`**: a lobby row, the join it sends and the row identity that survives a
+refresh are all qualified by REGION as well as id, and a join that carried only
+an id would land the player in a different round on another continent. Which
+region a client is in is a preference like the map (remembered; fastest-answering
+until the player picks), and it decides only where a match this client CREATES
+goes — joining a listed match plays where that match runs. **What is still
+forbidden is two processes behind one hostname**, which is the arrangement
+regions exist to avoid.
+
 → **[`docs/multiplayer.md`](docs/multiplayer.md)** — the authority model and what
 it deliberately does not defend against, the roster and the bench, which side the
 local player is on and the race the welcome is in, the deploy ask and why the
@@ -602,7 +618,9 @@ which side each of the four cues comes from, the per-slot scoreboard and
 why it is state on the wire rather than events added up on a client, the flag
 occupancy that travels beside the meter because nothing steps `ConquestSystem`
 on a client, the ping column and why the AUTHORITY holds the stopwatch (a client
-can time only its own), the lobby and why there is no central registry, everything a socket may spend and the pong
+can time only its own), the lobby and why there is no central registry, the
+regions and the two headers `/matches` owes them (one of which IS the ping),
+everything a socket may spend and the pong
 deadline beside it, the collision bake and what `npm run parity` actually
 compares, what may never cross the wire, and the list of what is not built yet.
 

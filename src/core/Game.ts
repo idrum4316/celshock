@@ -69,7 +69,8 @@ import { difficultyNames } from "../entities/BotSkill";
 import { callsign } from "../entities/callsigns";
 import type { Combatant, Team } from "../entities/Combatant";
 import { NetSession } from "../net/NetSession";
-import { fetchMatches } from "../net/lobby";
+import { clearRequestTimings, fetchMatches } from "../net/lobby";
+import { loadRegions, regionFromSocketUrl, type Region } from "../net/regions";
 import { SNAPSHOT_HZ, TICK_HZ, type ServerEvent } from "../net/protocol";
 import { Player } from "../entities/Player";
 import { type SightId } from "../entities/sights";
@@ -106,10 +107,12 @@ import { InputManager } from "./InputManager";
 import {
   readDifficulty,
   readMap,
+  readRegion,
   readSight,
   readWeapon,
   writeDifficulty,
   writeMap,
+  writeRegion,
   writeSight,
   writeWeapon,
 } from "./prefs";
@@ -299,19 +302,83 @@ export class Game {
   private net: NetSession | null = null;
 
   /**
-   * Which match server to talk to, for both the lobby's list and the socket.
+   * Which match servers exist, in the order the deployment names them.
    *
-   * `undefined` is the deployed case and means the page's own origin, which is
-   * where nginx answers `/ws` and `/matches`. It is only ever something else in
-   * DEV, from `?server=` or `?mp=` — the client is on Vite's port then and the
-   * server on its own, with nothing in between to make them one origin.
+   * Read once from `public/regions.json` (see `net/regions.ts`) and never
+   * refetched: a region list is a fact about the deployment, not about the
+   * fight, and a client that re-read it between two refreshes could move a row
+   * out from under a cursor for a reason nobody on this machine caused. Empty
+   * until that read lands, which is the only moment the game does not know what
+   * servers there are — every reader goes through `regionFor`, which is why
+   * nothing else has to hold an opinion about that moment.
    *
-   * One field for both because they are one server. Letting the list and the
+   * A region carries BOTH its urls, resolved together. Letting the list and the
    * socket be aimed separately would make "browsing one server and joining
    * another" representable, which is not a thing anybody wants and is a bug the
    * moment it happens by accident.
    */
-  private netUrl: string | undefined;
+  private regions: Region[] = [];
+
+  /**
+   * The one read of the region file, kept so the second asker joins the first.
+   *
+   * `?mp` and the lobby can both want it on the same frame, and a promise here
+   * rather than a flag means the second one waits on the same fetch instead of
+   * making another — the same reason a texture cache holds the promise and not
+   * just the texture.
+   */
+  private regionsLoad: Promise<Region[]> | null = null;
+
+  /**
+   * Which region the player CHOSE, or null if they never have.
+   *
+   * Null is the interesting value: it is what lets the fastest region that
+   * answers be preselected on every visit to the lobby, which is the whole of
+   * the "pick the right one" problem for a player who has not thought about it.
+   * The moment they step the region row it becomes their pick, is remembered,
+   * and is never moved for them again — `noteRegionPing` is the one place that
+   * distinction is spent.
+   *
+   * An id and not an index, because the file it indexes can be re-ordered
+   * under a remembered value and an index would then mean a different server.
+   */
+  private regionId: string | null = readRegion();
+
+  /**
+   * The region the client picked FOR a player who never has: whichever answered
+   * fastest. Not persisted, and overruled by `regionId` the instant there is
+   * one — see `noteRegionPing`.
+   */
+  private autoRegionId: string | null = null;
+
+  /**
+   * The newest round trip each region reported, kept only to rank them.
+   *
+   * The lobby draws its own numbers out of the results it was handed; this is
+   * the copy the auto-pick compares, and it lives here because the pick does.
+   */
+  private readonly lobbyPings = new Map<string, number>();
+
+  /**
+   * A server named outright on the URL, which REPLACES the region list.
+   *
+   * `?server=` and `?mp=<url>` are dev affordances that point this client at
+   * one specific process, and a region picker offering alternatives to a
+   * developer who has already named the server they want is noise — so this is
+   * not one region among the file's, it is all of them.
+   */
+  private devRegion: Region | null = null;
+
+  /**
+   * Which lobby refresh is current.
+   *
+   * Every region is asked at once and each answers when it answers, so a second
+   * Refresh can land its fast region's list before the first one's slow region
+   * has timed out — and a four-second-old answer painted over a fresh one is a
+   * row that lies about who is in it. A counter is the whole guard: an answer
+   * from a superseded generation is dropped.
+   */
+  private lobbyFetch = 0;
 
   /**
    * What to call this player on the wire. Server-side it is truncated and
@@ -873,13 +940,19 @@ export class Game {
     this.overlayScreen.onOpenMultiplayer = () => this.openLobby();
     this.settingsScreen.onChange = (key, value) => this.setSetting(key, value);
     this.settingsScreen.onClose = () => this.closeSettings();
-    // The row's own map travels with its id: a match is played on the map it is
-    // running, and the row the player picked is where that is already known.
-    this.lobbyScreen.onJoin = (matchId, mapId) => this.joinMatch({ matchId, mapId });
-    // A new match is the one join that DOES take this client's map — the map
-    // row on that screen is the same pick as the menu's, and `joinMatch` sends
-    // it for the server to spend on the match it builds.
+    // The row's own map and its own SERVER travel with its id: a match is
+    // played on the map it is running and joined where it is running, and the
+    // row the player picked is where both are already known. A match id is
+    // minted per process, so the region is not decoration on this call — `m1`
+    // exists in every region, and an id alone would open a socket to whichever
+    // server this client last spoke to.
+    this.lobbyScreen.onJoin = (regionId, matchId, mapId) =>
+      this.joinMatch({ regionId, matchId, mapId });
+    // A new match is the one join that DOES take this client's map and its
+    // chosen region — the two picker rows on that screen — and `joinMatch`
+    // sends the map for the server to spend on the match it builds.
     this.lobbyScreen.onCreate = () => this.joinMatch({ create: true });
+    this.lobbyScreen.onPickRegion = (index) => this.setRegion(index);
     this.lobbyScreen.onPickMap = (index) => this.setMap(index);
     this.lobbyScreen.onRefresh = () => void this.refreshLobby();
     this.lobbyScreen.onClose = () => this.closeLobby();
@@ -1127,6 +1200,116 @@ export class Game {
     void this.refreshLobby();
   }
 
+  /**
+   * The region list, read once and shared by everything that needs it.
+   *
+   * A promise field rather than an array plus a flag: the lobby and a `?mp`
+   * join can both ask before either answer has landed, and two reads of one
+   * static file is one more than the deployment deserves. It cannot fail — see
+   * `loadRegions`, which answers a broken or missing file with the one region
+   * every deployment has — so nothing downstream has an error case for "we do
+   * not know what servers exist".
+   */
+  private async ensureRegions(): Promise<Region[]> {
+    // A server named on the URL is the whole list, so there is nothing to read
+    // and nothing to wait for. Assigned rather than just returned, so that
+    // `this.regions` is always exactly what the lobby was handed.
+    if (this.devRegion) {
+      this.regions = [this.devRegion];
+      return this.regions;
+    }
+    if (!this.regionsLoad) {
+      this.regionsLoad = loadRegions().then((regions) => {
+        this.regions = regions;
+        return regions;
+      });
+    }
+    return this.regionsLoad;
+  }
+
+  /**
+   * The region a join should go to: the one named, else the standing choice.
+   *
+   * Every socket and every list in the game comes through here, which is what
+   * keeps "the row I am reading" and "the server I am joining" the same
+   * machine. The fallbacks are ordered by how specific the answer is — a row's
+   * own region, then the player's remembered pick, then the first region the
+   * deployment names — and the last of those is what a client that has not yet
+   * read the file gets, which is exactly the same-origin server it would have
+   * had before regions existed.
+   */
+  private regionFor(regionId?: string): Region | null {
+    if (this.devRegion) return this.devRegion;
+    if (regionId) {
+      const named = this.regions.find((r) => r.id === regionId);
+      if (named) return named;
+    }
+    const wanted = this.regionId ?? this.autoRegionId;
+    const chosen = wanted ? this.regions.find((r) => r.id === wanted) : undefined;
+    return chosen ?? this.regions[0] ?? null;
+  }
+
+  /**
+   * The player PICKING a region: the lobby's Region row.
+   *
+   * The mirror of `setMap` one screen over, and it is remembered for the same
+   * reason — it is a choice about how the game is played rather than a fact
+   * about a match. What it is NOT is a thing a match can change: joining a row
+   * in another region plays there without moving this pick, because the pick is
+   * where a match this client CREATES would go and a round somebody else
+   * started says nothing about that.
+   */
+  private setRegion(index: number): void {
+    if (this.state !== "lobby") return;
+    const n = this.regions.length;
+    if (n === 0) return;
+    const next = index < 0 ? 0 : index >= n ? n - 1 : index;
+    if (this.regions[next].id === this.regionId) return;
+    this.regionId = this.regions[next].id;
+    writeRegion(this.regionId);
+    this.lobbyScreen.setRegionChoice(next);
+  }
+
+  /**
+   * A region answered; move the standing choice if the player has never made
+   * one.
+   *
+   * **This is the whole of "choose the right region for me".** A player who has
+   * never touched the row is put in whichever server answered fastest, and one
+   * who has picked is never moved — which is why `regionId` is null rather than
+   * defaulted, and why this is the only writer that does not persist. Being
+   * seated somewhere by a measurement is not a decision to remember; it is a
+   * measurement, and the next visit takes it again.
+   *
+   * It runs per answer rather than after all of them, so the near server is
+   * already selected while the far one is still being waited for. That can move
+   * the highlight once, a few milliseconds in, on a row nobody is looking at
+   * yet — the screen opens with the cursor on New match, and a player who
+   * reaches the region row has by definition arrived after its answers did.
+   */
+  private noteRegionPing(region: Region, ping: number): void {
+    // Overwritten rather than cleared per refresh, which is what keeps a
+    // Refresh from passing through a moment where only one region has answered
+    // and is therefore the fastest one. The readings a player is comparing are
+    // always the newest each server gave.
+    this.lobbyPings.set(region.id, ping);
+    if (this.regionId !== null) return;
+    let best: Region | null = null;
+    let bestPing = Infinity;
+    for (const candidate of this.regions) {
+      const measured = this.lobbyPings.get(candidate.id);
+      if (measured !== undefined && measured < bestPing) {
+        bestPing = measured;
+        best = candidate;
+      }
+    }
+    if (!best || best.id === this.autoRegionId) return;
+    // Deliberately not `setRegion`: this is not a pick, so it is not written to
+    // storage and it does not stop a later answer moving it again.
+    this.autoRegionId = best.id;
+    this.lobbyScreen.setRegionChoice(this.regions.indexOf(best));
+  }
+
   private closeLobby(): void {
     if (!this.lowerLid("lobby")) return;
     // Redrawn on the way out, for the reason `closeSettings` states: the menu
@@ -1135,17 +1318,52 @@ export class Game {
   }
 
   /**
-   * Fetches the match list and hands it to the screen.
+   * Asks every region what it is running, and hands each answer to the screen
+   * as it lands.
    *
-   * Guarded on the screen still being open, because the fetch has a timeout of
-   * several seconds and a player who pressed Back is entitled to have meant it
-   * — a late answer must not repaint a screen that is down, or worse, put one
-   * back up over the menu.
+   * **Every region is asked, on every refresh, and that is what the ping column
+   * is.** There is no separate probe: the list request IS the measurement —
+   * same host, same path, an endpoint that stringifies a Map of at most a
+   * handful of matches — so a screen that shows what each server is running and
+   * a screen that shows how far away each server is are the same fetch. A
+   * dedicated ping endpoint would be a second thing to deploy, a second thing
+   * to proxy, and a number measured against a path nobody plays on.
+   *
+   * They are asked TOGETHER and rendered SEPARATELY. Waiting for the set would
+   * make every lobby as slow as the worst server in the file — including one
+   * that is down, whose answer is the full timeout — and the near region's rows
+   * are worth having on screen while the far one is still being waited for.
+   *
+   * Two guards, and each is a different kind of stale. The screen still being
+   * open, because the fetch has a timeout of several seconds and a player who
+   * pressed Back is entitled to have meant it — a late answer must not repaint
+   * a screen that is down, or worse, put one back up over the menu. And the
+   * generation, because a second Refresh can have its fast region answer before
+   * the first one's slow region has given up.
    */
   private async refreshLobby(): Promise<void> {
-    const result = await fetchMatches(this.netUrl);
-    if (this.state !== "lobby") return;
-    this.lobbyScreen.setList(result);
+    const generation = ++this.lobbyFetch;
+    const regions = await this.ensureRegions();
+    if (this.state !== "lobby" || generation !== this.lobbyFetch) return;
+    // The screen is told what there is to ask before any of it answers, so its
+    // region row and its "asking…" lines are drawn against the real list rather
+    // than appearing when the first result does.
+    const standing = this.regionFor();
+    this.lobbyScreen.setRegions(
+      regions,
+      standing ? regions.indexOf(standing) : 0,
+    );
+    // Before the requests, and once for all of them: the timings they are about
+    // to be measured by are not recorded at all unless there is room in a buffer
+    // this page filled while it was loading. See `clearRequestTimings`.
+    clearRequestTimings();
+    for (const region of regions) {
+      void fetchMatches(region).then((result) => {
+        if (this.state !== "lobby" || generation !== this.lobbyFetch) return;
+        if (result.ok) this.noteRegionPing(region, result.ping);
+        this.lobbyScreen.setResult(region.id, result);
+      });
+    }
   }
 
   /**
@@ -2679,24 +2897,44 @@ export class Game {
    * - `?name=` — what to call this player, until the lobby grows text entry.
    * - `?server=ws://host:port/ws` — which match server the LOBBY should list
    *   and join. Purely a dev affordance: the client is on Vite's port and the
-   *   server on its own, so same-origin does not reach it.
+   *   server on its own, so same-origin does not reach it. It REPLACES the
+   *   region list rather than adding to it — a developer who has named the one
+   *   process they want is not choosing between deployments.
    * - `?mp` — skip the menu and join immediately, optionally naming the server
    *   the way `?server=` does. It predates the lobby and is kept because it is
    *   how the smoke tests get into a networked round in one navigation; the
    *   menu's Multiplayer row is the way a player gets there.
+   *
+   * A bare `?mp` is the one form that has to WAIT: with no server named, the
+   * region it joins is the remembered one, and the file that says where that is
+   * has not been read yet. It is a few hundred bytes off this page's own origin
+   * and the join is asynchronous anyway.
    */
   private joinFromUrl(): void {
     const params = new URLSearchParams(location.search);
     const name = params.get("name");
     if (name) this.playerName = name;
     const server = params.get("server");
-    if (server) this.netUrl = server;
+    if (server) this.devRegion = regionFromSocketUrl(server);
     const mp = params.get("mp");
     if (mp === null) return;
     // A value on `?mp` names the server too, so the one-navigation form does
     // not also need `?server=`.
-    if (mp !== "") this.netUrl = mp;
-    this.joinMatch();
+    if (mp !== "") this.devRegion = regionFromSocketUrl(mp);
+    if (this.devRegion) {
+      this.joinMatch();
+      return;
+    }
+    void this.ensureRegions().then(() => {
+      // Still on the menu, because this is the one join with a WAIT in front of
+      // it. The read is milliseconds off this page's own origin in every
+      // healthy case, but a deployment whose regions file does not answer holds
+      // it for the full timeout — long enough for the menu to be up, its
+      // confirm gate to have opened and a player to have started an offline
+      // round. Yanking them out of one is worse than an `?mp` that lost a race
+      // it only ever loses when somebody was already playing.
+      if (this.state === "menu") this.joinMatch();
+    });
   }
 
   /**
@@ -2715,8 +2953,18 @@ export class Game {
    * and a match can rotate between the fetch and the pick, so the welcome is
    * still what settles it — see `applyMatchMap`. What travels the other way is
    * `map`, the map to start a match on if this join CREATES one.
+   *
+   * **Which SERVER is `opts.regionId`, and it is the row's rather than the
+   * player's.** A match id means nothing outside the process that minted it —
+   * every region has an `m1` — so a join that took the id from one row and the
+   * address from the standing pick would ask the wrong server for a match that
+   * probably exists there, and land the player in a stranger's round on another
+   * continent. Absent is the join that names no row (`?mp`, and New match),
+   * which is the only case the standing pick answers.
    */
-  joinMatch(opts: { matchId?: string; create?: boolean; mapId?: string } = {}): void {
+  joinMatch(
+    opts: { matchId?: string; create?: boolean; mapId?: string; regionId?: string } = {},
+  ): void {
     if (this.net) return;
     // Refused before anything is built or connected, which is the cheapest of
     // the three places this can be caught and the only one that leaves the
@@ -2725,6 +2973,11 @@ export class Game {
       this.hud.toast(`that match is on "${opts.mapId}", which this build does not have`);
       return;
     }
+    // Resolved ONCE, here, and spent on the socket below. Null only when the
+    // region file has not been read yet — a state the lobby cannot be in, since
+    // it awaits that read before it draws a row — and it means the same thing
+    // it always did: whatever is answering `/ws` on this page's own origin.
+    const region = this.regionFor(opts.regionId);
     const net = new NetSession(this.scene, this.mats);
     this.net = net;
 
@@ -2873,13 +3126,15 @@ export class Game {
     };
 
     // The screen stays up under the build, showing which row is being joined,
-    // and `startRound` takes it down on the way into `loading`.
-    if (opts.matchId) this.lobbyScreen.setJoining(opts.matchId);
+    // and `startRound` takes it down on the way into `loading`. Qualified by
+    // region for the reason the row itself is: the same match id is being shown
+    // by every server on the screen.
+    if (opts.matchId && region) this.lobbyScreen.setJoining(region.id, opts.matchId);
 
     this.startRound();
     net.connect({
       name: this.playerName,
-      url: this.netUrl,
+      url: region?.socketUrl,
       weapon: this.weapon,
       matchId: opts.matchId,
       create: opts.create,

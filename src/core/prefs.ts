@@ -1,7 +1,8 @@
 /**
- * prefs.ts — What the player picked last time: difficulty, map and loadout.
+ * prefs.ts — What the player picked last time: difficulty, map, loadout and
+ * region.
  * Owns the localStorage round trip for each; owns nothing that applies them
- * (that is `Game.setDifficulty` / `setMap` / `applyLoadout`).
+ * (that is `Game.setDifficulty` / `setMap` / `applyLoadout` / `setRegion`).
  * Sibling of [`settings.ts`](settings.ts), which does the same job for the
  * display settings and is separate only because those are one flat object
  * behind one screen, where these are four unrelated picks made in three places.
@@ -32,6 +33,8 @@ const MAP_KEY = "hollowmere.map";
 /** …and the loadout. Same store, same tolerance for it not working. */
 const SIGHT_KEY = "hollowmere.sight";
 const WEAPON_KEY = "hollowmere.weapon";
+/** …and which region the player chose to play in, by `Region.id`. */
+const REGION_KEY = "hollowmere.region";
 
 export function readDifficulty(): number {
   try {
@@ -76,6 +79,41 @@ export function readMap(): MapDef {
 export function writeMap(id: string): void {
   try {
     window.localStorage.setItem(MAP_KEY, id);
+  } catch {
+    // As above.
+  }
+}
+
+/**
+ * The region the player last CHOSE, by id, or null.
+ *
+ * The one preference here that is not validated against a table, because the
+ * table is not in this build: regions come from a deploy-time file, so an id
+ * this reader cannot recognise may be a region that exists, one that has been
+ * retired, or one that is briefly out of the list while a box is down. It is
+ * resolved where the list is known (`Game.regionFor`) and simply falls through
+ * to the ordinary default when it does not match — and it is deliberately NOT
+ * cleared then, so a region taken out for an hour is still the player's when it
+ * comes back.
+ *
+ * Null is a meaningful answer and not a missing one. Nothing remembered means
+ * the player has never picked, which is what lets the lobby put them in the
+ * region that answered fastest rather than in whichever one the file lists
+ * first — see `Game.noteRegionPing`.
+ */
+export function readRegion(): string | null {
+  try {
+    const raw = window.localStorage.getItem(REGION_KEY);
+    if (raw) return raw;
+  } catch {
+    // As above.
+  }
+  return null;
+}
+
+export function writeRegion(id: string): void {
+  try {
+    window.localStorage.setItem(REGION_KEY, id);
   } catch {
     // As above.
   }

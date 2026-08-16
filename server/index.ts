@@ -313,13 +313,22 @@ const http = createServer((req, res) => {
   if (req.url === "/matches") {
     res.writeHead(200, {
       "content-type": "application/json",
-      // The lobby fetches this before any socket exists, and in DEV it does so
-      // from another origin: the client is on Vite's port and the server on its
-      // own, with no nginx in between to make them one. Read-only and public —
-      // it is the same list anyone can get by connecting — so there is nothing
-      // here an origin check would protect. In production nginx proxies
-      // `/matches` onto the game's own origin and this header is moot.
+      // The lobby fetches this before any socket exists, and it does so from
+      // another origin whenever this process is not the one behind the page:
+      // every region past the local one, and in DEV the client on Vite's port
+      // with no nginx in between to make them one. Read-only and public — it is
+      // the same list anyone can get by connecting — so there is nothing here
+      // an origin check would protect.
       "access-control-allow-origin": "*",
+      // **This header is the ping.** The lobby times its own request with the
+      // transport's resource timing (`responseStart - requestStart`) precisely
+      // so the DNS, TCP and TLS a first request pays for are excluded — and
+      // cross-origin, a browser zeroes those fields unless the server allows
+      // the reading. Without this line every region a player has never fetched
+      // from falls back to a wall clock that includes its whole connection
+      // setup, so the far server reads as slower than it is on the one screen
+      // built for comparing them. A region is by definition cross-origin.
+      "timing-allow-origin": "*",
       // A lobby row that is four seconds stale is a row that lies about who is
       // in it, and this is cheap to recompute.
       "cache-control": "no-store",

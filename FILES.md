@@ -41,6 +41,10 @@ main.ts             # Bootstrap. Imports src/ui/base.css FIRST. Owns the boot
                     #   failure message.
 public/             # Copied to dist/ VERBATIM — unhashed URLs named by hand
                     #   (manifest.webmanifest, icons/ from `npm run icons`).
+  regions.json      # Which match servers this deployment offers, by host. The
+                    #   one file a deployer edits on the box: adding, moving or
+                    #   draining a region is not a rebuild. no-cache in nginx
+                    #   and exempt in the service worker, for that reason
 src/
   config/           # ALL tunable constants (no magic numbers in code).
                     #   One module per subsystem; import `CONFIG` from "…/config"
@@ -260,14 +264,19 @@ src/
                         #   thumb picks an option INDEX, so both are the same
                         #   choice). Owns no setting: picks leave through
                         #   onChange and return as setValues
-    LobbyScreen.ts      # The match browser: one row per match on the server,
-      lobby.css         #   plus map/new/refresh/back. Rows are DERIVED from
-                        #   the list, and everything off the wire is written
+    LobbyScreen.ts      # The match browser: every region's matches in one list
+      lobby.css         #   with a region column and a ping per row, plus
+                        #   region/map/new/refresh/back. Rows are DERIVED from
+                        #   the results, and everything off a network is written
                         #   with textContent. Fetches nothing — Game hands it a
-                        #   result and takes onJoin/onCreate/onPickMap back.
-                        #   The Map row is what a match CREATED here starts on;
-                        #   joining one takes that match's map, and onJoin
-                        #   carries it
+                        #   region list and each region's answer as it lands,
+                        #   and takes onJoin/onCreate/onPickRegion/onPickMap
+                        #   back. A match row is a REGION and an id (ids are
+                        #   minted per process, so every region has an m1). The
+                        #   Region and Map rows are what a match CREATED here
+                        #   starts in and on; joining one takes that match's
+                        #   server and map, and onJoin carries both. One region
+                        #   collapses it to the three-column screen it was
     Minimap.ts          # Corner minimap: flags, friendlies, firing enemies
       minimap.css
     ping.ts             # What a latency LOOKS like — the text and the quality
@@ -289,10 +298,16 @@ src/
     NetGrenades.ts    #   Everybody else's grenades in the air, interpolated on
                       #   the same clock as the bodies. The thrower's own is
                       #   skipped — they are watching their local copy
-    lobby.ts          #   GET /matches, and the one bit of arithmetic behind
-                      #   it: the ws:// URL's origin -> the HTTP one. The only
-                      #   part of multiplayer that is not the WebSocket. Times
-                      #   its own request, which is the lobby's ping
+    lobby.ts          #   GET /matches for ONE region. The only part of
+                      #   multiplayer that is not the WebSocket. Times its own
+                      #   request, which is the ping shown beside that region —
+                      #   and owns clearRequestTimings, without which that
+                      #   timing is not recorded at all
+    regions.ts        #   Which match servers exist: the read of
+                      #   public/regions.json, and the arithmetic that turns a
+                      #   region's HOST into its socket and its list URL. Both
+                      #   are resolved together, so browsing one server and
+                      #   joining another is not representable
   pwa/
     register.ts         # SW registration + the touch fullscreen gesture.
                         #   Knows nothing about the game

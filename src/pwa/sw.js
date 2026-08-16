@@ -90,7 +90,23 @@ self.addEventListener("fetch", (event) => {
   // Named as paths rather than tested against the socket's URL because these
   // are proxied independently of `/ws` and only agree by convention, which is
   // the reason `net/lobby.ts` names `/matches` outright too.
-  if (url.pathname === "/matches" || url.pathname === "/health") return;
+  //
+  // `/regions.json` is here for a DIFFERENT reason and is worth not merging
+  // with them in your head. It is a static file, so it is precached like the
+  // rest of the build — but it is the one static file a deployer is expected to
+  // edit on the box, without a rebuild, and it is what a region being drained
+  // is edited out of. Cache-first would answer with the version that shipped
+  // until the next deploy, which is to say it would point players at a server
+  // somebody has already taken out of the list. Network-only here, and
+  // `loadRegions` answers a failed fetch with this page's own origin, so an
+  // offline launch is a single-player launch rather than a broken one.
+  if (
+    url.pathname === "/matches" ||
+    url.pathname === "/health" ||
+    url.pathname === "/regions.json"
+  ) {
+    return;
+  }
 
   // A navigation is always the app shell. Answering it from the precache by
   // path (rather than by the request, which carries the query string and any

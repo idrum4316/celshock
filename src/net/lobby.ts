@@ -1,20 +1,25 @@
 /**
  * net/lobby.ts — Asking a match server what it is running, before there is a
  * socket.
- * Owns: the `/matches` request and the one piece of arithmetic behind it —
- * turning the WebSocket URL the rest of the net layer speaks in into the HTTP
- * origin the list lives on. Owns no UI and no state: it is one function that
- * fetches and returns.
+ * Owns: the `/matches` request and the round trip it is timed by. Owns no UI
+ * and no state: it is one function that fetches a region and returns.
  * Invariants: never opens a socket, never joins anything, and never throws a
  * raw `TypeError` at a caller — a server that is down is an ordinary answer for
- * a lobby to render, not an exception for it to handle.
+ * a lobby to render, not an exception for it to handle. It never chooses WHICH
+ * server either: it is handed a resolved `Region` and asks that one, so the
+ * list a player is reading and the socket they would open are the same machine
+ * by construction (see `net/regions.ts`).
  *
  * This is the ONE part of multiplayer that is not the WebSocket. It is plain
  * HTTP on purpose: a client browsing matches has not committed to anything yet,
  * and making it hold a socket open to read a list would mean every idle player
- * sitting on a menu is a connection the server has to carry.
+ * sitting on a menu is a connection the server has to carry. With more than one
+ * region that argument only gets stronger — a lobby measures every region on
+ * every refresh, and doing that over sockets would mean opening one to each
+ * server just to find out which is nearest.
  */
 import type { MatchList } from "./protocol";
+import type { Region } from "./regions";
 
 /**
  * How long to wait for a list before calling the server down, in ms.
@@ -22,50 +27,54 @@ import type { MatchList } from "./protocol";
  * Short, because this is a menu: the endpoint does no work — it walks a Map of
  * at most a handful of matches and stringifies it — so anything past a second
  * is a network that is not going to answer, and a lobby that spins for thirty
- * seconds before admitting it is a lobby nobody waits out.
+ * seconds before admitting it is a lobby nobody waits out. It is also the
+ * longest a DOWN region can hold up the region beside it, which is nothing at
+ * all: the requests are in flight together and each row lands when it lands.
  */
 const LIST_TIMEOUT_MS = 4000;
 
-/**
- * Where the match list lives, given where the socket does.
- *
- * The net layer speaks in WebSocket URLs — a relative `/ws` in a deployed
- * build, an absolute `ws://host:port/ws` for a dev client pointed at another
- * port — and the list is the same server over HTTP. So the ORIGIN is what
- * carries over and the path is replaced outright: `wss://` becomes `https://`,
- * `ws://` becomes `http://`, and a relative URL means the page's own origin,
- * which is exactly what nginx's `/matches` proxy answers on.
- *
- * The path is not derived from the socket's (`/ws` → `/matches` by string
- * surgery) because those two are proxied independently and only agree by
- * convention. Naming it outright means a server that moves its socket does not
- * silently take the lobby with it.
- */
-function listUrl(wsUrl: string): string {
-  if (/^wss?:\/\//.test(wsUrl)) {
-    const parsed = new URL(wsUrl);
-    return `${parsed.protocol === "wss:" ? "https:" : "http:"}//${parsed.host}/matches`;
-  }
-  return `${location.origin}/matches`;
-}
-
-/** What a lobby got back, or why it got nothing. */
+/** What a lobby got back from one region, or why it got nothing. */
 export type LobbyResult =
   | {
       ok: true;
       list: MatchList;
       /**
-       * How long the round trip to the match server took, in ms.
+       * How long the round trip to this region took, in ms.
        *
        * The only ping available on this screen and an honest one: there is no
        * socket yet, so what is measured is the request that fetched this list —
        * same host, same network path, and the endpoint itself does no work
        * beyond walking a Map of at most a handful of matches. What a player
-       * reads it for is whether this server is near them, and it answers that.
+       * reads it for is which server is nearest them, and it answers that.
        */
       ping: number;
     }
   | { ok: false; error: string };
+
+/**
+ * Makes room for the timings the next fan-out is about to take.
+ *
+ * **The resource timing buffer holds 250 entries and then silently stops
+ * recording**, and a page that has loaded a game has spent all of them long
+ * before anybody opens the lobby: the bundle's own chunks, every texture, and —
+ * on an installed build — the service worker's `cache.addAll` over the entire
+ * precache. So `getEntriesByName` finds nothing, every reading falls through to
+ * the wall clock, and the ping column quietly measures how busy the main thread
+ * was instead of how far away the server is. Measured in a headless client,
+ * where a stalled frame turned a 3 ms round trip to localhost into 683 ms —
+ * against a probe on the same machine, taken on a page with no game on it,
+ * which read the true 2.9 ms out of the transport.
+ *
+ * Called ONCE before a fan-out rather than inside the fetch, and the ordering is
+ * the point: the regions are asked together, so a clear inside each request
+ * would drop the entry of whichever answered first. Nothing else in the game
+ * reads resource timings — this is the only measurement of its kind here — so
+ * clearing the lot costs nothing and leaves the buffer holding one refresh's
+ * worth for the life of the page.
+ */
+export function clearRequestTimings(): void {
+  performance.clearResourceTimings();
+}
 
 /**
  * The transport's own timing for a request that has just finished, or the
@@ -80,11 +89,18 @@ export type LobbyResult =
  * requestStart` is the transport's own answer to "how long did the far end take
  * to start replying", with the setup already excluded.
  *
- * It is not always there: the buffer fills, and a cross-origin server (a dev
- * client pointed at another port) exposes zeros without a `Timing-Allow-Origin`
- * header. Both come back as the wall-clock figure, which is the honest thing to
- * do with a measurement that was not available — an inflated first reading is
- * worse than the alternative only when there is a better one to be had.
+ * **With regions that stopped being a nicety and became the measurement.** Two
+ * numbers are on screen to be COMPARED, and the far one is the one paying for a
+ * fresh connection — an inflated first reading does not just flatter a server,
+ * it points the player at the wrong one. Which is why the match server sends
+ * `timing-allow-origin: *` beside its CORS header: without it a cross-origin
+ * region's timing entry reads zeros and falls back to the wall clock, and the
+ * region a player has never fetched from is the region that looks slow.
+ *
+ * It is not always there — a server that predates that header exposes nothing —
+ * and that comes back as the wall-clock figure, which is the honest thing to do
+ * with a measurement that was not available. The OTHER way it goes missing is
+ * `clearRequestTimings`'s problem, above; read that before trusting this.
  */
 function requestRtt(url: string, elapsed: number): number {
   const entries = performance.getEntriesByName(url);
@@ -95,7 +111,7 @@ function requestRtt(url: string, elapsed: number): number {
 }
 
 /**
- * Fetches the match list from the server the given socket URL points at.
+ * Fetches the match list from one region.
  *
  * Every failure comes back as `{ ok: false }` with something a player can read.
  * The distinction that matters to the caller is not WHICH failure it was but
@@ -103,8 +119,8 @@ function requestRtt(url: string, elapsed: number): number {
  * match server" is more use than one that renders an empty list — an empty list
  * means "no matches running", which is a different and joinable situation.
  */
-export async function fetchMatches(wsUrl?: string): Promise<LobbyResult> {
-  const url = listUrl(wsUrl ?? "");
+export async function fetchMatches(region: Region): Promise<LobbyResult> {
+  const url = region.listUrl;
   const started = performance.now();
   try {
     const res = await fetch(url, {

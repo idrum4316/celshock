@@ -753,8 +753,16 @@ matches. It is taken from the transport's own resource timing
 `fetch`, and that is not fussiness: the FIRST list a player asks for is the
 request that pays for DNS, TCP and TLS, so a naive reading reports three round
 trips as one on the one look that forms their impression of the server, and a
-third of it on every Refresh after. One reading for the screen and not one per
-row, since there is one server behind every row on it.
+third of it on every Refresh after.
+
+**Where it goes is decided by whether the player has a choice to make.** With one
+region there is one server behind every row, so the reading belongs to the screen
+and sits on the status line — the same number printed four times would read as
+though picking a row picked a connection. With more than one that inverts
+exactly: the number differs per row, choosing a row IS choosing a connection, and
+the reading moves into the list where two of them can be compared. Both forms are
+`pingQuality`'s bands, for the reason `ui/ping.ts` exists at all. What the
+cross-origin case then costs is a header and a cleared buffer — see "Regions".
 
 ## The world the server stands in
 
@@ -851,17 +859,27 @@ middle of its own explosion.
 
 **The registry in `server/index.ts` IS the lobby.** Matches live in that
 process's memory, so the list it serves on `GET /matches` is authoritative for
-itself: there is nothing for a match server to check in WITH, because there is
-one of them and it already knows everything there is to know. A master server —
-the thing dedicated servers heartbeat into so clients can be handed a list of
-addresses — solves a problem this deployment does not have, and building one now
-would be a second source of truth about matches that only one process owns.
+itself: there is nothing for a match server to check in WITH, because it already
+knows everything there is to know about the only matches anyone can ask it for.
+A master server — the thing dedicated servers heartbeat into so clients can be
+handed a list of addresses — solves a problem this deployment does not have, and
+building one would be a second source of truth about matches that one process
+owns.
 
-That stops being true the moment there are two processes, and the trigger is
-CPU: Node is single-threaded, so every match in a process shares one core.
-`MAX_MATCHES` (env, default 4) is what bounds it, and it exists so that "New
-match" is a safe button — a create path with nothing behind it is a way for
-anyone to spend the server's memory from a menu.
+**That survived a second server, which is the part worth understanding.** There
+are regions now, and there is still nothing central: what a master server would
+have held is a list of ADDRESSES, and a deployment already knows its own
+addresses — so the client is handed them in a file (`public/regions.json`) and
+asks each server directly. Every server is still the only authority on its own
+matches, nothing has to be kept in step, and a region that is down is a row that
+says so rather than a registry serving stale rows about it. See the section
+below.
+
+The ceiling that made a second process necessary is CPU: Node is
+single-threaded, so every match in a process shares one core. `MAX_MATCHES`
+(env, default 4) is what bounds it, and it exists so that "New match" is a safe
+button — a create path with nothing behind it is a way for anyone to spend the
+server's memory from a menu.
 
 Three pieces, and the shape is the same one every screen here follows:
 
@@ -890,6 +908,87 @@ bounded on arrival (`cleanName` in `Match.ts`) exactly as the weapon id is
 resolved there: truncated to `MAX_NAME_LENGTH`, stripped of the control
 characters that hide the rest of a string, and never escaped — escaping belongs
 to whatever renders it, and every screen writes a name with `textContent`.
+
+### Regions: the client holds the list, and every server still speaks for itself
+
+**A region is a match server with a hostname, and the client is told about it in
+a file.** `public/regions.json` names each one — an id, a short display name, and
+the match server's HOST — and `net/regions.ts` reads it once per page and turns
+each entry into a resolved `Region`. It is a deploy-time file rather than a table
+in the bundle because a region's address is a fact about where the game is
+hosted, not a constant about how it plays: adding one, moving one, or taking an
+unhealthy one out of the list is then editing a file on the box rather than
+shipping a build, which matters most in exactly the case you would least like to
+be slow about.
+
+**A `Region` carries BOTH of its urls, resolved together, and that is the whole
+of the old `Game.netUrl` invariant.** The socket and the match list are proxied
+independently and agree only by convention, so both are named outright from the
+host (`wss://host/ws`, `https://host/matches`) in one function. Nothing
+downstream derives one from the other, and nothing else holds an address —
+which is what keeps "the list I am reading" and "the server I am joining" the
+same machine. The SCHEME is the page's, never the file's: an entry states an
+authority and nothing more, so a file cannot ask an https page to open a plain
+socket (the browser would refuse it as mixed content, and the failure would
+arrive as a socket that closes with nothing in it).
+
+**A match id is minted per process, so a row is a REGION and an id.** Every
+region has an `m1`; an id alone would send a join to whichever server the client
+last spoke to, which would usually find a match of that name and drop the player
+into a completely different round on another continent. `LobbyScreen` carries the
+region on every row, `onJoin` passes it to `joinMatch`, `sameRow` compares it,
+and the "joining" highlight matches on both. `Game.regionFor` is the single
+funnel: a row's own region, else the standing pick, else the first the file
+names.
+
+**The ping is the list fetch, and there is no second endpoint.** Every region is
+asked on every refresh, the requests go out together and each row lands when it
+lands — so the screen shows what each server is running and how far away it is
+from one round trip, and a region that is down costs the others nothing but its
+own timeout. Two details are load-bearing and both are about not lying:
+
+- **`timing-allow-origin: *` on `/matches`.** The reading is the transport's own
+  `responseStart - requestStart`, which excludes the DNS, TCP and TLS that a
+  first request pays for — and cross-origin a browser zeroes those fields unless
+  the server allows the reading. A region is by definition cross-origin, so
+  without that header every server a player has not fetched from yet reads as
+  slower than it is, on the one screen built for comparing them.
+- **The resource timing buffer holds 250 entries and then silently stops
+  recording**, and a page that has loaded a game spent them all long before the
+  lobby opened — the bundle's chunks, the textures, and on an installed build
+  the service worker's `cache.addAll` over the whole precache. So the reading
+  falls through to a wall clock that measures how busy the main thread was.
+  `clearRequestTimings` is called once before each fan-out (once, not per
+  request — the regions are asked together, and a clear inside each would drop
+  whichever answered first). Measured headless: 683 ms reported for a 3 ms round
+  trip to localhost.
+
+**The chosen region is a preference, and not choosing is the interesting case.**
+`readRegion`/`writeRegion` remember a pick exactly as the map is remembered.
+Nothing remembered means the fastest region that ANSWERS is preselected, on every
+visit, and the moment the player steps that row it becomes their pick and is
+never moved for them again — `Game.noteRegionPing` is the one place that
+distinction is spent, and it deliberately does not persist what it chooses,
+because being seated somewhere by a measurement is not a decision to remember.
+
+**The region row is what a match this client CREATES goes in, and nothing more**
+— the same relationship the Map row has to `Join.map`. Joining a listed match
+plays where that match is running and does not move the pick, because a round
+somebody else started says nothing about where this player wants to start one.
+
+**One region collapses the screen to what it was.** The region column, the ping
+column and the region row appear only when the file names more than one, so an
+untouched `regions.json` — a single-box deployment, and every dev client running
+`?server=` — gets the three-column lobby with one reading on its status line,
+which is the screen this all replaced.
+
+**What regions do NOT buy is two processes behind one hostname.** That is still
+the thing that would break: matches live in memory, so a load balancer in front
+of two match servers puts players who joined "the same" match into two different
+worlds, and each replica would serve its own half of `/matches` as though it were
+all of them. A region is the opposite arrangement — one hostname, one process,
+and the client choosing between hostnames — which is why it needs no registry
+and no shared state at all.
 
 ### The map belongs to the match, and a client never picks it
 
@@ -1239,11 +1338,17 @@ Stated so nobody assumes otherwise:
   until it asks, which is why the deploy screen goes back up on a re-seat. The
   match keeps its world for a minute, so the round survives; the seat is not
   reserved, and neither is the position you were standing in.
-- **More than one match server process.** Matches live in memory, so two
-  replicas behind one proxy put players who joined "the same" match into two
-  different worlds — and each would serve its own half of `/matches` as though
-  it were all of them. This is the one item above whose fix IS a central
-  registry, and the ceiling that forces it is one core's worth of matches.
+- **Moving a player between regions, or matching them across regions.** A region
+  is chosen before the socket opens and holds for the round: there is no "your
+  friends are in US East, come over", no cross-region party, and nothing that
+  looks at the two lists together and suggests one. The lobby shows both and the
+  player decides.
+- **Two match server processes behind ONE hostname.** Regions did not make this
+  work and were the way around it — see "Regions" above. Matches live in memory,
+  so two replicas behind one proxy put players who joined "the same" match into
+  two different worlds, and each would serve its own half of `/matches` as
+  though it were all of them. The fix for THAT is a central registry; the fix
+  for capacity is another region, or a bigger `MAX_MATCHES` on a bigger box.
 
 ## Deploying it
 
@@ -1261,6 +1366,53 @@ name falls through to the static root and comes back as a 404, and that failure
 is a nasty one because the lobby works perfectly against `npm run server` on a
 dev machine, where the client reaches the match server directly and nginx is not
 in the picture at all.
+
+### A second region is the same deployment, again, with a name of its own
+
+**There is no separate "region build" and no region-aware server.** A region is
+this same pair of containers on a box in that region, behind a hostname that
+resolves there. Nothing in `server/` knows which region it is — it does not need
+to, because a client picks a hostname and everything past that is one server
+talking to the clients that chose it.
+
+1. **Bring the stack up on the new box**, exactly as above. `MATCH_SERVER` and
+   `MAX_MATCHES` are per-box settings; give a smaller box a smaller cap.
+2. **Point a hostname at it and terminate TLS** — `us-east-1.example.com` — with
+   the same `/ws` Upgrade forwarding the main domain needs. Everything under
+   "the edge proxy" applies to every region host, because for the players who
+   pick it, it *is* the edge.
+3. **Add it to `public/regions.json`** wherever the game is served from, with
+   `host` set to that authority and no scheme:
+   ```json
+   {
+     "regions": [
+       { "id": "us-west-1", "name": "US West", "host": "us-west-1.example.com" },
+       { "id": "us-east-1", "name": "US East", "host": "us-east-1.example.com" }
+     ]
+   }
+   ```
+   No rebuild: it is a static file the running container serves, `no-cache` in
+   nginx and exempt from the service worker's cache-first, so an edit is live on
+   the next page load. **Edit it, do not delete it** — it is in the precache
+   manifest, and `cache.addAll` fails whole if any precached URL 404s, which
+   would leave the worker unable to install at all.
+4. **Serve the game from wherever you like.** It is static; the region hosts
+   answer `/ws` and `/matches` and nothing about a region has to be the origin
+   the page came from. A region that also serves the bundle (which the `web`
+   container does anyway) is fine and costs nothing.
+
+**The `/matches` response carries two headers a region depends on**, both from
+`server/index.ts`, and an edge proxy that strips response headers will break the
+lobby in two different ways: `access-control-allow-origin: *` (without it the
+fetch is refused outright, and every region but the one serving the page reads as
+unreachable) and `timing-allow-origin: *` (without it the fetch works but its
+ping is inflated by a whole connection setup, which is worse — it is wrong rather
+than absent).
+
+**A region that goes down needs nothing done to it.** The lobby renders it as a
+row that says so, the other regions are unaffected, and a player whose remembered
+pick is the dead one is put back on it when it returns. Taking it out of
+`regions.json` is for when it is going to stay down.
 
 **The upstream must be reached through a VARIABLE, and this is not a style
 choice.** A literal `proxy_pass http://match-server:8080` is resolved when nginx
