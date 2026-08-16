@@ -1,9 +1,9 @@
 /**
- * overlay.css — The four full-screen cards: the menu, the round-over result,
- * the pause list and the one over a map being built.
+ * overlay.css — The three full-screen cards: the menu, the round-over result
+ * and the pause list.
  * Owns: #overlay and everything under it — the shell, the title block, the
- * settings grid, the Deploy button, the pause and round-over action lists, the
- * controls table and the result bar.
+ * settings grid, the Deploy button, the pause action list, the controls table
+ * and the result bar.
  * The state rules keyed on #hud (.overlaid, and the pause's pointer-events
  * carve-out) stay in hud.css: a class belongs to whoever raises it, and those
  * two are the HUD's own chrome getting out of a card's way.
@@ -45,7 +45,6 @@
 }
 #overlay .ov-settings,
 #overlay button.ov-start,
-#overlay .ov-actions,
 #overlay .ov-controls,
 #overlay .pause-actions,
 #overlay .ov-result { width: var(--col); }
@@ -252,68 +251,6 @@
   transform: translateY(-1px);
 }
 
-/* --- the round-over card's other way out ---
-   The same two-line shape as the Deploy button above it and deliberately
-   not the same weight: another round on this map is what most visitors to
-   this card want, so it stays filled hot and this one is outlined. They
-   are one CHOICE, so they are wrapped in a block with a tight gap of its
-   own — the overlay's 18px between siblings is what separates the title
-   from the result, and spending it here would file the two halves of one
-   decision as two blocks of the page. */
-#overlay .ov-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-}
-#overlay button.ov-quit {
-  font: inherit;
-  pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 9px 52px;
-  color: #cdd6e6;
-  background: rgba(255, 255, 255, 0.06);
-  border: 0;
-  cursor: pointer;
-  /* A hairline plate, which the pause list can do without and this cannot:
-     four stacked buttons read as a group of controls at any weight, and one
-     button alone under a filled one reads as a caption unless it has an edge.
-     Inset for the reason the cursor's ring is — the chamfer clips its own
-     element's outline along with the corner. */
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
-  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
-  transition: background 0.12s, color 0.12s;
-}
-#overlay button.ov-quit b {
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  text-indent: 0.22em;
-  text-transform: uppercase;
-}
-#overlay button.ov-quit i {
-  font-style: normal;
-  font-size: 9px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.38);
-}
-#overlay button.ov-quit:hover {
-  background: rgba(255, 230, 128, 0.18);
-  color: var(--hot);
-}
-/* The cursor on it: a ring rather than the hot fill, which belongs to the
-   button beside it. Inset, like every other mark on a chamfered control
-   here — see the menu cursor's note. */
-#overlay button.ov-quit.sel {
-  color: var(--hot);
-  background: rgba(255, 230, 128, 0.12);
-  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.55);
-}
-
 /* --- the menu cursor ---
    The menu is a list a pad steps through, so exactly one row is "where
    you are" and it has to read as that from across the screen. Two marks
@@ -357,10 +294,10 @@
   box-shadow: inset 0 0 0 2px rgba(18, 20, 26, 0.45);
 }
 
-/* The one line that says how a card's list is driven, under the action
-   and above the controls table. The menu and the round-over card both
-   carry it. It names the stick first: the d-pad was always answered here
-   and the stick was not, which is the half a pad player reaches for. */
+/* The one line that says how the list is driven, under the action and
+   above the controls table. It names the stick first: the d-pad was
+   always answered here and the stick was not, which is the half a pad
+   player reaches for. */
 #overlay .ov-nav {
   display: flex;
   gap: 22px;
@@ -404,17 +341,13 @@
 }
 /* Selection is filled, hover is only warm: the keyboard's idea of where
    it is has to stay readable while the mouse is somewhere else. Hover
-   moves the selection anyway (see OverlayScreen.bindActions), so the two
-   only differ for the frame between entering a button and the class
-   landing. `.sel` is the cursor everywhere on this overlay — the menu's
-   rows, these, and the round-over pair — while `.on` stays what it means
-   on the tier buttons: the value that is CHOSEN, which is a different
-   thing from where the cursor happens to be resting. */
+   moves the selection anyway (see HUD.showPause), so the two only differ
+   for the frame between entering a button and the class landing. */
 #overlay button.pact:hover {
   background: rgba(255, 230, 128, 0.18);
   color: var(--hot);
 }
-#overlay button.pact.sel {
+#overlay button.pact.on {
   color: #12141a;
   background: var(--hot);
 }

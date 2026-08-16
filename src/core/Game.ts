@@ -788,14 +788,6 @@ export class Game {
     this.overlayScreen.onStart = () => {
       if (this.state === "menu" || this.state === "roundover") this.startRound();
     };
-    // The round-over card's other half. Guarded for the reason above and one
-    // more: `enterMenu` is written for a round that is still standing, and it
-    // is only harmless to run twice because everything in it is idempotent —
-    // which is not a property to lean on from a state that never showed the
-    // card the click came from.
-    this.overlayScreen.onMainMenu = () => {
-      if (this.state === "roundover") this.enterMenu();
-    };
     this.deployScreen.onOpenLoadout = () => this.openLoadout();
     this.loadoutScreen.onWeapon = (id) => this.setWeapon(id);
     this.loadoutScreen.onSight = (id) => this.setSight(id);
@@ -1345,11 +1337,9 @@ export class Game {
   /**
    * The title card and the round-over card, which share one overlay element.
    *
-   * Both are LISTS — the cursor keys move and step them, and the dedicated
-   * keys are accelerators rather than the only way to reach a row. They
-   * differ in what a row IS: the menu's are settings, so left and right step
-   * the one the cursor is on, while the round-over card's two are actions and
-   * have nothing to step.
+   * The menu is a LIST — the cursor keys move and step it, and the dedicated
+   * keys are accelerators rather than the only way to reach a row. The
+   * round-over card has no cursor, so it only takes the confirm.
    */
   private updateMenuCard(dt: number): void {
     this.overlayT += dt;
@@ -1380,26 +1370,6 @@ export class Game {
       }
       if (this.input.settingsPressed) {
         this.openSettings();
-        return;
-      }
-    } else {
-      // The round-over card, which is a two-item list: another round on this
-      // map, or the title screen. Driven exactly as the menu above is — the
-      // cursor moves, A fires the row it is on and BREAKS so the fall-through
-      // cannot start a round out from under whichever was picked, and Start
-      // below still deploys from wherever the cursor rests.
-      if (this.input.menuUpPressed) this.overlayScreen.moveActionSelection(-1);
-      if (this.input.menuDownPressed) this.overlayScreen.moveActionSelection(1);
-      if (this.input.menuConfirmPressed && this.overlayT > 0.5) {
-        this.overlayScreen.activateAction();
-        return;
-      }
-      // B / Backspace leaves, the same thing they mean on every other screen
-      // that has a way out. Gated with the rest: B is also the pad's crouch
-      // toggle, so a player who happened to be flipping it as the last ticket
-      // ran out would otherwise skip past their own result card.
-      if (this.input.menuBackPressed && this.overlayT > 0.5) {
-        this.enterMenu();
         return;
       }
     }
@@ -1549,11 +1519,11 @@ export class Game {
       this.openSettings();
       return;
     }
-    if (this.input.menuUpPressed) this.overlayScreen.moveActionSelection(-1);
-    if (this.input.menuDownPressed) this.overlayScreen.moveActionSelection(1);
+    if (this.input.menuUpPressed) this.overlayScreen.movePauseSelection(-1);
+    if (this.input.menuDownPressed) this.overlayScreen.movePauseSelection(1);
     // Keyboard/pad confirm only — the buttons handle their own clicks, and
     // a click on the empty half of the screen is not a menu choice.
-    if (this.input.menuConfirmPressed) this.overlayScreen.activateAction();
+    if (this.input.menuConfirmPressed) this.overlayScreen.activatePause();
   }
 
   /**
@@ -1680,14 +1650,9 @@ export class Game {
   }
 
   /**
-   * Back to the main menu, from the pause screen and from the round-over card.
-   * Mirrors `endRound` minus a result: the round is abandoned rather than
-   * finished, so there is no winner to show and nothing to keep.
-   *
-   * Everything it does is idempotent, which is what lets the round-over card
-   * reach it at all — `endRound` has already stopped the death cam, hidden the
-   * minimap and reset the battle by the time that card is on screen, and this
-   * runs over the top of a finished round exactly as it does over a live one.
+   * Back to the main menu, from the pause screen. Mirrors `endRound` minus a
+   * result: the round is abandoned rather than finished, so there is no winner
+   * to show and nothing to keep.
    *
    * The map is deliberately left standing. `startRound` rebuilds it anyway,
    * and disposing it here would only trade a live backdrop for an empty one.
