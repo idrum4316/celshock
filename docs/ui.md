@@ -77,10 +77,18 @@ differ, the screen's own hints say so: Enter changes a settings row and closes
 the kit screen, and only the pair that works everywhere is on the button.
 
 **The four cards are one class because they are one element** — they share the
-shell, the title block, the controls table and the Deploy button. The bar for a
-screen of its own is *state*: the deploy map has a selection and a canvas, the kit
-screen has two slots and a turntable; a card that is markup plus a button has not
-earned one.
+shell, the title block and the Deploy button. The bar for a screen of its own is
+*state*: the deploy map has a selection and a canvas, the kit screen has two
+slots and a turntable; a card that is markup plus a button has not earned one.
+
+**The key-cap table is no longer one of the things they share, and that is the
+whole reason it moved.** It hung under the menu's title and under the pause list,
+drawn from one table by one loop, which was right while the settings screen was
+two toggles no pad could reach. Once that screen became a list a cursor lands on
+from both places, the table belonged in it: the menu is five decisions and a
+Deploy button, and eleven rows of reference under them made the longest block on
+the card the one nobody reads twice. It is one row of the menu and one item of
+the pause list away, and the settings screen opens on the page that carries it.
 
 **The building card is the fourth, and it is the only one the player cannot
 act on.** It stands over the ~0.7 s of merges, occlusion bake and nav grid that
@@ -113,6 +121,35 @@ one hit-testing path. What a longer list changes is only how the cell is DRAWN:
 the control column is fixed, which is ~60 px a button for three options and 10 px
 for sixteen — narrower than one character — so a row can ask for
 `style: "slider"` and be laid along a track instead.
+
+**It is split into PAGES, and the page selector is ROW 0 rather than a key of its
+own.** That is the whole tab mechanism: up and down reach the row, left and right
+step it, Enter wraps it — exactly what every other row on the screen already
+reads, so a pad needs no bumper nobody would think to press and the screen needs
+no second hit-testing path (the tabs are `.se-opt` buttons like any short option
+list). It is not in `Settings` and not in a page's rows because what it changes is
+on this screen rather than in the store. Switching pages puts the cursor back on
+the selector: row 3 of Display is not row 3 of anything else, and the row the
+player is standing on is the one they just used. `show()` resets the page as well
+as the row, for the reason the kit screen resets its cursor — and because a
+screen that opens on Display because that is where you were last week hides the
+key table from the player who came looking for it.
+
+**A page is what this list GROUPS by, and it replaced a heading row for a reason
+that is about height.** Nothing in this HUD scrolls, so a list that outgrows its
+panel does not get a scrollbar, it gets a foot the player cannot see. A heading
+buys an inch of separation and spends the same height as a row; a page buys the
+whole rest of the list back. The split rule is the mechanical one — a page that
+outgrows the panel splits into another page, exactly as a section would have
+split into another heading.
+
+**The key-cap table is the one thing on the screen that is not a choice.** It
+carries no `data-row`, so the cursor steps straight past it, and it spans every
+column of the grid rather than sitting in the control one — it is not a row, it
+is what the Controls page is *about*. Its own three columns (action / keyboard /
+pad) are set independently of the list's above it, because an action name is
+short where a setting's label is long and matching the two would leave the key
+chips stranded mid-panel with the pad column adrift at the far edge.
 
 - **The slider is positioned by option INDEX, not by value**, one rung per equal
   share of the track. That is what keeps it a choice over the same `options` the
@@ -339,8 +376,8 @@ is what makes a stick usable (it has no detent to tap) and deliberately does not
 extend to confirm or back.
 
 **Each screen has ONE content width and everything hangs off it.** `#overlay`
-declares `--col` (settings grid, Deploy button, controls table, pause list, result
-bar) and `#deploy` declares `--map` (status line, hint row, button row, so they meet
+declares `--col` (settings grid, Deploy button, pause list, result bar) and
+`#deploy` declares `--map` (status line, hint row, button row, so they meet
 the map's edges). The two big titles are the deliberate exception.
 
 - **The menu's two settings rows are one grid, not two rows.** Centred

@@ -2,8 +2,9 @@
  * overlay.css — The three full-screen cards: the menu, the round-over result
  * and the pause list.
  * Owns: #overlay and everything under it — the shell, the title block, the
- * settings grid, the Deploy button, the pause action list, the controls table
- * and the result bar.
+ * settings grid, the Deploy button, the pause action list and the result bar.
+ * The key-cap table these cards used to carry is the settings screen's now, and
+ * so are its rules; what is left of `kbd` here is the nav hint under Deploy.
  * The state rules keyed on #hud (.overlaid, and the pause's pointer-events
  * carve-out) stay in hud.css: a class belongs to whoever raises it, and those
  * two are the HUD's own chrome getting out of a card's way.
@@ -29,9 +30,9 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  /* The menu stacks title, difficulty, the kit button, controls and
-     prompt. There is no scroll here either, so the gap is what keeps
-     all five inside a 720p window. */
+  /* The menu stacks title, the five picker rows, Deploy and the nav
+     hint. There is no scroll here either, so the gap is what keeps all
+     four inside a 720p window. */
   gap: 18px;
   text-align: center;
   /* ONE content width, and everything below the title takes it.
@@ -45,7 +46,6 @@
 }
 #overlay .ov-settings,
 #overlay button.ov-start,
-#overlay .ov-controls,
 #overlay .pause-actions,
 #overlay .ov-result { width: var(--col); }
 #overlay .ov-title { display: flex; flex-direction: column; gap: 10px; }
@@ -295,10 +295,10 @@
   box-shadow: inset 0 0 0 2px rgba(18, 20, 26, 0.45);
 }
 
-/* The one line that says how the list is driven, under the action and
-   above the controls table. It names the stick first: the d-pad was
-   always answered here and the stick was not, which is the half a pad
-   player reaches for. */
+/* The one line that says how the list is driven, and now the last thing
+   on the card. It names the stick first: the d-pad was always answered
+   here and the stick was not, which is the half a pad player reaches
+   for. */
 #overlay .ov-nav {
   display: flex;
   gap: 22px;
@@ -308,11 +308,11 @@
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.42);
   /* It rides under the Deploy button rather than standing as a block of
-     its own, and its caps are a size down from the controls table's.
-     Both are about HEIGHT: the menu had 36 px of slack in a 720p window
-     and this line at full size with a full gap above it spent every
-     pixel of it, which clips the bottom of the controls table — there is
-     no scrolling anywhere in this HUD to absorb it. */
+     its own. That was a HEIGHT fix while the key-cap table was still
+     below it — the menu had 36 px of slack in a 720p window and this
+     line at full size with a full gap above it spent every pixel of it —
+     and it stays because the hint belongs to the button it explains
+     rather than to the card. */
   margin-top: -8px;
 }
 #overlay .ov-nav span { display: flex; gap: 5px; align-items: center; }
@@ -353,43 +353,8 @@
   background: var(--hot);
 }
 
-/* Controls as a key-cap table: three columns, action / keyboard / pad. */
-#overlay .ov-controls {
-  --cham: 16px;
-  padding: 16px 26px 18px;
-  /* Reference material, and the last thing on either screen — set back
-     from the block above it so the action reads as the end of the page
-     and this reads as a footnote under it. */
-  margin-top: 6px;
-}
-#overlay .ov-controls-head,
-#overlay .ctl {
-  display: grid;
-  grid-template-columns: 1fr 168px 96px;
-  align-items: center;
-  gap: 12px;
-  text-align: left;
-}
-#overlay .ov-controls-head {
-  padding-bottom: 8px;
-  margin-bottom: 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.4);
-}
-#overlay .ctl { padding: 3px 0; }
-#overlay .ctl-act {
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: #dfe5ee;
-}
-#overlay .ctl-keys,
-#overlay .ctl-pad { display: flex; gap: 4px; }
+/* The nav hint's key chips — all that is left here of the key-cap table,
+   which moved to the settings screen with its own rules. */
 #overlay kbd {
   font: inherit;
   font-size: 11px;

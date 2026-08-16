@@ -343,8 +343,8 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
   clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
 }
-/* Pad glyphs are tinted, the same tell the controls table uses, so the two
-   keys on a hint read as alternatives rather than as a chord. */
+/* Pad glyphs are tinted, the same tell the settings screen's key-cap table
+   uses, so the two keys on a hint read as alternatives rather than a chord. */
 .ui-foot kbd.pad {
   color: var(--hot);
   box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);

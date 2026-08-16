@@ -11,43 +11,25 @@
  * element — and `hide()` is the single way down from any of them.
  *
  * One class rather than four because the cards are one element, not four
- * screens that happen to overlap: they share the shell, the title block, the
- * controls table (which the menu and the pause list drew from two copies of
- * the same loop before this) and, between the menu and the round-over card,
- * the Deploy button. What splitting them would buy is four files that could
- * never be shown together anyway, at the cost of a base class or a duplicated
- * stylesheet. A card that grows its own state — a settings screen with rows to
- * edit, a map picker — has earned a file of its own; a card that is markup and
- * a button has not, and the building card is markup and not even that.
+ * screens that happen to overlap: they share the shell, the title block and,
+ * between the menu and the round-over card, the Deploy button. What splitting
+ * them would buy is four files that could never be shown together anyway, at
+ * the cost of a base class or a duplicated stylesheet. A card that grows its
+ * own state — a settings screen with rows to edit, a map picker — has earned a
+ * file of its own; a card that is markup and a button has not, and the building
+ * card is markup and not even that.
  *
- * Deliberately NOT here: `setPaused`/`setEditing`. Those hide parts of the
- * HUD's own chrome and stay with the HUD, even though a pause is what raises
- * one of them.
+ * Deliberately NOT here: the KEY-CAP TABLE. It hung under the menu's title and
+ * under the pause list, drawn from one table by one loop, and it belongs to
+ * `SettingsScreen` now — a card the player is on to make a decision should not
+ * carry the longest block on the screen as reference material under it, and the
+ * settings screen is one row of the menu and one item of the pause list away.
+ *
+ * Deliberately NOT here either: `setPaused`/`setEditing`. Those hide parts of
+ * the HUD's own chrome and stay with the HUD, even though a pause is what
+ * raises one of them.
  */
 import "./overlay.css";
-
-/** The player's controls, as the menu and the pause list both show them. */
-const CONTROLS: readonly [string, string, string][] = [
-  ["Move", "Left stick", "W A S D"],
-  ["Look", "Right stick", "Mouse"],
-  ["Aim", "LT", "RMB"],
-  ["Fire", "RT", "LMB"],
-  ["Jump", "A", "Space"],
-  ["Reload", "X", "R"],
-  // Three keys, because they are two different asks: the wheel swaps to the
-  // other weapon and the numbers name one outright. Y is the kit screen's
-  // button in a menu and this one in a round; the two states never overlap, so
-  // the table can name it here without qualification.
-  ["Weapon", "Y", "Wheel 1 2"],
-  ["Grenade", "RB", "G"],
-  ["Sprint", "L3", "Shift"],
-  // Two keys because they behave differently — Ctrl is held, C latches, and
-  // on the pad B latches too. The table's grammar is one chip per key and it
-  // has nowhere to say which is which; the pair reads as "either", which is
-  // true, and one press of each tells the rest.
-  ["Crouch", "B", "Ctrl C"],
-  ["Pause", "Start", "Esc"],
-];
 
 /**
  * What the pause menu can do, and the label for each. In screen order.
@@ -192,34 +174,6 @@ export class OverlayScreen {
   }
 
   /**
-   * The controls table, which the menu and the pause list both carry.
-   *
-   * Built here rather than at each call site: the two were the same loop
-   * written out twice, so a control rebound in one place quietly disagreed
-   * with the other.
-   */
-  private controlsTable(): string {
-    const rows = CONTROLS.map(
-      ([action, pad, key]) => `
-        <div class="ctl">
-          <span class="ctl-act">${action}</span>
-          <span class="ctl-keys">${key
-            .split(" ")
-            .map((k) => `<kbd>${k}</kbd>`)
-            .join("")}</span>
-          <span class="ctl-pad"><kbd class="pad">${pad}</kbd></span>
-        </div>`,
-    ).join("");
-    return `
-      <div class="ov-controls frame">
-        <div class="ov-controls-head">
-          <span>Controls</span><span>Keyboard &amp; mouse</span><span>Gamepad</span>
-        </div>
-        ${rows}
-      </div>`;
-  }
-
-  /**
    * The main menu: the difficulty picker and the way into the loadout screen.
    *
    * The kit itself is not edited here — it is two slots and a stat chart now,
@@ -289,8 +243,8 @@ export class OverlayScreen {
           <span class="hint">L / Y</span>
         </div>
         <div class="kit" data-menu="settings">
-          <span class="label">Display</span>
-          <button class="settings-open"><b>Settings</b><i>Counter &middot; effects</i></button>
+          <span class="label">Options</span>
+          <button class="settings-open"><b>Settings</b><i>Controls &middot; display</i></button>
           <span class="hint">O</span>
         </div>
         <div class="kit" data-menu="multiplayer">
@@ -304,7 +258,6 @@ export class OverlayScreen {
         <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick / D-pad</kbd> move</span>
         <span><kbd>Enter</kbd><kbd class="pad">A</kbd> select</span>
       </p>
-      ${this.controlsTable()}
     `;
     this.root
       .querySelectorAll<HTMLElement>("button[data-tier]")
@@ -495,7 +448,7 @@ export class OverlayScreen {
   }
 
   /**
-   * The pause menu: a short action list, the controls table, and nothing else.
+   * The pause menu: a short action list and nothing else.
    *
    * It deliberately does NOT call `setOverlaid`. The menu and the round-over
    * card hide the gameplay chrome because what is under them is last round's
@@ -523,7 +476,6 @@ export class OverlayScreen {
         <p class="tagline">The round is held &mdash; nothing moves until you resume</p>
       </div>
       <div class="pause-actions">${items}</div>
-      ${this.controlsTable()}
       <p class="prompt">Esc &middot; Start &middot; B to resume</p>
     `;
     this.pauseButtons = [];

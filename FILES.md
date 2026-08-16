@@ -261,11 +261,14 @@ src/
                         #   in a netplay round a confirm is a REQUEST and says so
     LoadoutScreen.ts    # Kit screen: two slots, a stat chart derived from
       loadout.css       #   CONFIG.weapons, and the turntable stage
-    SettingsScreen.ts   # Controls built from a ROW TABLE — a button group, or
-      settings.css      #   a slider where the ladder is too long for one (the
-                        #   thumb picks an option INDEX, so both are the same
-                        #   choice). Owns no setting: picks leave through
-                        #   onChange and return as setValues
+    SettingsScreen.ts   # Controls built from a ROW TABLE, in PAGES — a button
+      settings.css      #   group, or a slider where the ladder is too long for
+                        #   one (the thumb picks an option INDEX, so both are
+                        #   the same choice). Row 0 is the page selector, which
+                        #   is why tabs need no key of their own; the Controls
+                        #   page carries the key-cap table the menu used to.
+                        #   Owns no setting: picks leave through onChange and
+                        #   return as setValues
     LobbyScreen.ts      # The match browser: every region's matches in one list
       lobby.css         #   with a region column and a ping per row, plus
                         #   region/map/new/refresh/back. Rows are DERIVED from

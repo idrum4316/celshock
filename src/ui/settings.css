@@ -1,5 +1,6 @@
 /**
- * settings.css — The settings screen: a scrim, a panel, and a list of toggles.
+ * settings.css — The settings screen: a scrim, a panel, a page selector, a list
+ * of choices, and the key-cap table one of those pages is.
  * Owns #settings and nothing else. Scaled by --ov-scale (declared in base.css,
  * where #settings is in the selector list) — unlike #loadout, this screen has
  * no hole in it for the 3D scene to show through, so a transform is safe.
@@ -75,21 +76,6 @@
   width: 100%;
 }
 
-/* A section opener. It is a label for the rows under it, so it sits on
-   the same left edge they do rather than being centred over them. */
-#settings .se-head {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.28em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.3);
-  padding: 10px 12px 2px;
-}
-#settings .se-head:not(:first-child) {
-  margin-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
-}
-
 /* THREE COLUMNS, and the row is `display: contents` so they are the
    grid's, not the row's — the same construction the menu's `.ov-settings`
    uses and for the same reason: rows centred on their own contents put
@@ -106,9 +92,18 @@
   align-items: center;
   gap: 0 16px;
 }
-#settings .se-head { grid-column: 1 / -1; }
 #settings .se-row {
   display: contents;
+}
+/* The page selector is a row like any other — same grid, same highlight,
+   same left/right — so what marks it as chrome rather than as a setting is
+   a rule under it. It has to be drawn on the CELLS, because the row is
+   `display: contents` and has no box of its own; the same reason the
+   highlight is. */
+#settings .se-row.se-tabs > * {
+  padding-bottom: 13px;
+  margin-bottom: 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
 }
 /* The highlight has to be painted on the CELLS, because the row itself
    is `display: contents` and therefore has no box of its own to fill.
@@ -230,6 +225,72 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* --- the key-cap table ---
+   Moved here from the menu card, which is where it lived while the settings
+   screen was two toggles nobody could reach with a pad. It spans every
+   column rather than sitting in the control one: it is not a row, it is
+   what the Controls page is about, and the cursor steps straight past it.
+
+   Its own three columns are action / keyboard / pad, and they are set
+   independently of the list's above — an action name is short where a
+   setting's label is long, and matching the two would leave the key chips
+   in the middle of the panel with the pad column adrift at the far edge. */
+#settings .se-binds {
+  grid-column: 1 / -1;
+  margin-top: 12px;
+  padding-top: 2px;
+}
+#settings .se-bind-head,
+#settings .se-bind {
+  display: grid;
+  grid-template-columns: 1fr 176px 104px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+}
+#settings .se-bind-head {
+  padding-bottom: 7px;
+  margin-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+}
+#settings .se-bind { padding-top: 3px; padding-bottom: 3px; }
+#settings .se-bind-act {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #dfe5ee;
+}
+#settings .se-bind-keys,
+#settings .se-bind-pad { display: flex; gap: 4px; }
+/* The list's own hints and the footer's chips are base.css's; these are the
+   plates the table is made of, and they are a size up because they are the
+   thing on this page you are here to read. */
+#settings .se-binds kbd {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 4px 8px;
+  min-width: 26px;
+  text-align: center;
+  color: #cfd6e2;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+/* Pad glyphs are tinted, the same tell the footer's hints use, so the two
+   halves of a binding read as alternatives rather than as a chord. */
+#settings .se-binds kbd.pad {
+  color: var(--hot);
+  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
+}
+
 /* The footer — the hint line and the Back button at the end of it — is
    `.ui-foot` / `.ui-back` in base.css, shared with the kit screen and the
    lobby. This screen adds nothing to it. */
@@ -240,4 +301,12 @@
 @media (max-width: 700px) {
   #settings .se-body { grid-template-columns: minmax(110px, auto) 170px; }
   #settings .se-row > .se-hint { display: none; }
+  /* The key table keeps all three of its columns — every one of them is the
+     content — but they shrink-wrap instead of holding a width, since the
+     widest chip ("Right stick") is what decides how narrow they can get. */
+  #settings .se-bind-head,
+  #settings .se-bind {
+    grid-template-columns: 1fr auto auto;
+    gap: 8px;
+  }
 }
