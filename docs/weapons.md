@@ -785,12 +785,12 @@ rear aperture every optic here is built around. It still reports a `sightCenter`
 reference is not duplicated; only the geometry in front of it is the weapon's own.
 
 The kit screen (`src/ui/LoadoutScreen.ts`) owns its DOM under `#hud` and is a
-`loadout` game state — a lid over `menu` or `deploy` that remembers which
-(`loadoutFrom`). It is reachable from the **main menu and the deploy screen** (a
-button, `L`, or gamepad X) and deliberately not from the pause menu: a round you are
-already standing in is not somewhere you change what you are carrying. Nothing
-enforces that with a flag; the states that offer the button are the ones that read
-`loadoutPressed`. Every pick applies immediately through `Game.applyLoadout` and
+`loadout` game state — a lid over `menu` or `deploy`, which closing puts back. It
+is reachable from the **main menu and the deploy screen** (a button, `L`, or
+gamepad X) and deliberately not from the pause menu: a round you are already
+standing in is not somewhere you change what you are carrying. That is the
+`covers` list on `loadout`'s row in `SCREENS` (see [`states.md`](states.md)),
+which is what refuses the raise. Every pick applies immediately through `Game.applyLoadout` and
 persists to `localStorage` like the difficulty tier, so confirm just closes.
 
 - **The weapon on the stage is read against a CARD, and the card is in the scene**

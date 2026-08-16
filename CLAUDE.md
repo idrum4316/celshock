@@ -15,6 +15,7 @@ substitute: read the companion before changing that subsystem.
 | --- | --- |
 | [`docs/weapons.md`](docs/weapons.md) | the viewmodel, the aim path, the two slots, an optic or a weapon model |
 | [`docs/grenades.md`](docs/grenades.md) | anything about the one projectile in the game |
+| [`docs/states.md`](docs/states.md) | a new screen, a new game state, anything about what a lid holds or lets run |
 | [`docs/ui.md`](docs/ui.md) | any screen, any stylesheet, anything under `src/ui/` |
 | [`docs/rendering.md`](docs/rendering.md) | lights, shadows, fog, outlines, the post chain, the sky |
 | [`docs/world.md`](docs/world.md) | a map, a layout, a builder, the terrain or the rim |
@@ -176,84 +177,39 @@ round alone owns what is about a *fight* — battle, conquest, flag markers, min
 `Game`'s state machine is `menu -> loading -> deploy -> playing -> dying ->
 deploy`, with `roundover` when a side runs out of tickets. The 3D scene renders
 in **every** state, which is what lets the deploy screen and the menu sit over a
-live view.
+live view. `loading` is the map being built, and it is a **STEP, not a lid**:
+nothing may simulate there because there is no map yet, and the **two**
+`requestAnimationFrame`s between `startRound` and `buildRound` are what put the
+building card on the glass before the freeze rather than after it. `dying` is the
+death cam and is a step too — `updateWorld` runs in full underneath it.
 
-**`loading` is the map being built, and the split that creates it is the whole
-feature.** Building one is the better part of a second of synchronous work —
-merges, the occlusion bake, the nav grid — and a browser paints between TASKS,
-never inside one, so a `startRound` that built the map where it stood froze the
-card the player had just confirmed for the entire build and then jumped to the
-deploy screen. Nothing was slow that is not slow now; what was missing was any
-sign the game had heard the button. So `Game.startRound` raises the building
-card and hands the work to `Game.buildRound` **two** `requestAnimationFrame`s
-later, and the count is load-bearing: a frame runs its animation callbacks and
-*then* paints, so a single rAF booked from ordinary task code fires before the
-card has ever been on the glass and the freeze happens under the old screen
-exactly as before. One is enough from inside the render loop, which is where
-the real callers are — the second is what stops that being a property of the
-call site. It is a **STEP, not a lid**: nothing may simulate there (`tick` has
-a deliberately empty arm) because there is no map yet, and `startRound` guards
-on it so a second build can never be queued over a pending one.
+**A LID is a screen laid over a state, which taking it off puts back rather than
+moving the game on — and which state is which, and what each one owes, is
+DECLARED rather than described.** `SCREENS` in
+[`src/core/ScreenStack.ts`](src/core/ScreenStack.ts) is a
+`Record<GameState, ScreenSpec>` with one row per state, so **a new screen does not
+compile until it has answered all four questions**: what it may cover, whether the
+world under it is held offline, whether it owes the netplay frame the authority
+keeps running behind it, and whether the scoreboard is owed to it. `Game.tick`
+asks the table rather than trusting each screen to volunteer, `Game` has exactly
+three moves (`go` a step, `raiseLid`, `lowerLid`), and **nothing in the codebase
+assigns a game state** — `Game.state` is a getter. `go` hands back whatever lids
+were up and `Game.takeDown` (exhaustive over `LidState`, enforced with a `never`)
+is the one place that knows what putting a screen away means, which is why no
+transition carries its own list of screens to hide any more.
 
-**`dying` is the death cam and is a STEP, not a lid** — `updateWorld` runs in full
-underneath it. **`loadout` and `paused` are lids**: each records which state it
-covered (`loadoutFrom` / `pausedFrom`) and puts it back. The loadout screen covers
-`menu` or `deploy`; a pause covers `playing`, `dying` or `deploy`, so a pause taken
-while waiting out a respawn returns to the deploy map rather than dropping the
-player into the world.
+**The question a lid raises is never which screen is up, but whether what is
+under it is moving.** Offline a pause genuinely holds the world (the audio clock
+stops, the HUD is ticked with `dt = 0`); in a netplay round it holds nothing,
+because the authority never heard the key. Both halves are the table's
+`holdsWorld` and `roundBehind`, and `Game.worldHeld` adds the one thing the table
+cannot know — whether there is a session at all.
 
-Pausing is just `tick` not calling `updateGameplay` — everything else still
-renders, so the round reads as held rather than gone — plus two things that would
-leak past it: `Sfx.setSuspended` stops the audio clock (the tail of the last shot
-is still there on return, and the voice counter stays honest because nothing ends
-while the clock is stopped), and the HUD is ticked with `dt = 0` so the killfeed
-and toasts freeze with the world instead of fading off a frozen screen.
-
-**Both of those invert under a NETPLAY lid, because there the game is not
-held.** The authority never heard the key, so `paused`, `settings` and `loadout`
-all step `updateNetUnderLid` — the netplay frame and the gauges as the deploy screen
-draws them, plus the reinforcement clock when the deploy screen is what the
-stack is over, since that clock is the round's and the server runs it down
-regardless. The HUD keeps its real `dt` (kills arrive while the card is up), and
-the audio clock is left running: a suspended context would not play the wire's
-`hit`/`damage`/`explode` cues *or* let them end, and the whole pause-worth of
-them would sound on the resume. **The question is never which screen is up, but
-whether what is under it is moving** — `Game.worldHeld` and `Game.stateUnderLids`
-are that question asked once each, `settings` is the one lid that has to look
-through another to answer it, and a new screen over a round owes the same call.
-
-**Losing the pointer lock is the trigger, and it has to be.** Escape belongs to
-the browser — it is the UA's gesture for dropping the lock and the keydown behind
-it is not reliably delivered — so `Game` pauses on the *transition* out of the
-lock, which also covers alt-tab and any focus loss. A player who never took the
-lock (a pad player) has none to lose, hence the transition test rather than a bare
-"not locked". `Escape` and gamepad Start are the second trigger, through
-`input.pausePressed`; Start also raises `confirmPressed` (it is the menus' deploy
-button), so the paused branch handles pause first and breaks. Gamepad **B** resumes
-(`menuBackPressed`). The list is confirmed with `menuConfirmPressed` — Enter and
-pad A but *not* the mouse — because a click on the empty half of a pause screen is
-not a menu choice.
-
-**Re-taking the lock on resume is deferred, retried, and never pauses on its own
-failure** — the one key that ends a pause is the one key the browser reads as
-"drop the lock", so asking for it back in the same breath loses three ways.
-Chrome refuses outright for about a second after an Escape-exit; a lock granted
-while Escape is still down is taken away again by the key's auto-repeat; and
-that revocation arrives as a `pointerlockchange` the pause trigger would read as
-a player leaving, putting the menu back up a split second after it was
-dismissed. So `resume` only *marks* the lock as owed, `updatePendingLock` waits
-for the key to come up and then asks on an interval until the lock lands or the
-window runs out, and a loss inside `CONFIG.input.lockGrace` of taking it is read
-as a refusal rather than a departure. If the browser holds out, the round is
-still running with the CLICK hint up and the next click gets it.
-
-`#hud.paused` is deliberately **not** `.overlaid`: the menu and round-over card
-hide the gauges because what is under them is last round's, while under a pause the
-tickets, flags and vitals are current and frozen with the scene. It hides what
-would be lying — crosshair, hitmarker, damage arcs, mouse hint. It is also the one
-overlay taking pointer events across its whole area, because the deploy screen
-underneath takes them too and a click through the backdrop would land on its map or
-Deploy button.
+→ **[`docs/states.md`](docs/states.md)** — the full cycle and why `loading` is a
+state rather than a flag, the four spec fields and what each replaced, why a step
+transition takes down the lids and the stranded-screen bug that says so, pausing
+and the netplay inversion of it, the pointer-lock trigger and the deferred
+re-take, and what `#hud.paused` shows that `.overlaid` hides.
 
 `Game.updateGameplay` has a load-bearing order at the end of the frame: camera
 update → carried-light updates → `lighting.update(dt, camera.position, mats)` →

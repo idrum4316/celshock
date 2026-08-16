@@ -1,7 +1,7 @@
 /**
- * Game.ts — Orchestrator: engine/scene init, state machine, main loop, and ALL
- * cross-system wiring. The only place systems meet — systems never import each
- * other; new cross-system behavior is a callback wired here.
+ * Game.ts — Orchestrator: engine/scene init, main loop, and ALL cross-system
+ * wiring. The only place systems meet — systems never import each other; new
+ * cross-system behavior is a callback wired here.
  * WHERE THINGS ARE, because this is a long file and a change should not need a
  * read of it: the constructor is CONSTRUCTION ONLY (a linear list of `new X`,
  * which has to stay there — those fields are what strictPropertyInitialization
@@ -15,7 +15,13 @@
  * The remembered difficulty/map/loadout live in `prefs.ts`, the display
  * settings in `settings.ts`; neither applies anything, that is this file's job.
  * State machine: menu -> deploy -> playing (deploy re-entered on each death)
- * -> roundover. The 3D scene renders live behind every state.
+ * -> roundover. The 3D scene renders live behind every state. The SHAPE of it
+ * is `ScreenStack.ts` and not this file: what a screen may cover, what it holds
+ * offline, what it owes a netplay round and whether the scoreboard is owed to
+ * it are one declared row per state there. This file holds one `ScreenStack`,
+ * moves it with `go`/`raiseLid`/`lowerLid`, and never assigns a state —
+ * `Game.state` is a getter. `takeDown` is the one place that knows what putting
+ * a screen away means, and every transition goes through it.
  * Load-bearing frame order at the end of updateGameplay: camera update ->
  * carried lights -> lighting.update() -> sfx.setListener(). The shader's eye
  * (mats.updateCamera) is NOT in that chain — it is pushed once per frame in
@@ -107,75 +113,14 @@ import {
   writeSight,
   writeWeapon,
 } from "./prefs";
+import {
+  ScreenStack,
+  type GameState,
+  type LidState,
+  type StepState,
+} from "./ScreenStack";
 import { readSettings, writeSettings, type Settings } from "./settings";
 import { Sfx } from "./Sfx";
-
-/**
- * `menu` -> `loading` -> `deploy` -> `playing` -> `dying` -> `deploy`, with
- * `roundover` when one side runs out of tickets.
- *
- * `loading` is the map being built, and it is a STEP for the same reason
- * `dying` is: it is a thing the game is doing, not a lid over one. It lasts
- * exactly one frame of wall clock and an indeterminate amount of it — the
- * build is ~0.7 s of synchronous work, which is a freeze if nothing says
- * otherwise (see `startRound`, which is the split that lets the card be drawn
- * first). It exists as a STATE rather than as a flag because the frame in
- * between belongs to nobody otherwise: `tick` would keep dispatching to the
- * menu it just left, and a second confirm in that window would start a second
- * round on top of the first. Nothing may simulate here — there is no map yet.
- *
- * `dying` is the death cam: the player is down, a body is falling where they
- * stood, and the camera has left the head to watch it. It is a STEP in the
- * cycle rather than a lid, and that distinction is the whole feature — the
- * fight carries on underneath it (`updateWorld` runs in full), where a lid
- * stops everything. It ends on its own clock, and the deploy screen it opens
- * subtracts the time already spent, so a life costs what it always did.
- *
- * `deploy` simulates nothing and never may — offline the world is genuinely
- * held while the map is up. In a NETPLAY round it is the one state outside the
- * fight that still steps the netplay half of a frame (`updateNetWorld`), which
- * is not the same thing: the authority has not paused, and everything this
- * screen shows — the flags its offer is derived from, the tickets on the strip
- * under it, the bodies moving behind it — arrives from a frame. It is also the
- * state a player LEAVES by asking rather than by acting: `onDeploy` sends a
- * request and the server's own spawn event is what puts them in the world.
- *
- * `paused` is the other side state, and unlike the rest it remembers where it
- * came from (`pausedFrom`): a pause is a lid over `playing`, `dying` or
- * `deploy`, and resuming puts the state back exactly as it was rather than
- * moving the game on. Nothing simulates while it is up — the scene still
- * renders, which is what makes a paused round look held rather than gone.
- *
- * `loadout` and `settings` are lids of the same shape, each remembering what it
- * covered. The kit screen covers `menu` or `deploy`; the settings screen also
- * covers `paused`, because turning an effect off is something you judge against
- * the scene rather than from the title card — which makes it the one lid that
- * can be raised over another one.
- *
- * `lobby` is a lid too, and the simplest of the three: it covers `menu` and
- * only `menu`, so it needs no `-From` field to remember where it came from.
- * Picking a match out of it leaves through `startRound` exactly as Deploy does,
- * which is why the lobby is not a step in the state machine — a networked round
- * and a single-player one are the same `loading -> deploy -> playing` cycle,
- * differing only in whether `Game.net` exists.
- *
- * `editor` sits outside that cycle: it is a dev-only side state reachable from
- * anywhere with F2, and leaving it always restarts the round rather than
- * resuming, because the systems that cache the GameMap cannot be handed a map
- * that was rebuilt underneath them.
- */
-type GameState =
-  | "menu"
-  | "loading"
-  | "deploy"
-  | "playing"
-  | "dying"
-  | "paused"
-  | "loadout"
-  | "settings"
-  | "lobby"
-  | "roundover"
-  | "editor";
 
 /** Grass bends around combatants; in the editor there are none. */
 const EMPTY_PUSHERS: readonly Combatant[] = [];
@@ -279,9 +224,31 @@ export class Game {
    */
   private mapDef: MapDef = readMap();
 
-  private state: GameState = "menu";
-  /** Which state the pause menu is a lid over; where `resume()` puts it back. */
-  private pausedFrom: "playing" | "dying" | "deploy" = "playing";
+  /**
+   * The state machine: the step the game is on, and the screens raised over it.
+   *
+   * Everything about what a state IS — whether it is a step or a lid, what a lid
+   * may cover, whether the world under it is held, whether it owes the netplay
+   * frame, whether it is owed the scoreboard — is declared per state in
+   * `ScreenStack.ts` rather than written out at the call sites that ask. This
+   * file's three moves are `go`, `raiseLid` and `lowerLid`, and there is no
+   * fourth: nothing here assigns a state.
+   */
+  private screens = new ScreenStack();
+
+  /**
+   * The state this frame is in — the topmost screen, which is the step itself
+   * when nothing is over it.
+   *
+   * Read-only on purpose: the fifty-odd places that ASK are unchanged by the
+   * stack underneath, and the fifteen that used to ANSWER by assignment have to
+   * go through a move instead. What is under the lids is `screens.under` and is
+   * a different question — see `pushScoreboard` for a case that deliberately
+   * wants this one.
+   */
+  private get state(): GameState {
+    return this.screens.current;
+  }
   /**
    * Whether the pointer was locked as of the last `pointerlockchange`. Losing
    * the lock is what pauses the game, and only a *transition* out of it counts
@@ -317,17 +284,8 @@ export class Game {
    */
   private sight: SightId = readSight();
   private weapon: PrimaryWeaponId = readWeapon();
-  /** Which state the loadout screen is a lid over; where closing it returns. */
-  private loadoutFrom: "menu" | "deploy" = "menu";
-  /**
-   * The display settings, and which state their screen is a lid over.
-   *
-   * `paused` is in the list where the kit screen's is not: a round you are
-   * standing in is not somewhere you change what you carry, but it is exactly
-   * where you want to judge an effect you have just turned off.
-   */
+  /** The display settings. Which states their screen may cover is the table's. */
   private settings: Settings = readSettings();
-  private settingsFrom: "menu" | "deploy" | "paused" = "menu";
   /** Reused each frame: the player plus every bot, for objective occupancy. */
   /**
    * The networked round, or null offline.
@@ -1005,20 +963,98 @@ export class Game {
   }
 
   /**
-   * Opens the loadout screen over whatever is on top of it, and remembers
-   * which so closing it puts that back — the same lid-and-return shape the
-   * pause menu has, and for the same reason: it is not a step in the
-   * menu -> deploy -> playing cycle, it is a thing laid over two of them.
+   * Moves the game on to a step, taking down every screen the player had raised
+   * over the last one.
+   *
+   * The three transitions that leave a round — the menu, a round starting, F2
+   * into the editor — each used to write out the same list of screens to put
+   * away, and the copies had already drifted: F2 from the lobby left the match
+   * list hanging over the editor's own panel, because that one list was written
+   * before the lobby existed. The other twelve transitions wrote none of it and
+   * were not merely untidy but broken, and only in a netplay round, where a step
+   * can be decided by the wire while a lid is up: a `died` landing under the
+   * settings screen used to overwrite `settings` with `deploy` and strand the
+   * screen on top — visible, uncloseable (`closeSettings` guards on a state that
+   * was gone), with the deploy screen live and taking input underneath it.
+   *
+   * So no caller decides which screens to take down. `ScreenStack.go` hands back
+   * what was up and `takeDown` knows what each one means, which is the same
+   * bargain the rest of this file makes with the table: the obligation is
+   * discharged once, here, for screens that did not exist when it was written.
+   */
+  private go(step: StepState): void {
+    for (const lid of this.screens.go(step)) this.takeDown(lid);
+  }
+
+  /**
+   * Raises a lid, if the table says it may cover what is on screen. `false` is
+   * "it may not" and every caller returns on it — the guard each `open*` used to
+   * write out for itself is `ScreenSpec.covers` now.
+   */
+  private raiseLid(lid: LidState): boolean {
+    return this.screens.raise(lid);
+  }
+
+  /**
+   * Takes the named lid off, and puts its screen away with it. `false` is "that
+   * is not what is on top" — the guard each `close*` used to open with.
+   */
+  private lowerLid(lid: LidState): boolean {
+    if (!this.screens.lower(lid)) return false;
+    this.takeDown(lid);
+    return true;
+  }
+
+  /**
+   * What putting one screen away MEANS. The elements are here rather than in
+   * `ScreenStack`, which knows the names of the screens and not one of the
+   * screens themselves.
+   *
+   * Exhaustive over `LidState`, and the `never` is what makes it so: a fifth
+   * screen does not compile until it says how it comes down, and every
+   * transition in the file above is then correct for it on the day it is
+   * written. That is the same guarantee the table gives, spent on the half of
+   * the problem that is DOM.
+   *
+   * Each arm undoes exactly what the matching `open*` did and decides nothing
+   * else — where the game goes next is the caller's, which is why `resume` and
+   * `go("menu")` can share this.
+   */
+  private takeDown(lid: LidState): void {
+    switch (lid) {
+      case "paused":
+        this.overlayScreen.hide();
+        this.clearPause();
+        return;
+      case "loadout":
+        this.stowKit();
+        return;
+      case "settings":
+        this.settingsScreen.hide();
+        return;
+      case "lobby":
+        this.lobbyScreen.hide();
+        return;
+      default: {
+        const unhandled: never = lid;
+        throw new Error(`no way down from screen ${String(unhandled)}`);
+      }
+    }
+  }
+
+  /**
+   * Opens the loadout screen over whatever is on top of it. Closing it puts that
+   * back — the same lid-and-return shape the pause menu has, and for the same
+   * reason: it is not a step in the menu -> deploy -> playing cycle, it is a
+   * thing laid over two of them.
    *
    * Deliberately unreachable from `playing` and from the pause menu: a round
    * you are already standing in is not somewhere you get to change what you
-   * are carrying. Nothing here enforces that — the states that offer the
-   * button are the states that read `loadoutPressed`.
+   * are carrying. That is `loadout`'s `covers` in `ScreenStack.ts`, which is
+   * what refuses the raise here.
    */
   private openLoadout(): void {
-    if (this.state !== "menu" && this.state !== "deploy") return;
-    this.loadoutFrom = this.state;
-    this.state = "loadout";
+    if (!this.raiseLid("loadout")) return;
     this.loadoutScreen.setFit(this.weapon, this.sight);
     this.loadoutScreen.show();
     // The weapon comes out to be looked at. It is the real viewmodel on the
@@ -1032,11 +1068,11 @@ export class Game {
    * Puts the kit screen away — the screen, the weapon on its stage, and the
    * lamp lighting it — without saying where the game goes next.
    *
-   * Every exit owes all three, and there are four of them: the Done button,
-   * the main menu, F2 into the editor and a round starting. The lamp is the
-   * one that bites if it is missed. A carried light never loses its shader
-   * slot and survives `lighting.clear()` between rounds, so one left behind
-   * follows the player into the fight as a lantern nobody is holding.
+   * Every exit owes all three, and there is now exactly one — `takeDown`, which
+   * every way out of the screen goes through. The lamp is the one that bites if
+   * it is missed. A carried light never loses its shader slot and survives
+   * `lighting.clear()` between rounds, so one left behind follows the player
+   * into the fight as a lantern nobody is holding.
    */
   private stowKit(): void {
     this.loadoutScreen.hide();
@@ -1056,23 +1092,13 @@ export class Game {
    * then the same element, not a redraw.
    */
   private openSettings(): void {
-    if (
-      this.state !== "menu" &&
-      this.state !== "deploy" &&
-      this.state !== "paused"
-    ) {
-      return;
-    }
-    this.settingsFrom = this.state;
-    this.state = "settings";
+    if (!this.raiseLid("settings")) return;
     this.settingsScreen.setValues(this.settings);
     this.settingsScreen.show();
   }
 
   private closeSettings(): void {
-    if (this.state !== "settings") return;
-    this.settingsScreen.hide();
-    this.state = this.settingsFrom;
+    if (!this.lowerLid("settings")) return;
     // The menu paints its own markup and was covered while the settings were
     // changed, so it is redrawn on the way out — the same reason
     // `closeLoadout` does it. The pause card was never taken down.
@@ -1091,8 +1117,7 @@ export class Game {
    * be offering to join a second match while standing in one.
    */
   private openLobby(): void {
-    if (this.state !== "menu") return;
-    this.state = "lobby";
+    if (!this.raiseLid("lobby")) return;
     // The map row starts on whatever the menu underneath is offering — there is
     // one map choice in this game and two places it is shown, so the screen is
     // handed the standing one rather than keeping a second copy that could
@@ -1103,9 +1128,7 @@ export class Game {
   }
 
   private closeLobby(): void {
-    if (this.state !== "lobby") return;
-    this.lobbyScreen.hide();
-    this.state = "menu";
+    if (!this.lowerLid("lobby")) return;
     // Redrawn on the way out, for the reason `closeSettings` states: the menu
     // owns its markup and has been covered.
     this.showMenu();
@@ -1245,9 +1268,7 @@ export class Game {
   }
 
   private closeLoadout(): void {
-    if (this.state !== "loadout") return;
-    this.stowKit();
-    this.state = this.loadoutFrom;
+    if (!this.lowerLid("loadout")) return;
     // The menu paints the kit into its own markup and was covered while it
     // changed, so it is redrawn on the way out. The deploy screen's caption is
     // a text node `applyLoadout` already patched.
@@ -1489,6 +1510,15 @@ export class Game {
     // delta rather than the clamped one — see `HUD.setFps`.
     this.hud.setFps(this.engine.getFps(), real);
 
+    // A round running without you, drawn under whatever you have on screen —
+    // every state that owes it, asked once. Before the switch rather than after,
+    // because `dt` is time that has already passed and the screen that was up
+    // for it is the one this frame belongs to; and before the arms rather than
+    // inside four of them, because that was the arrangement nothing but prose
+    // held together. Offline, and in every state that is either IN the fight or
+    // has none behind it, this returns on its first line.
+    this.updateRoundBehind(dt);
+
     switch (this.state) {
       case "menu":
       case "roundover":
@@ -1509,29 +1539,19 @@ export class Game {
         this.updateLoadoutScreen(dt);
         break;
       case "settings":
-        this.updateSettingsScreen(dt);
+        this.updateSettingsScreen();
         break;
       case "lobby":
         this.updateLobbyScreen();
         break;
+      // The netplay frame a pause does not stop is `updateRoundBehind`'s, above.
+      // The lid stays on the half of the frame that is genuinely this client's:
+      // the player does not move, does not shoot, and reports nothing while the
+      // menu is up — `updateNet` sends no move sample because it asks for
+      // `state === "playing"`, so being paused is already indistinguishable on
+      // the wire from standing still.
       case "paused":
         this.updatePauseMenu();
-        // A pause is a lid over the local game, and in a networked round the
-        // local game is not the round: the authority never heard the key. So
-        // the half of a frame that DRAWS what it was told is owed here exactly
-        // as it is owed to the deploy screen, and for the same reason — both
-        // are a round running without you, which offline is a thing that
-        // cannot happen and here is the normal case. Left out, sixteen bodies
-        // stand frozen behind the card and snap to where they really are on
-        // the frame the player resumes.
-        //
-        // Still nothing that decides an outcome, which is what makes it legal
-        // from a state that owns none. The lid stays on the half of the frame
-        // that is genuinely this client's: the player does not move, does not
-        // shoot, and reports nothing while the menu is up — `updateNet` sends
-        // no move sample because it asks for `state === "playing"`, so being
-        // paused is already indistinguishable on the wire from standing still.
-        this.updateNetUnderLid(dt);
         break;
       case "playing":
         if (this.input.pausePressed) {
@@ -1690,12 +1710,13 @@ export class Game {
       return;
     }
     this.respawnT -= dt;
-    // The round carries on without us, and this is the screen that reads it.
-    // The map below is drawn from `conquest.points`, which the wire keeps
-    // current — but the bodies behind the card, the tickets on the strip and
-    // the effects this client owns are all stepped from a frame, and this
-    // state's frame is the only one they get while a player is choosing.
-    this.updateNetUnderCard(dt);
+    // The round carries on without us, and this is the screen that reads it —
+    // the map below is drawn from `conquest.points`, which the wire keeps
+    // current, and the bodies behind the card and the tickets on the strip are
+    // stepped from a frame. That frame is `updateRoundBehind`'s and has already
+    // run when this arm is reached, which is what leaves this method with only
+    // the clock and the input that are its own.
+    //
     // Stepped before the redraw, so the marker and the status line move on
     // the frame the key was pressed. Both axes step the same list — the
     // spawns are a handful of points scattered over a map rather than a
@@ -1725,13 +1746,12 @@ export class Game {
    * there is nothing to confirm, each pick is already on the weapon behind.
    */
   private updateLoadoutScreen(dt: number): void {
-    // The third lid, and the one that hides the most: the scrim is opaque
-    // except for the stage the weapon turns on. That makes no difference to
-    // what is owed — the round is still being played by fifteen other people
-    // and the reinforcement clock is still running down — and it is precisely
-    // the screen where the freeze was hardest to see and the snap on the way
-    // out hardest to explain. Offline this does nothing.
-    this.updateNetUnderLid(dt);
+    // The lid that hides the most — the scrim is opaque except for the stage the
+    // weapon turns on — and it makes no difference to what is owed: the round is
+    // still being played by fifteen other people and the reinforcement clock is
+    // still running down. `updateRoundBehind` has already stepped both, on this
+    // screen's own say-so (`ScreenSpec.roundBehind`).
+    //
     // Two axes, two slots: up/down chooses which half of the kit is being
     // edited, left/right steps through it. Back, confirm and pause all
     // close — there is nothing to confirm here, every pick has already been
@@ -1760,14 +1780,15 @@ export class Game {
    * The settings list. The one screen where the confirm is NOT an exit: a
    * boolean has nothing to step through, so A and Enter flip the row.
    */
-  private updateSettingsScreen(dt: number): void {
-    // The one lid that can be raised over another, and the only one that can
-    // cover a round from two states away — but the round underneath does not
-    // care which screen is on top of it, only whether the authority is still
-    // running it. So this owes exactly what the pause card owes, and the two
-    // ask the same method rather than each deciding for themselves. Offline it
-    // does nothing at all: there is no round running without you.
-    this.updateNetUnderLid(dt);
+  private updateSettingsScreen(): void {
+    // The one lid that can be raised over another, and so the only one that can
+    // cover a round from two states away — which changes nothing about what it
+    // owes, because the round underneath does not care which screen is on top of
+    // it, only whether the authority is still running it. That is why the two
+    // gauges and the reinforcement clock are `updateRoundBehind`'s and not this
+    // method's: four screens deciding it for themselves is four chances to
+    // decide it differently.
+    //
     // Up/down picks the row, left/right and Enter flip it. The confirm is
     // NOT an exit here, which is the one place this screen departs from the
     // kit screen's shape: a boolean has nothing to step through, so A and
@@ -1896,15 +1917,7 @@ export class Game {
    * already do, and it is why a paused round reads as held rather than gone.
    */
   private pause(): void {
-    if (
-      this.state !== "playing" &&
-      this.state !== "dying" &&
-      this.state !== "deploy"
-    ) {
-      return;
-    }
-    this.pausedFrom = this.state;
-    this.state = "paused";
+    if (!this.raiseLid("paused")) return;
     // A pause outranks a resume that never got its lock: a second pause taken
     // while one was still being chased must not have the round grab the mouse
     // out from under the menu it just raised.
@@ -1928,9 +1941,8 @@ export class Game {
   }
 
   /**
-   * Lifts the lid without deciding where the game goes next. Every exit from
-   * `paused` owes this — including F2 into the editor, which is why it is a
-   * method and not three lines repeated in `resume`.
+   * What a pause leaves running, undone. It is half of `takeDown("paused")` and
+   * is called from nowhere else — a lid is only ever lifted there.
    */
   private clearPause(): void {
     this.hud.setPaused(false);
@@ -1938,10 +1950,7 @@ export class Game {
   }
 
   private resume(): void {
-    if (this.state !== "paused") return;
-    this.overlayScreen.hide();
-    this.clearPause();
-    this.state = this.pausedFrom;
+    if (!this.lowerLid("paused")) return;
     // `dying` too. The death cam is a live frame that holds the lock, so a
     // pause over it has to give back what it took — the alternative is a cam
     // that resumes unlocked and a player who is silently mouse-free for the
@@ -2010,7 +2019,10 @@ export class Game {
    * round's `enterDeploy` happened to clear both.
    */
   private enterMenu(): void {
-    this.state = "menu";
+    // Takes down the pause card, the kit screen and the settings with it —
+    // whichever of them the player was looking at when they quit. All three used
+    // to be listed here by hand; see `go`.
+    this.go("menu");
     // A networked round ends HERE, and the socket is closed rather than left to
     // time out: a peer that merely goes quiet holds its roster slot until the
     // server notices, and the bot that should have taken the seat back stays
@@ -2027,10 +2039,7 @@ export class Game {
     // offering the one they did pick, rather than to whichever stranger's round
     // they last dropped into. Legal here because the state is already `menu`.
     this.mapDef = readMap();
-    this.clearPause();
     this.deployScreen.hide();
-    this.stowKit();
-    this.settingsScreen.hide();
     this.deathCam.stop();
     this.hud.setDeathCam(false);
     this.minimap.setVisible(false);
@@ -2115,18 +2124,18 @@ export class Game {
     // started underneath would have its build stomped to "editor" here.
     if (this.buildPending() || this.editor) return;
 
-    this.state = "editor";
+    // F2 is reachable from every screen in the game — the pause card, whose
+    // suspended audio context and hidden crosshair an editor session would
+    // otherwise inherit; the kit screen and the settings, either of which would
+    // sit over the editor's own panel; and the lobby, which used to be missing
+    // from the list here and did exactly that. `go` takes down whichever it was.
+    this.go("editor");
     const map = this.buildEditorMap();
+    // Not a lid: the menu's own card is on the same element and F2 is reachable
+    // from there too.
     this.overlayScreen.hide();
-    // F2 is reachable from the pause menu, and an editor session that inherited
-    // a suspended audio context and a hidden crosshair would be a puzzle.
-    this.clearPause();
     this.hud.setEditing(true);
     this.deployScreen.hide();
-    // F2 is reachable from the loadout screen too, and it would sit over the
-    // editor's own panel. The settings screen is above both and owes the same.
-    this.stowKit();
-    this.settingsScreen.hide();
     // And from the death cam, whose body would otherwise be left standing in
     // the map the editor is about to rebuild — `installMap` frees the ragdoll
     // slot underneath it, so the cam has to be told rather than find out.
@@ -2307,16 +2316,12 @@ export class Game {
     // leaves the systems holding a map the first one disposed, which is the
     // silent failure `installMap` exists to prevent.
     if (this.state === "loading") return;
+    // The menu's own card, which is not a lid and so is not `go`'s to take.
     this.overlayScreen.hide();
     // Reachable from the menu, so any lid may still be up over it — including
-    // the lobby, which is the one that got here on a networked round.
-    this.stowKit();
-    this.settingsScreen.hide();
-    this.lobbyScreen.hide();
-    // Reachable straight from the pause menu ("Restart round"), and harmless
-    // from anywhere else.
-    this.clearPause();
-    this.state = "loading";
+    // the lobby, which is the one that got here on a networked round — and
+    // straight from the pause menu ("Restart round").
+    this.go("loading");
     this.overlayScreen.showBuilding(this.mapDef.name);
     requestAnimationFrame(() =>
       requestAnimationFrame(() => this.buildRound()),
@@ -2459,7 +2464,7 @@ export class Game {
     // would clear it.
     this.input.clearCrouchToggle();
     this.input.clearSprintToggle();
-    this.state = "playing";
+    this.go("playing");
     // `enterDeploy` dropped the lock, and until now the only thing that ever
     // took it back was a click — the `pointerdown` handler in the constructor,
     // which is the deploy map's own click arriving a moment later. A pad player
@@ -3329,58 +3334,49 @@ export class Game {
   }
 
   /**
-   * What the game is actually DOING, looked at through whatever screens are
-   * stacked over it. `settings` is the one lid that can cover another one, so
-   * this is two deep and can be no deeper: nothing may be raised over it.
-   *
-   * `menu` needs no arm because a lid cannot be over a networked round there —
-   * `enterMenu` calls `leaveMatch`, so `this.net` is null in every state that
-   * reads back as `menu`.
-   */
-  /**
    * True while the world on screen is genuinely stopped — an offline pause, and
-   * the settings screen raised over one. It is what the HUD's own clock keys
-   * off: the killfeed and the toasts belong to the frame, so they freeze with
-   * it and fade with it, and the failure either way round is a fight fading off
-   * a still screen or a still screen catching up in one jump.
+   * whatever is raised over one. It is what the HUD's own clock keys off: the
+   * killfeed and the toasts belong to the frame, so they freeze with it and fade
+   * with it, and the failure either way round is a fight fading off a still
+   * screen or a still screen catching up in one jump.
    *
-   * The deploy screen is deliberately not in here even offline, where it holds
-   * the world just as hard: the gauges under it are the ones a player reads
-   * while choosing, and the countdown on the card is a clock of its own.
+   * The session test is the whole of the online half: in a netplay round nothing
+   * on this client holds anything, because the authority never heard the key.
+   * Which screens hold the world OFFLINE is `ScreenSpec.holdsWorld`, asked of
+   * the whole stack — the deploy screen is deliberately not one of them even
+   * though it holds the world just as hard, because the gauges under it are the
+   * ones a player reads while choosing and the countdown on the card is a clock
+   * of its own.
    */
   private get worldHeld(): boolean {
-    if (this.net) return false;
-    return (
-      this.state === "paused" ||
-      (this.state === "settings" && this.settingsFrom === "paused")
-    );
-  }
-
-  private get stateUnderLids(): GameState {
-    if (this.state === "settings") {
-      return this.settingsFrom === "paused" ? this.pausedFrom : this.settingsFrom;
-    }
-    if (this.state === "paused") return this.pausedFrom;
-    if (this.state === "loadout") return this.loadoutFrom;
-    return this.state;
+    return !this.net && this.screens.holdsWorld;
   }
 
   /**
-   * A netplay round carrying on under a lid: the frame, the gauges, and the
-   * reinforcement clock when what is under the stack is the deploy screen.
+   * The authority's round, carried on behind whatever this client has on screen:
+   * the frame, the gauges, and the reinforcement clock when what is under the
+   * stack is the deploy screen.
    *
-   * The clock is here rather than left to `updateDeployScreen` because it is
-   * the ROUND's and not the screen's. The authority runs `NetPlayer.respawnT`
-   * down whatever this client has on top, and the local copy is a countdown
-   * drawn on the card plus the gate on its own Deploy button — so a lid that
-   * stops it makes a player wait out time the server has already given them
-   * back, and the number on the card is wrong the whole while. Offline that
-   * same lid genuinely holds the round and the clock is right to stop with it.
+   * Called once from `tick` for every state, which is the point of it. This was
+   * four calls — one per screen that happened to know it owed one — and the rule
+   * that kept them honest was a comment saying the next screen owed the same. Now
+   * the screen answers `ScreenSpec.roundBehind` and `tick` does the asking, so a
+   * fifth screen cannot be written without an answer and cannot be written with
+   * the wrong one silently: the row is next to the four that are right.
+   *
+   * The clock is here rather than in `updateDeployScreen` because it is the
+   * ROUND's and not the screen's. The authority runs `NetPlayer.respawnT` down
+   * whatever this client has on top, and the local copy is a countdown drawn on
+   * the card plus the gate on its own Deploy button — so a lid that stops it
+   * makes a player wait out time the server has already given them back, and the
+   * number on the card is wrong the whole while. Offline that same lid genuinely
+   * holds the round and the clock is right to stop with it. Under no lid the
+   * deploy screen runs its own, which is why this asks for both.
    */
-  private updateNetUnderLid(dt: number): void {
-    if (!this.net) return;
+  private updateRoundBehind(dt: number): void {
+    if (!this.net || !this.screens.roundBehind) return;
     this.updateNetUnderCard(dt);
-    if (this.stateUnderLids !== "deploy") return;
+    if (!this.screens.lidUp || this.screens.under !== "deploy") return;
     this.respawnT -= dt;
     this.deployScreen.update(this.respawnT);
   }
@@ -3783,12 +3779,17 @@ export class Game {
     this.hud.setCapture(null);
     if (this.map) this.deployScreen.show(this.map, this.conquest, this.player.team);
     this.deployScreen.update(this.respawnT);
-    this.state = "deploy";
+    // A netplay death is decided by the wire and arrives in whatever state this
+    // client is in — including under a lid, which is where this used to leave a
+    // screen stranded over a live deploy screen. `go` takes it down.
+    this.go("deploy");
     document.exitPointerLock();
   }
 
   private endRound(winner: Team): void {
-    this.state = "roundover";
+    // Ends under a lid for the same reason a death does: the authority's
+    // `roundover` does not wait for the player to close their settings.
+    this.go("roundover");
     // The round can end on a frame the death cam is up — a squad taking the
     // last flag while the player watches their own body — and the result card
     // is not somewhere a corpse follows them to.
@@ -3921,7 +3922,7 @@ export class Game {
     // has stopped being the player's.
     this.hud.setDeathCam(true);
     this.hud.clearDamageDirections();
-    this.state = "dying";
+    this.go("dying");
   }
 
   /**
@@ -3972,12 +3973,13 @@ export class Game {
    * back in. A board that goes dark exactly then is dark for a good share of
    * the round.
    *
-   * The state test is `this.state` and deliberately not `stateUnderLids`: a lid
-   * is a screen the player ASKED for and put in front of the round, so the
-   * board goes away under one — which also means nothing has to remember to
-   * hide it. That is the whole reason this is a per-frame push rather than a
-   * call at each boundary: the six ways out of a round (deploying, dying, the
-   * round ending, a pause, the kit screen, the menu) each used to owe a
+   * `ScreenSpec.inRound` is answered by the state the frame is IN and
+   * deliberately not by what is under the lids: a lid is a screen the player
+   * ASKED for and put in front of the round, so every lid answers `false` and
+   * the board goes away under one without anything having to remember to hide
+   * it. That is the whole reason this is a per-frame push rather than a call at
+   * each boundary: the six ways out of a round (deploying, dying, the round
+   * ending, a pause, the kit screen, the menu) each used to owe a
    * `setScoreboard(false)`, and the one that forgot would leave last round's
    * numbers hanging over the next screen.
    *
@@ -3985,11 +3987,7 @@ export class Game {
    * and three arrays, and `flagsHeld` counts the control points twice.
    */
   private pushScoreboard(): void {
-    const inRound =
-      this.state === "playing" ||
-      this.state === "dying" ||
-      this.state === "deploy";
-    if (!inRound || !this.input.scoreboard) {
+    if (!this.screens.inRound || !this.input.scoreboard) {
       this.hud.setScoreboard(false);
       return;
     }

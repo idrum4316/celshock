@@ -71,10 +71,18 @@ src/
     sky.ts              # The painted sky and moon shafts (sky, godRays)
     teams.ts            # The two sides; index 0 is the player's
   core/
-    Game.ts             # Orchestrator + state machine + main loop. Constructor
-                        #   is construction only; wiring is wireSystems (+ four
-                        #   subject methods), installDomListeners, wireScreens;
-                        #   tick dispatches one method per screen
+    Game.ts             # Orchestrator + main loop + all cross-system wiring.
+                        #   Constructor is construction only; wiring is
+                        #   wireSystems (+ four subject methods),
+                        #   installDomListeners, wireScreens; tick dispatches
+                        #   one method per screen. Holds ONE ScreenStack and
+                        #   never assigns a state — go/raiseLid/lowerLid, and
+                        #   takeDown for what a screen means on screen
+    ScreenStack.ts      # The state machine's shape as data: GameState, the
+                        #   SCREENS table (what a lid covers, what holds the
+                        #   world offline, what owes the netplay frame, what is
+                        #   owed the scoreboard), and the raised-lid stack. A
+                        #   new state does not compile without a row
     InputManager.ts     # Keyboard/mouse + gamepad state + rumble
     CameraSystem.ts     # First-person cam at the eye; ADS zooms and slows by
                         #   the fitted optic, at the weapon's own rate

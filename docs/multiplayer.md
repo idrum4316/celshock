@@ -232,17 +232,18 @@ handler in whatever state the client is in, and against a suspended
 `AudioContext` they neither play nor reach `onended`, so each holds a voice
 against the cap until the resume and then they all fire on the same instant.
 
-**Three lids — `paused`, `settings` and `loadout` — and `settings` is the one
-that can be raised over another**, so what a frame owes cannot be read off
-`Game.state` alone: `stateUnderLids` looks through the stack (two deep, and it
-can be no deeper — nothing may cover the settings screen) and `worldHeld` asks
-the only question the HUD's clock cares about. All three call
-`updateNetUnderLid` rather than each deciding for itself, for the reason
-`updateNetWorld` has one home, and **a fourth screen owes the same call the day
-it is written**. The kit screen is the one where this is easiest to skip and
-worst to skip: its scrim is opaque but for the stage the weapon turns on, so the
-freeze behind it is nearly invisible and the snap on the way out is
-unattributable.
+**Four lids — `paused`, `settings`, `loadout` and `lobby` — and `settings` is the
+one that can be raised over another**, so what a frame owes cannot be read off
+`Game.state` alone: `ScreenStack.under` looks through the stack for the step at
+the bottom of it, and `worldHeld` asks the only question the HUD's clock cares
+about. **No lid decides any of this for itself.** Each declares `roundBehind` in
+`SCREENS` ([`docs/states.md`](states.md)) and `Game.updateRoundBehind` — one call,
+from `tick`, for whatever is on screen — is what steps it, so a fifth screen
+cannot be written without an answer. It used to be a call each screen had to
+remember, under a comment saying the next one owed the same; the kit screen is
+the one where that was easiest to skip and worst to skip, its scrim being opaque
+but for the stage the weapon turns on, so the freeze behind it is nearly
+invisible and the snap on the way out is unattributable.
 
 What a lid still covers is everything that would be a decision — the player does
 not move, shoot or upload; `updateNet` asks for `state === "playing"` before it
