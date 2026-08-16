@@ -563,7 +563,7 @@ const FIELDS = {
     const { tone, height } = field;
     const warpU = lattice(8, 0xd1a1);
     const warpV = lattice(8, 0xd1a2);
-    const damp = octaves(0xd1a3, 3, 6);
+    const damp = octaves(0xd1a3, 3, 14);
     const crumb = octaves(0xd1a7, 3, 20);
     const grit = octaves(0xd1a4, 2, 96);
     const cracks = cells(13, 0xd1a5);
@@ -580,7 +580,7 @@ const FIELDS = {
         const wu = u + (latticeAt(warpU, u, v) - 0.5) * 0.06;
         const wv = v + (latticeAt(warpV, u, v) - 0.5) * 0.06;
 
-        const wet = spread(fbmAt(damp, u, v), 2.1);
+        const wet = spread(fbmAt(damp, u, v), 1.8);
         const lump = billowAt(crumb, wu, wv);
         const g = fbmAt(grit, u, v);
 
@@ -626,12 +626,28 @@ const FIELDS = {
         // dry side of it and a hollow holds the damp — and that correlation is
         // most of why this reads as one material rather than as a colour and a
         // bump map that happen to share a tile.
+        //
+        // **The damp/dry term is deliberately weaker than the fine grain, and
+        // that ordering is the whole difference between soil and blotches.** A
+        // posterized ramp turns any smooth low-frequency field into flat
+        // patches with hard edges — a contour map, not a texture — and the
+        // patches are exactly the size of that field's features. At a 0.46
+        // weight over a spread of 2.1 this one swung nearly a level and a half
+        // across 0.7 m, so the ground read as a scatter of dark spots that then
+        // repeated with the tile. Keeping it inside half a level leaves damp
+        // and dry legible as a tendency rather than as shapes, and the slow
+        // change that is actually worth seeing across a valley is
+        // `graphics.groundVariation` in world space, which has no period.
+        //
+        // The fine grain is what makes that survive quantization: it has to be
+        // worth a good fraction of a level (a sixth of the ramp) on its own, or
+        // the boundaries it is meant to break up stay clean lines.
         tone[i] =
-          0.24 +
-          wet * 0.46 +
+          0.29 +
+          wet * 0.36 +
           (h - 0.5) * 0.3 +
-          (g - 0.5) * 0.3 -
-          groove * 0.22 +
+          (g - 0.5) * 0.44 -
+          groove * 0.18 +
           stone * 0.08;
       }
     }
