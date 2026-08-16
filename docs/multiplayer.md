@@ -1244,10 +1244,11 @@ browser talking to this port directly, and a browser's own claim about where it
 is is worth nothing. `TRUST_PROXY=1`/`0` forces the question for a proxy that
 is not on this machine. **The cap is the one bound here that can be turned into
 a bug by a misconfiguration**: behind a proxy that forwards no client address
-at all, every player is one key and the seventeenth is refused — so `X-Real-IP`
-is set in `docker/default.conf.template` and in the edge-proxy block at the
-bottom of this document, the refusal names the address it counted, and
-`MAX_SOCKETS_PER_IP=0` turns it off outright.
+at all, every player is one key and the seventeenth is refused — so both
+headers are set in `docker/default.conf.template` off an address that survived
+TWO proxies (see the edge-proxy block at the bottom of this document, which is
+the half that is easy to get wrong), the refusal names the address it counted,
+and `MAX_SOCKETS_PER_IP=0` turns it off outright.
 
 **Counts from the environment go through `envCount`.** `Number(process.env.X ??
 4)` reads `MAX_MATCHES=four` as `NaN`, and every comparison against `NaN` is
@@ -1444,17 +1445,36 @@ location /ws {
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
-    # Which client this is. Without it every player on the box arrives from
-    # 127.0.0.1 and the per-address socket cap counts them as one person —
-    # see "What a socket may spend before it has proved anything".
-    proxy_set_header X-Real-IP $remote_addr;
+    # Which client this is. See below: this is the FIRST of two hops that has
+    # to say so, and it is the one the other cannot work out for itself.
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_read_timeout 1h;
 }
 ```
 
 Caddy needs nothing said: `reverse_proxy 127.0.0.1:8080` carries WebSockets on
-its own, and sets `X-Forwarded-For` without being asked — which is the other
-header the per-address cap reads.
+its own, and sets `X-Forwarded-For` without being asked. Measured on 2.11: a
+browser that sends its own `X-Forwarded-For` has it REPLACED rather than
+appended to, because the peer is not in `trusted_proxies`, so what arrives is
+Caddy's own observation and not a value anyone chose. (A CDN in front of Caddy
+is where `servers { trusted_proxies }` goes; nothing downstream of Caddy can
+work that out.)
+
+**What neither form gets for free is the SECOND hop, and it is the one that
+eats the header.** The edge proxy forwards to the `web` container's published
+port on the host's loopback, and Docker rewrites the source of that connection —
+so inside that container `$remote_addr` is the bridge gateway for every player
+on the box, and the `proxy_set_header X-Real-IP $remote_addr` on its way to the
+match server would overwrite the edge's word with the gateway's. Measured
+through the real chain, an edge that forwarded `203.0.113.9` reached the server
+as `x-real-ip: 172.20.0.1` — a correctly configured edge proxy and a match
+server that counts every player as one person. `docker/default.conf.template`
+closes it with `real_ip_header X-Forwarded-For` over the private ranges, which
+moves the forwarded address into `$remote_addr` itself; the two `proxy_pass`
+blocks then send the browser's address without knowing anything changed, and
+the access log stops naming the gateway too. **An edge proxy that sets only
+`X-Real-IP` is therefore not enough** — that header is overwritten downstream,
+and `X-Forwarded-For` is what the container reads.
 
 **Capacity is one core per process, and it is not the constraint people expect.**
 Measured on one container: four concurrent matches — sixty-four bodies, sixteen

@@ -36,6 +36,37 @@ server {
     # than written into each `proxy_pass` so both locations cannot disagree.
     set $match_server "${MATCH_SERVER}";
 
+    # WHO THE BROWSER IS, and this is not optional plumbing — the match server's
+    # per-address socket cap is what it decides.
+    #
+    # There are two proxies in front of the game, not one: an edge proxy
+    # terminates HTTPS for the domain and forwards to this container's published
+    # port on the host's loopback. Docker rewrites the source of that connection,
+    # so `$remote_addr` here is the bridge gateway (measured: 172.20.0.1) for
+    # EVERY player on the box — and `proxy_set_header X-Real-IP $remote_addr`
+    # below would then hand the match server one key for the whole internet, so
+    # sixteen players connect and the seventeenth is refused. The edge proxy's
+    # `X-Forwarded-For` is the only thing in the request that knows better.
+    #
+    # `real_ip_header` moves it into `$remote_addr` itself rather than being read
+    # at each `proxy_pass`, which is what makes the two locations below correct
+    # without either one mentioning it — and puts the right address in the access
+    # log as well. With no edge proxy and no header it does nothing at all, so a
+    # container reached directly still counts its true peer.
+    #
+    # The trusted set is the private space, deliberately the same ranges as
+    # `isLocalPeer` in `server/index.ts`: this port is published on the host's
+    # loopback, so nothing else can reach it, and an untrusted peer's header is
+    # ignored — which is what stops a browser choosing its own bucket.
+    set_real_ip_from 127.0.0.0/8;
+    set_real_ip_from 10.0.0.0/8;
+    set_real_ip_from 172.16.0.0/12;
+    set_real_ip_from 192.168.0.0/16;
+    set_real_ip_from ::1/128;
+    set_real_ip_from fc00::/7;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
     root /usr/share/nginx/html;
     index index.html;
 
@@ -108,7 +139,14 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
+        # `$remote_addr` is the browser rather than the edge proxy, because of
+        # the `real_ip` block above. Both headers are written, and written from
+        # the same variable: the server prefers `X-Real-IP` and falls back to the
+        # first `X-Forwarded-For` entry, and a client can prepend to a list — so
+        # the list it sent is replaced here rather than passed through, and the
+        # fallback cannot be aimed either.
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_read_timeout 1h;
         proxy_send_timeout 1h;
     }
@@ -129,7 +167,9 @@ server {
         proxy_pass http://$match_server;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        # Same pair, same reason, as `/ws` above.
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
     }
 
     # No client-side router, so a missing path is a genuine 404 rather than an
