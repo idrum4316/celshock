@@ -48,6 +48,7 @@ interface Sample {
   moving: number;
   dead: number;
   alive: boolean;
+  crouch: number;
 }
 
 /** How many samples to keep. Two is the minimum to interpolate; more absorbs jitter. */
@@ -149,6 +150,7 @@ export class NetSoldier implements Combatant, RagdollSubject {
     moving: number,
     dead: number,
     alive: boolean,
+    crouch: number,
   ): void {
     // Out-of-order arrival: UDP-like reordering does not happen over a
     // WebSocket, but a reconnect can replay an older tick and one stale sample
@@ -156,7 +158,7 @@ export class NetSoldier implements Combatant, RagdollSubject {
     const newest = this.samples[this.samples.length - 1];
     if (newest && t <= newest.t) return;
 
-    this.samples.push({ t, x: p[0], y: p[1], z: p[2], yaw, bodyYaw, pitch, moving, dead, alive });
+    this.samples.push({ t, x: p[0], y: p[1], z: p[2], yaw, bodyYaw, pitch, moving, dead, alive, crouch });
     if (this.samples.length > BUFFER) this.samples.shift();
   }
 
@@ -210,6 +212,10 @@ export class NetSoldier implements Combatant, RagdollSubject {
     const pitch = a.pitch + (b.pitch - a.pitch) * blend;
     const moving = a.moving + (b.moving - a.moving) * blend;
     const dead = a.dead + (b.dead - a.dead) * blend;
+    // Interpolated like everything else here rather than eased locally: this is
+    // the AUTHORITY's stance blend, already the shape it will be, and running a
+    // second ease over it would draw a body the server never had.
+    const crouch = a.crouch + (b.crouch - a.crouch) * blend;
 
     // Ground distance covered since the last frame, for the walk cycle. Taken
     // before `position` is overwritten, and horizontal only — a body walking
@@ -230,11 +236,30 @@ export class NetSoldier implements Combatant, RagdollSubject {
     // `centerHeight` and `eyeHeight` resolved the same way `Bot.syncTransform`
     // resolves them, so a net body's centre and eye — which is what the head
     // zone is centred on and what LOS is tested against — sit where a bot's do.
+    //
+    // The stance moves both, down the same half metre and off the same blend
+    // the authority derived ITS pair from (`NetPlayer.apply`), so the sphere a
+    // shooter's own hitmarker is guessed against is the sphere the server will
+    // rewind. It is the `player` numbers on both sides even though this body
+    // may be a bot, and that is not an inconsistency: a bot's `crouch` is
+    // always 0, so a bot resolves to `centerHeight` and `eyeHeight` exactly as
+    // it always has, and nothing but a person ever leaves them.
+    //
+    // The ROOT does not move. The crouch lives inside the rig — `animateSoldier`
+    // drops the body node and folds the legs under it — so the rig still hangs
+    // from the standing body centre and the boots stay on the ground.
+    const p = CONFIG.player;
     const c = this.rig.centerHeight;
     this.rig.root.position.set(x, y + c, z);
     this.rig.root.rotation.y = bodyYaw;
-    this.center.set(x, y + c, z);
-    this.eyePos.set(x, y + CONFIG.camera.eyeHeight, z);
+    this.center.set(x, y + c + (p.crouchCenterHeight - c) * crouch, z);
+    this.eyePos.set(
+      x,
+      y +
+        CONFIG.camera.eyeHeight +
+        (p.crouchEyeHeight - CONFIG.camera.eyeHeight) * crouch,
+      z,
+    );
 
     if (!this.alive && dead >= 1 && this.enabled) {
       // Fully collapsed and still. Nothing more to draw until it respawns.
@@ -245,7 +270,11 @@ export class NetSoldier implements Combatant, RagdollSubject {
     if (!this.enabled) return;
 
     if (dead > 0) {
-      animateSoldier(this.rig, 0, 0, 0, 0, Math.min(1, dead));
+      // The stance goes in with it: the authority stops accepting moves from a
+      // dead player, so `crouch` holds at whatever they were in when they were
+      // hit, and the collapse unfolds it rather than standing the body up on
+      // the frame it died.
+      animateSoldier(this.rig, 0, 0, 0, 0, Math.min(1, dead), crouch);
       return;
     }
 
@@ -274,6 +303,7 @@ export class NetSoldier implements Combatant, RagdollSubject {
       pitch,
       wrapAngle(yaw - bodyYaw),
       0,
+      crouch,
     );
   }
 

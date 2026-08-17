@@ -27,9 +27,9 @@
  *   this file existed. Do NOT "fix" that by feeding corpses into
  *   `ObstacleField` — its buckets are baked at map load for a reason.
  * - It is strictly cosmetic and always optional. Every refusal (WASM not
- *   loaded, WASM failed, setting off, pool full, too far away) falls back to
- *   `Bot`'s collapse tween, which is why that tween is load-bearing rather
- *   than legacy. The death cam's body is the ONE thing that may not be refused
+ *   loaded, WASM failed, setting off, pool full, too far away, legs folded in
+ *   a crouch) falls back to `Bot`'s collapse tween, which is why that tween is
+ *   load-bearing rather than legacy. The death cam's body is the ONE thing that may not be refused
  *   for a full pool — it is the sole subject of a four-second shot — and
  *   `takeSlot` is where that exception lives and where it stops.
  * - The sim is a FIXED step with a CARRIED remainder, so a tumble is identical
@@ -298,6 +298,17 @@ export class RagdollSystem {
     if (subject.ragdolling || this.slots.some((s) => s.subject === subject)) {
       return false;
     }
+    // A folded leg is not a bone. `RAGDOLL_BONES` makes a leg ONE rigid segment
+    // from hip to sole, 0.72 m long and oriented by the hip joint — so a body
+    // caught mid-crouch would be thrown with two 0.72 m planks sticking
+    // forward out of its hips, propping a corpse up off geometry its own
+    // drawn legs are nowhere near. There is no pose that fixes it either:
+    // straight legs under lowered hips reach through the floor, and lifting
+    // the hips to meet them is half a metre of pop on the frame of death.
+    // The collapse tween has no such constraint — it is a pose, so it can
+    // unfold the crouch on the way down — and being refused is a path this
+    // system already has five other reasons to take.
+    if (subject.rig.kneeL.rotation.x > 0.1) return false;
     const slot = this.takeSlot(priority);
     if (!slot) return false;
 
@@ -452,7 +463,7 @@ export class RagdollSystem {
   /**
    * Drops ONE body early, if this pool is holding it. Idempotent, and a no-op
    * for a body it never took — so a caller may offer and retire without ever
-   * checking which of the five refusals it hit.
+   * checking which of the six refusals it hit.
    *
    * A bot never needs this: its corpse outlives the death cam's whole window
    * and retires on its own clock. The player's does, because the deploy screen

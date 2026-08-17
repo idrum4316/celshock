@@ -26,7 +26,9 @@ visible-but-unhittable trap `CoverMap`'s `hardHeight` documents from the other
 side. The collider capsule is deliberately *not* resized: `moveWithCollisions` is
 horizontal-only and the ground probe places the feet, so a shorter body buys
 nothing and would owe a stand-up clearance test. Sprint outranks crouch and is
-resolved first. Bots have no equivalent — their rig has no knees.
+resolved first. Bots have no equivalent: the rig they share with remote humans can
+crouch — `animateSoldier` takes a stance and folds the legs to it — but nothing in
+the AI ever asks for one.
 
 **Crouch is asked for two ways, and the split is per input.** Ctrl is a hold; `C`
 and the pad's **B** flip a latch, which on a pad is the only workable shape since B

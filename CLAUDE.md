@@ -662,6 +662,18 @@ somebody was nearly hit, which is the read a wallhack wants. The `reload` is the
 one thing a client announces about itself, and it is allowed only because it
 decides nothing: anything that decides something is the server's.
 
+**A STANCE is state, and what travels is the authority's own blend.** A crouch
+moves the eye and the hit sphere half a metre (see first person, above), so a
+remote body drawn standing is a helmet above a sphere that no longer reaches
+it — the visible-but-unhittable failure, arriving over a wire. The client sends
+`crouching` as a boolean, `NetPlayer` eases it exactly as `Player` does, and
+`EntityState.crouch` carries the RESULT: a client running its own ease against
+the authority's would disagree with it, by that same half metre, for the whole
+quarter-second the stance takes. The drawn pose is derived from the same config
+the sphere is (`SoldierModel`'s `CROUCH_DROP`, folded into the legs by inverse
+kinematics with the boots planted), so retuning the crouch moves the drawing
+with it. Bots never crouch and omit the field.
+
 **`decode` proves only that a frame is JSON with a `t` on it, so a
 `ClientMessage` is a CLAIM about a well-behaved client and never a fact.**
 `server/wire.ts` is the one door that makes it one — both callers read a frame

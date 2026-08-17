@@ -182,6 +182,25 @@ export interface EntityState {
   dead: number;
   /** Set on the tick it fired, for the muzzle flash and the tracer. */
   fired?: boolean;
+  /**
+   * Stance, 0 standing .. 1 fully crouched. Absent means standing, which is
+   * every bot in the game — nothing in the AI crouches.
+   *
+   * **The authority's own blend, not the key a client is holding**, and that is
+   * the point of sending a number rather than the boolean the client already
+   * sends up. `NetPlayer` eases this exactly as `Player.syncCombatant` does,
+   * and drops the eye and the hit sphere along it; a client draws the body from
+   * the same number and puts its local copy of those spheres in the same place.
+   * So what an observer aims at and what the server rewinds are the same shape
+   * at the same instant, including halfway through the quarter-second the
+   * stance takes to change. Sent as the boolean instead, every client would run
+   * its own blend against the authority's and disagree with it for that whole
+   * window — a 0.5 m disagreement about where a head is.
+   *
+   * Additive, like `fired` and `present`: an older client ignores it and draws
+   * what it drew before the field existed, so no `PROTOCOL_VERSION` bump.
+   */
+  crouch?: number;
 }
 
 /**

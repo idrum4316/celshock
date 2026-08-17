@@ -13,10 +13,11 @@
  * position: that is what makes strafing work. Obstacle push-out is a
  * preference, not a veto: squeezeT drops it when wedged. Bots are pooled by
  * BattleSystem — death hides the rig, respawn re-poses it; never allocate a new
- * Bot per respawn. Animation is procedural and the rig has 7 joints and no
- * knees: there is no crouch, lean or flinch pose, so reactions are expressed in
- * speed, heading and facing only — and "cover" therefore means corners, never
- * ducking. `yaw` is where the bot LOOKS (and is what the view cone reads);
+ * Bot per respawn. Animation is procedural and NOTHING here passes a stance:
+ * `animateSoldier`'s crouch exists for a remote human and its default is
+ * standing, so a bot has no crouch, lean or flinch pose and its reactions are
+ * expressed in speed, heading and facing only — and "cover" therefore means
+ * corners, never ducking. `yaw` is where the bot LOOKS (and is what the view cone reads);
  * `bodyYaw` is where its feet point. Keeping them apart is what stops a
  * strafing bot walking sideways, and the twist between them is clamped. Cover is a PREFERENCE: a spot that cannot be reached inside
  * cover.abandonTime is dropped (with a cooldown, or the search instantly

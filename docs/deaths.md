@@ -16,9 +16,12 @@ bodies and rounds pass through them. Do not "fix" that by feeding corpses into
 `ObstacleField`, whose buckets are baked at map load.
 
 **The collapse tween in `Bot.update`'s dead branch is not legacy — it is the floor
-under all of this**, and it runs on five separate refusals: the WASM has not loaded,
-the WASM failed, the setting is off, the pool is full, or the death was past
-`death.maxDistance`. Deleting it is the single worst change available here. The tween
+under all of this**, and it runs on six separate refusals: the WASM has not loaded,
+the WASM failed, the setting is off, the pool is full, the death was past
+`death.maxDistance`, or the body died with its legs folded in a crouch — a corpse's
+leg is one rigid 0.72 m bone, which a folded leg is not, and the tween is a pose so
+it can unfold the stance on the way down where the solver could only be handed a
+plank sticking out of each hip. Deleting it is the single worst change available here. The tween
 is exempt from the pose-freeze LOD *because it is five property writes*; **a ragdoll
 needs no such exemption**, because it poses through the proxy nodes its joints are
 parented to and the solver writes those whatever the LOD says. Reading those two as

@@ -902,6 +902,11 @@ export class Match {
           // actually covered — the same rule `NetSoldier` follows on the far
           // side.
           moving: this.movingFor(i, player.position.x, player.position.z),
+          // The authority's own stance blend, which is the one the eye and the
+          // hit sphere were derived from this tick. Every observer draws the
+          // body from it and puts its local copy of those spheres in the same
+          // place — see `EntityState.crouch`.
+          crouch: player.crouchBlend,
           alive: player.alive,
           // The same tween a bot's body plays, off the same field — see
           // `NetPlayer.deathProgress` for why this is not a bare 1.
@@ -1229,6 +1234,7 @@ export class Match {
     player.seq = msg.seq;
     peer.seq = msg.seq;
     player.apply(
+      dt,
       x,
       y,
       z,

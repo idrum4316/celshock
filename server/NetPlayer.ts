@@ -34,6 +34,14 @@ export class NetPlayer implements Combatant {
   pitch = 0;
   crouching = false;
   sprinting = false;
+  /**
+   * The stance as a 0..1 blend, eased toward `crouching` exactly as
+   * `Player.syncCombatant` eases its own. The eye and the hit sphere are
+   * derived from THIS and never from the boolean, and it is what the snapshot
+   * carries: a client draws the body from the authority's own blend rather than
+   * running a second one of its own — see `EntityState.crouch`.
+   */
+  crouchBlend = 0;
 
   /** Highest input sequence accepted. A correction names this. */
   seq = 0;
@@ -114,8 +122,15 @@ export class NetPlayer implements Combatant {
    * eye that drops while the hit sphere stays put makes crouching make you
    * easier to kill rather than harder. Getting that wrong here would invert the
    * mechanic for every networked player while leaving it correct offline.
+   *
+   * Both ride `crouchBlend` rather than the boolean, and `dt` is what advances
+   * it. A snapped stance would put a head somewhere no client ever drew it for
+   * the quarter-second the blend takes at either end, and the rewind would
+   * happily resolve shots against that phantom — the history `LagComp` records
+   * is only ever as honest as the pose it samples.
    */
   apply(
+    dt: number,
     x: number,
     y: number,
     z: number,
@@ -130,8 +145,13 @@ export class NetPlayer implements Combatant {
     this.pitch = pitch;
     this.crouching = crouching;
     this.sprinting = sprinting;
+    this.crouchBlend +=
+      ((crouching ? 1 : 0) - this.crouchBlend) *
+      Math.min(1, dt * p.crouchBlendSpeed);
 
-    const eyeY = crouching ? p.crouchEyeHeight : CONFIG.camera.eyeHeight;
+    const eyeY =
+      CONFIG.camera.eyeHeight +
+      (p.crouchEyeHeight - CONFIG.camera.eyeHeight) * this.crouchBlend;
     // `height / 2` standing, exactly as `Player.syncCombatant` resolves it —
     // and NOT `eyeHeight - 0.05`, which is the trap this line was in. The 0.05
     // in `config/player.ts` is where the sphere's TOP sits relative to the eye
@@ -139,7 +159,8 @@ export class NetPlayer implements Combatant {
     // read as a centre it puts a standing player's body sphere 0.6 m up their
     // own chest, so the authority disagrees with both the client that drew the
     // body and the shooter that aimed at it.
-    const centerY = crouching ? p.crouchCenterHeight : p.height / 2;
+    const centerY =
+      p.height / 2 + (p.crouchCenterHeight - p.height / 2) * this.crouchBlend;
     this.eyePos.set(x, y + eyeY, z);
     this.center.set(x, y + centerY, z);
   }
@@ -208,7 +229,10 @@ export class NetPlayer implements Combatant {
     this.alive = true;
     this.crouching = false;
     this.sprinting = false;
-    this.apply(at.x, at.y, at.z, yaw, 0, false, false);
+    // A fresh body stands, and `dt` of 0 is what says so: the blend is written
+    // here rather than eased toward zero from whatever the last life ended in.
+    this.crouchBlend = 0;
+    this.apply(0, at.x, at.y, at.z, yaw, 0, false, false);
   }
 
   /** Takes this player out of the fight without killing them — a disconnect. */

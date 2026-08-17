@@ -156,7 +156,8 @@ export const bots = {
     /**
      * How long a hit disrupts a bot's aim, and how far off target it throws
      * the aim point (metres, at the target). There is no flinch *pose* — the
-     * rig has 7 joints and 4 animation parameters — so "got hit" reads as a
+     * rig has no spine to fold and no AI parameter that would drive one — so
+     * "got hit" reads as a
      * yaw snap toward the shooter plus a brief aim disruption, and that is
      * the whole honest vocabulary for it.
      */
@@ -228,10 +229,11 @@ export const bots = {
   },
 
   /**
-   * Movement texture. All of this is heading, speed and facing only — the rig
-   * has seven joints and four animation parameters, so there is no crouch,
-   * lean or vault to reach for. What is achievable is *where* and *how fast*,
-   * and that turns out to carry most of it.
+   * Movement texture. All of this is heading, speed and facing only — there is
+   * no lean or vault to reach for, and the crouch the rig CAN pose belongs to a
+   * remote human's stance rather than to anything an AI decides. What is
+   * achievable is *where* and *how fast*, and that turns out to carry most of
+   * it.
    */
   movement: {
     /**
@@ -507,9 +509,10 @@ export const bots = {
     hardHeight: 1.7,
     /**
      * Knee height. Marks geometry worth walking along rather than across open
-     * ground — and nothing more. The bot rig has no knees, so there is no
-     * crouch, and a bot behind a waist-high wall is exactly as shootable as
-     * one in the open. Never treat this as protection.
+     * ground — and nothing more. No bot ever crouches — the rig can, for a
+     * remote human, but nothing here asks it to — so a bot behind a waist-high
+     * wall is exactly as shootable as one in the open. Never treat this as
+     * protection.
      */
     softHeight: 0.9,
     /**

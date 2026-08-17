@@ -197,9 +197,10 @@ flow fields. A cover query costs a bit test.
   tested from the eyes but hits are tested against the sphere (`center.y + hitRadius`
   = 1.65). Bake at eye height and a bot behind a 1.6 m wall is *visible but
   unhittable*, which reads as broken netcode.
-- **Soft cover (0.9 m) is a steering preference and nothing else.** The rig has seven
-  joints and no knees, so there is no crouch: a bot behind a waist-high wall is exactly
-  as shootable as one in the open. **Cover here means corners.**
+- **Soft cover (0.9 m) is a steering preference and nothing else.** The rig grew knees
+  and ankles for a remote human's stance, but nothing in the AI passes a crouch, so a
+  bot never bends them: a bot behind a waist-high wall is exactly as shootable as one
+  in the open. **Cover here means corners.**
 - **A `porous` box is neither mask, and a `strut` is in no mask at all.** The
   bake skips the porous box outright: rounds go through it (that is what the
   flag means), so it cannot be hard cover for the reason above — and it cannot

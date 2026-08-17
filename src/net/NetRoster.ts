@@ -139,6 +139,9 @@ export class NetRoster {
         e.moving,
         e.dead,
         e.alive,
+        // Absent is standing, which is every bot and every server that predates
+        // the field. See `EntityState.crouch`.
+        e.crouch ?? 0,
       );
     }
 

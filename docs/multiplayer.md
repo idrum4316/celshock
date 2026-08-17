@@ -131,6 +131,49 @@ Two consequences to preserve:
   what it did — makes a killed player VANISH on the tick they die instead of
   collapsing, and it takes the ragdoll's fallback with it, since a corpse the
   pool declines has nothing else left to play.
+- **The one thing only a person does is crouch**, and the rig they share can
+  pose it: `animateSoldier` takes a stance blend and nothing in the AI ever
+  passes one, so a bot's legs stay straight without a second rig or a second
+  code path. See below for why the stance is a number rather than the boolean
+  the client sends up.
+
+## A stance is drawn where the authority has it, or it is worse than not drawn
+
+The client sends `crouching` as a boolean, the authority eases it into
+`NetPlayer.crouchBlend`, and **the SNAPSHOT carries the blend** — not the
+boolean, and not nothing.
+
+Not nothing, because a drawn body that does not crouch is an invisible
+advantage. The authority drops a crouching player's eye to `crouchEyeHeight` and
+their hit sphere to `crouchCenterHeight`, half a metre each; an observer drawing
+them upright aims at a helmet the sphere no longer reaches, and the round the
+shooter watched land is a miss the server never saw a reason for. The same body
+is also drawn head-up over a wall it is genuinely hidden behind. Both are the
+`visible but unhittable` failure `config/player.ts` argues at length, arriving
+over a wire instead of out of a config.
+
+Not the boolean, because a client cannot ease it. `NetPlayer` runs the same
+`crouchBlendSpeed` ease `Player.syncCombatant` runs, so the eye and the sphere
+take a quarter of a second to travel — and a client running its own ease against
+that one would disagree with it for that whole window, by up to the same half
+metre it was sent to fix. Sending the number the authority actually used makes
+the disagreement unrepresentable: `NetSoldier` interpolates it between samples
+like every other field, poses the rig from it, and derives its own copies of the
+centre and the eye from it, so what a shooter aims at and what `LagComp` rewinds
+are the same shape at the same instant.
+
+The pose is derived rather than authored for the same reason (`SoldierModel`).
+`CROUCH_DROP` is read from `camera.eyeHeight - player.crouchEyeHeight`, the legs
+are folded by inverse kinematics to carry the hips exactly that far down with
+the boots planted, and the spine's own lean is subtracted from the drop it
+buys — so the drawn head lands on the eye the authority is using, at every point
+of the blend and not only at its ends. Retune the crouch in `CONFIG` and the
+drawing follows; author the pose by hand instead and the two drift apart the
+first time anybody does.
+
+`EntityState.crouch` is optional and absent means standing, so it is additive in
+the same way `fired` and `present` are and needs no `PROTOCOL_VERSION` bump.
+Every bot omits it.
 
 ## Coming into the world is an ASK, and it is the only one
 
