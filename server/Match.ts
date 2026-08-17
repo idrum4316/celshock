@@ -1229,7 +1229,6 @@ export class Match {
     player.seq = msg.seq;
     peer.seq = msg.seq;
     player.apply(
-      Date.now(),
       x,
       y,
       z,
