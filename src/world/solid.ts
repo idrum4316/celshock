@@ -1,11 +1,33 @@
 /**
- * solid.ts — The read side of `metadata.solid`: the one pick predicate every
- * ray test in the game filters with.
- * Invariants: this is a module CONSTANT, not a factory — it closes over nothing
- * and must keep closing over nothing, because the callers are per-shot and
- * per-frame and a predicate minted at the call site allocates on every one.
- * `MapBuilder` is the only writer of the flag (two sites); this is the only
- * spelling of the question.
+ * solid.ts — The read side of `metadata.solid` and `metadata.porous`: the two
+ * pick predicates every ray test in the game filters with.
+ * Invariants: these are module CONSTANTS, not factories — they close over
+ * nothing and must keep closing over nothing, because the callers are per-shot
+ * and per-frame and a predicate minted at the call site allocates on every one.
+ * `MapBuilder` is the only writer of either flag; this is the only spelling of
+ * both questions.
+ *
+ * **There are two questions, and a ray asks exactly one of them.** *Where may a
+ * body be?* is `SOLID_ONLY` — the floor underfoot, the wall you cannot walk
+ * into, the spot the camera may not sit in. *What stops a round or a look?* is
+ * `OPAQUE_ONLY`. They were one question until the fence: a post-and-rail run is
+ * a wall to a body and mostly air to a bullet, and answering both with one flag
+ * meant a fence either let bots walk through it or ate rounds aimed between its
+ * rails.
+ *
+ * A collider therefore answers in one of three ways, and a builder picks which
+ * by how it declares the box (`BoxSpec`, `Build.wall` / `block` / `strut`):
+ *
+ * | collider | body | round |
+ * | --- | --- | --- |
+ * | ordinary (`wall`, `block`) | yes | yes |
+ * | `porous` — a fence's coarse run | yes | **no** |
+ * | `rayOnly` — a fence's posts and rails (`strut`) | **no** | yes |
+ *
+ * The last two exist as a PAIR and describe one object between them: the
+ * coarse box is the fence a body walks into, the struts are the timber a round
+ * stops on. See `MapBuilder.collider` and `MapBuilder.struts` for the write
+ * side.
  */
 import type { AbstractMesh } from "@babylonjs/core";
 
@@ -14,11 +36,17 @@ import type { AbstractMesh } from "@babylonjs/core";
  * never the visual geometry they stand in for. See `MapBuilder`'s header on the
  * visual/collider split for why the two roles are separate meshes.
  *
- * Every ray in the game runs through here: `CombatSystem`'s hitscan and its
- * wall cap, `BattleSystem`'s and `AimAssistSystem`'s line of sight, the
- * grenade's step ray and its throw check, `Player.probeGround`, the death cam's
- * pull-in, and the editor's centre-screen pick. They were seven copies of one
- * expression, two of them hoisted and five minted per call.
+ * Every ray about WHERE A BODY MAY BE runs through here: `Player.probeGround`,
+ * the death cam's pull-in, and the editor's centre-screen pick. Porous boxes
+ * are included, and that is the point — a fence is still something you stand on
+ * when you jump onto it, and a ground probe that could not see one would drop
+ * the player inside a box `moveWithCollisions` is still holding them out of.
+ *
+ * `rayOnly` geometry is excluded for the mirror reason: a fence's posts and
+ * rails stop rounds, but standing on a 0.1 m rail is not a thing a body does,
+ * and the coarse box beside them is what the probe is meant to find. It also
+ * keeps the game's most expensive per-frame call from paying for triangles it
+ * would only throw away.
  *
  * It is written as a `!!metadata &&` guard rather than `metadata?.solid` so the
  * hot path does one truthiness test on a field that is `null` for most meshes
@@ -26,4 +54,27 @@ import type { AbstractMesh } from "@babylonjs/core";
  * for a property at all.
  */
 export const SOLID_ONLY = (m: AbstractMesh): boolean =>
-  !!m.metadata && m.metadata.solid === true;
+  !!m.metadata && m.metadata.solid === true && m.metadata.rayOnly !== true;
+
+/**
+ * The solid world MINUS what a round or a sightline passes through:
+ * `CombatSystem`'s hitscan and its wall cap, `BattleSystem`'s and
+ * `AimAssistSystem`'s line of sight, and the grenade's step ray and blast
+ * check.
+ *
+ * Every one of those five asks the same question — *is there something in the
+ * way?* — and for a post-and-rail fence the answer is *only where the timber
+ * is*: the coarse `porous` box comes out of the set, and the `strut` geometry
+ * standing exactly where the posts and rails are drawn stays in it. So a round
+ * through a gap goes through, and a round at a post stops on the post.
+ *
+ * The grenade is in this list rather than the other one because a grenade is a
+ * thing travelling to somewhere, not a body standing anywhere: it goes over,
+ * under and between the rails exactly as a round does, and its fragments do the
+ * same.
+ *
+ * The extra term costs one property read on meshes that already passed the
+ * `solid` test — a few hundred boxes per ray, none of the ~1,800 visuals.
+ */
+export const OPAQUE_ONLY = (m: AbstractMesh): boolean =>
+  !!m.metadata && m.metadata.solid === true && m.metadata.porous !== true;

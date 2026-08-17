@@ -325,8 +325,12 @@ export class DeathCam {
     this.ray.origin.copyFrom(this.anchor);
     this.ray.direction.copyFrom(this.dir);
     this.ray.length = len;
-    // The same filter every ray in this game uses: collider proxies only, so
-    // the corpse's own meshes — and every other visual — are transparent to it.
+    // Collider proxies only, so the corpse's own meshes — and every other
+    // visual — are transparent to it. `SOLID_ONLY` rather than the shot ray's
+    // `OPAQUE_ONLY`, because this asks where the camera may SIT, not what it
+    // can see through: a porous box is still somewhere a camera should not be
+    // parked, and stopping short of a fence costs four seconds of a view that
+    // was see-through anyway.
     const hit = this.scene.pickWithRay(this.ray, SOLID_ONLY);
     if (!hit || !hit.hit) return;
     const allow = Math.max(c.minDistance, hit.distance - c.wallMargin);

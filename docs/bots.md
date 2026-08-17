@@ -200,6 +200,16 @@ flow fields. A cover query costs a bit test.
 - **Soft cover (0.9 m) is a steering preference and nothing else.** The rig has seven
   joints and no knees, so there is no crouch: a bot behind a waist-high wall is exactly
   as shootable as one in the open. **Cover here means corners.**
+- **A `porous` box is neither mask, and a `strut` is in no mask at all.** The
+  bake skips the porous box outright: rounds go through it (that is what the
+  flag means), so it cannot be hard cover for the reason above — and it cannot
+  be soft either, because soft exists to steer bots toward walls and away from
+  open ground, and a fence line *is* open ground with a rail across it. The
+  timber that DOES stop rounds is `rayOnly` and emits no `WorldBox`, so it never
+  reaches this bake either, which is right: a 0.18 m post is a thing a round
+  hits, not a thing a body hides behind. The same split is why a bot's LOS runs
+  across a fence — `BattleSystem` filters `OPAQUE_ONLY`, so a bot sees exactly
+  as far as its rounds reach, timber included.
 - **It is a preference, not a commitment** — the same rule as `ObstacleField`'s
   push-out. A spot not reached within `cover.abandonTime` is dropped, and a cooldown
   stops the search instantly re-picking it. A bot moving to cover still shoots; only

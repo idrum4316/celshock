@@ -8,9 +8,11 @@
  * This is the one thing in the game that is not hitscan, and everything here is
  * shaped by that:
  * - A grenade is integrated per frame and collides with ONE ray per grenade per
- *   frame, against `metadata.solid === true` — the same collider proxies
- *   bullets stop on, never the visuals. There are at most a handful in the air,
- *   so that ray is affordable where a per-bullet one would not be.
+ *   frame, filtered `OPAQUE_ONLY` — the same collider proxies bullets stop on
+ *   and the same ones they pass through, never the visuals. There are at most a
+ *   handful in the air, so that ray is affordable where a per-bullet one would
+ *   not be. A grenade goes between a fence's rails because a body's width is
+ *   not what is travelling.
  * - The blast resolves at detonation against the target list the THROWER is
  *   handed (`hittablesFor`), so friendly fire is excluded by construction, the
  *   same way `CombatSystem.fire` excludes it. Nothing in here knows what a team
@@ -39,7 +41,7 @@ import { buildGrenade, pipLit } from "../entities/GrenadeModel";
 import type { CelMaterialFactory } from "../shaders/CelShader";
 import type { EnvironmentSpec } from "../world/environment";
 import { TerrainField } from "../world/TerrainField";
-import { SOLID_ONLY } from "../world/solid";
+import { OPAQUE_ONLY } from "../world/solid";
 import type { Hittable } from "./CombatSystem";
 
 /** One grenade in flight (or resting with its fuse running). */
@@ -366,11 +368,11 @@ export class GrenadeSystem {
       if (travel > 1e-5) {
         // One ray per grenade per frame, along the step and a body's radius
         // past it, so a fast grenade cannot tunnel through a wall between two
-        // frames. Same `solid` filter as every other ray in the game.
+        // frames. Same filter as every other ray that asks what is in the way.
         this.ray.origin.copyFrom(n.mesh.position);
         this.ray.direction.copyFrom(_step).scaleInPlace(1 / travel);
         this.ray.length = travel + g.radius;
-        const hit = this.scene.pickWithRay(this.ray, SOLID_ONLY);
+        const hit = this.scene.pickWithRay(this.ray, OPAQUE_ONLY);
         const normal = hit?.hit && hit.pickedPoint ? hit.getNormal(true) : null;
         if (hit?.pickedPoint && normal) {
           _normal.copyFrom(normal);
@@ -478,7 +480,7 @@ export class GrenadeSystem {
     this.ray.origin.copyFrom(from);
     this.ray.direction.set(dx / len, dy / len, dz / len);
     this.ray.length = len;
-    const hit = this.scene.pickWithRay(this.ray, SOLID_ONLY);
+    const hit = this.scene.pickWithRay(this.ray, OPAQUE_ONLY);
     return !hit?.hit;
   }
 

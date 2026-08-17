@@ -4,9 +4,10 @@
  * Owns: the collider meshes the server's rays pick against, the terrain floor's
  * collider clones, and the nav/cover/obstacle structures built from them.
  * Invariants: this is the collider half of `MapBuilder.build` and nothing else
- * — no visuals, no materials, no textures, no merges, no AO bake. It must
- * produce geometry that lines up with the client's exactly, or a shot that
- * lands on a wall here passes through it there.
+ * — no visuals, no materials, no textures, no AO bake, and the one merge here
+ * is `strutMesh`, which merges COLLIDERS and draws nothing. It must produce
+ * geometry that lines up with the client's exactly, or a shot that lands on a
+ * wall here passes through it there.
  *
  * Why a rebuild and not a build: the server has no canvas, so
  * `DynamicTexture.getContext()` throws and `MapBuilder` cannot run at all (it
@@ -30,7 +31,11 @@
  */
 import { Mesh, MeshBuilder, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../src/config";
-import { toWorldBoxes, type MapCollision } from "../src/world/collision";
+import {
+  toRayGroups,
+  toWorldBoxes,
+  type MapCollision,
+} from "../src/world/collision";
 import { CoverMap } from "../src/world/CoverMap";
 import type { GameMap, WorldBox } from "../src/world/MapBuilder";
 import { BLOCK_SIZE } from "../src/world/MapBuilder";
@@ -43,8 +48,9 @@ import { TerrainField, terrainPatches } from "../src/world/TerrainField";
  * Builds one collider box, matching `MapBuilder.collider()` exactly.
  *
  * The flags are the contract every ray test in the game reads: `solid` is what
- * `SOLID_ONLY` filters on, and `MapBuilder` deliberately leaves `surface`
- * absent so the box reads as "hard". Both are copied here rather than shared
+ * `SOLID_ONLY` filters on, `porous` is what `OPAQUE_ONLY` subtracts from it,
+ * and `MapBuilder` deliberately leaves `surface` absent so the box reads as
+ * "hard". All three are copied here rather than shared
  * because the two functions build from different inputs — one from a `BoxSpec`
  * in a structure's local frame, one from a `WorldBox` already in world space —
  * and the only thing they have in common is the result.
@@ -64,9 +70,54 @@ function colliderBox(scene: Scene, box: WorldBox, i: number): Mesh {
   // touched the collidable list. Left on anyway so the mesh is identical to the
   // client's in every field a future reader might compare.
   mesh.checkCollisions = true;
-  mesh.metadata = { solid: true };
+  // `porous` copied through for the reason the whole file exists: the server
+  // resolves every shot, so a fence it thought was solid would eat rounds the
+  // shooter watched go between the rails, and the client would be showing a
+  // hitmarker the authority disagrees with.
+  mesh.metadata = box.porous ? { solid: true, porous: true } : { solid: true };
   mesh.freezeWorldMatrix();
   return mesh;
+}
+
+/**
+ * One group of `strut` boxes as the single collider mesh the client merged them
+ * into — a fence's posts and rails.
+ *
+ * **This is the one merge on the server, and it is here because the client's
+ * pick has to meet the same geometry the server's does.** The header's "no
+ * merges" is about visuals: there is nothing to draw here and this produces no
+ * material, no texture and no draw call — it is a triangle soup that exists to
+ * be picked, and merging is what keeps the cost of picking it flat. Group by
+ * group, exactly as baked: merging all of them into one mesh would wrap one
+ * bounding box around every fence in the village, and then every ray this
+ * process fires would pay for all of them.
+ *
+ * `rayOnly` keeps it out of `SOLID_ONLY`, matching the client, so the movement
+ * validator and everything else that asks where a body may be never sees a
+ * rail. Nothing here is in `colliderBoxes`, so the nav graph, the cover bake
+ * and the obstacle field never see one either — which is what keeps this world
+ * identical to the one `npm run parity` compares.
+ */
+function strutMesh(scene: Scene, group: WorldBox[], i: number): Mesh {
+  const parts = group.map((box, j) => {
+    const part = MeshBuilder.CreateBox(
+      `timber${i}-${j}`,
+      { width: box.w, height: box.h, depth: box.d },
+      scene,
+    );
+    part.position.set(box.cx, box.cy, box.cz);
+    part.rotation.set(box.rotX, box.rotY, 0);
+    return part;
+  });
+  const merged = Mesh.MergeMeshes(parts, true, true, undefined, false, false);
+  if (!merged) throw new Error(`strut group ${i} failed to merge`);
+  merged.name = `timber${i}`;
+  merged.isVisible = false;
+  merged.isPickable = true;
+  merged.checkCollisions = false;
+  merged.metadata = { solid: true, rayOnly: true };
+  merged.freezeWorldMatrix();
+  return merged;
 }
 
 /**
@@ -113,6 +164,8 @@ export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameM
   const boxes = toWorldBoxes(collision);
 
   const colliders = boxes.map((box, i) => colliderBox(scene, box, i));
+  const rayGroups = toRayGroups(collision);
+  colliders.push(...rayGroups.map((group, i) => strutMesh(scene, group, i)));
   const floor = terrainColliders(scene, terrain, size);
   colliders.push(...floor);
 
@@ -143,6 +196,7 @@ export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameM
     spawns: def.layout.spawns,
     colliders,
     colliderBoxes: boxes,
+    rayGroups,
     terrainColliders: floor,
     visuals: [],
     nav,

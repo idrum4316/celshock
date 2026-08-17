@@ -357,3 +357,14 @@ Layout gotchas that have already cost time:
   genuinely routes bots the long way round — or seals a plot outright. Enclosures like
   the burying ground need a gap of a couple of cells, and corners left open help more
   than a wider gate.
+- **A fence is described twice — once for bodies, once for rounds — and both
+  halves are load-bearing.** Its coarse box is `porous`: a body walks into it,
+  stands on it and is routed around it, while nothing is ever stopped by the
+  1.4 m of air the box also covers. Its posts and rails are `strut`s: a round,
+  a sightline, a grenade and a blast fragment stop on the timber and nowhere
+  else (see the collider section of `CLAUDE.md`). So a fence line is a
+  *movement* decision when you author one — it costs a bot the walk around, and
+  `CoverMap` bakes no cover from it, because a 0.18 m post is not something a
+  body hides behind. Reach for the dry-stone wall when a run is meant to break
+  a sightline, and expect open ground to stay a shooting gallery until
+  something opaque stands in it.

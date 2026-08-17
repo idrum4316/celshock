@@ -8,7 +8,9 @@
  * the first visible one, and is capped at CONFIG.bots.acquireRayBudget — the
  * view cone (Bot.facing) rejects most candidates before any ray is fired.
  * Hearing, damage direction and near-miss suppression are all RAY-FREE by
- * construction; keep them that way. LOS rays filter metadata.solid === true.
+ * construction; keep them that way. LOS rays filter OPAQUE_ONLY, so a bot sees
+ * through what it could shoot through (fence rails) and not through what it
+ * could not.
  * Cover is a baked lookup (world/CoverMap), never a probe. Bot muzzle flashes are
  * NOT pulsed from here — this system only records flash positions and Game
  * spends CONFIG.lighting.muzzleBudgetPerFrame on the nearest few (16 shader
@@ -35,7 +37,7 @@ import type { CoverMap } from "../world/CoverMap";
 import type { FlowField, NavGrid } from "../world/NavGrid";
 import type { GameMap } from "../world/MapBuilder";
 import type { ObstacleField } from "../world/ObstacleField";
-import { SOLID_ONLY } from "../world/solid";
+import { OPAQUE_ONLY } from "../world/solid";
 import type { CombatSystem, Hittable, ShotOptions } from "./CombatSystem";
 import type { SquadOrder } from "./ConquestSystem";
 
@@ -605,7 +607,7 @@ export class BattleSystem {
     this.ray.origin.copyFrom(from);
     this.ray.direction.set(dx / len, dy / len, dz / len);
     this.ray.length = len;
-    const hit = this.scene.pickWithRay(this.ray, SOLID_ONLY);
+    const hit = this.scene.pickWithRay(this.ray, OPAQUE_ONLY);
     return !hit?.hit;
   }
 

@@ -775,8 +775,35 @@ It rebuilds the solid world instead, from `src/world/<map>/collision.ts`
 (generated; see `scripts/bake-collision.mjs`). That is sound because
 `MapBuilder.collider()` is the only place a collider is made and the `WorldBox`
 it records is everything `MeshBuilder.CreateBox` needs. Both sides then pick
-against that geometry with the same `scene.pickWithRay(SOLID_ONLY)` — one ray
-implementation, not two.
+against that geometry with the same predicates from `src/world/solid.ts` — one
+ray implementation, not two.
+
+**A baked box carries its `porous` flag as a ninth tuple entry, and the bake
+carries a second list beside `boxes` for the `rayOnly` geometry.** Both are what
+the shot ray adds up to (`OPAQUE_ONLY`; see the collider section of
+`CLAUDE.md`): a server whose fences are solid eats rounds the shooter watched go
+between the rails, and a server with no fence timber gives up hits the shooter
+watched stop on a post. Either way it disagrees in the direction that is hardest
+to report, because the client drew the outcome and the authority is the only
+side that counts.
+
+`rayGroups` stays **grouped as the client merged it**, one inner array per
+collider mesh, and the server merges the same way — `strutMesh` is the one merge
+in `server/world.ts`, and it is allowed there because it produces geometry to
+pick against rather than anything to draw. The grouping is not cosmetic: merged
+per fence, the timber costs a shot 0.2%; merged into one mesh for the map it
+would wrap a single bounding box around every fence in the village and charge
+every ray for all of them; not merged at all it costs ~17% on every ray in the
+process.
+
+`worldFingerprint` carries `porousBoxes`, `rayGroups`, `rayBoxes` and a hash
+over the ray geometry, because **the nav graph is blind to all of it** — every
+other field in that comparison would match while the two sides resolved
+different shots. Note also that the bake's `sourceHash` covers a map's
+`layout.ts` and `heights.ts` — **a `porous` flag and a `strut` live in a
+BUILDER, so changing one is a bake the staleness guard will not notice. Re-run
+`npm run collision` by hand after touching a collider's flags or a builder's
+collider set.**
 
 **`npm run parity` is the guard on that claim** and should be run after anything
 that touches the world layer. It compares the nav GRAPH, not the boxes: a box

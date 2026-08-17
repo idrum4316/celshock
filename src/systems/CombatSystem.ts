@@ -3,8 +3,9 @@
  * pooled tracer/spark effects.
  * Invariants: fire() takes the shooter's target list — friendly fire is
  * excluded by the caller's list construction, never by a team check inside.
- * Wall ray filters metadata.solid === true and caps the shot; a target sphere
- * farther than the first solid hit does not count (a bot embedded in a prop is
+ * Wall ray filters OPAQUE_ONLY — the solid world minus what a round passes
+ * through, which today is fence rails — and caps the shot; a target sphere
+ * farther than the first opaque hit does not count (a bot embedded in a prop is
  * unshootable — movement bugs become combat bugs).
  * Damage is `damage` at close range falling to `opts.damageFar` past
  * `opts.falloffFar`, resolved against the distance the impact point already
@@ -39,7 +40,7 @@ import {
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
-import { SOLID_ONLY } from "../world/solid";
+import { OPAQUE_ONLY } from "../world/solid";
 
 /** Anything a hitscan shot can damage. */
 export interface Hittable {
@@ -304,7 +305,7 @@ export class CombatSystem {
 
     // Wall/prop/floor hit distance caps the shot.
     const ray = new Ray(origin, dir, range);
-    const wallPick = this.scene.pickWithRay(ray, SOLID_ONLY);
+    const wallPick = this.scene.pickWithRay(ray, OPAQUE_ONLY);
     let hitDist = wallPick && wallPick.hit ? wallPick.distance : range;
     const hitWall = !!(wallPick && wallPick.hit);
 

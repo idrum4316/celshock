@@ -437,6 +437,42 @@ off the visible geometry. `MapBuilder.collider()` is the only place that creates
 them, and it also records a `WorldBox` for the nav grid — geometry added by any
 other path is invisible to navigation.
 
+**A collider answers two questions and they can disagree, which is why there are
+two pick predicates and not one.** *Where may a body be?* is `SOLID_ONLY` —
+`Player.probeGround`, the death cam's pull-in, the editor's centre-screen pick.
+*What stops a round or a look?* is `OPAQUE_ONLY` — the hitscan and its wall cap,
+the bots' and the aim assist's LOS, the grenade's step ray and its blast check.
+Both live in [`src/world/solid.ts`](src/world/solid.ts) and both are module
+constants, never minted at a call site. So a collider is one of three things,
+and a builder picks which by how it declares the box:
+
+| collider | body | round | in the nav/cover/AO boxes |
+| --- | --- | --- | --- |
+| ordinary — `wall`, `block` | yes | yes | yes |
+| `porous` — a fence's coarse run | yes | **no** | yes |
+| `rayOnly` — a fence's posts and rails (`strut`) | **no** | yes | **no** |
+
+**The last two exist as a pair and describe one object between them**, which is
+how open-frame geometry keeps both halves honest: the coarse box is the fence a
+body walks into and the nav graph severs across, and the struts are the timber a
+round stops on. One 1.4 m slab could only be a wall you see through or a fence
+you walk through; splitting the question makes it neither. A porous box is
+**not cover** (`CoverMap` skips it, or bots hide behind something that stops
+nothing), and a strut is invisible to navigation on purpose — a 0.1 m rail is a
+shape `NavGrid` can only get wrong, which is the same reason `guard()` stands a
+deck rail off the surface it guards.
+
+**`MapBuilder.struts` merges a placement's struts into ONE collider mesh, and
+that is what makes the fidelity affordable.** A pick costs per MESH — predicate,
+matrix inverse, bounding test — far more than it costs per triangle. Measured on
+Hollowmere's fences: 161 loose post-and-rail boxes cost *every* ray in the game
+~17%, the ground probe included; the same geometry merged per fence costs a shot
+0.2%, a ray that actually crosses a fence 7%, and the probe nothing at all
+(`SOLID_ONLY` skips `rayOnly`). Merging them all into one mesh would be worse
+than either — one bounding box around every fence in the village. Both flags
+must reach the SERVER, so they ride in the collision bake, struts still grouped
+per mesh — see `docs/multiplayer.md`.
+
 **The floor is the one documented exception**, and it proves the rule rather than
 bending it: the heightfield has no box that could stand in for it, so each block's
 collider is an invisible *clone of the visual's vertex data* — same shape, still two
@@ -447,11 +483,22 @@ placement is the ground probe's job, and bots never touch the collidable list.
 
 ### Mesh metadata is a contract
 
-Four flags and one value, all read elsewhere; new geometry that omits them
+Six flags and one value, all read elsewhere; new geometry that omits them
 misbehaves silently:
 
 - `solid: true` — collider proxies only. Unmarked geometry is shot through, seen
   through, and walked through.
+- `porous: true` — a `solid` collider that rounds, sightlines and grenades pass
+  through anyway (`OPAQUE_ONLY` subtracts it; `SOLID_ONLY` keeps it). Declared as
+  `BoxSpec.porous` by the builder, carried on the `WorldBox` and into the
+  collision bake, and skipped by `CoverMap`. Today it is the fence's coarse run,
+  and only that.
+- `rayOnly: true` — the mirror: a `solid` collider that stops a round and a look
+  but is no body at all (`SOLID_ONLY` subtracts it, `OPAQUE_ONLY` keeps it), and
+  the one collider that emits **no `WorldBox`** — invisible to the nav grid, the
+  cover bake, the obstacle field, the AO bake and scatter placement. Declared by
+  `Build.strut`, merged per placement, baked in groups. Today it is fence posts
+  and rails.
 - `noOutline: true` — skipped by `addOutline()`. Every emissive part (eyes, flames,
   signs, reticle) needs it. Outlines are coloured ink (a darkened take on the mesh's
   own cel colour), thinned with distance per mesh by `updateOutlineScales()` and
@@ -595,9 +642,13 @@ in a match alike).
 
 **The server cannot run `MapBuilder`**: it has no canvas, so `DynamicTexture`
 throws. It rebuilds the solid world from the generated
-`src/world/<map>/collision.ts` and picks against it with the same `SOLID_ONLY`
-ray the client uses, so **`npm run parity` should be run after anything touching
-the world layer**; `npm run build` refuses a bake older than its layout. What a
+`src/world/<map>/collision.ts` and picks against it with the same rays the
+client uses — including each box's `porous` flag, which the bake carries because
+a fence the authority thinks is solid eats rounds the shooter watched land — so
+**`npm run parity` should be run after anything touching the world layer**; `npm
+run build` refuses a bake older than its layout, but that guard hashes the
+LAYOUT, so a collider flag changed in a builder needs `npm run collision` run by
+hand. What a
 socket may spend before it has proved it is a player is bounded in
 `server/index.ts`, along with the pong deadline that is the only thing there
 which notices a peer that stopped existing without saying so.

@@ -15,17 +15,27 @@
  * these boxes instead. That is sound because `MapBuilder.collider()` is the one
  * place a collider is made and a `WorldBox` records everything
  * `MeshBuilder.CreateBox` needs to reproduce it — so both sides end up picking
- * against the same geometry with the same `SOLID_ONLY` predicate, rather than
- * against two implementations that can drift.
+ * against the same geometry with the same predicates from `solid.ts`, rather
+ * than against two implementations that can drift. That includes `porous`,
+ * which is a flag on the box and therefore part of the geometry: a server that
+ * dropped it would rebuild a world whose fences stop rounds the client sent
+ * through them.
  */
 import type { WorldBox } from "./MapBuilder";
 
 /**
- * One collider, as `[w, h, d, cx, cy, cz, rotX, rotY]`.
+ * One collider, as `[w, h, d, cx, cy, cz, rotX, rotY]`, plus a ninth entry on
+ * the few that are `porous` (a fence: a wall to a body, air to a round).
  *
  * A tuple rather than an object because a map carries thousands of them and the
  * field names would be the same eight words repeated tens of thousands of times
  * in a generated file somebody has to review the diff of.
+ *
+ * The porous flag is OPTIONAL rather than a `0` on every row for the same
+ * reason: it is true of a few dozen boxes out of hundreds, and writing it out
+ * everywhere is a column of zeroes in a file that is reviewed as a diff. It
+ * must nonetheless be baked — the server resolves every shot, so a fence it
+ * thinks is solid is a fence that eats hits the shooter watched land.
  */
 export type CollisionBox = readonly [
   w: number,
@@ -36,6 +46,7 @@ export type CollisionBox = readonly [
   cz: number,
   rotX: number,
   rotY: number,
+  porous?: 0 | 1,
 ];
 
 /** One map's baked collider set. Generated — see `scripts/bake-collision.mjs`. */
@@ -47,18 +58,47 @@ export interface MapCollision {
    */
   sourceHash: string;
   boxes: readonly CollisionBox[];
+  /**
+   * The `strut` boxes — ray geometry with no body behind it — **grouped as the
+   * client merged them**, one inner array per collider mesh.
+   *
+   * Separate from `boxes` because these are not the solid world: nothing
+   * derived from geometry may see them (see `BoxSpec.rayOnly`), and `boxes` is
+   * exactly the list `NavGrid`, `CoverMap` and `ObstacleField` are handed. The
+   * grouping is baked rather than a flat list because the server merges each
+   * group into one mesh the way the client does, and merging every fence on
+   * the map into a single mesh would put one bounding box around the whole
+   * village — every ray in the process would then pay for every fence's
+   * triangles.
+   */
+  rayGroups: readonly (readonly CollisionBox[])[];
+}
+
+function toWorldBox([
+  w,
+  h,
+  d,
+  cx,
+  cy,
+  cz,
+  rotX,
+  rotY,
+  porous,
+]: CollisionBox): WorldBox {
+  const box: WorldBox = { w, h, d, cx, cy, cz, rotX, rotY };
+  // Only when set, so a rebuilt box is key-for-key what `MapBuilder.collider`
+  // produced — `porous: undefined` and no key at all read the same to every
+  // consumer, but only one of them is the same object.
+  if (porous) box.porous = true;
+  return box;
 }
 
 /** Expands a baked set into the `WorldBox`es `NavGrid` and friends consume. */
 export function toWorldBoxes(collision: MapCollision): WorldBox[] {
-  return collision.boxes.map(([w, h, d, cx, cy, cz, rotX, rotY]) => ({
-    w,
-    h,
-    d,
-    cx,
-    cy,
-    cz,
-    rotX,
-    rotY,
-  }));
+  return collision.boxes.map(toWorldBox);
+}
+
+/** The ray-only geometry, still grouped by the mesh each group merges into. */
+export function toRayGroups(collision: MapCollision): WorldBox[][] {
+  return collision.rayGroups.map((group) => group.map(toWorldBox));
 }

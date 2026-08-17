@@ -6,7 +6,16 @@
  * solid world from these instead. Every entry is one `WorldBox` as
  * `[w, h, d, cx, cy, cz, rotX, rotY]` — a tuple rather than an object because
  * there are 671 of them and the field names would be 4697 repetitions
- * of the same eight words.
+ * of the same eight words. A ninth entry of `1` marks a `porous` box: solid
+ * to a body, air to a round, so a round crosses a fence rather than stopping in
+ * a gap between its rails.
+ *
+ * `rayGroups` is the other half of that: 0 `strut` boxes in
+ * 0 groups — the timber a round DOES stop on, with no body
+ * behind it. One group per collider mesh, because the server merges each group
+ * the way the client does. They are not in `boxes` because nothing derived
+ * from geometry may see them: a 0.1 m rail is a shape the nav grid can only get
+ * wrong.
  *
  * `sourceHash` covers this map's `layout.ts` and `heights.ts`. The server
  * checks it at startup and refuses to run when it does not match, because a
@@ -689,6 +698,9 @@ export const GreyfenCollision: MapCollision = {
   [0.983991730120033,11.020707377344369,0.983991730120033,-18.278855398256333,5.5103536886721844,67.83550004730002,0,6.93721820494929],
   [1.1087513814680279,12.418015472441912,1.1087513814680279,0.25293320794030905,6.209007736220956,67.22478719683365,0,6.391331293585436],
   [1.1939799489453435,13.372575428187847,1.1939799489453435,-33.606786058243365,6.686287714093924,66.00070785287768,0,4.915370617921785],
+  ],
+  rayGroups: [
+
   ],
 };
 

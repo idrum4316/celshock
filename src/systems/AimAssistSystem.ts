@@ -7,13 +7,13 @@
  * mouse moves and leaves mouse sensitivity untouched. Its rotation is capped
  * at a fraction of the player's OWN full-stick turn rate, is gated on the
  * player actually driving, and is cancelled by opposing stick deflection — so
- * a committed push always wins. LOS ray filters metadata.solid === true (walls
- * block assist). Called by Game before CameraSystem.update.
+ * a committed push always wins. LOS ray filters OPAQUE_ONLY (walls block
+ * assist; a fence the round would pass through does not). Called by Game before CameraSystem.update.
  */
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { InputManager } from "../core/InputManager";
-import { SOLID_ONLY } from "../world/solid";
+import { OPAQUE_ONLY } from "../world/solid";
 
 /**
  * Structural subset of `Hittable` (CombatSystem), declared here so this
@@ -188,7 +188,7 @@ export class AimAssistSystem {
       this.losRay.origin.copyFrom(origin);
       this.losRay.direction.copyFrom(this.losDir);
       this.losRay.length = bestDist;
-      const wall = this.scene.pickWithRay(this.losRay, SOLID_ONLY);
+      const wall = this.scene.pickWithRay(this.losRay, OPAQUE_ONLY);
       if (wall && wall.hit) best = null;
     }
 

@@ -137,6 +137,12 @@ export interface WorldBox {
   cz: number;
   rotX: number;
   rotY: number;
+  /**
+   * Stops a body, not a round — see `BoxSpec.porous`, which is where a builder
+   * declares it. Carried here because the box outlives the spec: `CoverMap`
+   * bakes off these, and the server rebuilds its whole world from them.
+   */
+  porous?: true;
 }
 
 /**
@@ -192,6 +198,17 @@ export interface GameMap {
   colliders: Mesh[];
   /** The same colliders as plain boxes, for the nav grid. */
   colliderBoxes: WorldBox[];
+  /**
+   * The `strut` boxes — ray geometry with no body behind it — grouped by the
+   * collider mesh each group was merged into.
+   *
+   * Not in `colliderBoxes` on purpose: everything derived from geometry reads
+   * that list, and none of it can represent a 0.1 m rail (see
+   * `BoxSpec.rayOnly`). The grouping is carried rather than flattened because
+   * the server has to rebuild and merge the same meshes from the bake, and it
+   * cannot recover from a flat list which boxes were one fence.
+   */
+  rayGroups: WorldBox[][];
   /**
    * The floor's collider blocks, a SUBSET of `colliders`.
    *
@@ -367,6 +384,15 @@ const PROP_BODIES: Record<ScatterSpec["prop"], PropBody> = {
  *
  * Colliders must line up with the surfaces they stand in for, or bullet sparks
  * land off the visible geometry.
+ *
+ * Open-frame geometry is described TWICE rather than approximated once, which
+ * is how it keeps that rule: a collider tagged `porous` is the solid world to a
+ * BODY and not there at all to a ROUND, and the `rayOnly` colliders beside it
+ * (`Build.strut`, merged by `struts()`) are the reverse — the timber a round
+ * stops on, with no body behind it and no `WorldBox` at all. A fence is a 1.4 m
+ * porous slab for walking into and nine merged posts and rails for shooting at.
+ * See `BoxSpec.porous` / `BoxSpec.rayOnly`, and `solid.ts` for the two
+ * predicates that split them.
  */
 export class MapBuilder {
   constructor(
@@ -377,6 +403,13 @@ export class MapBuilder {
 
   /** World-space collider boxes, accumulated by `collider()` during a build. */
   private boxes: WorldBox[] = [];
+
+  /**
+   * The `strut` boxes, grouped by the placement whose collider mesh they were
+   * merged into. Deliberately NOT in `boxes` — nothing derived from geometry
+   * (nav, cover, obstacles, AO, scatter) may see them. See `struts()`.
+   */
+  private rayGroups: WorldBox[][] = [];
 
   /**
    * Scratch for `insideCollider`'s box-frame transform. Reused because scatter
@@ -413,6 +446,7 @@ export class MapBuilder {
     // A view onto the floor's own blocks within `colliders` — see GameMap.
     const terrainColliders: Mesh[] = [];
     this.boxes = [];
+    this.rayGroups = [];
     // Sized to the widest burial test this layout will run. `findSpot` asks
     // about `(spec.clearance ?? 0.8) * scale`, and `scale` tops out at the
     // upper end of the spec's own range — so the layout knows the answer before
@@ -494,13 +528,34 @@ export class MapBuilder {
           blocks.add(p.x, p.z, merged);
         }
       }
+      // Body boxes first, then the struts, so `item`'s three parallel arrays
+      // agree on the order whichever kinds a structure declares.
       for (const box of s.colliders) {
+        if (box.rayOnly) continue;
         const mesh = this.collider(`${p.kind}-col`, box, origin, rotY);
         if (item) {
           tag(mesh, { list: "placements", index: i });
           item.localBoxes.push(box);
         }
         colliders.push(mesh);
+      }
+      const strutSpecs = s.colliders.filter((box) => box.rayOnly);
+      if (strutSpecs.length > 0) {
+        const meshes = this.struts(
+          `${p.kind}-timber`,
+          strutSpecs,
+          origin,
+          rotY,
+        );
+        if (item) {
+          // Unmerged in the editor, so these line up one for one with the
+          // specs; the shipped build merges and has no item to keep.
+          meshes.forEach((mesh, j) => {
+            tag(mesh, { list: "placements", index: i });
+            item.localBoxes.push(strutSpecs[j]);
+          });
+        }
+        colliders.push(...meshes);
       }
       for (const l of s.lights) {
         const at = rotateY(l.x, l.y, l.z, rotY).addInPlace(origin);
@@ -578,6 +633,7 @@ export class MapBuilder {
       spawns: layout.spawns,
       colliders,
       colliderBoxes: this.boxes,
+      rayGroups: this.rayGroups,
       terrainColliders,
       visuals,
       water: layout.water ?? [],
@@ -953,26 +1009,14 @@ export class MapBuilder {
     }
   }
 
-  /** Tested, never drawn. The only geometry that carries `solid`. */
-  private collider(
-    name: string,
+  /** Where a builder's local `BoxSpec` lands once the placement is applied. */
+  private worldBoxOf(
     box: BoxSpec,
     origin?: Vector3,
     parentRotY = 0,
-  ): Mesh {
-    const mesh = MeshBuilder.CreateBox(
-      name,
-      { width: box.w, height: box.h, depth: box.d },
-      this.scene,
-    );
+  ): WorldBox {
     const local = rotateY(box.x, box.y, box.z, parentRotY);
     const at = origin ? local.addInPlace(origin) : local;
-    const rotX = box.rotX ?? 0;
-    const rotY = (box.rotY ?? 0) + parentRotY;
-    mesh.position.copyFrom(at);
-    mesh.rotation.set(rotX, rotY, 0);
-    this.item?.boxes.push(this.boxes.length);
-    this.item?.colliders.push(mesh);
     const world: WorldBox = {
       w: box.w,
       h: box.h,
@@ -980,20 +1024,117 @@ export class MapBuilder {
       cx: at.x,
       cy: at.y,
       cz: at.z,
-      rotX,
-      rotY,
+      rotX: box.rotX ?? 0,
+      rotY: (box.rotY ?? 0) + parentRotY,
     };
+    // Set rather than always written, so a box that is not porous carries no
+    // key at all: `worldFingerprint` and the bake both walk these, and an
+    // explicit `porous: false` on 820-odd boxes is a field in every baked
+    // tuple to say nothing.
+    if (box.porous) world.porous = true;
+    return world;
+  }
+
+  /** The box itself, placed. Flags are the caller's — the two kinds differ. */
+  private boxMesh(name: string, world: WorldBox): Mesh {
+    const mesh = MeshBuilder.CreateBox(
+      name,
+      { width: world.w, height: world.h, depth: world.d },
+      this.scene,
+    );
+    mesh.position.set(world.cx, world.cy, world.cz);
+    mesh.rotation.set(world.rotX, world.rotY, 0);
+    mesh.isVisible = false;
+    mesh.isPickable = true;
+    return mesh;
+  }
+
+  /** Tested, never drawn. The only geometry that carries `solid`. */
+  private collider(
+    name: string,
+    box: BoxSpec,
+    origin?: Vector3,
+    parentRotY = 0,
+  ): Mesh {
+    const world = this.worldBoxOf(box, origin, parentRotY);
+    const mesh = this.boxMesh(name, world);
+    this.item?.boxes.push(this.boxes.length);
+    this.item?.colliders.push(mesh);
     this.boxes.push(world);
     // The scatter index rides along here because this is the only place a
     // collider is ever made — the same property that makes `boxes` complete.
     // Feeding it anywhere else would leave the two able to disagree.
     insertBox(this.boxIndex, world);
-    mesh.isVisible = false;
-    mesh.isPickable = true;
     mesh.checkCollisions = true;
-    mesh.metadata = { solid: true };
+    // `porous` rides in the metadata rather than being answered by leaving
+    // `solid` off, because the two questions have different answers and both
+    // are asked of this mesh: it IS the solid world to a body (movement, the
+    // ground probe) and is not there at all to a round. `OPAQUE_ONLY` is the
+    // reader; dropping `solid` instead would let the player fall through a
+    // fence top their own capsule is still being held out of.
+    mesh.metadata = box.porous ? { solid: true, porous: true } : { solid: true };
     mesh.freezeWorldMatrix();
     return mesh;
+  }
+
+  /**
+   * One placement's `strut`s: the ray geometry that stands where the timber is
+   * drawn — a fence's posts and rails — as ONE collider mesh.
+   *
+   * **The merge is the whole reason this can afford to be honest.** A pick
+   * costs per MESH far more than it costs per triangle: it runs the predicate,
+   * inverts a world matrix and tests a bounding box before a triangle is ever
+   * considered. Measured against Hollowmere's fences, 161 loose post and rail
+   * boxes cost every ray in the game about 17% — the ground probe included,
+   * and that is the most expensive single call the game makes per frame —
+   * while the same geometry merged per fence costs the probe 1.4%, a shot
+   * 0.3%, and 7.4% on the rays that actually cross a fence and have triangles
+   * to test. Fourteen meshes, not a hundred and sixty-one.
+   *
+   * These emit no `WorldBox` and are not in `boxes`: navigation, cover, the
+   * obstacle field and the AO bake read a fence's coarse `porous` box instead,
+   * which is the shape they can represent (see `BoxSpec.rayOnly`). They go in
+   * `rayGroups` instead, grouped exactly as merged, because the SERVER has to
+   * rebuild the same geometry from the bake and a flat list would leave it
+   * merging by guesswork.
+   *
+   * The editor gets them unmerged, for the reason it also skips the visual
+   * `BlockMerge`: `repositionItem` walks colliders, local specs and boxes in
+   * step, and one mesh standing for eleven specs cannot be moved that way.
+   */
+  private struts(
+    name: string,
+    specs: BoxSpec[],
+    origin: Vector3,
+    parentRotY: number,
+  ): Mesh[] {
+    const worlds = specs.map((s) => this.worldBoxOf(s, origin, parentRotY));
+    this.rayGroups.push(worlds);
+    const parts = worlds.map((w, i) => this.boxMesh(`${name}${i}`, w));
+    for (const part of parts) {
+      part.checkCollisions = false;
+      part.metadata = { solid: true, rayOnly: true };
+    }
+    if (this.item) {
+      for (const part of parts) {
+        part.freezeWorldMatrix();
+        // No `WorldBox` behind a strut, so there is no index to record — but
+        // the slot is kept, because `repositionItem` reads these three arrays
+        // in parallel and `boxes[-1]` is the undefined its guard expects.
+        this.item.boxes.push(-1);
+        this.item.colliders.push(part);
+      }
+      return parts;
+    }
+    const merged = Mesh.MergeMeshes(parts, true, true, undefined, false, false);
+    if (!merged) return [];
+    merged.name = name;
+    merged.isVisible = false;
+    merged.isPickable = true;
+    merged.checkCollisions = false;
+    merged.metadata = { solid: true, rayOnly: true };
+    merged.freezeWorldMatrix();
+    return [merged];
   }
 }
 

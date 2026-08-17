@@ -6,7 +6,8 @@
  * finished NavGrid; read-only and allocation-free thereafter. NEVER raycasts —
  * that is the entire point (see the class comment). The hard-cover height is
  * the hit sphere's top, NOT the eye height: cover that hides a bot from LOS but
- * not from bullets is worse than no cover at all. Soft cover is a hint about
+ * not from bullets is worse than no cover at all — and for that same reason a
+ * `porous` box is not baked as cover of either kind. Soft cover is a hint about
  * where to walk and must never be treated as a safety claim.
  */
 import { Vector3 } from "@babylonjs/core";
@@ -125,6 +126,13 @@ export class CoverMap {
       // Same exclusions as the nav grid and the obstacle field: the ground
       // plane and the boundary ridge are not cover.
       if (box.w > 200 || box.d > 200) continue;
+      // A porous box stops a body and nothing else, so it is not cover of
+      // either kind. Not `hard` for the reason at the top of this file — cover
+      // that hides a bot from LOS but not from bullets is worse than no cover
+      // at all, and this one does not even hide it. Not `soft` either: soft
+      // exists to bias movement toward walls and away from open ground, and a
+      // fence line IS open ground with a rail across it.
+      if (box.porous) continue;
       // Pitched boxes are skipped here for a reason of this file's own, not
       // `segmentHitsBox`'s (which handles them): the `top`/`bottom` below are
       // the box's AABB, and a ramp's peak reported across its whole footprint

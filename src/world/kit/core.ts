@@ -15,7 +15,9 @@
  *   because MapBuilder still rotates and translates it.
  * - Builders NEVER set metadata.solid, checkCollisions, or isPickable — the
  *   visual/collider split is MapBuilder's job; builders only declare where
- *   collider boxes go.
+ *   collider boxes go, and what kind: `BoxSpec.porous` is the one property of
+ *   a collider a builder decides, because only the builder knows its box is
+ *   standing in for a shape that is mostly gaps.
  * - Collider top faces must stay within CONFIG.nav.stepHeight of adjacent
  *   ground or the nav flood fill never reaches them. Ramp colliders need
  *   rotX, not just the visual.
@@ -55,6 +57,51 @@ export interface BoxSpec {
   z: number;
   rotX?: number;
   rotY?: number;
+  /**
+   * A box that stops a BODY but not a ROUND: rounds, sightlines, grenades and
+   * blast fragments pass straight through it. Movement, the nav graph, the
+   * obstacle field and the ground probe are unchanged — a porous box is as
+   * solid to walk into and to stand on as any other.
+   *
+   * This exists for open-frame geometry, whose collider is honest about the
+   * silhouette and a lie about the surface. A fence run is the case it was
+   * added for: one box the length of the run, 1.4 m of it, standing in for two
+   * 0.12 m rails and a post every 2.5 m. To a body that box is the fence; to a
+   * bullet it is a wall across ground that is nine parts air, and the shot
+   * stopping in mid-air between two rails is the bug this answers.
+   *
+   * The cost is the other half of the same approximation and is deliberate: a
+   * round aimed at a post passes through it too. The alternative is a collider
+   * per post and per rail — some 160 more boxes on Hollowmere against the 824
+   * it has, on every ray in the game — to catch hits on 0.18 m of timber at a
+   * distance where the crosshair covers it.
+   *
+   * Porous is also not COVER: `CoverMap` skips these boxes entirely, or bots
+   * would take cover behind something that stops nothing.
+   *
+   * What catches the rounds instead is `strut`: the timber is declared as its
+   * own ray geometry, so a shot that hits a post stops on the post and one
+   * aimed between the rails goes through. The pair is the whole design — the
+   * coarse box owns the BODY, the struts own the ROUND — and a porous box
+   * without struts is a fence rounds pass through entirely.
+   */
+  porous?: true;
+
+  /**
+   * Stops a round and a sightline, and is not a body at all: no
+   * `checkCollisions`, invisible to `SOLID_ONLY`, and — the part with teeth —
+   * **no `WorldBox`**, so the nav grid, the cover bake, the obstacle field and
+   * the AO bake never see it. Declared by `Build.strut`, which is where the
+   * reasoning lives.
+   *
+   * The exemption from navigation is what makes it safe to describe geometry
+   * this fine. `NavGrid` samples one column per 1.5 m cell, so a 0.1 m rail is
+   * a shape it can only get wrong: it invents a standable surface at rail
+   * height that the flood fill can never reach, and can silently overflow
+   * `MAX_SURFACES` where it lands. A strut is only ever ray geometry, and the
+   * coarse box beside it is what navigation reads.
+   */
+  rayOnly?: true;
 }
 
 /**
@@ -306,6 +353,51 @@ export class Build implements Structure {
     );
   }
 
+  /**
+   * A visible member that stops a ROUND exactly where it is drawn, and is not
+   * a body obstacle: a fence post, a rail. The third of the three box words,
+   * and the one to reach for when a structure is mostly air.
+   *
+   * `box` is drawn and nothing else, `wall` is drawn and stops both a body and
+   * a round, and a strut is drawn and stops only the round — because the body
+   * is already handled by a `block` covering the whole run, coarsely, the way
+   * a fence's one 1.4 m slab stands in for a line of posts. Splitting them is
+   * what lets the coarse box be `porous` (a body walks into a fence, a round
+   * does not stop on the gaps) while the timber still stops what hits it.
+   *
+   * A strut costs a collider that is NOT a `WorldBox`: no nav grid, no cover,
+   * no obstacle field, no AO. That is deliberate and it is why the coarse box
+   * is not optional — the navigation half of a fence is that box's job, and a
+   * 0.18 m post is a shape `NavGrid` cannot represent anyway (see `guard`).
+   * `MapBuilder` merges a placement's struts into ONE collider mesh, which is
+   * what makes the fidelity affordable: measured over Hollowmere's fences, 161
+   * loose post/rail boxes cost every ray in the game ~17%, and the same
+   * geometry merged per fence costs the ground probe 1.4% and a shot 0.3%.
+   */
+  strut(
+    w: number,
+    h: number,
+    d: number,
+    x: number,
+    y: number,
+    z: number,
+    color: string,
+    rot?: { x?: number; y?: number; z?: number },
+  ): Mesh {
+    this.colliders.push({
+      w,
+      h,
+      d,
+      x,
+      y,
+      z,
+      rotX: rot?.x,
+      rotY: rot?.y,
+      rayOnly: true,
+    });
+    return this.box(w, h, d, x, y, z, color, rot);
+  }
+
   /** A box that also blocks movement and stops bullets. */
   wall(
     w: number,
@@ -395,6 +487,15 @@ export class Build implements Structure {
    * the edge is that fix, and having it here rather than in each builder is
    * what stops the next one forgetting: the barn's rails were left visual-only
    * for exactly this reason and you could walk straight off its ramp.
+   *
+   * **A guard is not a `strut`, and the difference is what is behind it.** A
+   * deck rail is a solid surface at the edge of somewhere a body stands: it has
+   * to stop a body (a rail you walk through is a fall) and it stops rounds like
+   * any other timber, so it is an ordinary collider. A strut is for the case
+   * where a COARSER box already owns the body and the fine geometry is only
+   * there to catch rounds. Using a strut here would drop the player off the
+   * ramp; using a guard for a fence's posts would put its rails in the nav
+   * graph, which is the pathology this comment already describes.
    *
    * `edge` is the guarded surface's OUTER face on `side`'s axis, `along` and
    * `length` describe the run on the other horizontal axis, and `surface` is

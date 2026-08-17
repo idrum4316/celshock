@@ -40,6 +40,32 @@ function hashNumbers(values: ArrayLike<number>): string {
 /** What two builds of the same map must agree on. */
 export interface WorldFingerprint {
   boxes: number;
+  /**
+   * How many of those stop a body but not a round (`BoxSpec.porous`).
+   *
+   * Counted rather than inferred from anything else because it is the one
+   * property of a box the nav graph is blind to — a fence is a fence to the
+   * flood fill whether rounds go through it or not, so every other field here
+   * would match while the server ate shots the client watched land. It is also
+   * the field most able to go stale on its own: `sourceHash` covers a map's
+   * `layout.ts` and `heights.ts`, and this flag is declared in a BUILDER.
+   */
+  porousBoxes: number;
+  /**
+   * The ray-only geometry, which the nav graph is blind to for the same reason
+   * and more completely — a `strut` emits no `WorldBox` at all.
+   *
+   * Both the group count and a hash over the boxes themselves, because the two
+   * catch different faults: the count catches a bake that predates the flag or
+   * a server that dropped the groups, and the hash catches timber standing
+   * somewhere else from where the client draws it. `groups` matters on its own
+   * because grouping decides how the geometry is merged, and a server that
+   * merged them differently would pick against the same triangles with a
+   * different bounding box.
+   */
+  rayGroups: number;
+  rayBoxes: number;
+  rayHash: string;
   /** Nav surfaces — a (cell, height) pair each, so this counts geometry. */
   surfaces: number;
   walkable: number;
@@ -56,10 +82,26 @@ export interface WorldFingerprint {
 export function worldFingerprint(map: GameMap): WorldFingerprint {
   const snap = map.nav.debugSnapshot();
   let volume = 0;
-  for (const b of map.colliderBoxes) volume += b.w * b.h * b.d;
+  let porous = 0;
+  for (const b of map.colliderBoxes) {
+    volume += b.w * b.h * b.d;
+    if (b.porous) porous++;
+  }
+
+  // Order-dependent on purpose: two sides that built the same timber in a
+  // different order have merged it into different meshes.
+  const ray: number[] = [];
+  for (const group of map.rayGroups) {
+    ray.push(group.length);
+    for (const b of group) ray.push(b.w, b.h, b.d, b.cx, b.cy, b.cz, b.rotX, b.rotY);
+  }
 
   return {
     boxes: map.colliderBoxes.length,
+    porousBoxes: porous,
+    rayGroups: map.rayGroups.length,
+    rayBoxes: (ray.length - map.rayGroups.length) / 8,
+    rayHash: hashNumbers(ray),
     surfaces: map.nav.surfaceCount,
     walkable: map.nav.walkableCount,
     navDim: snap.dim,

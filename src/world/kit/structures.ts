@@ -8,7 +8,10 @@
  * Cover vocabulary, so a layout can pick the right height deliberately:
  * fence and trough are *low* (step over with the eyes, not the body), cart,
  * crates, woodpile and haystack are *waist/chest* high cover you crouch
- * behind, and stone wall, shed, silo and kiln break sightlines outright.
+ * behind, and stone wall, shed, silo and kiln break sightlines outright. The
+ * fence is the one thing here that is cover from nothing but its own timber —
+ * its coarse box is `porous` and its posts and rails are `strut`s, so it turns
+ * a route without turning a sightline, and stops only what actually hits wood.
  *
  * Two things here are walked ON rather than hidden behind — the two bridges and
  * the temple — so they additionally owe what kit/terrain.ts's header states:
@@ -88,7 +91,21 @@ export function buildStall(scene: Scene, mats: CelMaterialFactory): Structure {
   return b;
 }
 
-/** Post-and-rail fence run along X. Blocks movement, not sight. */
+/**
+ * Post-and-rail fence run along X. Blocks movement, not sight, and stops a
+ * round on its timber and nowhere else.
+ *
+ * **The body and the round are described separately, and that is the whole of
+ * it.** The `block` at the bottom is the fence to a BODY: 1.4 m of it, the
+ * length of the run, `porous`, so the nav graph severs across it and a player
+ * walks into it while no round ever stops on it. The posts and rails are
+ * `strut`s, so a ROUND stops exactly where the timber is drawn and passes
+ * through the gaps — which is most of a fence, and was the whole of it before
+ * the slab was told to stop pretending.
+ *
+ * Neither half works alone: without the block a fence is walked through, and
+ * without the struts it is a wall you can see your target through.
+ */
 export function buildFence(
   scene: Scene,
   mats: CelMaterialFactory,
@@ -99,11 +116,11 @@ export function buildFence(
   const posts = Math.max(2, Math.round(len / 2.5));
   for (let i = 0; i <= posts; i++) {
     const x = -len / 2 + (i / posts) * len;
-    b.box(0.18, 1.5, 0.18, x, 0.75, 0, TIMBER);
+    b.strut(0.18, 1.5, 0.18, x, 0.75, 0, TIMBER);
   }
-  b.box(len, 0.12, 0.1, 0, 1.2, 0, TIMBER);
-  b.box(len, 0.12, 0.1, 0, 0.6, 0, TIMBER);
-  b.block({ w: len, h: 1.4, d: 0.4, x: 0, y: 0.7, z: 0 });
+  b.strut(len, 0.12, 0.1, 0, 1.2, 0, TIMBER);
+  b.strut(len, 0.12, 0.1, 0, 0.6, 0, TIMBER);
+  b.block({ w: len, h: 1.4, d: 0.4, x: 0, y: 0.7, z: 0, porous: true });
   return b;
 }
 
