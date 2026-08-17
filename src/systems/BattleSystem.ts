@@ -26,6 +26,9 @@
  * them back into the ordinary respawn queue with skill and squad intact, which
  * is what makes a human joining and leaving symmetrical. Every loop over
  * `bots` must skip the bench; `Bot` itself knows nothing about any of it.
+ * A HUMAN ALWAYS HOLDS A SLOT, offline as well as on the server: `seatPlayer`
+ * benches the local player's, which is what makes a single-player round 8v8
+ * rather than 8v9.
  */
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -164,10 +167,17 @@ export class BattleSystem {
    * the human leaves it is back with the same skill and the same squad, because
    * nothing about it was ever torn down.
    *
-   * Empty offline, so the single-player path pays one `Set.has` per bot per
-   * frame and behaves exactly as it did.
+   * Exactly one entry offline — the slot the local player holds, see
+   * `seatPlayer` — so the single-player path pays one `Set.has` per bot per
+   * frame for the same rule the server runs.
    */
   private readonly benched = new Set<Bot>();
+  /**
+   * The roster slot the offline player sits in, or -1 before a round has
+   * seated them. Written only by `seatPlayer`, and read by the scoreboard,
+   * which draws the player's line in place of that slot's bot.
+   */
+  private seated = -1;
   private thinkCursor = 0;
   /**
    * Live orders per team, indexed by squad. Replanned on their own slow timer
@@ -299,6 +309,38 @@ export class BattleSystem {
 
   isBenched(bot: Bot): boolean {
     return this.benched.has(bot);
+  }
+
+  /** The slot the offline player holds, or -1 if none has been taken. */
+  get playerSlot(): number {
+    return this.seated;
+  }
+
+  /**
+   * Seats the offline player in a roster slot: the lowest-numbered one on
+   * `team`, whose bot is benched for as long as they hold it.
+   *
+   * The player used to be a SEVENTEENTH body standing beside a full sixteen-bot
+   * roster, which made a single-player round 8v9 in their favour — the one
+   * place in the game where the two sides were not the same size, and it read
+   * as an extra friendly rather than as a bug. The answer was already in this
+   * file: a human takes a slot and the bot in it is benched. This is that rule
+   * applied to the one human a local round has, rather than a second mechanism
+   * that counts bodies and could disagree with the first.
+   *
+   * The lowest-numbered slot on the side, because that is what `Roster.claim`
+   * picks on the server — so the callsign a local round takes off the board is
+   * the one a match would have taken.
+   *
+   * Idempotent, and it hands the old bot back if the side ever changes, so
+   * `Game.buildRound` can call it on every round without asking anything.
+   */
+  seatPlayer(team: Team): void {
+    const slot = this.bots.findIndex((bot) => bot.team === team);
+    if (slot === this.seated) return;
+    if (this.seated >= 0) this.setBenched(this.bots[this.seated], false);
+    this.seated = slot;
+    if (slot >= 0) this.setBenched(this.bots[slot], true);
   }
 
   /**

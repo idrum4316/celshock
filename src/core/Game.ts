@@ -384,9 +384,11 @@ export class Game {
    *
    * Per body rather than per team, because the team totals are the sum of the
    * rows and a second set of counters for them is a second set that can drift.
-   * The player is not in these — they are not in the bot pool — and their own
-   * two numbers are below, which is the same split every other list in this
-   * file makes between `battle.bots` and `this.player`.
+   * The player is not in these — they hold a roster slot but they are not in
+   * the bot pool — and their own two numbers are below, which is the same
+   * split every other list in this file makes between `battle.bots` and
+   * `this.player`. The slot they sit in is a benched bot, and `scoreRows`
+   * leaves its line out for exactly that reason.
    *
    * **Netplay writes none of this.** In a match the board is the authority's
    * and arrives whole (`NetSession.slotKills`): this client runs no AI, its
@@ -2453,6 +2455,12 @@ export class Game {
     // welcome beat this build; when it did not, the welcome applies it itself.
     // Either way it goes in through the one funnel — see `applyPlayerTeam`.
     this.applyPlayerTeam(this.net?.seated ? this.net.team : 0, map);
+    // …and offline they take a SLOT on that side rather than standing beside
+    // the roster: the bot in it is benched, so the fight is eight a side with
+    // the player as one of the eight. In a match the authority does this on
+    // its own roster and the local pool is not the fight — see
+    // `BattleSystem.seatPlayer`.
+    if (!this.net) this.battle.seatPlayer(this.player.team);
     // A new round is a new board. Sized from the pool here rather than at
     // construction, so it is the roster that says how many rows there are.
     this.botKills.length = 0;
@@ -4184,8 +4192,9 @@ export class Game {
       }
       return rows;
     }
-    // Offline the player is not in the pool — they are the seventeenth body in
-    // a sixteen-bot round — so their line is pushed rather than found.
+    // Offline the player's counters are their own rather than the pool's, so
+    // their line is pushed rather than found — but it IS one of the sixteen,
+    // because they hold a slot like everybody else.
     // Every offline row's ping is -1 and the board draws no column for it:
     // there is no server in a single-player round to be any distance from.
     rows.push({
@@ -4197,6 +4206,11 @@ export class Game {
       ping: -1,
     });
     for (let i = 0; i < this.battle.bots.length; i++) {
+      // The row above IS this slot's line — its bot is benched for as long as
+      // the player sits there (`BattleSystem.seatPlayer`). Drawing the bot as
+      // well would put a seventeenth body on a sixteen-slot board and count a
+      // body that is not in the fight into the player's team totals.
+      if (i === this.battle.playerSlot) continue;
       rows.push({
         name: callsign(i),
         team: this.battle.bots[i].team,

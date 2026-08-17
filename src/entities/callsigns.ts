@@ -8,9 +8,10 @@
  * takes a slot's name off the board, it does not shuffle the fifteen others.
  *
  * A person's name is their own and comes from the roster (`SlotOccupant`); this
- * is only for the slots no person is in. Offline that is every bot, and the
- * roster index is the bot's index in `BattleSystem.bots`; in a match it is the
- * slot, which is the same number by construction — see `server/Roster.ts`.
+ * is only for the slots no person is in. Offline that is every bot but the one
+ * the local player sits on (`BattleSystem.seatPlayer`), and the roster index is
+ * the bot's index in `BattleSystem.bots`; in a match it is the slot, which is
+ * the same number by construction — see `server/Roster.ts`.
  */
 
 /**
