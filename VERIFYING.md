@@ -194,6 +194,21 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   basis from `aimYaw`. And **the settled pose is a numeric question first**: the
   joints' height spread says face-down (all within ~0.01 m) or on its side
   (~0.5 m), which a headless screenshot at this scale will not.
+- **A CROUCHED death is one line of setup and is worth checking after anything that
+  touches the bone table**: `Object.assign(g.player, { crouchBlend: 1 })` then
+  `g.player.takeDamage(999, from)` in the SAME `page.evaluate` — the blend is eased
+  every tick and will not survive a round trip, and `enterDying` reads it
+  synchronously off `player.stance`. Then step `g.ragdolls.update(1/60)` in a loop as
+  above; the death cam's own clock is not involved. **The reading that means
+  something is the knee's fold angle**, and it is an angle between world positions
+  rather than a local rotation — the joints belong to the solver's proxies while it
+  owns them, so `kneeL.rotation.x` is not the pose. Take
+  `acos(normalise(knee - hip) · normalise(ankle - knee))` with
+  `computeWorldMatrix(true)` on all three: 2.58 rad is the drawn full crouch, and a
+  leg that reads ~0 within a step or two of the throw is a joint limit that does not
+  contain its own spawn pose. A standing body settles with every joint inside 0.06 m
+  of the floor; a crouched one settles on its side and stays curled, so the
+  face-down height-spread test above is the wrong assertion for it.
 - **The death cam is the one thing NOT steppable synchronously**, by design: it is
   a game state, so it advances only from `tick` — ~80 s of wall clock for its 4 s.
   SAMPLE `g.deathCam.elapsed` rather than sleeping a fixed wait. Everything else is

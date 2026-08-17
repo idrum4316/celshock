@@ -16,17 +16,54 @@ bodies and rounds pass through them. Do not "fix" that by feeding corpses into
 `ObstacleField`, whose buckets are baked at map load.
 
 **The collapse tween in `Bot.update`'s dead branch is not legacy — it is the floor
-under all of this**, and it runs on six separate refusals: the WASM has not loaded,
-the WASM failed, the setting is off, the pool is full, the death was past
-`death.maxDistance`, or the body died with its legs folded in a crouch — a corpse's
-leg is one rigid 0.72 m bone, which a folded leg is not, and the tween is a pose so
-it can unfold the stance on the way down where the solver could only be handed a
-plank sticking out of each hip. Deleting it is the single worst change available here. The tween
+under all of this**, and it runs on five separate refusals: the WASM has not loaded,
+the WASM failed, the setting is off, the pool is full, or the death was past
+`death.maxDistance`. Deleting it is the single worst change available here. The tween
 is exempt from the pose-freeze LOD *because it is five property writes*; **a ragdoll
 needs no such exemption**, because it poses through the proxy nodes its joints are
 parented to and the solver writes those whatever the LOD says. Reading those two as
 one fact is what pinned `maxDistance` to `lodFreezeDistance` (35) and stopped anything
 dying across the square from falling over at all — a marksman rifle's whole range.
+
+**A crouch was a sixth refusal and is not one any more, and what bought it back is
+the bone table.** A leg was ONE rigid 0.72 m bone oriented by the hip joint, which a
+folded leg is nowhere near, so a body caught mid-crouch had to be refused and take
+the tween — which meant the one stance a player holds while being shot at was also
+the one stance that could not fall over. There was no pose that fixed it either:
+straight legs under lowered hips reach through the floor, and lifting the hips to
+meet them is half a metre of pop on the frame of death. So the leg became three
+bones — thigh, shin and boot, hung off the same hip, knee and ankle the crouch bends
+— and the proxies take whatever pose the rig is already in. Measured on a body
+killed at a full crouch: the knee is thrown holding its drawn 2.58 rad fold, keeps
+it through the first steps rather than being snapped straight, and the corpse settles
+on its side still curled. A standing body is unchanged — every joint within 0.06 m of
+the floor's height, legs straight to 0.05 rad. Three things go with it and are the
+part that is easy to get wrong:
+
+- **A joint limit must CONTAIN the pose a body can be thrown in.** The standing pose
+  is the zero of all three angular axes, and the knee reaches 2.58 rad from there;
+  a range that stopped short would have the solver straightening a leg on the frame
+  of death, which is the pop this feature exists to remove arriving through the fix
+  for it. The ankle's -1.39 rad is likewise the DRAWN crouch's and not anatomy's.
+- **A bone hangs off its parent bone, not off the chest.** `BoneLink.parent` is what
+  says so and the pivot is in that parent's frame. Pinning a shin to the torso
+  instead holds it at a fixed offset from the ribs and lets it swing there — a corpse
+  whose knee is a second hip.
+- **A corpse does not collide with itself**, because a folded leg lays the shin along
+  the thigh and puts the boot inside it, and a body that shoved its own limbs apart
+  on the frame it was thrown is worse than one that clips. Each pooled slot owns its
+  bone shapes in its own collision group (bit 0 is the world's, slot `i` takes bit
+  `i + 1`) — which is also why the shapes are per slot rather than one set shared by
+  every corpse: the mask lives on the SHAPE, so sharing them could only turn every
+  body's self-collision off together with every corpse-against-corpse one. Two
+  corpses landing on each other still collide.
+
+The four extra bones cost nothing measurable. One harness, run either side of the
+split — a whole death's 150 substeps timed end to end, median of seven trials —
+gave eight falling corpses 0.279 ms/step at six bones and 0.290 at ten, inside a
+trial spread of 0.24-0.42. Those absolutes do not line up with the ones
+`maxConcurrent` carries below and are not meant to: different harness, different
+session, and headless absolutes are inflated anyway. The PAIR is the measurement.
 
 **The gate is the FOG WALL, and it is one number for everything that stops at it.**
 `FOG_WALL` in `config/fogWall.ts` is its own module because two unrelated tunables are the
@@ -50,7 +87,8 @@ caller would be two claims on one exception.
 
 **`maxConcurrent` is what bounds the cost, and it is measured, not reasoned.** Eight
 falling corpses are 0.121 ms/frame against the whole roster's AI at 0.39–0.42 ms in
-the same run; a settled one is 0.0004 ms because the engine is not stepped at all, and
+the same run — taken on the six-bone body, and the leg split that followed did not
+move it; a settled one is 0.0004 ms because the engine is not stepped at all, and
 unused slots are free (four corpses cost the same in a pool of four and a pool of
 eight). Raising the DISTANCE is what makes the pool busier — raise the two together.
 FINDINGS #8's older 1.37 ms for four does not reproduce; see the note there.
@@ -79,6 +117,10 @@ FINDINGS #8's older 1.37 ms for four does not reproduce; see the note there.
   `WorldBox`, hence `GameMap.terrainColliders`). Built in `installMap`, skipped on
   editor builds, and torn down leaf by leaf or the WASM heap grows one map build at a
   time. Measured 33–50 ms headless, and 25 bodies flat across three rounds.
+- **The knee and the ankle are bones and the rifle is not**, which is the same
+  question answered twice: a bone is worth having where the RIG can already put the
+  joint somewhere the one box could not follow. The crouch bends knees and ankles, so
+  they earn one each.
 - **The rifle is not a bone.** It stays parented to `torso` and rides that body.
   Giving it one drops it out of hands that cannot open — the arm is a single welded
   segment with no elbow, wrist or finger — so the weapon falls away while two fists
@@ -129,6 +171,16 @@ without that subtract turns feedback into a punishment.
   `Player.floorY` (the FEET — `Player.position` is the middle of the collider capsule)
   and hidden again at the end, so nothing in movement, collision or hit detection ever
   gains a mesh to disagree with.
+- **It is stood up in the STANCE they died in**, off `Player.stance` — the eased
+  blend, not the `crouching` intent, which would round a body a third of the way into
+  a crouch up to a full one and spend half a metre of pop on the one body the camera
+  is about to point at for four seconds. Two things follow the blend and they are not
+  the same thing: the rig is posed by `animateSoldier`, which drops the hips and leaves
+  the boots planted, and `RagdollSubject.center` comes down to `crouchCenterHeight`
+  because that is where the round landed and what the throw is aimed away from. The
+  ROOT does not move — the crouch lives inside the rig, so a root pulled down with it
+  puts the feet through the floor. It is the same split `NetPlayer` draws for a remote
+  body. The fallback tween is handed the stance too, and unfolds it on the way down.
 - **The camera leaves the head through `CameraSystem.place`, the one exception to
   that system's own invariant**, and `update` is simply not called in that window — so
   no look input, ADS blend, recoil, bob or landing spring advances, and the aim is

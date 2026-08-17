@@ -4034,6 +4034,7 @@ export class Game {
       this.cameraSys.forward,
       from,
       amount,
+      this.player.stance,
     );
     if (!this.deathCam.active) {
       this.enterDeploy(respawnIn);

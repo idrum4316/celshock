@@ -27,9 +27,9 @@
  *   this file existed. Do NOT "fix" that by feeding corpses into
  *   `ObstacleField` — its buckets are baked at map load for a reason.
  * - It is strictly cosmetic and always optional. Every refusal (WASM not
- *   loaded, WASM failed, setting off, pool full, too far away, legs folded in
- *   a crouch) falls back to `Bot`'s collapse tween, which is why that tween is
- *   load-bearing rather than legacy. The death cam's body is the ONE thing that may not be refused
+ *   loaded, WASM failed, setting off, pool full, too far away) falls back to
+ *   `Bot`'s collapse tween, which is why that tween is load-bearing rather
+ *   than legacy. The death cam's body is the ONE thing that may not be refused
  *   for a full pool — it is the sole subject of a four-second shot — and
  *   `takeSlot` is where that exception lives and where it stops.
  * - The sim is a FIXED step with a CARRIED remainder, so a tumble is identical
@@ -140,8 +140,8 @@ export class RagdollSystem {
   /** The tumble's jitter. See `SPIN_SEED`. */
   private rand: () => number = mulberry32(SPIN_SEED);
 
-  /** One shape per bone KIND, shared by every slot and both teams. */
-  private shapes = new Map<BoneJoint, PhysicsShape>();
+  /** Every bone shape in the pool, held flat for disposal — see `buildShapes`. */
+  private shapes: PhysicsShape[] = [];
   private slots: Slot[] = [];
 
   /** The map as one static body: a container of every collider in the world. */
@@ -238,7 +238,6 @@ export class RagdollSystem {
         this.scene.physicsEnabled = false;
         this.engine = this.scene.getPhysicsEngine();
         this.plugin = plugin;
-        this.buildShapes();
         this.buildPool();
         this.state = "ready";
         if (this.enabled && this.pendingMap) this.buildWorld(this.pendingMap);
@@ -298,17 +297,17 @@ export class RagdollSystem {
     if (subject.ragdolling || this.slots.some((s) => s.subject === subject)) {
       return false;
     }
-    // A folded leg is not a bone. `RAGDOLL_BONES` makes a leg ONE rigid segment
-    // from hip to sole, 0.72 m long and oriented by the hip joint — so a body
-    // caught mid-crouch would be thrown with two 0.72 m planks sticking
-    // forward out of its hips, propping a corpse up off geometry its own
-    // drawn legs are nowhere near. There is no pose that fixes it either:
-    // straight legs under lowered hips reach through the floor, and lifting
-    // the hips to meet them is half a metre of pop on the frame of death.
-    // The collapse tween has no such constraint — it is a pose, so it can
-    // unfold the crouch on the way down — and being refused is a path this
-    // system already has five other reasons to take.
-    if (subject.rig.kneeL.rotation.x > 0.1) return false;
+    // A crouched body is NOT refused, and the bone table is what earns that.
+    // A leg was one rigid 0.72 m segment oriented by the hip joint until it had
+    // a knee and an ankle of its own, and a body caught mid-crouch would have
+    // been thrown with two planks sticking forward out of its hips, propping a
+    // corpse up off geometry its own drawn legs were nowhere near. There was no
+    // pose that fixed it — straight legs under lowered hips reach through the
+    // floor, and lifting the hips to meet them is half a metre of pop on the
+    // frame of death — so the refusal stood in for the missing joints. The
+    // joints exist now (`RAGDOLL_BONES`), the proxies below take whatever pose
+    // the rig is in, and the one stance a player is most likely to be shot in
+    // falls over like every other.
     const slot = this.takeSlot(priority);
     if (!slot) return false;
 
@@ -499,15 +498,34 @@ export class RagdollSystem {
       }
     }
     this.slots = [];
-    for (const s of this.shapes.values()) s.dispose();
-    this.shapes.clear();
+    for (const s of this.shapes) s.dispose();
+    this.shapes = [];
   }
 
   // --- construction -------------------------------------------------------
 
-  /** One shape per bone, built once and shared by every slot. */
-  private buildShapes(): void {
+  /**
+   * One shape per bone for ONE slot, in that slot's own collision group.
+   *
+   * Per slot rather than one set shared by every corpse, and the group is why.
+   * A ragdoll's own bones overlap by construction — a folded leg lies the shin
+   * along the thigh and puts the boot inside it — so a corpse that collided
+   * with itself would spend the frame it was thrown on shoving its own limbs
+   * apart. Filtering is the only way to say that: the mask lives on the SHAPE,
+   * so a shape shared between slots could only turn every corpse's
+   * self-collision off together with every corpse-against-corpse one, and two
+   * bodies landing on each other is worth keeping. Bit 0 is left to the world
+   * (`PhysicsShape` defaults to membership 1), so slot `i` takes bit `i + 1`
+   * and collides with everything except itself.
+   *
+   * The wrap at 30 is a backstop, not a design: past thirty slots two corpses
+   * would share a group and pass through each other, which is the mildest
+   * failure available and far better than shifting into the sign bit.
+   */
+  private buildShapes(slot: number): Map<BoneJoint, PhysicsShape> {
     const d = CONFIG.bots.death;
+    const group = 1 << (1 + (slot % 30));
+    const shapes = new Map<BoneJoint, PhysicsShape>();
     for (const bone of RAGDOLL_BONES) {
       const shape = new PhysicsShapeBox(
         new Vector3(...bone.center),
@@ -516,13 +534,21 @@ export class RagdollSystem {
         this.scene,
       );
       shape.material = { friction: d.friction, restitution: d.restitution };
-      this.shapes.set(bone.joint, shape);
+      shape.filterMembershipMask = group;
+      // Written unsigned, because this crosses into the WASM as a uint32. It
+      // reads back out of Havok as the same bits signed (-3 for slot 0), and
+      // both forms answer a `&` test identically.
+      shape.filterCollideMask = ~group >>> 0;
+      shapes.set(bone.joint, shape);
+      this.shapes.push(shape);
     }
+    return shapes;
   }
 
   private buildPool(): void {
     const d = CONFIG.bots.death;
     for (let i = 0; i < d.maxConcurrent; i++) {
+      const shapes = this.buildShapes(i);
       const bones: Bone[] = RAGDOLL_BONES.map((spec) => {
         const proxy = new TransformNode(`ragdoll${i}-${spec.joint}`, this.scene);
         // Pre-created so Havok's sync only ever copies into it — the one place
@@ -535,7 +561,7 @@ export class RagdollSystem {
           false,
           this.scene,
         );
-        body.shape = this.shapes.get(spec.joint)!;
+        body.shape = shapes.get(spec.joint)!;
         body.setMassProperties({ mass: spec.mass });
         body.setLinearDamping(d.linearDamping);
         body.setAngularDamping(d.angularDamping);
@@ -543,12 +569,17 @@ export class RagdollSystem {
       });
 
       const byJoint = new Map(bones.map((b) => [b.joint, b]));
-      const chest = byJoint.get("torso")!;
       const constraints: Physics6DoFConstraint[] = [];
       for (const [joint, link] of Object.entries(RAGDOLL_LINKS)) {
         if (!link) continue;
         const child = byJoint.get(joint as BoneJoint);
-        if (!child) continue;
+        // The bone this one hangs off, which is the chest for everything above
+        // the hips and the segment above for a knee and an ankle. Pinning the
+        // whole leg to the chest instead would hold a shin at a fixed offset
+        // from the ribs and let it swing there — a corpse whose knee is a
+        // second hip.
+        const parent = byJoint.get(link.parent);
+        if (!child || !parent) continue;
         const c = new Physics6DoFConstraint(
           {
             pivotA: new Vector3(...link.pivot),
@@ -587,7 +618,7 @@ export class RagdollSystem {
           ],
           this.scene,
         );
-        chest.body.addConstraint(child.body, c);
+        parent.body.addConstraint(child.body, c);
         constraints.push(c);
       }
 

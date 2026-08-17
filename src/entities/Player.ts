@@ -299,6 +299,18 @@ export class Player implements Combatant {
    * transition reads as a single motion the way ADS does.
    */
   private crouchBlend = 0;
+  /**
+   * That blend, for the one thing outside this class that needs the eased
+   * number rather than the `crouching` intent: the stand-in body `DeathCam`
+   * stands up has to be posed in the stance the eye and the hit sphere were
+   * actually in, and both of those ride this. The boolean would round a body
+   * caught a third of the way into a crouch to a full one — half a metre of
+   * pop on the frame of death, on the one body the camera is about to spend
+   * four seconds pointing at.
+   */
+  get stance(): number {
+    return this.crouchBlend;
+  }
   /** Counts down from `regenDelay` after each hit; regen resumes at zero. */
   private regenLockT = 0;
   private reloadT = 0;

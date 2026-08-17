@@ -55,7 +55,11 @@ export type BoneJoint =
   | "shoulderL"
   | "shoulderR"
   | "hipL"
-  | "hipR";
+  | "hipR"
+  | "kneeL"
+  | "kneeR"
+  | "ankleL"
+  | "ankleR";
 
 /**
  * Every joint the rig poses, bone or not.
@@ -150,19 +154,25 @@ export interface BoneSpec {
 }
 
 /**
- * The ragdoll's six bones, derived from the segment box lists below. Extents
+ * The ragdoll's ten bones, derived from the segment box lists below. Extents
  * are the union of a joint's boxes, trimmed a little inside the silhouette: a
  * collider fatter than the mesh makes a corpse hover, which is the same tell
  * `terrainSlab` documents from the other side.
  *
- * Six and no more, and the legs are the interesting half of that. There is no
- * elbow and no spine — a forearm is baked into the merged upper-arm mesh — and
- * there IS a knee and an ankle, but neither is a bone: a corpse's leg is one
- * rigid segment from hip to sole, exactly as it was before the crouch needed
- * joints to bend. That is what `animateSoldier` straightens the legs for the
- * moment `dead` goes above zero — the bone box below is 0.72 m of straight
- * leg, and handing physics a folded one would be a collider that agrees with
- * the mesh nowhere.
+ * **The legs are three bones apiece — thigh, shin and boot — because a body can
+ * die crouched.** They were one rigid 0.72 m segment from hip to sole until
+ * they had to be: a folded leg is that shape nowhere, so `RagdollSystem.spawn`
+ * refused a body caught mid-crouch outright and the tween took it, which meant
+ * the one stance a player holds while being shot at was also the one stance
+ * that could not fall over. The three boxes here are the three the leg is
+ * DRAWN from, hung off the same hip, knee and ankle the crouch bends, so the
+ * collider now agrees with the mesh in every pose the rig can hold rather than
+ * only in the standing one. There is still no elbow and no spine — a forearm
+ * is baked into the merged upper-arm mesh.
+ *
+ * The three masses split the leg's old 15 where the leg's own weight is
+ * (8/5/2), so the body still totals 80 kg and every number in
+ * `CONFIG.bots.death.impulse` means what it did when it was tuned.
  *
  * **The rifle is deliberately NOT a bone.** It stays parented to `torso` and
  * rides that body for free. Giving it one would drop it out of hands that
@@ -188,24 +198,30 @@ export const RAGDOLL_BONES: readonly BoneSpec[] = [
     center: [0, -0.205, 0.015],
     mass: 5,
   },
-  // Hip to boot sole, y in [-0.72, 0].
+  // Thigh: hip to knee, y in [-THIGH, 0].
+  { joint: "hipL", size: [0.17, 0.34, 0.18], center: [0, -0.17, 0], mass: 8 },
+  { joint: "hipR", size: [0.17, 0.34, 0.18], center: [0, -0.17, 0], mass: 8 },
+  // Shin: knee to ankle, y in [-SHIN, 0].
+  { joint: "kneeL", size: [0.15, 0.32, 0.15], center: [0, -0.16, 0], mass: 5 },
+  { joint: "kneeR", size: [0.15, 0.32, 0.15], center: [0, -0.16, 0], mass: 5 },
+  // Boot: the one bone that is mostly forward of its joint, not below it.
   {
-    joint: "hipL",
-    size: [0.17, 0.72, 0.2],
-    center: [0, -0.36, 0.02],
-    mass: 15,
+    joint: "ankleL",
+    size: [0.17, 0.08, 0.24],
+    center: [0, -0.02, 0.03],
+    mass: 2,
   },
   {
-    joint: "hipR",
-    size: [0.17, 0.72, 0.2],
-    center: [0, -0.36, 0.02],
-    mass: 15,
+    joint: "ankleR",
+    size: [0.17, 0.08, 0.24],
+    center: [0, -0.02, 0.03],
+    mass: 2,
   },
 ];
 
 /**
- * One bone's pin to the chest: where it hangs, in the CHEST's frame, and how
- * far it may swing there.
+ * One bone's pin to the bone it hangs off: which one that is, where it hangs in
+ * THAT bone's frame, and how far it may swing there.
  *
  * Limits are radians, per axis, symmetric about the carried pose. They are
  * loose enough to look boneless in flight and tight enough that a settled body
@@ -213,7 +229,9 @@ export const RAGDOLL_BONES: readonly BoneSpec[] = [
  * numbers and the reasoning for them live.
  */
 export interface BoneLink {
-  /** Pivot in the chest's frame. */
+  /** The bone this one hangs off. `torso` is the root and pins nothing. */
+  parent: BoneJoint;
+  /** Pivot in the PARENT bone's frame. */
   pivot: [number, number, number];
   /** Angular range about x (pitch), as [min, max]. */
   x: [number, number];
@@ -224,12 +242,16 @@ export interface BoneLink {
 }
 
 /**
- * Where each bone is pinned to the chest and how far it may swing there.
- * `torso` is the root body and is absent — nothing pins it.
+ * Where each bone is pinned and how far it may swing there. `torso` is the root
+ * body and is absent — nothing pins it.
  *
  * Every joint is at identity relative to its parent in the carried pose, so
  * **the standing pose is the zero of all three angular axes** and these read as
- * plain ranges rather than as offsets from some authored rest angle.
+ * plain ranges rather than as offsets from some authored rest angle. That is
+ * also why a limit must CONTAIN the pose a body is thrown in: the knee below
+ * reaches 2.58 rad at a full crouch, and a range that stopped short of it would
+ * have the solver snapping a leg straight on the frame of death — the pop this
+ * whole feature exists to remove, arriving through the fix for it.
  *
  * The ROLL ranges are asymmetric per side on purpose: a symmetric one lets an
  * arm or a leg fold in through the body it hangs off.
@@ -238,33 +260,85 @@ export interface BoneLink {
  * (see the leg section below), so the pivot in chest space is their own local
  * y of -0.02 MINUS the torso's +0.1 — the -0.12 here. Reading the hip's local
  * position straight off the node instead puts both legs 0.1 m up inside the
- * chest, which reads as a body folded in half.
+ * chest, which reads as a body folded in half. The knee and the ankle have no
+ * such trap and must not be given one: each hangs off the segment directly
+ * above it, so its pivot is that segment's own length and is written as
+ * `-THIGH` / `-SHIN` rather than as a number, which is what keeps the pin on
+ * the joint when the leg's boxes move.
  */
 export const RAGDOLL_LINKS: Readonly<Partial<Record<BoneJoint, BoneLink>>> = {
-  head: { pivot: [0, 0.52, 0], x: [-0.5, 0.5], y: [-0.7, 0.7], z: [-0.5, 0.5] },
+  head: {
+    parent: "torso",
+    pivot: [0, 0.52, 0],
+    x: [-0.5, 0.5],
+    y: [-0.7, 0.7],
+    z: [-0.5, 0.5],
+  },
   shoulderL: {
+    parent: "torso",
     pivot: [-0.28, 0.42, 0],
     x: [-1.6, 1.2],
     y: [-0.5, 0.5],
     z: [-0.2, 1.7],
   },
   shoulderR: {
+    parent: "torso",
     pivot: [0.28, 0.42, 0],
     x: [-1.6, 1.2],
     y: [-0.5, 0.5],
     z: [-1.7, 0.2],
   },
   hipL: {
+    parent: "torso",
     pivot: [-0.12, -0.12, 0],
     x: [-0.9, 1.4],
     y: [-0.3, 0.3],
     z: [-0.15, 0.8],
   },
   hipR: {
+    parent: "torso",
     pivot: [0.12, -0.12, 0],
     x: [-0.9, 1.4],
     y: [-0.3, 0.3],
     z: [-0.8, 0.15],
+  },
+  // The knee is a HINGE and the only joint here with a one-way range: it folds
+  // to 2.7 and is allowed a few hundredths the other way for numerical slack,
+  // because a knee that opens backwards is the leg version of a head on
+  // backwards. The yaw and roll are pinched to a tenth for the same reason —
+  // enough to keep the solver from fighting itself, not enough to read as a
+  // twisted shin.
+  kneeL: {
+    parent: "hipL",
+    pivot: [0, -THIGH, 0],
+    x: [-0.05, 2.7],
+    y: [-0.1, 0.1],
+    z: [-0.1, 0.1],
+  },
+  kneeR: {
+    parent: "hipR",
+    pivot: [0, -THIGH, 0],
+    x: [-0.05, 2.7],
+    y: [-0.1, 0.1],
+    z: [-0.1, 0.1],
+  },
+  // The ankle's range is set by the DRAWN crouch rather than by anatomy. The
+  // squat this rig holds puts the shin near horizontal with the boot flat, so
+  // `poseLegs` dorsiflexes the foot to -1.39 rad — further than an ankle goes,
+  // and exactly where a crouched body has to be thrown from.
+  ankleL: {
+    parent: "kneeL",
+    pivot: [0, -SHIN, 0],
+    x: [-1.5, 0.6],
+    y: [-0.15, 0.15],
+    z: [-0.15, 0.15],
+  },
+  ankleR: {
+    parent: "kneeR",
+    pivot: [0, -SHIN, 0],
+    x: [-1.5, 0.6],
+    y: [-0.15, 0.15],
+    z: [-0.15, 0.15],
   },
 };
 
@@ -296,11 +370,11 @@ export interface SoldierRig {
   hipL: TransformNode;
   hipR: TransformNode;
   /**
-   * Knees and ankles, which exist for the crouch and for nothing else — a bot
-   * never bends them, and a standing body holds them all at zero. The ankle is
-   * what keeps a boot flat on the ground while the shin folds under a squat;
-   * without it the sole tips up with the shin and the toe goes through the
-   * floor. Neither is a ragdoll bone: see `RAGDOLL_BONES`.
+   * Knees and ankles. They exist for the crouch — a bot never bends them, and a
+   * standing body holds them all at zero — and the ankle is what keeps a boot
+   * flat on the ground while the shin folds under a squat; without it the sole
+   * tips up with the shin and the toe goes through the floor. Both are ragdoll
+   * bones as well, which is what lets a body die crouched: see `RAGDOLL_BONES`.
    */
   kneeL: TransformNode;
   kneeR: TransformNode;
@@ -629,11 +703,15 @@ export function animateSoldier(
   if (dead > 0) {
     // Pitch forward and sink; the rig is hidden once the tween completes.
     //
-    // A body shot out of a crouch UNFOLDS as it goes down, over the same tween:
-    // it has to end straight, because the legs are one rigid bone apiece to
-    // `RagdollSystem` and to the corpse's own collapse, and it must not get
-    // there by standing up on the frame it died — half a metre of pop is worse
-    // than anything the tween is hiding.
+    // A body shot out of a crouch UNFOLDS as it goes down, over the same tween.
+    // This is the TWEEN's own reason and no longer the ragdoll's — the legs
+    // have knees and ankles of their own in `RAGDOLL_BONES` now, so the solver
+    // takes a folded body as it stands. What the tween cannot do is fold: it
+    // pitches the whole body about one joint, and a corpse that kept its squat
+    // through that would go down as a seated figure tipping over sideways. It
+    // must not straighten by standing up on the frame it died either — half a
+    // metre of pop is worse than anything the tween is hiding — hence the
+    // unfold riding `1 - dead` rather than landing on the first frame.
     const dying = crouchDrop(crouch) * (1 - dead);
     rig.body.rotation.x = dead * 1.5;
     rig.body.position.y = -dead * 0.7 - dying;

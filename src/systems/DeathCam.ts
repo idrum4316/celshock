@@ -92,6 +92,13 @@ export class DeathCam {
   private running = false;
   /** Seconds since the killing round landed. */
   private t = 0;
+  /**
+   * The stance the player died in, held for the fallback tween — which unfolds
+   * it as the body goes down and therefore has to know where it started. The
+   * ragdoll path never reads it: the pose is already in the rig by then and the
+   * solver owns the joints.
+   */
+  private crouch = 0;
   /** Where the orbit currently is, as a world yaw. */
   private orbit = 0;
 
@@ -178,6 +185,12 @@ export class DeathCam {
    * `feet` is the player's FEET, not `Player.position`, which is the middle of
    * the collider capsule. `Player.floorY` is the height to use and is already
    * probed this frame, so it costs nothing.
+   *
+   * `crouch` is the player's own eased stance blend, and the body is posed in
+   * it before it is offered. It is the same number `Player.syncCombatant` has
+   * been spending all along — the eye, the hit sphere and now the corpse come
+   * off one blend — so a player shot halfway into a crouch gets a body halfway
+   * into one, standing exactly where the round that killed them found it.
    */
   start(
     feet: Vector3,
@@ -186,22 +199,37 @@ export class DeathCam {
     forward: Vector3,
     from: Vector3 | undefined,
     damage: number,
+    crouch: number,
   ): void {
     if (!this.corpse) return;
     const corpse = this.corpse;
     const rig = corpse.rig;
 
+    this.crouch = crouch;
     corpse.position.copyFrom(feet);
-    corpse.center.set(feet.x, feet.y + rig.centerHeight, feet.z);
+    // The CENTRE rides the stance and the ROOT does not, which is the same
+    // split `NetPlayer` draws for a remote body: the crouch lives inside the
+    // rig — `animateSoldier` drops the hips and plants the boots — so a root
+    // pulled down with it would put the feet through the floor. The centre is
+    // where the round landed and where the throw is aimed away from, so it goes
+    // to the same place `Player.center` was on the frame of death.
+    corpse.center.set(
+      feet.x,
+      feet.y +
+        rig.centerHeight +
+        (CONFIG.player.crouchCenterHeight - rig.centerHeight) * crouch,
+      feet.z,
+    );
     corpse.deathDamage = damage;
     if (from) corpse.deathFrom.copyFrom(from);
     else corpse.deathFrom.copyFrom(corpse.center);
 
-    // A clean standing pose facing the way the player was, so the throw starts
-    // from the shape they were in rather than from whatever the last corpse
-    // left behind.
+    // A clean pose facing the way the player was, in the stance they were in,
+    // so the throw starts from the shape they were in rather than from whatever
+    // the last corpse left behind.
     resetSoldierPose(rig);
-    rig.root.position.copyFrom(corpse.center);
+    animateSoldier(rig, 0, 0, 0, 0, 0, crouch);
+    rig.root.position.set(feet.x, feet.y + rig.centerHeight, feet.z);
     rig.root.rotation.y = yaw;
     corpse.setEnabled(true);
 
@@ -251,6 +279,7 @@ export class DeathCam {
         0,
         0,
         Math.min(1, this.t / CONFIG.bots.death.collapseTime),
+        this.crouch,
       );
     }
 
