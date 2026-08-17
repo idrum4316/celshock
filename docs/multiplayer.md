@@ -937,7 +937,7 @@ region has an `m1`; an id alone would send a join to whichever server the client
 last spoke to, which would usually find a match of that name and drop the player
 into a completely different round on another continent. `LobbyScreen` carries the
 region on every row, `onJoin` passes it to `joinMatch`, `sameRow` compares it,
-and the "joining" highlight matches on both. `Game.regionFor` is the single
+and the "joining" highlight matches on both. `RegionBook.resolve` is the single
 funnel: a row's own region, else the standing pick, else the first the file
 names.
 
@@ -967,9 +967,20 @@ own timeout. Two details are load-bearing and both are about not lying:
 `readRegion`/`writeRegion` remember a pick exactly as the map is remembered.
 Nothing remembered means the fastest region that ANSWERS is preselected, on every
 visit, and the moment the player steps that row it becomes their pick and is
-never moved for them again — `Game.noteRegionPing` is the one place that
+never moved for them again — `RegionBook.note` is the one place that
 distinction is spent, and it deliberately does not persist what it chooses,
 because being seated somewhere by a measurement is not a decision to remember.
+
+**All of that lives in `net/RegionBook.ts` and none of it in `Game`.** The list,
+the one read of it, the player's pick, the automatic one, the pings it ranks by
+and a `?server=` override are a cluster that answers only to itself — no system,
+no mesh, no frame — which is what let it out of the orchestrator when the
+netplay wiring beside it may not go. Two halves stay behind on purpose, and they
+are the two the book is not allowed to do: `writeRegion` is `prefs.ts`'s to
+store and `Game.setRegion`'s to spend, and every push at `LobbyScreen` is made
+from `Game`. So `choose` and `note` HAND BACK the row to light up rather than
+lighting it — a book that could draw would be a second thing writing that
+screen, and the screen's whole rule is that it never writes its own state.
 
 **The region row is what a match this client CREATES goes in, and nothing more**
 — the same relationship the Map row has to `Join.map`. Joining a listed match

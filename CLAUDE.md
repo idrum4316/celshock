@@ -160,6 +160,29 @@ would not do — the shot has to resolve synchronously inside the bot's think ti
 so the result is available to the same frame's kill handling. Read the rule as
 "never reach for another system", not "never mention its type".
 
+**`Game.ts` is long on purpose, and what may leave it is mechanical so nobody
+has to re-argue the line count.** It is the only place systems meet, so most of
+its length *is* its job — and splitting the wiring re-creates exactly the
+system→system edges the rule above spends itself preventing. What may leave is a
+cluster of **private fields that answers only to itself**: nothing else in the
+file reads them, and the methods over them touch no system, no mesh and no
+frame. `net/RegionBook.ts` is the worked example — the region list, its one
+read, the player's pick, the automatic pick and the pings ranking it were six
+fields no line outside the five lobby methods over them ever touched. What may
+**not** leave is anything whose methods reach across systems, however big it
+gets: the netplay client is the biggest cluster in the file and touches ~35 of
+its members across a dozen systems, so extracting it would hand a constructor
+`Game` itself or twenty callbacks — moving the coupling into a signature rather
+than out of the file. **Two halves always stay behind**, and they are what makes
+an extracted module a module: what PERSISTS (`prefs.ts` stores, `Game` spends)
+and what DRAWS (every push at a screen is made from here). So such a module
+hands its result *back* — `choose` and `note` return the row to light up — and
+never acts on it.
+
+Judge the file by its **code** lines, not its length: it is more than half
+prose, and the contract headers this project runs on are not what a refactor
+should be measuring.
+
 **`installMap` is the one place a map is built**, and both callers — a round
 starting and an editor rebuild — go through it. It disposes the standing map,
 builds `this.mapDef`, and hands the result to every system that reads geometry or

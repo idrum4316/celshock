@@ -313,6 +313,12 @@ src/
                       #   region's HOST into its socket and its list URL. Both
                       #   are resolved together, so browsing one server and
                       #   joining another is not representable
+    RegionBook.ts     #   WHICH region this client browses and joins: the list
+                      #   once read, the player's pick, the fastest-answering
+                      #   pick for one who has none, and ?server=. resolve() is
+                      #   the funnel every socket and every list goes through.
+                      #   Draws nothing and stores nothing — choose()/note()
+                      #   hand back the row for Game to light up
   pwa/
     register.ts         # SW registration + the touch fullscreen gesture.
                         #   Knows nothing about the game
