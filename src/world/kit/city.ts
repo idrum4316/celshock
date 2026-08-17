@@ -94,6 +94,28 @@ const GRADE = 0.35;
 /** Riser aimed for; the tread count is rounded off it. `buildStairs`'s. */
 const RISER = 0.18;
 /**
+ * Depth of the LANDING at the head of a flight, and the floor every flight in
+ * this file arrives on.
+ *
+ * A lane is void at the level its flight climbs to (see `buildOffice`), so
+ * without this the top tread is merely FLUSH with the slab beside it: the way
+ * on is sideways, and walking off the stair in the direction you climbed it
+ * drops you a storey. Nothing said so — the nav graph links the top tread to
+ * the slab across the lane edge, so bots route through it and every reachability
+ * probe passes while the player still runs off a cliff at the top of the stairs.
+ *
+ * 2.4 m is a landing rather than a lip: over `NavGrid`'s 1.5 m cell, so it is
+ * never rounded out of the graph, and long enough to stop a sprint on. What is
+ * left of the lane past it is still the atrium — 4.7 m on the shipped plate —
+ * which is the hole the whole lane arrangement exists to leave.
+ *
+ * It is what a plate must be DEEP enough for, and the flight is the smaller
+ * half of that: a flight overruns its own foot by 0.6 m and a landing stands
+ * 2.4 m past its head, so `d` is what has to hold `run + 3.0`. Both builders
+ * check it.
+ */
+const LANDING = 2.4;
+/**
  * The ground floor's walked height, above the street outside.
  *
  * Inside `HEIGHT_EPS` (0.35), so `NavGrid.addSurface` MERGES it with the
@@ -275,6 +297,13 @@ export function buildTower(
  * +X one, which is the atrium a real building of this size has and the
  * vertical sightline a fight in it needs.
  *
+ * **What the lane keeps back from the void is the LANDING at the head of each
+ * flight** — `LANDING` deep, the lane's full width, and part of the walked
+ * group rather than an afterthought. A flight climbs into a lane that has no
+ * floor in it, so without one the top tread ends level with the slab beside it
+ * and over nothing at all in front. The slab two floors up covers a landing
+ * exactly as it covers the flight, at the same 3.1 m.
+ *
  * The ground floor is ENCLOSED — two doorways, no windows — and every floor
  * above it is a continuous window band over a chest-high spandrel. That is a
  * gameplay gradient rather than an architectural one: the way in is a fight
@@ -287,6 +316,11 @@ export function buildTower(
  * strip of cells between the treads and the slab edge with no surface in them,
  * and the nav graph cannot step across a gap it has nothing to stand on — the
  * storey then reads as reachable from the stair and is not.
+ *
+ * The plate has to be DEEP enough for a flight and its landing: the circulation
+ * runs from `run / 2 + 0.6` short of the -Z elevation to `run / 2 + LANDING`
+ * short of the +Z one, so `depth` is what has to hold it. DEV throws rather than
+ * pushing a landing through a wall.
  */
 export function buildOffice(
   scene: Scene,
@@ -321,13 +355,21 @@ export function buildOffice(
     b.block({ w: sw, h: SLAB, d, x: cx, y: y - SLAB / 2, z: 0 });
   }
 
-  // The flights. One per storey, each in its own lane, all climbing +Z so the
-  // building has a single circulation direction and the landings line up.
+  // The flights and the landings they arrive on. One pair per storey, each in
+  // its own lane, all climbing +Z so the building has a single circulation
+  // direction and the landings line up.
   for (let s = 0; s + 1 < floors; s++) {
     const from = levelY(s);
     const to = levelY(s + 1);
     const rise = to - from;
     const run = rise / GRADE;
+    if (import.meta.env.DEV && run / 2 + LANDING > d / 2 - WALL / 2) {
+      throw new Error(
+        `office: a ${d} m plate cannot hold a ${run.toFixed(1)} m flight and its ` +
+          `${LANDING} m landing — the landing would stand in the +Z elevation. ` +
+          "See buildOffice, and LANDING.",
+      );
+    }
     b.flight({
       x: laneX(s),
       w: lane,
@@ -342,6 +384,13 @@ export function buildOffice(
       steps: Math.max(4, Math.round(rise / RISER)),
       color: DARK_CONCRETE,
     });
+    // The landing, butted against the head of the flight it serves. Emitted
+    // here rather than with the slabs so a flight and its floor stay one thing:
+    // both are keyed to `run`, and a flight whose grade moved takes its landing
+    // with it. See `LANDING`.
+    const lz = run / 2 + LANDING / 2;
+    b.box(lane, SLAB, LANDING, laneX(s), to - SLAB / 2, lz, CONCRETE);
+    b.block({ w: lane, h: SLAB, d: LANDING, x: laneX(s), y: to - SLAB / 2, z: lz });
   }
 
   // --- enclosure ------------------------------------------------------------
@@ -487,8 +536,9 @@ export function buildOffice(
  * not stairs — a ramp is a surface `NavGrid` rasterises without any special
  * case, so bots contest the roof the same way they contest the street.
  *
- * Lane alternation, the slab voids and the emission order are `office`'s, for
- * the reasons in this file's header. What differs is that the columns run the
+ * Lane alternation, the slab voids, the apron at the head of each ramp and the
+ * emission order are `office`'s, for the reasons in this file's header and in
+ * `LANDING`. What differs is that the columns run the
  * building's FULL height in one box each: a column is solid at every level, so
  * one box blocks all three, and its top face lands flush with the top deck
  * where `HEIGHT_EPS` merges it into a surface that is already there.
@@ -548,6 +598,12 @@ export function buildParkade(
     const x = laneX(s);
     const mid = (from + to) / 2;
     const thick = 0.4;
+    if (import.meta.env.DEV && run / 2 + LANDING > d / 2) {
+      throw new Error(
+        `parkade: a ${d} m plate cannot hold a ${run.toFixed(1)} m ramp and its ` +
+          `${LANDING} m apron. See buildParkade, and LANDING.`,
+      );
+    }
     // Placed by its TOP face, whose half-thickness is measured VERTICALLY —
     // `h / 2 / cos`, the mistake `Build.flight`'s header names.
     const y = mid - thick / 2 / Math.cos(pitch);
@@ -561,6 +617,13 @@ export function buildParkade(
       z: 0,
       rotX: -pitch,
     });
+    // The apron at the head of the ramp, which is `office`'s landing and the
+    // same constant: the deck the ramp climbs to omits this lane over its whole
+    // depth, so the top of the ramp is otherwise the lip of a two-storey drop
+    // with the deck reachable only sideways off it.
+    const lz = run / 2 + LANDING / 2;
+    b.box(lane, SLAB, LANDING, x, to - SLAB / 2, lz, CONCRETE);
+    b.block({ w: lane, h: SLAB, d: LANDING, x, y: to - SLAB / 2, z: lz });
   }
 
   // --- cover and enclosure --------------------------------------------------

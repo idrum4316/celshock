@@ -384,7 +384,10 @@ file states all four. In summary, because a new multi-storey builder anywhere
 will meet them: emit walked surfaces FIRST (see `docs/bots.md` on arrival
 order); a flight is `rise / 0.35` long and the slab it climbs to may not cover
 it, so put flights in a LANE at one edge and leave that lane out of the slab
-above — alternating edges storey by storey so two voids never stack; a walked
+above — alternating edges storey by storey so two voids never stack, and keeping
+a LANDING back out of the void at the head of each flight, or the top tread is
+merely flush with the slab beside it and walking off the stair the way you
+climbed it drops you a storey; a walked
 slab needs real depth behind its top face or its own outline shell paints it;
 and a mullion or a fin is a `strut`, never a wall.
 

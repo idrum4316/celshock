@@ -363,9 +363,10 @@ export const ColdharbourLayout: MapLayout = {
    * `NavGrid` DROPS the overflow rather than sorting it in.
    *
    * **Four is a MEASURED number and the measurement is the interesting part.**
-   * Probing every walked level of both offices and all three parkade decks for
+   * Probing every walked level of both offices and all three parkade decks —
+   * the six stair landings included — for
    * "is it a surface, did the flood fill reach it, can both home fields route
-   * to it", the answer is identical at 3, 4 and 5: 32,501 walkable surfaces,
+   * to it", the answer is identical at 3, 4 and 5: 32,529 walkable surfaces,
    * every level reachable. Three is enough — because the builders emit walked
    * surfaces FIRST (see `world/kit/city.ts`), so the floors fill the slots and
    * it is the spandrels and the roof that get dropped, which is exactly the
