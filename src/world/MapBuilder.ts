@@ -440,7 +440,11 @@ export class MapBuilder {
    * second map is a second layout file and nothing here changes.
    */
   build(layout: MapLayout, env: EnvironmentSpec, opts?: BuildOptions): GameMap {
-    const size = CONFIG.map.size;
+    // The map's own extent, not the global — a village and a downtown are not
+    // the same size. Everything downstream already took it as an argument; it
+    // reaches them from here and is carried on `GameMap.size` for the readers
+    // (the minimap, the deploy map, the editor) that meet a built map instead.
+    const size = layout.size ?? CONFIG.map.size;
     const visuals: Mesh[] = [];
     const colliders: Mesh[] = [];
     // A view onto the floor's own blocks within `colliders` — see GameMap.
@@ -613,7 +617,7 @@ export class MapBuilder {
     // Navigation is derived from the finished collider set, then a flow field
     // is precomputed per objective: five flags plus both home spawns. The map
     // is static, so this is the only time any of it is computed.
-    const nav = new NavGrid(size, this.boxes, terrain);
+    const nav = new NavGrid(size, this.boxes, terrain, layout.surfaces);
     for (const cp of layout.controlPoints) {
       nav.buildField(cp.id, cp.pos, cp.radius * 0.6);
     }

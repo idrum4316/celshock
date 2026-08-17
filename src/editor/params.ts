@@ -143,7 +143,7 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
   road: [
     num("width", "width", 8, 2, 20, 0.5),
     num("length", "length", 40, 4, 160, 1),
-    { key: "surface", type: "choice", label: "surface", def: "cobble", options: ["cobble", "dirt"] },
+    { key: "surface", type: "choice", label: "surface", def: "cobble", options: ["cobble", "dirt", "asphalt"] },
   ],
   jetty: [num("length", "length", 18, 4, 60, 1)],
   boardwalk: [
@@ -175,6 +175,48 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
     },
   ],
 
+  // --- the downtown set (world/kit/city.ts) --------------------------------
+  // `floors` is a COUNT of walked levels rather than a height, for the reason
+  // BuildParams gives: a storey's height is fixed by what a flight at
+  // MAX_WALKABLE_GRADE can climb inside the footprint. The ceiling of 4 is not
+  // arbitrary either — every level costs a NavGrid surface slot across the
+  // whole footprint, and a map's `surfaces` is what pays for it.
+  tower: [
+    num("width", "width", 18, 6, 40),
+    num("depth", "depth", 16, 6, 40),
+    // The one place the height range is wide: this is the skyline.
+    num("height", "height", 34, 6, 70, 1),
+  ],
+  office: [
+    // Minimum 14 on the depth is the flight: a storey is 10.3 m of run, and a
+    // building shallower than that has nowhere to put one.
+    num("width", "width", 22, 14, 44),
+    num("depth", "depth", 18, 14, 44),
+    num("floors", "floors", 3, 2, 4, 1),
+    bool("litWindows", "lit windows"),
+  ],
+  parkade: [
+    num("width", "width", 32, 20, 56),
+    num("depth", "depth", 24, 14, 48),
+    num("floors", "floors", 3, 2, 4, 1),
+  ],
+  planter: [
+    num("width", "width", 2.6, 1, 8, 0.2),
+    num("depth", "depth", 1.4, 0.8, 6, 0.2),
+  ],
+  barrier: [num("length", "length", 6, 3, 40, 1)],
+  streetLight: [num("height", "height", 7.5, 4, 12, 0.5)],
+  monument: [num("width", "width", 11, 5, 20, 0.5)],
+  car: [
+    {
+      key: "tint",
+      type: "choice",
+      label: "paint",
+      def: "#3f4b52",
+      options: ["#3f4b52", "#5d4a3a", "#4a4f45", "#6b463a", "#2f3338"],
+    },
+  ],
+
   // Fixed-geometry kinds: placed, rotated, and otherwise not configurable.
   tavern: [],
   smithy: [],
@@ -196,7 +238,14 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
 
 /** Kinds whose rotation should snap to the axis-aligned layout rule. */
 export function isStructural(kind: BuilderKind): boolean {
-  return kind !== "cart" && kind !== "crates" && kind !== "woodpile";
+  return (
+    kind !== "cart" &&
+    kind !== "crates" &&
+    kind !== "woodpile" &&
+    // A parked car is dressing, not architecture: it sits at whatever angle it
+    // was left at, the same licence the cart has.
+    kind !== "car"
+  );
 }
 
 /**

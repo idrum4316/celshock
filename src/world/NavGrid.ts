@@ -3,7 +3,8 @@
  * objective (5 flags + 2 home spawns). Built ONCE at map load from the final
  * collider set; runtime is read-only (bots call steer(), never pathfind).
  * Invariants: a graph node is a (cell, height) SURFACE — one cell can hold
- * creek floor + bridge deck (MAX_SURFACES=3). Surface heights come from the
+ * creek floor + bridge deck (maxSurfaces, 3 unless the map raises it). Surface
+ * heights come from the
  * collider's top-face PLANE at the cell centre, not its AABB — see
  * boxGeometry.ts, which owns that (sign-sensitive) math for every caller.
  * The base surface in every cell comes from
@@ -55,10 +56,13 @@ import type { TerrainField } from "./TerrainField";
  */
 
 /**
- * Max standable surfaces tracked per cell. Three is enough for Hollowmere's
- * worst case — creek floor, bank top, bridge deck stacked in one column.
+ * Max standable surfaces tracked per cell, where a map does not say otherwise.
+ * Three is enough for Hollowmere's worst case — creek floor, bank top, bridge
+ * deck stacked in one column. A map that stacks FLOORS raises it through
+ * `MapLayout.surfaces`; see that field, and `maxSurfaces` below, which is the
+ * value this grid was actually built with.
  */
-const MAX_SURFACES = 3;
+const DEFAULT_MAX_SURFACES: number = CONFIG.nav.maxSurfaces;
 /** Heights closer than this are the same surface. */
 const HEIGHT_EPS = 0.35;
 /** Vertical clearance a combatant needs to stand somewhere. */
@@ -90,6 +94,15 @@ export class NavGrid {
   readonly cellSize: number;
   /** Cells per side. */
   readonly dim: number;
+  /**
+   * Standable surfaces tracked per cell — the stride of every array below, and
+   * the map's own answer rather than a constant (see `MapLayout.surfaces`).
+   *
+   * Public because the editor rebuilds this grid from a `GameMap` and has no
+   * layout in hand: reading it back off the grid it is replacing is what keeps
+   * the rebuild the same shape as the build.
+   */
+  readonly maxSurfaces: number;
   private readonly origin: number;
 
   /** Surface heights per cell, ascending. `-1` marks an unused slot. */
@@ -103,26 +116,32 @@ export class NavGrid {
 
   private readonly fields = new Map<string, FlowField>();
 
-  constructor(size: number, boxes: WorldBox[], terrain: TerrainField) {
+  constructor(
+    size: number,
+    boxes: WorldBox[],
+    terrain: TerrainField,
+    maxSurfaces = DEFAULT_MAX_SURFACES,
+  ) {
     this.cellSize = CONFIG.nav.cellSize;
     this.dim = Math.ceil(size / this.cellSize);
+    this.maxSurfaces = maxSurfaces;
     this.origin = -size / 2;
 
     const cells = this.dim * this.dim;
     // -1 pads the slots no surface ever fills. It is NOT "below ground": every
     // read walks `counts[cell]`, which is what lets a sunken floor hold a
     // perfectly ordinary negative height.
-    this.heights = new Float32Array(cells * MAX_SURFACES).fill(-1);
+    this.heights = new Float32Array(cells * this.maxSurfaces).fill(-1);
     this.counts = new Uint8Array(cells);
-    this.walkable = new Uint8Array(cells * MAX_SURFACES);
-    this.links = new Int32Array(cells * MAX_SURFACES * NEIGHBOURS.length).fill(-1);
+    this.walkable = new Uint8Array(cells * this.maxSurfaces);
+    this.links = new Int32Array(cells * this.maxSurfaces * NEIGHBOURS.length).fill(-1);
 
     this.rasterize(boxes, terrain);
     this.link(boxes);
   }
 
   get surfaceCount(): number {
-    return this.dim * this.dim * MAX_SURFACES;
+    return this.dim * this.dim * this.maxSurfaces;
   }
 
   /** Number of surfaces the flood fill could actually stand on. */
@@ -163,7 +182,7 @@ export class NavGrid {
       dim: this.dim,
       cellSize: this.cellSize,
       origin: this.origin,
-      maxSurfaces: MAX_SURFACES,
+      maxSurfaces: this.maxSurfaces,
       stepHeight: CONFIG.nav.stepHeight,
       heights: this.heights,
       counts: this.counts,
@@ -190,7 +209,7 @@ export class NavGrid {
     for (let i = 0; i < this.dim * this.dim; i++) {
       const cx = i % this.dim;
       const cz = (i - cx) / this.dim;
-      this.heights[i * MAX_SURFACES] = terrain.heightAt(
+      this.heights[i * this.maxSurfaces] = terrain.heightAt(
         this.toWorld(cx),
         this.toWorld(cz),
       );
@@ -221,7 +240,7 @@ export class NavGrid {
 
   /** Inserts a candidate height into a cell, keeping the list sorted and deduped. */
   private addSurface(cell: number, y: number): void {
-    const base = cell * MAX_SURFACES;
+    const base = cell * this.maxSurfaces;
     const n = this.counts[cell];
     for (let i = 0; i < n; i++) {
       if (Math.abs(this.heights[base + i] - y) < HEIGHT_EPS) {
@@ -231,7 +250,7 @@ export class NavGrid {
         return;
       }
     }
-    if (n >= MAX_SURFACES) return;
+    if (n >= this.maxSurfaces) return;
     let i = n;
     while (i > 0 && this.heights[base + i - 1] > y) {
       this.heights[base + i] = this.heights[base + i - 1];
@@ -291,7 +310,7 @@ export class NavGrid {
       for (let cx = 0; cx < this.dim; cx++) {
         const cell = cz * this.dim + cx;
         for (let si = 0; si < this.counts[cell]; si++) {
-          const surface = cell * MAX_SURFACES + si;
+          const surface = cell * this.maxSurfaces + si;
           const y = this.heights[surface];
           for (let n = 0; n < linkStride; n++) {
             const [dx, dz] = NEIGHBOURS[n];
@@ -303,7 +322,7 @@ export class NavGrid {
             let best = -1;
             let bestDy = Infinity;
             for (let ni = 0; ni < this.counts[ncell]; ni++) {
-              const other = ncell * MAX_SURFACES + ni;
+              const other = ncell * this.maxSurfaces + ni;
               if (this.blocked[other]) continue;
               const ny = this.heights[other];
               const dy = Math.abs(ny - y);
@@ -325,7 +344,7 @@ export class NavGrid {
     const queue: number[] = [];
     const push = (cell: number) => {
       if (this.counts[cell] === 0) return;
-      const s = cell * MAX_SURFACES;
+      const s = cell * this.maxSurfaces;
       if (this.blocked[s] || this.walkable[s]) return;
       this.walkable[s] = 1;
       queue.push(s);
@@ -440,7 +459,7 @@ export class NavGrid {
             if (top === null) continue;
             const bottom = top - thickness;
             for (let si = 0; si < this.counts[cell]; si++) {
-              const surface = cell * MAX_SURFACES + si;
+              const surface = cell * this.maxSurfaces + si;
               const other = this.links[surface * linkStride + n];
               if (other < 0) continue;
               const y = Math.max(this.heights[surface], this.heights[other]);
@@ -465,7 +484,7 @@ export class NavGrid {
    * well above it and stays clear; the cell *under* a wall does not.
    */
   private clearBlocked(boxes: WorldBox[]): void {
-    this.blocked = new Uint8Array(this.dim * this.dim * MAX_SURFACES);
+    this.blocked = new Uint8Array(this.dim * this.dim * this.maxSurfaces);
     for (const box of boxes) {
       if (box.w > 200 || box.d > 200) continue;
       const reach = (Math.abs(box.w) + Math.abs(box.d)) / 2 + box.h;
@@ -481,11 +500,11 @@ export class NavGrid {
           if (!span) continue;
           const cell = cz * this.dim + cx;
           for (let si = 0; si < this.counts[cell]; si++) {
-            const y = this.heights[cell * MAX_SURFACES + si];
+            const y = this.heights[cell * this.maxSurfaces + si];
             // Overlapping the space a body would occupy, but not merely being
             // the surface itself.
             if (span.top > y + 0.15 && span.bottom < y + HEADROOM) {
-              this.blocked[cell * MAX_SURFACES + si] = 1;
+              this.blocked[cell * this.maxSurfaces + si] = 1;
             }
           }
         }
@@ -516,7 +535,7 @@ export class NavGrid {
     let best = -1;
     let bestDy = Infinity;
     for (let si = 0; si < this.counts[cell]; si++) {
-      const s = cell * MAX_SURFACES + si;
+      const s = cell * this.maxSurfaces + si;
       if (!this.walkable[s]) continue;
       const dy = Math.abs(this.heights[s] - y);
       if (dy < bestDy) {
@@ -534,7 +553,7 @@ export class NavGrid {
 
   /** World centre of a surface's cell. */
   positionOf(surface: number, into: Vector3): Vector3 {
-    const cell = Math.floor(surface / MAX_SURFACES);
+    const cell = Math.floor(surface / this.maxSurfaces);
     return into.set(
       this.toWorld(cell % this.dim),
       this.heights[surface],
@@ -605,7 +624,7 @@ export class NavGrid {
     }
     if (best < 0) return into;
 
-    const cell = Math.floor(best / MAX_SURFACES);
+    const cell = Math.floor(best / this.maxSurfaces);
     const dx = this.toWorld(cell % this.dim) - pos.x;
     const dz = this.toWorld(Math.floor(cell / this.dim)) - pos.z;
     const len = Math.hypot(dx, dz);
@@ -650,7 +669,7 @@ export class NavGrid {
         }
       }
       if (best < 0) break;
-      const cell = Math.floor(best / MAX_SURFACES);
+      const cell = Math.floor(best / this.maxSurfaces);
       aheadX = this.toWorld(cell % this.dim);
       aheadZ = this.toWorld(Math.floor(cell / this.dim));
       if (step === 0) {

@@ -122,8 +122,29 @@ export interface BuildParams {
   rampSide?: -1 | 1;
   /** Gatehouse: banner colour identifying the owning team. */
   teamColor?: string;
-  /** Road: cobblestone street (default) or the old flat dirt track. */
-  surface?: "cobble" | "dirt";
+  /** Road: cobblestone street (default), the flat dirt track, or blacktop. */
+  surface?: "cobble" | "dirt" | "asphalt";
+  /**
+   * How many WALKED levels a city building has, ground floor included — so 3
+   * is a ground floor and two storeys over it, reached by two flights.
+   *
+   * Not `height`, which every other builder means as "how tall", because in
+   * here the two are not the same question: a storey's height is fixed by what
+   * a stair at `MAX_WALKABLE_GRADE` can climb inside the footprint, and the
+   * building's height is that times this. Naming the count is what keeps a
+   * layout from asking for a storey a flight cannot reach.
+   *
+   * **Every level costs a `NavGrid` surface slot in the whole footprint**, so a
+   * map full of these owes `MapLayout.surfaces`; see that field.
+   */
+  floors?: number;
+  /**
+   * A body colour, for the one piece in the kit that comes in more than one: a
+   * parked car. Deliberately not `teamColor`, which is already spoken for and
+   * means "whose gatehouse is this" — a field that answers two questions is a
+   * field that will be read for the wrong one.
+   */
+  tint?: string;
   /**
    * Boardwalk: which long edges carry a guard rail.
    *
@@ -206,6 +227,39 @@ export const TEAK = "#4a3a2c";
 export const VERDIGRIS = "#3f6055";
 /** Creeper, vine and moss: what the forest has already taken back. */
 export const CREEPER = "#41552f";
+
+// --- the built city --------------------------------------------------------
+// A third climate, on the same terms as the tropical set above: colours, not a
+// map's private palette, so anything made of them is available everywhere. The
+// restraint is the same and the reason is stronger here — a downtown is one
+// material repeated over acres, so the whole read has to come from VALUE (a
+// pale spandrel against a dark reveal) rather than from hue, which the cel
+// shader's flat bands would post-erise into stripes.
+//
+// Everything here is darker than the swatch it is named for, and deliberately.
+// The sky term is applied by `n.y` and lands on every up-facing surface at
+// once, so a slab picked to look right held in the hand comes back chalk white
+// the moment it is a roof. Greyfen's `floorColor` note is the same lesson from
+// the ground.
+
+/** Poured concrete: slabs, cores, spandrels, plinths. The city's `PLASTER`. */
+export const CONCRETE = "#57564f";
+/** Concrete in shadow — reveals, soffits, the inside of a car-park deck. */
+export const DARK_CONCRETE = "#3a3936";
+/** Blacktop: the roadway, and the flat roofs that are the same stuff. */
+export const ASPHALT = "#26272c";
+/** Curtain-wall glazing, unlit: a dark slate that reads as reflected sky. */
+export const GLASS = "#2a333b";
+/** Anodised mullions, handrails, lamp columns, signal poles. */
+export const ALLOY = "#4a4f54";
+/** Fired brick on the older, lower stock between the towers. */
+export const CITY_BRICK = "#6b463a";
+/** Painted steel: shutters, barriers, plant housings, a parked car's body. */
+export const ENAMEL = "#3f4b52";
+/** Lane markings and kerb paint — the one thing here allowed to be bright. */
+export const ROAD_PAINT = "#9c9887";
+/** A lit window or a shopfront at dusk; the city's `FLAME`. */
+export const WINDOW_LIGHT = "#ffd79a";
 
 // --- guard rails -----------------------------------------------------------
 

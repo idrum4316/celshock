@@ -17,6 +17,8 @@
 import type { MapCollision } from "./collision";
 import type { EnvironmentSpec } from "./environment";
 import type { MapLayout } from "./layout";
+import { ColdharbourEnvironment } from "./coldharbour/environment";
+import { ColdharbourLayout } from "./coldharbour/layout";
 import { GreyfenEnvironment } from "./greyfen/environment";
 import { GreyfenLayout } from "./greyfen/layout";
 import { HollowmereEnvironment } from "./hollowmere/environment";
@@ -71,8 +73,23 @@ export const GREYFEN: MapDef = {
   collision: () => import("./greyfen/collision"),
 };
 
+/**
+ * Coldharbour: a city's business district on a clear afternoon. The first map
+ * that is neither 240 m nor fogged — it states its own `size` (320) and its own
+ * `surfaces` (5, for the buildings you can climb inside), and its `fogEnd` is
+ * what `Game.installMap` pushes into the three systems that used to read
+ * `FOG_WALL`. It shares no module with either valley and must not.
+ */
+export const COLDHARBOUR: MapDef = {
+  id: "coldharbour",
+  name: "Coldharbour",
+  layout: ColdharbourLayout,
+  environment: ColdharbourEnvironment,
+  collision: () => import("./coldharbour/collision"),
+};
+
 /** Every map that can be played, in the order a picker would show them. */
-export const MAPS: readonly MapDef[] = [HOLLOWMERE, GREYFEN];
+export const MAPS: readonly MapDef[] = [HOLLOWMERE, GREYFEN, COLDHARBOUR];
 
 /** What a round starts on with nothing chosen. */
 export const DEFAULT_MAP: MapDef = HOLLOWMERE;

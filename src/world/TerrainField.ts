@@ -57,17 +57,34 @@ export interface SlabSpec {
   thickness: number;
 }
 
-/** An empty, level heightfield at the given resolution. */
-export function emptyHeightfield(cell: number): Heightfield {
-  const size = Math.round(CONFIG.map.size / cell);
+/**
+ * An empty, level heightfield at the given resolution, over a map `extent`
+ * metres on a side (`CONFIG.map.size` unless the layout states its own).
+ */
+export function emptyHeightfield(
+  cell: number,
+  extent = CONFIG.map.size,
+): Heightfield {
+  const size = Math.round(extent / cell);
   return { size, cell, heights: new Array((size + 1) * (size + 1)).fill(0) };
 }
 
 export class TerrainField {
-  /** Half the map, cached — every sample needs it. */
-  private readonly half = CONFIG.map.size / 2;
+  /**
+   * Half the map, cached — every sample needs it.
+   *
+   * Taken from the FIELD rather than from `CONFIG.map.size`, because the grid
+   * already states the extent twice over (`size * cell`) and a map is free to
+   * be a size of its own (`MapLayout.size`). Reading the global here would
+   * sample a 320 m map's floor against a 240 m origin: every height comes from
+   * the wrong row, the ground reads as garbage, and nothing throws. A field
+   * with no grid returns 0 everywhere and never reaches this.
+   */
+  private readonly half: number;
 
-  constructor(readonly field?: Heightfield) {}
+  constructor(readonly field?: Heightfield) {
+    this.half = field ? (field.size * field.cell) / 2 : 0;
+  }
 
   /** True when nothing reshapes the floor; lets callers keep their fast path. */
   get flat(): boolean {
@@ -288,7 +305,9 @@ export function terrainSlab(
 ): VertexData | null {
   const f = terrain.field;
   if (!f) return null;
-  const half = CONFIG.map.size / 2;
+  // The field's own extent, for `TerrainField.half`'s reason: this is what the
+  // grid lines are measured from, and the map is free to be a size of its own.
+  const half = (f.size * f.cell) / 2;
 
   // Which world axis each local axis maps onto, on a quarter turn. rotateY
   // sends local (lx, lz) to (lx*cos + lz*sin, -lx*sin + lz*cos), so at a

@@ -440,7 +440,9 @@ function terrainGrade(layout: MapLayout): Finding[] {
   let steep = 0;
   let worst = 0;
   let at: Vector3 | undefined;
-  const half = CONFIG.map.size / 2;
+  // The field's own extent — `TerrainField.half`'s reason. A map may be a size
+  // of its own, and this is the grid that states it.
+  const half = (f.size * f.cell) / 2;
 
   for (let j = 0; j <= f.size; j++) {
     for (let i = 0; i <= f.size; i++) {

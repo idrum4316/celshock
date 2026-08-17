@@ -137,6 +137,8 @@ export class GrassSystem {
     env: EnvironmentSpec,
     boxes: readonly WorldBox[],
     terrain: TerrainField,
+    /** The map's extent, for the collider index below. See `GameMap.size`. */
+    size: number,
   ): void {
     this.dispose();
     if (rects.length === 0 || !env.grass) return;
@@ -146,7 +148,7 @@ export class GrassSystem {
     const mesh = new Mesh("grass", this.scene);
     buildTuftVertexData(rng).applyToMesh(mesh);
 
-    const matrices = this.scatter(rects, boxes, terrain, rng);
+    const matrices = this.scatter(rects, boxes, terrain, size, rng);
     mesh.thinInstanceSetBuffer("matrix", matrices, 16, true);
     mesh.thinInstanceRefreshBoundingInfo(true);
 
@@ -264,6 +266,7 @@ export class GrassSystem {
     rects: readonly GrassRect[],
     boxes: readonly WorldBox[],
     terrain: TerrainField,
+    size: number,
     rng: () => number,
   ): Float32Array {
     const g = CONFIG.grass;
@@ -279,7 +282,7 @@ export class GrassSystem {
     // inside the map build the loading card is covering — while the index that
     // answers it in a handful was being built and thrown away two passes
     // earlier. No pad: a tuft is a point and the test has no clearance term.
-    const index = buildBoxIndex(boxes, CONFIG.map.size, 0);
+    const index = buildBoxIndex(boxes, size, 0);
 
     const scale = new Vector3();
     const pos = new Vector3();

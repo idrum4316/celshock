@@ -646,7 +646,16 @@ export function rebuildNavigation(
   // The map's own terrain field, not a fresh one off the layout: a terrain
   // edit is a "geometry" tier change and rebuilds the whole map anyway, so the
   // field here is always the one the current geometry was built from.
-  const nav = new NavGrid(map.size, map.colliderBoxes, map.terrain);
+  // The stack depth comes off the grid being replaced rather than off the
+  // layout, for the same reason the terrain does: it is what the geometry in
+  // hand was built with, and a rebuild that quietly narrowed it would drop the
+  // upper floors of everything the editor has not touched.
+  const nav = new NavGrid(
+    map.size,
+    map.colliderBoxes,
+    map.terrain,
+    map.nav.maxSurfaces,
+  );
   for (const cp of layout.controlPoints) {
     nav.buildField(cp.id, cp.pos, cp.radius * 0.6);
   }

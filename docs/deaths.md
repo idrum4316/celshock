@@ -65,15 +65,22 @@ trial spread of 0.24-0.42. Those absolutes do not line up with the ones
 `maxConcurrent` carries below and are not meant to: different harness, different
 session, and headless absolutes are inflated anyway. The PAIR is the measurement.
 
-**The gate is the FOG WALL, and it is one number for everything that stops at it.**
-`FOG_WALL` in `config/fogWall.ts` is its own module because two unrelated tunables are the
-same distance and must move together: `bots.lodDisableDistance`, where `BattleSystem`
-stops drawing a rig, and `death.maxDistance`, one metre past which the solver would be
-tumbling something nobody can see. `BattleSystem` wrote its own `78` out by hand
-before this, which is how the ragdoll gate came to be keyed off an unrelated LOD. It
-must agree with the MAP's `EnvironmentSpec.fogEnd` — the one that actually paints the
-fog — and `installMap` warns in dev builds if a map disagrees, because on a second map
-those two would otherwise drift in silence.
+**The gate is the FOG WALL, and it is one number for everything that stops at it
+— the MAP's number.** Three systems gate on the same distance for the same
+reason (there is nothing to see past it): `BattleSystem`, where a rig stops being
+drawn; `NetRoster`, the same call for a body coming off the wire; and
+`death.maxDistance` here, one metre past which the solver would be tumbling
+something nobody can see. `BattleSystem` wrote its own `78` out by hand before
+any of this, which is how the ragdoll gate came to be keyed off an unrelated LOD.
+
+What each of the three now holds is a FIELD that `Game.installMap` pushes
+`EnvironmentSpec.fogEnd` into, and `FOG_WALL` in `config/fogWall.ts` is what they
+carry before a map is installed. It used to be the answer, with a dev warning
+when a map's `fogEnd` disagreed — and the disagreement is now the point:
+Coldharbour has no fog wall at all, sees 480 m, and a body vanishing at 78 there
+would vanish in plain sight. `config/fogWall.ts` is still its own module for the
+original reason (`config/bots.ts` reads it, and taking it from `index.ts` would
+be an import cycle).
 
 **The pool refuses rather than stealing a live slot, with exactly one exception: the
 death cam's body.** A bot's corpse is one of sixteen; the player's is the sole subject

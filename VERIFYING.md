@@ -11,7 +11,8 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
 (`g` below). Headless quirks that have already cost time:
 
 - Headless SwiftShader runs at ~2 fps and `dt` is clamped to 0.05, so **game time
-  runs at ~25% of wall clock**. Don't wait for bots to cross a 240 m map — force a
+  runs at ~25% of wall clock**. Don't wait for bots to cross a map (240 m, or
+  Coldharbour's 320) — force a
   skirmish by overriding `battle.spawnPointFor`, or drive rules directly with
   `conquest.update(1/60, fakeCombatants)` in a loop.
 - **`page.screenshot()` waits for the load event, so it cannot photograph the
@@ -382,7 +383,9 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   number like `1e12` is *below* it, every real sample keeps landing, and the
   body simply walks away while the test reports nothing ragdolled.
 - **A ragdoll refused in a netplay round is usually the fog gate, not the fix.**
-  `bots.death.maxDistance` is `FOG_WALL` (78 m) and a client sitting at its home
+  The gate is the MAP's `fogEnd`, pushed into `RagdollSystem` by `installMap`
+  (`FOG_WALL`, 78 m, is only the default and only until a map is installed) — so
+  on either valley a client sitting at its home
   spawn is further than that from every death in the village — so a run can
   report a dozen death edges, all correctly armed, and zero corpses. Assert on
   the edge count and the offer separately, or stage the body near the camera.

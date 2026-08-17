@@ -59,6 +59,18 @@ const WRITABLE = {
     min: 1200,
     marker: "export const GreyfenEnvironment",
   },
+  "src/world/coldharbour/layout.ts": {
+    min: 4000,
+    marker: "export const ColdharbourLayout",
+  },
+  "src/world/coldharbour/heights.ts": {
+    min: 500,
+    marker: "export const ColdharbourHeights",
+  },
+  "src/world/coldharbour/environment.ts": {
+    min: 1200,
+    marker: "export const ColdharbourEnvironment",
+  },
 };
 
 /**

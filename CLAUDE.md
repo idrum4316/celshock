@@ -392,14 +392,42 @@ group 1, thick boxes under walked surfaces, coplanar faces), and the painted sky
 regions, control points, spawns, the water/grass/terrain rects — and `MapBuilder`
 special-cases nothing, so **a second map is one new layout file plus an
 `EnvironmentSpec`**. The two halves are paired in `src/world/maps.ts`, which with
-`vite.config.ts`'s `WRITABLE` table are the only existing files a new map touches;
+`vite.config.ts`'s `WRITABLE` table and `scripts/collision-hash.mjs`'s `MAPS` are
+the only existing files a new map touches;
 nothing outside `maps.ts` may import a map's own modules. A `MapDef` must be a
 **module constant**, `Game.mapDef` may only be written from the `menu` state, and
 **scatter placement is seeded — never call `Math.random()` in world-building
 code**, or the nav graph differs between page loads.
 
+**Three things that read like global constants are the MAP's, and each one used
+to be a global that a second map had to agree with rather than override.** All
+three default to what the shipped valleys are, so a map that says nothing is
+unaffected:
+
+- **How big it is.** `MapLayout.size` (`CONFIG.map.size`, 240) — carried on
+  `GameMap.size` and passed as an argument to everything that reads it, which is
+  what made this a default rather than a rewrite. `terrain.size * terrain.cell`
+  must equal it, and the rim's four boundary boxes must stay over 200 m so the
+  seven sites that identify the boundary by `w > 200 || d > 200` still can.
+- **How far you can see.** `EnvironmentSpec.fogEnd` — and `Game.installMap`
+  pushes it into `BattleSystem`, `NetRoster` and `RagdollSystem`, the three that
+  gated on `FOG_WALL`. That constant is now the DEFAULT view distance rather
+  than the answer, because a map is allowed to have no fog and on a clear one a
+  body vanishing at seventy-eight vanishes in plain sight. What did NOT move with
+  it: `audio.maxDistance` (70), `bots.perception.engageRange` (55) and the 110 m
+  shadow window. A clear map has to be laid out knowing that.
+- **How deep it stacks.** `MapLayout.surfaces` (`CONFIG.nav.maxSurfaces`, 3) —
+  how many standable heights `NavGrid` keeps per cell. A map raises it only
+  because it stacks FLOORS; see the bots section.
+
+**The shipped maps are Hollowmere** (a night village), **Greyfen** (a jungle
+valley at first light) **and Coldharbour** (a city's business district on a clear
+afternoon). Coldharbour is the map all three overrides exist for: 320 m, no fog
+wall, and buildings with three walked floors in them.
+
 → **[`docs/world.md`](docs/world.md)** — the per-map environment overrides and
-floor surfaces, the heightfield and the road slabs cut against it, the winding
+floor surfaces, the per-map extent and surface stack and what each owes, the
+heightfield and the road slabs cut against it, the winding
 trap that makes a floor vanish, the builder and two-pass merge rules, the layout
 gotchas that have already cost time, and the valley rim's contract with the sky.
 
@@ -522,8 +550,13 @@ misbehaves silently:
 ### Bots: navigation, scaling, perception and squads
 
 `NavGrid` is built from the finished collider set at map load, and its node is a
-**surface** — a (cell, height) pair — not a cell. `MAX_SURFACES` is 3 and
-overflow **fails silently**, so anything stacked must be built around it. One flow
+**surface** — a (cell, height) pair — not a cell. The cap is
+`CONFIG.nav.maxSurfaces` (3) unless the map raises it (`MapLayout.surfaces`), and
+overflow **fails silently — the candidate that does not fit is DROPPED, in
+arrival order**, so anything stacked must be built around it. That makes the
+order a BUILDER declares its colliders in part of the design: walked surfaces
+first, cover next, roofs last. `kit/manor.ts` states the rule and `kit/city.ts`,
+whose buildings stack three floors, is what generalised it. One flow
 field per objective is precomputed and nothing is ever recomputed: **bots read
 `nav.steer()`, never run their own pathfinding, and never use
 `moveWithCollisions`**. The grid is too coarse to be the whole collision test, so

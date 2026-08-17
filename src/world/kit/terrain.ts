@@ -15,11 +15,13 @@ import {
   type BuildCtx,
   type BuildParams,
   type Structure,
+  ASPHALT,
   CREEPER,
   DARK_STONE,
   DIRT,
   GUARD_THICKNESS,
   PLANK,
+  ROAD_PAINT,
   TEAK,
   TIMBER,
 } from "./core";
@@ -88,7 +90,13 @@ export function buildRamp(
  * grid. The slab is therefore sunk so its top sits only a centimetre proud —
  * enough to avoid z-fighting the floor, but not enough to swallow a
  * character's ankles. Cobblestone by default; `surface: "dirt"` gives the flat
- * track for farm lanes.
+ * track for farm lanes and `surface: "asphalt"` the blacktop a city street is.
+ *
+ * The two flat surfaces are one branch because they differ only in colour: the
+ * cobble path carries a world-mapped texture, a per-sett bump map and the wet
+ * sheen `groundSpec` tunes, and none of that is anything a road wants when it
+ * is meant to read as poured. Adding a third tone here is a colour, not a code
+ * path.
  *
  * It is the one builder whose shape depends on where it is going. MapBuilder
  * samples the floor once, at a placement's own centre, and translates the whole
@@ -109,7 +117,9 @@ export function buildRoad(
   const h = 0.08;
   const w = p.width ?? 8;
   const len = p.length ?? 40;
-  const dirt = p.surface === "dirt";
+  // Which flat tone this road is, or null for the textured cobble.
+  const flat =
+    p.surface === "dirt" ? DIRT : p.surface === "asphalt" ? ASPHALT : null;
 
   const contoured =
     ctx &&
@@ -123,9 +133,42 @@ export function buildRoad(
       top,
       thickness: h,
     });
-  if (contoured) b.surface(contoured, dirt ? DIRT : undefined);
-  else if (dirt) b.box(w, h, len, 0, top - h / 2, 0, DIRT);
+  if (contoured) b.surface(contoured, flat ?? undefined);
+  else if (flat) b.box(w, h, len, 0, top - h / 2, 0, flat);
   else b.groundBox(w, h, len, 0, top - h / 2, 0);
+
+  // Blacktop gets a broken centre line, and it is not decoration: an asphalt
+  // road is the one surface in the kit with no texture and no bump, so a 16 m
+  // carriageway is otherwise the largest untextured area anywhere in the game
+  // and reads as a hole in the map rather than as a street. The dashes give it
+  // a scale, a direction and something for the eye to measure distance along.
+  //
+  // Only on the FLAT path. A dash is a box laid on a plane and the contoured
+  // path is not one — over sculpted ground each would float or bury itself,
+  // which is the whole problem `terrainSlab` exists to solve for the slab
+  // itself and cannot solve for something laid on top of it.
+  if (p.surface === "asphalt" && !contoured) {
+    // Clear of the slab's own top by more than the centimetre it stands proud
+    // of the floor: coplanar faces in two meshes are a depth-test tie broken
+    // per pixel, which strobes into a line as you walk (see buildTavern).
+    const paintY = top + 0.02;
+    const dash = 3.2;
+    const gap = 3.2;
+    const n = Math.floor((len + gap) / (dash + gap));
+    const run = n * (dash + gap) - gap;
+    for (let i = 0; i < n; i++) {
+      const z = -run / 2 + i * (dash + gap) + dash / 2;
+      // `noOutline`, and it is not a nicety. A dash is 4 cm tall and the ink
+      // shell `addOutline` wraps it in is 5 cm of expansion along its own
+      // normals — bigger than the thing it is outlining — so every marking came
+      // out as a dark scratch rather than a pale one, which is the same
+      // thin-slab failure the SLAB note in kit/city.ts describes from the other
+      // end. Paint has no silhouette to ink; it is a colour on a surface.
+      b.box(0.26, 0.04, dash, 0, paintY, z, ROAD_PAINT).metadata = {
+        noOutline: true,
+      };
+    }
+  }
   return b;
 }
 

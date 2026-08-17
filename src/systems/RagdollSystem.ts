@@ -53,7 +53,7 @@ import {
   TransformNode,
   Vector3,
 } from "@babylonjs/core";
-import { CONFIG } from "../config";
+import { CONFIG, FOG_WALL } from "../config";
 import {
   RAGDOLL_BONES,
   RAGDOLL_LINKS,
@@ -135,6 +135,15 @@ export class RagdollSystem {
    */
   private plugin: HavokPlugin | null = null;
   private enabled: boolean = CONFIG.bots.death.ragdoll;
+  /**
+   * Past this a body is not worth tumbling, because it is not worth drawing —
+   * the map's `fogEnd`, pushed by `Game.installMap` beside the same number
+   * going to `BattleSystem` and `NetRoster`. It is the fog wall by
+   * construction rather than by coincidence (see `bots.death.maxDistance`),
+   * and the construction is that all three read the one distance the map
+   * paints; `CONFIG` holds what a map with no opinion gets.
+   */
+  private viewDistance = FOG_WALL;
   /** Sim time owed but not yet stepped — see `update`. */
   private accum = 0;
   /** The tumble's jitter. See `SPIN_SEED`. */
@@ -264,6 +273,11 @@ export class RagdollSystem {
    * nothing will ever fall on it; `setEnabled` puts it up if the player
    * changes their mind, which is what `pendingMap` is held for.
    */
+  /** See `viewDistance`. Pushed with the map, not read from CONFIG. */
+  setViewDistance(metres: number): void {
+    this.viewDistance = metres;
+  }
+
   setMap(map: GameMap | null, editor: boolean): void {
     this.reset();
     this.clearWorld();
@@ -288,9 +302,10 @@ export class RagdollSystem {
    * body offered twice is broken however important it is.
    */
   spawn(subject: RagdollSubject, camPos: Vector3, priority = false): boolean {
-    const d = CONFIG.bots.death;
     if (!this.enabled || this.state !== "ready" || !this.worldBody) return false;
-    if (Vector3.Distance(subject.position, camPos) > d.maxDistance) return false;
+    if (Vector3.Distance(subject.position, camPos) > this.viewDistance) {
+      return false;
+    }
     // A body already held is not offered twice. `registerBotKill` is the one
     // caller and fires once, but a rig in two slots would be two sets of
     // bodies fighting over the same joints.

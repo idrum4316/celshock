@@ -251,10 +251,14 @@ the top.
   and rounds pass through them.
 - Five primaries, a fixed sidearm and five optics — but **no classes and no
   vehicles**, and the sidearm is not a choice.
-- Nav cells hold up to three surfaces, so unusually deep stacks of walkable
-  geometry would need `MAX_SURFACES` raised.
-- Two maps, Hollowmere and Greyfen. The system supports more; a third is one
-  layout file plus an environment.
+- Nav cells hold a few surfaces each — three by default, and a map states its
+  own where it stacks floors (Coldharbour's offices are three deep). Unusually
+  deep stacks still need that number raised, and overflow is silent.
+- Three maps: **Hollowmere**, a fog-drowned village at night; **Greyfen**, a
+  jungle valley at first light, still being built; and **Coldharbour**, a city's
+  business district on a clear afternoon — larger than the other two, with no
+  fog wall, and with buildings you can fight through on three floors. The system
+  supports more; a fourth is one layout file plus an environment.
 - **Multiplayer is one server process, and the lobby lists only that one.**
   Matches live in its memory, so it cannot be scaled by running a second copy
   behind the same address — that needs a shared matchmaker, which is not built.

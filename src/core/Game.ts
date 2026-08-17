@@ -58,7 +58,7 @@ import {
   StandardMaterial,
   Vector3,
 } from "@babylonjs/core";
-import { CONFIG, FOG_WALL } from "../config";
+import { CONFIG } from "../config";
 import {
   CelMaterialFactory,
   fogAmountAt,
@@ -2280,17 +2280,6 @@ export class Game {
    */
   private installMap(opts?: BuildOptions): GameMap {
     const { layout, environment } = this.mapDef;
-    // The fog wall is stated twice — here, where it is painted, and in CONFIG,
-    // where the bot LOD and the ragdoll gate read it. They are the same
-    // distance by definition, and a map that disagreed would silently pose,
-    // draw or tumble bodies in solid fog. Dev only: it is an authoring
-    // mistake, not a runtime condition.
-    if (import.meta.env.DEV && environment.fogEnd !== FOG_WALL) {
-      console.warn(
-        `Map fogEnd ${environment.fogEnd} != CONFIG FOG_WALL ${FOG_WALL}; ` +
-          "the bot LOD and the ragdoll distance gate are keyed off the latter.",
-      );
-    }
     this.map?.dispose();
     this.combat.clearTransient();
     // A grenade whose fuse outlived the map it was thrown across would go off
@@ -2307,6 +2296,20 @@ export class Game {
     // are the fresh map's visuals — last build's meshes are now disposed.
     this.shadows.setLightDirection(environment.lighting.direction);
     this.shadows.setFogRange(environment.fogStart, environment.fogEnd);
+    // The same fog range, to the three systems that gate on where it ENDS: past
+    // it there is nothing to see, so a rig is not drawn, a remote body is not
+    // drawn and a corpse is not worth tumbling.
+    //
+    // It used to be stated twice — here, where it is painted, and in CONFIG,
+    // where those three read it — with a dev warning when a map disagreed. It
+    // is now stated once, by the map, for a reason that warning could only
+    // report: a map is allowed to have no fog, and on one that can see three
+    // hundred metres a body vanishing at seventy-eight vanishes in plain sight.
+    // `FOG_WALL` is what each of them carries until a map is installed, which
+    // is the shipped valleys' number.
+    this.battle.setViewDistance(environment.fogEnd);
+    this.ragdolls.setViewDistance(environment.fogEnd);
+    this.net?.roster.setViewDistance(environment.fogEnd);
     // How hard the grade is pushed is the map's; whether it runs at all stays
     // the player's (`applySettings`). A vignette that reads as dread over a
     // night village reads as a lens fault over a bright one.
@@ -2314,7 +2317,13 @@ export class Game {
     this.shadows.setCasters(map.visuals);
     this.atmosphere.apply(environment.particles, map.size, map.size);
     this.water.build(map.water, environment, map.terrain);
-    this.grass.build(map.grass, environment, map.colliderBoxes, map.terrain);
+    this.grass.build(
+      map.grass,
+      environment,
+      map.colliderBoxes,
+      map.terrain,
+      map.size,
+    );
     this.player.setTerrain(map.terrain);
     // The floor a grenade comes to rest on, as a backstop under the collider
     // proxies — the same terrain the player's ground probe falls back to, and
@@ -2951,6 +2960,13 @@ export class Game {
     net.roster.onDeath = (soldier) =>
       this.ragdolls.spawn(soldier, this.cameraSys.camera.position);
     net.roster.onRetire = (soldier) => this.ragdolls.retire(soldier);
+
+    // How far a body is worth drawing, from the standing map. `installMap`
+    // pushes it too and is the usual path — a rotation rebuilds the world — but
+    // a roster is built when the session is, which on a join into a match
+    // already in progress is after the map that decides this. Both, because
+    // neither one on its own covers both orders.
+    net.roster.setViewDistance(this.mapDef.environment.fogEnd);
 
     // Boots. The exact counterpart of `wireBattle`'s `onBotStepped`, down to
     // the callback being handed the body rather than a position, and the one

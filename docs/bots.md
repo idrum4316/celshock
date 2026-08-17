@@ -10,12 +10,29 @@ for `NavGrid`, `ObstacleField`, `CoverMap`, `Bot` and `BattleSystem`.
 `NavGrid` is built from the finished collider set at map load. The graph node is a
 **surface** — a (cell, height) pair — not a cell, because one cell can hold the creek
 floor and the bridge deck above it, or the barn floor and its hayloft.
-`MAX_SURFACES` is 3.
+The cap is `CONFIG.nav.maxSurfaces` (3) unless the map raises it
+(`MapLayout.surfaces`) — Coldharbour, whose buildings have three walked floors
+in them, states 4.
 
-**Three is a hard cap that fails SILENTLY, and anything stacked has to be built
-around it.** `addSurface` returns when the list is full, so the fourth candidate in
+**The cap fails SILENTLY, and anything stacked has to be built
+around it whatever the number is.** `addSurface` returns when the list is full,
+so the next candidate in
 a cell is discarded with nothing thrown and nothing to see. Terrain always takes one
-slot, which leaves two. A stepped structure built the obvious way — nested solid
+slot, which leaves two at the default.
+
+**The discard is in ARRIVAL order, not by height, and that is the lever.**
+`addSurface` inserts sorted but refuses once the count is reached, so which
+surfaces a crowded cell keeps is decided by the order the BUILDER pushed its
+colliders — which makes emission order part of a builder's design rather than an
+implementation detail. The rule is: **walked surfaces first, cover and parapets
+next, roofs last.** `kit/manor.ts` states it for one building ("Roofs are emitted
+LAST"); `kit/city.ts` generalises it, because a three-storey office stacks a
+ground floor, two slabs, two window spandrels, three wall heads and a roof into
+one perimeter column — nine candidates for four slots. Measured on Coldharbour
+with a route probe from both home spawns: with that order, even the default 3
+keeps every walked storey reachable, and it is the spandrels and the roof that
+fall off the end. Get the order wrong instead and a floor leaves the graph with
+the slab still drawn, the stair still climbable and nothing in the console. A stepped structure built the obvious way — nested solid
 colliders, one per tier — spends a slot per tier in the cells at its centre and
 therefore loses its TOP tier, the one thing anyone climbs it for. The fix is that
 **each tier's collider is only the RING of tread it actually exposes**, so a cell

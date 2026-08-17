@@ -2,7 +2,7 @@
  * BuildingKit.ts — Facade for the parametric structure builders. Re-exports
  * the shared types and the BUILDERS registry; the implementation lives in
  * kit/ (core.ts = Build accumulator + palette + contract, buildings.ts,
- * manor.ts, structures.ts, terrain.ts).
+ * city.ts, manor.ts, structures.ts, terrain.ts).
  * Invariants: builders assemble AT THE ORIGIN, UNROTATED and NEVER set
  * metadata.solid, checkCollisions, or isPickable — MapBuilder owns the
  * visual/collider split. A builder may take a BuildCtx to read the world it is
@@ -35,6 +35,16 @@ import {
   buildStiltHut,
   buildJungleRuin,
 } from "./kit/buildings";
+import {
+  buildBarrier,
+  buildCar,
+  buildMonument,
+  buildOffice,
+  buildParkade,
+  buildPlanter,
+  buildStreetLight,
+  buildTower,
+} from "./kit/city";
 import { buildJungleManor } from "./kit/manor";
 import {
   buildSilo,
@@ -103,6 +113,16 @@ export const BUILDERS = {
   trough: buildTrough,
   shrine: buildShrine,
   kiln: buildKiln,
+  // The downtown set — see kit/city.ts, whose header owns the four rules a
+  // building that stacks walked floors has to obey.
+  tower: buildTower,
+  office: buildOffice,
+  parkade: buildParkade,
+  planter: buildPlanter,
+  barrier: buildBarrier,
+  car: buildCar,
+  streetLight: buildStreetLight,
+  monument: buildMonument,
 } as const;
 
 export type BuilderKind = keyof typeof BUILDERS;

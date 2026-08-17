@@ -19,15 +19,65 @@ types from its predecessor, and `MapBuilder.build(layout, env)` takes both as
 arguments for the same reason.
 
 **The two halves are paired in `src/world/maps.ts`, and it plus
-`vite.config.ts`'s `WRITABLE` table are the only existing files a new map
-touches.** A `MapDef` is `{ id, name, layout, environment }`; `MAPS` is the registry
+`vite.config.ts`'s `WRITABLE` table and `scripts/collision-hash.mjs`'s `MAPS` are
+the only existing files a new map
+touches.** A `MapDef` is `{ id, name, layout, environment, collision }`; `MAPS` is
+the registry
 and `DEFAULT_MAP` is the fallback. `Game` holds one `mapDef` field (`Game.mapDef`) and
 reads both halves off it. Nothing outside `maps.ts` may import a map's own modules.
-The shipped maps are **Hollowmere** (night) and **Greyfen** (overcast dawn). The
-second was forked from the first's layout, cleared back to a blank valley, and is
+The shipped maps are **Hollowmere** (night), **Greyfen** (overcast dawn) and
+**Coldharbour** (a city at clear afternoon). Greyfen
+was forked from Hollowmere's layout, cleared back to a blank valley, and is
 now being rebuilt as a jungle one: what stands is the **manor** on flag C and
-nothing else, so it is the map being built rather than a second finished one. The
-two share no module in either direction.
+nothing else, so it is the map being built rather than a second finished one.
+Coldharbour was written from nothing and is the one that pushed on what a map is
+allowed to be — see the next section. No two share a module in any direction.
+
+## Three things that look global and are the map's
+
+Everything below defaults to what the two valleys are, so a map that states
+nothing is bit-identical to before any of them existed. Each was a genuine
+global first and became an override when a map needed the other answer.
+
+**`MapLayout.size` — how big the square is** (`CONFIG.map.size`, 240).
+Coldharbour is 320. This was affordable because the extent was already an
+ARGUMENT nearly everywhere: `GameMap.size` has always carried it, and `NavGrid`,
+`ObstacleField`, the minimap and the deploy map have always been handed it. What
+had to change is the handful of readers that took it from nothing — `TerrainField`
+and `terrainSlab` (which now take their half-extent from the heightfield's own
+`size * cell`, since the grid states it twice), `GrassSystem`'s collider index,
+`Ridge`'s outside-play assertion, the editor's coordinate spinners and terrain
+grade check, and `buildServerWorld`. Three things a larger map owes:
+
+- `terrain.size * terrain.cell` must equal it. Nothing checks; the floor simply
+  samples against the wrong origin and comes back as garbage.
+- The rim's four boundary boxes stay over 200 m — they are `size + 4` long, so
+  this holds for any map over ~196 — because **seven sites identify the boundary
+  by `box.w > 200 || box.d > 200`** and know nothing else about it.
+- The heightfield grows with the square rather than getting coarser, or the
+  slope limit is measured over cells no author can control. Coldharbour is 80
+  cells of 4 m against the valleys' 80 of 3.
+
+**`EnvironmentSpec.fogEnd` — how far you can see.** `FOG_WALL` in
+`config/fogWall.ts` used to be the answer and is now only the DEFAULT: a map's
+`fogEnd` is pushed by `Game.installMap` into the three systems that gate on it —
+`BattleSystem` (where a rig stops being drawn), `RagdollSystem` (where a corpse
+is not worth tumbling) and `NetRoster` (the same call for a remote body). The
+old dev warning that checked the two against each other is gone, because the
+disagreement it reported is now the feature.
+
+**What deliberately did NOT move with it** is the whole reason a clear map is a
+layout problem as well as a palette one: `audio.maxDistance` is still 70 m,
+`bots.perception.engageRange` still 55, and the shadow window still a fixed
+110 m square following the player. So on Coldharbour you can see four times
+further than a bot will start shooting, and the map is laid out knowing it — a
+high sun to keep shadows inside the window, and streets whose clear line is
+broken at chest height every few tens of metres.
+
+**`MapLayout.surfaces` — how deep the nav graph stacks** (`CONFIG.nav.maxSurfaces`,
+3). See `docs/bots.md`: a map raises it only because it stacks FLOORS, and the
+guarantee that a floor survives is the ORDER its builder declares colliders in,
+not the number.
 
 Three rules:
 
@@ -85,7 +135,10 @@ ground, never the colour of it. Three consequences:
   field is seeded per pattern and reads no colour, so one height map serves every
   tint of `dirt` — while two maps on `dirt` in different soils must be two albedo
   textures rather than whichever asked first, the same trap `setGroundSpec` exists
-  to close. The field itself is memoized one deep, which is enough because
+  to close. All three shipped maps are on `dirt` now (a dead valley's soil, a wet
+  jungle's loam and a city's weathered paving), so this is a live case rather
+  than a hypothetical: verified in one session, three distinct albedos and
+  materials against one shared bump map. The field itself is memoized one deep, which is enough because
   `floorMaterial` asks for the albedo and the bump one line apart.
 - **The floor material is deliberately MATTE and must stay that way.**
   `getGroundTextured` only registers a material for `setGroundSpec` to re-apply to
@@ -322,6 +375,18 @@ and the outline pass draws every mesh twice, so without it the map alone costs ~
 draws; with it, ~150, and frustum culling still throws away most of the map because
 a block is well inside the 78 m fog wall. Outlines still trace each building,
 because `renderOutline` expands vertices along their own normals.
+
+**A building that stacks WALKED FLOORS is a different kind of thing from
+everything else in the kit, and `kit/city.ts`'s header is its contract.** Every
+other builder is one walked surface with a roof over it; an office with three
+storeys and a stair between each pair runs into four limits at once, and the
+file states all four. In summary, because a new multi-storey builder anywhere
+will meet them: emit walked surfaces FIRST (see `docs/bots.md` on arrival
+order); a flight is `rise / 0.35` long and the slab it climbs to may not cover
+it, so put flights in a LANE at one edge and leave that lane out of the slab
+above — alternating edges storey by storey so two voids never stack; a walked
+slab needs real depth behind its top face or its own outline shell paints it;
+and a mullion or a fin is a `strut`, never a wall.
 
 Layout gotchas that have already cost time:
 

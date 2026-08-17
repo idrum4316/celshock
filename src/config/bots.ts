@@ -718,4 +718,16 @@ export const nav = {
   bodyRadius: 0.4,
   /** Max step-up a bot can walk over without a ramp. */
   stepHeight: 0.6,
+  /**
+   * Standable surfaces `NavGrid` tracks per cell, where a map does not say
+   * otherwise (`MapLayout.surfaces`).
+   *
+   * Three is a VILLAGE's worst case — creek floor, bank top, bridge deck in
+   * one column — and it is a default rather than a limit because the number a
+   * map needs is a property of how that map stacks. A downtown block is
+   * pavement plus two upper floors plus a roof and needs more; raising it for
+   * every map would spend the memory (see `MapLayout.surfaces`) on valleys
+   * that stack nothing.
+   */
+  maxSurfaces: 3,
 } as const;

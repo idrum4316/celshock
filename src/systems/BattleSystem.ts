@@ -31,7 +31,7 @@
  * rather than 8v9.
  */
 import { Ray, Scene, Vector3 } from "@babylonjs/core";
-import { CONFIG } from "../config";
+import { CONFIG, FOG_WALL } from "../config";
 import { Bot, type BattleCtx, type BotZone } from "../entities/Bot";
 import { assignSkills } from "../entities/BotSkill";
 import { OTHER_TEAM, type Combatant, type Team } from "../entities/Combatant";
@@ -92,6 +92,18 @@ export class BattleSystem {
    */
   private readonly flashPool: Vector3[] = [];
   private flashCount = 0;
+
+  /**
+   * How far a rig is worth drawing and posing — the map's `fogEnd`, pushed by
+   * `Game.installMap`, defaulting to the shipped fog wall.
+   *
+   * It is a FIELD rather than `CONFIG.bots.lodDisableDistance` because the
+   * distance past which there is nothing to see belongs to the weather, and a
+   * map is free to have none: on a clear one this is several hundred metres
+   * and a bot that vanished at 78 would vanish in plain sight. The value the
+   * config still holds is what a fogged map gets, which is both shipped maps.
+   */
+  private viewDistance = FOG_WALL;
 
   /**
    * Wired by Game: a bot's round killed somebody.
@@ -259,6 +271,14 @@ export class BattleSystem {
     this.nav = map.nav;
     this.cover = map.cover;
     this.obstacles = map.obstacles;
+  }
+
+  /**
+   * How far bodies are worth drawing on this map. See `viewDistance`; pushed
+   * from `Game.installMap` alongside the environment it comes out of.
+   */
+  setViewDistance(metres: number): void {
+    this.viewDistance = metres;
   }
 
   /**
@@ -468,10 +488,10 @@ export class BattleSystem {
     }
 
     // --- per-frame movement, with LOD ---
-    // The fog wall, from CONFIG rather than written out here: the ragdoll gate
-    // is the same distance for the same reason (nothing to see past it), and
-    // two copies is how that one came to be pinned to `lodFreezeDistance`.
-    const fogEnd = b.lodDisableDistance;
+    // The map's fog wall, pushed in rather than written out here: the ragdoll
+    // gate is the same distance for the same reason (nothing to see past it),
+    // and two copies is how that one came to be pinned to `lodFreezeDistance`.
+    const fogEnd = this.viewDistance;
     for (const bot of this.bots) {
       if (this.benched.has(bot)) continue;
       if (bot.state === "dead" && bot.respawnT <= 0 && !bot.rig.root.isEnabled()) {

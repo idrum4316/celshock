@@ -24,6 +24,7 @@ export const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const MAPS = [
   { id: "hollowmere", constant: "HollowmereCollision" },
   { id: "greyfen", constant: "GreyfenCollision" },
+  { id: "coldharbour", constant: "ColdharbourCollision" },
 ];
 
 /** The files a map's collider boxes are derived from. */

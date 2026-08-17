@@ -53,7 +53,9 @@ src/
     index.ts            # Composes CONFIG from the sections. The ONLY importer of
                         #   them. A new tunable goes in a section, not here
     fogWall.ts          # FOG_WALL alone — bots.ts reads it, so it cannot live in
-                        #   index.ts without an import cycle
+                        #   index.ts without an import cycle. The DEFAULT view
+                        #   distance now: a map's own `fogEnd` overrides it, and
+                        #   Game.installMap pushes that into the three systems
     conquest.ts         # Flags, capture meter, tickets, bleed
     bots.ts             # Bot AI + the nav grid (bots, nav)
     player.ts           # Movement, crouch, ground probe, vitals
@@ -212,6 +214,10 @@ src/
                         #   trestleBridge, templeRuin, haystack, lamp, cart,
                         #   crates, woodpile, shed, trough, shrine, kiln
     kit/terrain.ts      #   terrace, ramp, road, jetty, boardwalk, stairs
+    kit/city.ts         #   tower, office, parkade, planter, barrier, car,
+                        #   streetLight, monument — the downtown set, and the
+                        #   only builders that stack WALKED floors. Its header
+                        #   owns the four rules that makes necessary
     NavGrid.ts          # Walkable-surface graph + precomputed flow fields
     CoverMap.ts         # Baked per-surface directional cover masks
     boxGeometry.ts      # Analytic WorldBox primitives, shared by NavGrid /
@@ -250,6 +256,14 @@ src/
                               #   wadeable everywhere (banks grade at 0.22)
     greyfen/environment.ts    # Palette, fog, sun, sky — overcast dawn
     greyfen/collision.ts      # GENERATED collider boxes (`npm run collision`)
+    coldharbour/layout.ts     # The third map: a city's business district. The
+                              #   first that is not 240 m (`size: 320`) and the
+                              #   first that stacks floors (`surfaces: 4`)
+    coldharbour/heights.ts    # GENERATED floor heights — dead level under the
+                              #   city, a 1.2 m skirt into the rim outside it
+    coldharbour/environment.ts# Palette, sun, sky — a clear afternoon, and the
+                              #   first map with no fog wall (`fogEnd: 480`)
+    coldharbour/collision.ts  # GENERATED collider boxes (`npm run collision`)
   ui/                   # One .css beside each module that writes markup
     base.css            #   Reset, canvas, #hud root, and ONLY primitives two
                         #   or more screens share. Imported by main.ts

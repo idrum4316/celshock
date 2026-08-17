@@ -17,7 +17,7 @@
  * belonging to the local player is left disabled.
  */
 import { Scene, Vector3 } from "@babylonjs/core";
-import { CONFIG } from "../config";
+import { CONFIG, FOG_WALL } from "../config";
 import { NetSoldier } from "../entities/NetSoldier";
 import type { Combatant, Team } from "../entities/Combatant";
 import type { CelMaterialFactory } from "../shaders/CelShader";
@@ -28,6 +28,19 @@ import type { PointState, SlotState, Snapshot } from "./protocol";
 export class NetRoster {
   /** One per roster slot, indexed by slot. Built once, never disposed. */
   readonly soldiers: NetSoldier[] = [];
+
+  /**
+   * How far a body is worth drawing — the match's map `fogEnd`, pushed by
+   * `Game.installMap`. `BattleSystem.viewDistance` is the same field for the
+   * same reason: past the fog there is nothing to see, and a map with no fog
+   * has no such distance short of its own far side.
+   */
+  private viewDistance = FOG_WALL;
+
+  /** See `viewDistance`. Pushed with the map, not read from CONFIG. */
+  setViewDistance(metres: number): void {
+    this.viewDistance = metres;
+  }
 
   /** Mirrored from the server each snapshot. */
   readonly tickets: [number, number] = [0, 0];
@@ -176,7 +189,7 @@ export class NetRoster {
         else this.onDeath(soldier);
       }
       const d = Vector3.Distance(soldier.position, cameraPos);
-      if (d > b.lodDisableDistance) {
+      if (d > this.viewDistance) {
         soldier.setEnabled(false);
         continue;
       }

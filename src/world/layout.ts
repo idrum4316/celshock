@@ -135,7 +135,14 @@ export function isScatterRect(s: ScatterSpec): s is ScatterRect {
 export interface Heightfield {
   /** Cells per side. There are `(size + 1) ^ 2` vertices. */
   size: number;
-  /** Metres per cell. `size * cell` must equal `CONFIG.map.size`. */
+  /**
+   * Metres per cell. `size * cell` must equal the MAP's size — `MapLayout.size`
+   * where the layout states one, `CONFIG.map.size` where it does not. The field
+   * is the one place that product is written down twice, which is why
+   * `TerrainField` takes its own half-extent from here rather than from
+   * `CONFIG`: a map larger than the shipped 240 m would otherwise sample its
+   * floor against the wrong origin and read the wrong row of heights.
+   */
   cell: number;
   /**
    * Vertex heights in metres, row-major from the -X/-Z corner: index
@@ -202,6 +209,40 @@ export interface MapLayout {
   spawns: SpawnPointDef[];
   water?: WaterRect[];
   grass?: GrassRect[];
+  /**
+   * The playable square's side, in metres, centred on the origin. Absent means
+   * `CONFIG.map.size` — the 240 m both shipped valleys are authored in.
+   *
+   * It lives here rather than in `CONFIG` because it is a statement about ONE
+   * map: a village and a downtown are not the same size and never were. What
+   * makes that affordable is that the extent was already carried on `GameMap`
+   * (`map.size`) and passed to `NavGrid`, `ObstacleField`, the minimap and the
+   * deploy map as an argument — the global was only ever the value handed in.
+   * The remaining readers of `CONFIG.map.size` are the ones that take the size
+   * from nothing at all, and each is now given it.
+   *
+   * Three things a larger map owes, none of which this field can check:
+   * `terrain.size * terrain.cell` must equal it (see `Heightfield.cell`), the
+   * rim's four boundary boxes stay over 200 m and so stay recognisable to the
+   * seven sites that identify the boundary by `w > 200 || d > 200`, and the
+   * heightfield's own grid grows with the square rather than getting coarser.
+   */
+  size?: number;
+  /**
+   * How many standable surfaces `NavGrid` tracks per cell. Absent means
+   * `CONFIG.nav.maxSurfaces` (3), which is what a village stacks: creek floor,
+   * bank top, bridge deck.
+   *
+   * **A map raises this only because it stacks FLOORS**, and it is the one
+   * number that decides whether a bot can use an upper storey. Overflow is
+   * silent — `NavGrid.addSurface` drops the candidate that does not fit and
+   * nothing says so — which is why the manor emits its roofs last and why a
+   * three-storey block would otherwise lose its top floor to its own roof.
+   * The cost is linear in the value and paid in memory at load: the link table
+   * is `cells * value * 8` int32s and each flow field is `cells * value`
+   * floats, so a 320 m map at 5 is ~7 MB of links against ~4 MB at 3.
+   */
+  surfaces?: number;
   /** The floor's shape. Absent means a level valley floor. */
   terrain?: Heightfield;
   /** The rim's shape. Absent means the default escarpment. */

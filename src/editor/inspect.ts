@@ -34,8 +34,14 @@ import {
 import { BUILDER_KINDS, PARAMS, SCATTER_PROPS } from "./params";
 import type { SelectionRef } from "./selection";
 
-/** Half the map, less a margin — the same bound the ridge check uses. */
-const REACH = CONFIG.map.size / 2;
+/**
+ * Half of THIS map — the same bound the ridge check uses, and a per-map number
+ * since `MapLayout.size` exists. Threaded down from `inspect`, which is where
+ * the layout is in hand: a spinner clamped to the shipped 240 m would refuse
+ * to type a coordinate a 320 m map is full of.
+ */
+const reachOf = (layout: MapLayout): number =>
+  (layout.size ?? CONFIG.map.size) / 2;
 
 export interface Inspection {
   title: string;
@@ -51,6 +57,7 @@ const options = (values: readonly string[]): ChoiceOption[] =>
 
 /** x / y / z, shared by everything that sits somewhere. */
 function place(
+  reach: number,
   x: number,
   y: number | null,
   z: number,
@@ -58,16 +65,19 @@ function place(
   prefix = "",
 ): FieldSpec[] {
   return [
-    number(`${prefix}x`, "x", x, -REACH, REACH),
-    number(`${prefix}z`, "z", z, -REACH, REACH),
+    number(`${prefix}x`, "x", x, -reach, reach),
+    number(`${prefix}z`, "z", z, -reach, reach),
     number(`${prefix}y`, "y", y, -8, 48, 0.25, yOptional ? 0 : undefined),
   ];
 }
 
 /** The three fields water and grass rects share. */
-function rect(r: { x: number; z: number; y?: number; width: number; depth: number }): FieldSpec[] {
+function rect(
+  reach: number,
+  r: { x: number; z: number; y?: number; width: number; depth: number },
+): FieldSpec[] {
   return [
-    ...place(r.x, r.y ?? null, r.z, true),
+    ...place(reach, r.x, r.y ?? null, r.z, true),
     number("width", "width", r.width, 1, 200, 1),
     number("depth", "depth", r.depth, 1, 200, 1),
   ];
@@ -85,6 +95,7 @@ export function inspect(
   ref: SelectionRef | null,
 ): Inspection {
   if (!ref) return EMPTY;
+  const reach = reachOf(layout);
 
   switch (ref.list) {
     case "placements": {
@@ -92,7 +103,7 @@ export function inspect(
       if (!p) break;
       const fields: FieldSpec[] = [
         choice("kind", "kind", p.kind, options(BUILDER_KINDS)),
-        ...place(p.x, p.y ?? null, p.z, true),
+        ...place(reach, p.x, p.y ?? null, p.z, true),
         // Empty rather than a solid 0 when unrotated, matching `y`: both are
         // absent from the data, and the placeholder says what absent means.
         number(
@@ -166,7 +177,7 @@ export function inspect(
             isScatterRect(s) ? "rect" : "circle",
             options(["circle", "rect"]),
           ),
-          ...place(s.x, s.y ?? null, s.z, true),
+          ...place(reach, s.x, s.y ?? null, s.z, true),
           ...shape,
           number("count", "count", s.count, 0, 120, 1),
           number("scale.0", "scale min", s.scale?.[0] ?? null, 0.2, 4, 0.1, 1),
@@ -186,7 +197,7 @@ export function inspect(
         fields: [
           text("id", "id", cp.id),
           text("name", "name", cp.name),
-          ...place(cp.pos.x, cp.pos.y, cp.pos.z, false, "pos."),
+          ...place(reach, cp.pos.x, cp.pos.y, cp.pos.z, false, "pos."),
           number("radius", "radius", cp.radius, 3, 40, 0.5),
         ],
       };
@@ -212,7 +223,7 @@ export function inspect(
         deletable: true,
         fields: [
           choice("owner", "owner", owner, owners),
-          ...place(s.pos.x, s.pos.y, s.pos.z, false, "pos."),
+          ...place(reach, s.pos.x, s.pos.y, s.pos.z, false, "pos."),
           number("yaw", "yaw°", toDegrees(s.yaw), -360, 360, 15, 0),
         ],
       };
@@ -221,7 +232,7 @@ export function inspect(
     case "water": {
       const r = layout.water?.[ref.index];
       if (!r) break;
-      return { title: `water rect #${ref.index}`, fields: rect(r), deletable: true };
+      return { title: `water rect #${ref.index}`, fields: rect(reach, r), deletable: true };
     }
 
     case "grass": {
@@ -231,7 +242,7 @@ export function inspect(
         title: `grass rect #${ref.index}`,
         deletable: true,
         fields: [
-          ...rect(r),
+          ...rect(reach, r),
           number(
             "density",
             "density",

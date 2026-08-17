@@ -159,7 +159,10 @@ function terrainColliders(scene: Scene, terrain: TerrainField, size: number): Me
  */
 export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameMap> {
   const collision: MapCollision = (await def.collision()).default;
-  const size = CONFIG.map.size;
+  // The layout's own extent, exactly as `MapBuilder.build` reads it: a server
+  // that took the global would rasterize a larger map's nav grid over a 240 m
+  // square and steer bots against a world a third the size of the clients'.
+  const size = def.layout.size ?? CONFIG.map.size;
   const terrain = new TerrainField(def.layout.terrain);
   const boxes = toWorldBoxes(collision);
 
@@ -171,7 +174,7 @@ export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameM
 
   // Same order and same inputs as `MapBuilder.build`: the graph is derived from
   // the finished collider set, never from the geometry that suggested it.
-  const nav = new NavGrid(size, boxes, terrain);
+  const nav = new NavGrid(size, boxes, terrain, def.layout.surfaces);
   const cover = new CoverMap(nav, boxes);
   const obstacles = new ObstacleField(size, boxes);
 

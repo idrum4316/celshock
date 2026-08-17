@@ -43,7 +43,6 @@
  *   extrudes along normals `VertexData.transform` does not renormalise.
  */
 import { VertexData } from "@babylonjs/core";
-import { CONFIG } from "../config";
 import type { RidgePass, RidgeSpec } from "./layout";
 import type { TerrainField } from "./TerrainField";
 import { mulberry32 } from "./rng";
@@ -308,7 +307,7 @@ class RingAccum {
    * No UVs: `CelMaterialFactory.get()` declares `["position", "normal"]` only,
    * so a UV buffer here would be uploaded and never read.
    */
-  finish(): VertexData {
+  finish(half: number): VertexData {
     const data = new VertexData();
     data.positions = this.positions;
     data.indices = this.indices;
@@ -317,7 +316,7 @@ class RingAccum {
     data.normals = normals;
     if (import.meta.env.DEV) {
       assertFacesInward(this.positions, normals, this.front);
-      assertOutsidePlay(this.positions);
+      assertOutsidePlay(this.positions, half);
     }
     return data;
   }
@@ -361,9 +360,12 @@ function assertFacesInward(
   }
 }
 
-/** Nothing the rim draws may stand where a player can be. */
-function assertOutsidePlay(positions: number[]): void {
-  const half = CONFIG.map.size / 2;
+/**
+ * Nothing the rim draws may stand where a player can be. `half` is the MAP's
+ * half-extent, handed down from `ridgeSegments` — the same number the boundary
+ * boxes are placed at, which is the whole point of the check.
+ */
+function assertOutsidePlay(positions: number[], half: number): void {
   for (let i = 0; i < positions.length; i += 3) {
     const reach = Math.max(Math.abs(positions[i]), Math.abs(positions[i + 2]));
     if (reach < half - 1e-3) {
@@ -505,7 +507,7 @@ export function ridgeSegments(
         }
       }
       if (acc.empty) continue;
-      out.push({ key: `${tone}-${s}`, tone, data: acc.finish() });
+      out.push({ key: `${tone}-${s}`, tone, data: acc.finish(half) });
     }
   }
   return out;
