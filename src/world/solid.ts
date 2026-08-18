@@ -30,8 +30,8 @@
  * side.
  *
  * **A fourth kind is a `porous` box that stops being one, and it needs no term
- * here at all.** A barrier pane (`Build.pane({ barrier: true })`) is glass: a
- * body walks into it, a round goes through it, which is `porous` exactly. When
+ * here at all.** A breakable pane (`Build.pane({ breakable: true })`) is glass:
+ * a body walks into it, a round goes through it, which is `porous` exactly. When
  * `GlassSystem` breaks it, `solid` itself is cleared and the box leaves BOTH
  * predicates in one write — so the whole of "glass" on this side of the
  * question is a flag these two functions never read. That is deliberate: these

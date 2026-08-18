@@ -394,26 +394,46 @@ and a mullion or a fin is a `strut`, never a wall.
 ## Panes: the one thing in the world that is not static
 
 `Build.pane` is the fourth box word, and the only one whose geometry leaves
-`Structure.meshes`. A pane is drawn like a `box`, passes a round like a `porous`
-`block`, and — uniquely — keeps an identity through both merge passes so
-`GlassSystem` can take one sheet out of the world at runtime. Everything about
-it is arranged around two costs.
+`Structure.meshes`. A pane is drawn like a `box` and passes a round like a
+`porous` `block`; a `breakable` one also keeps an identity through both merge
+passes, so `GlassSystem` can take that sheet and no other out of the world at
+runtime.
 
-**The first is DRAW CALLS, and the answer is that a pane is a vertex range
-rather than a mesh.** The obvious way to make a pane addressable is to give it
-its own mesh, which on Coldharbour's 6,246 panes would be 6,246 meshes against
-~150 for the whole map — and worse than the count says, because glazing is
-alpha-blended and a transparent mesh is sorted and drawn on its own rather than
-batched. Instead the glazing merges per placement (`MapBuilder.paneGroup`) and
-then again per 48 m block (`PaneBlocks`), and each pane's positions are a known
-range in the result: breaking one collapses that range onto its own first
-vertex, every triangle in it becomes degenerate and rasterizes nothing, and the
-cost is one `updateVerticesData` on one small buffer. Measured: 6,246 panes are
-**37 meshes merged per block** — the same 37 the map had when the same glazing
-was 1,762 larger panes, because a block is a block and only the vertex count in
-each one grew. That is what makes the glazing unit a free choice: it is bounded
-by the SWEEP (12 µs a shot, bucketed per block — see `GlassSystem`) and by the
-collision bake's size, and not by anything the renderer pays per frame.
+**Which sheets those are is a DESIGN question and it is answered before any
+cost one: glass breaks where there is enterable space behind it.** A sheet hung
+on something solid stops nothing — the round has always ended on the concrete —
+so breaking it changes nothing you can play with, and it costs the building the
+one thing an elevation was saying: a street-level shopfront that shatters into a
+blank grey shaft is a building admitting it is a box. Coldharbour draws **6,246
+sheets and twelve of them break**, all twelve the two offices' shopfront bays.
+The curtain walls (4 cm off a solid shaft), the punched windows drawn on the
+same shaft and the cars' greenhouses (a cabin nobody gets into) stay whole. The
+offices' upper window bands are the case one step further on: they are left
+OPEN, because glass over a spandrel that already stops a body is worth neither
+the pane nor the drawing.
+
+Everything below follows from that split, and the sharpest consequence is that
+**a sheet which is not `breakable` is geometry and nothing else**: no
+`WorldPane`, no collider, no bucket in the sweep, no row in the collision bake,
+no index on the wire. The city's glazing is drawn by the same code and known to
+no other part of the game.
+
+**The DRAW CALLS are the one cost every sheet pays, and the answer is that
+glazing is merged and a pane is a vertex range rather than a mesh.** A mesh each
+would be 6,246 meshes against ~150 for the whole map — and worse than the count
+says, because glazing is alpha-blended and a transparent mesh is sorted and
+drawn on its own rather than batched. Instead it merges per placement
+(`MapBuilder.paneGroup`) and then again per 48 m block (`PaneBlocks`), which on
+Coldharbour is **75 glazed placements into 37 meshes**. A breakable pane's
+positions are a known range in the result: breaking one collapses that range
+onto its own first vertex, every triangle in it becomes degenerate and
+rasterizes nothing, and the cost is one `updateVerticesData` on one small
+buffer. Only the two blocks that hold a breakable pane keep an updatable
+position buffer at all; the other 35 are immutable for the life of the map.
+
+That is what makes the glazing unit a free choice — a tower is cut into bays
+because a curtain wall's whole appearance is the grid it is divided by, and the
+cut costs nothing the renderer pays per frame.
 
 What makes that collapse the whole of a break rather than the first half of one
 is that a pane owns nothing else to take down with it: it carries no outline and
@@ -440,37 +460,29 @@ here rather than there:
   it is why the number is judged from a pavement against a lit interior rather
   than picked for looks.
 
-**The second cost is RAY TESTS, and the answer is `PaneSpec.barrier`.**
-`MapBuilder.struts`'s header records what loose collider boxes cost: 161 of them
-put ~17% on every ray in the game, `Player.probeGround` — already the most
-expensive per-frame call at 2.45 ms (FINDINGS #6) — included. Six thousand
-pickable boxes is not a trade, it is a regression. So the default pane carries
-**no collider at all**: it shatters and changes nothing else. `barrier` is
-authored one at a time for the handful of places glass is the ONLY thing in the
-way, and Coldharbour has **twelve** of them, all on the two offices' glazed
-shopfronts.
+**The RAY TESTS are the cost only a breakable pane pays, and it pays them
+because it has to.** A pane with a room behind it is the only thing in the way
+while it stands, so it needs a collider that stops a body — which is why
+`PaneSpec.breakable` spawns one rather than leaving it as a second decision. The
+reason the flag has to stay rare is `MapBuilder.struts`'s header: 161 loose
+collider boxes put ~17% on every ray in the game, `Player.probeGround` — already
+the most expensive per-frame call at 2.45 ms (FINDINGS #6) — included. Six
+thousand pickable boxes is not a trade, it is a regression. Twelve is nothing,
+and the sweep that goes with them costs **~0.6 µs a shot** (twelve panes in two
+buckets; it was ~15 µs when every sheet on the map was a pane).
 
-That last point is the design one and is easy to get wrong: **glazing an opening
-something else already closes buys nothing.** An office's window band sits over a
-1 m spandrel that stops a body already; a tower's curtain wall hangs 4 cm off a
-solid shaft. Both are worth glazing for the look and neither is worth a collider.
-Reach for `barrier` only where there is no wall behind the glass.
+**A pane that DOES break is sized like the thing that breaks, and the
+elevation's own framing is what says how big that is.** `kit/city.ts` cuts the
+shopfront into the bays its piers already divide it into: a break then reads as
+one panel out of its frame with the piers either side still standing, where a
+single sheet would take the whole frontage on one round. The second reason is
+the shards: `DebrisSystem` cuts a burst of twelve pieces from the pane's own
+face, so a pane much past ~20 m² is one the burst can only cover a patch of.
+Coldharbour's bays are 12–19 m², which twelve pieces of about a metre account
+for. The tower's bays are cut to the same rhythm for the look alone — nothing
+holds a range into them and nothing ever will.
 
-**A pane is the unit that BREAKS, so it is sized like one — and the elevation's
-own framing is what says how big that is.** `kit/city.ts` glazes a tower one
-storey band by one BAY, which is exactly what sits between two collars and two
-fins, and the shopfront the same way: a break then reads as one panel out of its
-frame with the mullions either side still standing. It was a whole elevation
-once and a whole storey ribbon after that, and both were the same mistake at two
-scales — one round taking 25 x 3.7 m of glass out of a building is absurd from
-the street. The second reason is the shards: `DebrisSystem` cuts a burst of
-twelve pieces from the pane's own face, so a pane much past ~20 m² is one the
-burst can only cover a patch of. Coldharbour's are 12–19 m², which twelve pieces
-of about a metre account for. The cost of cutting finer is the collision bake's
-size and the sweep's per-block bucket, and neither is a frame cost — see the
-draw-call note above.
-
-**Breaking a barrier pane is five writes and one deferred rebuild.** The visual
+**Breaking a pane is five writes and one deferred rebuild.** The visual
 range collapses; `solid` is cleared, which takes the box out of `SOLID_ONLY` and
 `OPAQUE_ONLY` together; `checkCollisions` is cleared, which is the movement
 half; `ObstacleField.remove` takes it out of the sub-cell push-out the bots and

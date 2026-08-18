@@ -50,11 +50,11 @@ export type CollisionBox = readonly [
 ];
 
 /**
- * One pane of glass, as `[w, h, d, cx, cy, cz, rotY, box]`.
+ * One breakable pane of glass, as `[w, h, d, cx, cy, cz, rotY, box]`.
  *
  * Seven numbers and an index. There is no `rotX` — a pane is a sheet in a wall
- * and nothing in the kit tilts one — and `box` is its position in `boxes`, or
- * -1 for the cosmetic majority that have no collider at all.
+ * and nothing in the kit tilts one — and `box` is its position in `boxes`: the
+ * collider that holds a body out of the opening until the pane goes.
  *
  * **What is deliberately NOT baked is the vertex range.** A pane's identity on
  * the wire is its position in this array, which both sides build in the same
@@ -97,9 +97,14 @@ export interface MapCollision {
    */
   rayGroups: readonly (readonly CollisionBox[])[];
   /**
-   * Every pane of glass, in the client's build order — which is what makes the
-   * index into this array a name both processes agree on, and therefore what a
-   * `glass` event on the wire is allowed to carry.
+   * Every pane of glass a round can take away, in the client's build order —
+   * which is what makes the index into this array a name both processes agree
+   * on, and therefore what a `glass` event on the wire is allowed to carry.
+   *
+   * Not the glazing, which is most of the glass and is drawn on one side only:
+   * a sheet with something solid behind it opens nothing, so the authority has
+   * no use for it and the bake does not carry it (see `PaneSpec.breakable`).
+   * Coldharbour draws ~6,200 sheets and bakes twelve.
    *
    * Optional so a map baked before glass existed still loads: absent reads as a
    * map with no glazing, which is what every map but Coldharbour is.

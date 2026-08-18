@@ -252,31 +252,32 @@ four differences worth stating because each one is the corpse rule NOT applying.
 
 **A shard is a fraction of its PANE, and that is the whole feature.** It threw
 twelve 16 cm chips into an 0.8 m cube at the crossing point, whatever it had
-just broken — which reads against a cottage window and is absurd against a
+just broken — which reads against a small punched window and is absurd against a
 shopfront: several square metres of glass vanish in one frame and a handful of
 gravel appears where the round went in, so the eye reads the pane as deleted
 rather than broken. So `burst` takes the `WorldPane` and cuts the burst from it:
 the face is divided into cells of `sqrt(area / shards)` clamped to
 `[shardMin, shardMax]`, a piece fills `shardPack` of its cell, and the pieces are
 laid out ON the face, in its plane, before they are thrown. Measured on
-Coldharbour: 0.38 m pieces from a 1.3 x 1.5 m cottage window and ~1 m ones from a
+Coldharbour: 0.38 m pieces from a 1.3 x 1.5 m window and ~1 m ones from a
 shopfront bay, 77% of the pane's own area in both cases, so at t=0 the burst is
 very nearly the sheet that was standing there and the next quarter second is it
 coming apart. Where a pane is bigger than twelve cells the patch is centred on
 the hole and clipped to the face rather than spread thin across it — twelve
 pieces over ninety square metres is confetti — and **the right fix for a pane
-that big is a smaller pane**: see `kit/city.ts`, whose glazing unit is the bay
-its own mullions divide the elevation into.
+that big is a smaller pane**: see `kit/city.ts`, whose shopfront breaks a bay at
+a time, the unit its own piers divide the elevation into.
 
 **A sheet leaves its frame along its own NORMAL**, and the round drags glass
 along its own path only WITHIN the plane. That is not only how a pane fails, it
-is what keeps the pieces out of the wall behind them: all but twelve of
-Coldharbour's panes hang 4 cm off a solid mass, so a burst thrown along the
-bullet spawns bodies inside the shaft and Havok spends the first frames shoving
-them back out. Which side it leaves by is the pane's own answer — a cosmetic
-pane drops its glass toward the shooter, the one side provably open because a
-round crossed it to get here; a barrier pane is a way THROUGH, so its glass goes
-the way the round went, into the room the shot has just opened.
+is what keeps the pieces off the frame and the piers either side of them. Which
+side it leaves BY needs no question asked, because every pane that breaks is a
+way THROUGH (see `PaneSpec.breakable`): the glass goes the way the round went,
+into the room the shot has just opened. It was a question once, when the city's
+decorative glazing broke too — a sheet hanging 4 cm off a solid shaft had to
+throw its pieces back toward the shooter, the one side provably open, or Havok
+spent the first frames shoving bodies out of the concrete they were spawned
+inside. That glass no longer breaks, so the case is gone rather than handled.
 
 **The collision box is thicker than the piece it stands for**
 (`glass.shardCollide`, 0.09 against a 0.02 m sheet). The floor is a mesh shape
@@ -301,7 +302,7 @@ size.** The three systems that share `EnvironmentSpec.fogEnd` are asking "can
 anything be seen at all", and on Coldharbour that is 480 m. A 16 cm chip is a
 pixel at sixty metres and a 1 m panel is not, so `CONFIG.glass.shardDistance`
 (150) is quoted for a piece of `shardMax` and everything smaller gates nearer in
-proportion — a cottage window's pieces stop at ~44 m. **The BREAK is not gated
+proportion — 0.35 m pieces stop at ~44 m. **The BREAK is not gated
 by it**: the pane goes at any range, because that is the world changing rather
 than an effect playing.
 

@@ -10,7 +10,7 @@
  * ## A shard is a fraction of its pane, not a fixed chip
  *
  * This threw twelve 16 cm chips into an 0.8 m cube at the crossing point, for
- * every pane on the map. Against a cottage window that reads; against a
+ * every pane on the map. Against a small punched window that reads; against a
  * shopfront bay it is the bug the whole system was built to avoid — a sheet of
  * glass several metres across vanishes in one frame and a handful of gravel
  * appears where the round went in, so the eye reads the pane as DELETED rather
@@ -23,30 +23,31 @@
  * was standing there, which is what makes the next quarter second read as it
  * coming apart.
  *
- * Where a pane is bigger than twelve cells — a curtain wall, or any map whose
- * kit glazes an elevation in one piece — the patch is centred on the hole and
+ * Where a pane is bigger than twelve cells — any kit that makes a whole glazed
+ * elevation breakable in one piece — the patch is centred on the hole and
  * clipped to the face rather than spread thin across it. That is the graceful
  * failure and it is deliberate: twelve pieces sprinkled over ninety square
  * metres is confetti, while twelve over the three metres either side of the
  * round is a hole with glass falling out of it. **The right fix for a pane that
- * big is a smaller pane** — see `kit/city.ts`, where the unit is the bay the
- * mullions already divide the elevation into.
+ * big is a smaller pane** — see `kit/city.ts`, where the shopfront breaks a bay
+ * at a time, the unit its own piers divide the elevation into.
  *
- * ## Which way the glass goes, and why it is never the round's way
+ * ## Which way the glass goes: the sheet's normal, the round's side
  *
- * A sheet leaves its frame along its own NORMAL. The round drags glass along
- * its own path only WITHIN the plane, where the round's direction is projected.
- * That is not just how a pane fails: it is what keeps the pieces out of the wall
- * behind them. All but a dozen of Coldharbour's panes are decoration hanging
- * 4 cm off a solid mass, so a burst thrown along the bullet spawns bodies inside
- * the shaft they were hanging on, and Havok spends the first frames shoving them
- * back out through the face they came from.
+ * A sheet leaves its frame along its own NORMAL, on the side the round was
+ * going. The round drags glass along its own path only WITHIN the plane, where
+ * its direction is projected. That is not just how a pane fails: it is what
+ * keeps the pieces out of the frame they hung in and off the piers either side
+ * of them.
  *
- * Which side it leaves BY is the pane's own answer. A cosmetic pane hangs on
- * something solid, so the glass falls out toward the shooter — the one side
- * that is provably open, because a round crossed it to get here. A barrier pane
- * is a way THROUGH (see `BoxSpec.glass`), so its glass goes the way the round
- * went, into the room the shot has just opened.
+ * **The side needs no question asked of the pane, because every pane that
+ * breaks is a way THROUGH** (see `PaneSpec.breakable`): there is a room behind
+ * it, the shot has just opened it, and that is where the glass belongs. It was
+ * a question once, when a city's decorative glazing broke too — a sheet hanging
+ * 4 cm off a solid shaft had to throw its pieces back toward the SHOOTER, the
+ * one side provably open, or Havok spent the first frames shoving bodies out of
+ * the concrete they had been spawned inside. That glass no longer breaks, so
+ * the case is gone rather than handled.
  *
  * ## Everything here is bounded, and each bound is a different thing
  *
@@ -277,15 +278,14 @@ export class DebrisSystem implements PhysicsClient {
 
     // --- which way it leaves ------------------------------------------------
     //
-    // Toward the shooter for a cosmetic pane (the side a round provably came
-    // through, and the side that is not a wall), the way the round went for a
-    // barrier one (which is a way through, and has a room behind it). See the
-    // header.
+    // The way the round went, always: a pane that breaks is a pane with a room
+    // behind it, and the room is where the glass goes. See the header for the
+    // case this used to be a choice between.
     const facing = dir.x * nx + dir.z * nz;
-    const side = (facing > 0 ? -1 : 1) * (geom.box >= 0 ? -1 : 1);
+    const side = facing > 0 ? 1 : -1;
     // The round's own direction, projected into the plane. Out-of-plane it is
     // the normal above and nothing else, which is what keeps the glass out of
-    // the mass the pane is hanging on.
+    // the frame the pane was hanging in.
     const carry = dir.x * ux + dir.z * uz;
 
     this.reshape(slot, pieceW, pieceH);
@@ -300,9 +300,9 @@ export class DebrisSystem implements PhysicsClient {
       return ((this.seed >>> 0) % 10000) / 10000;
     };
     // Clear of the pane's own thickness on the side it is leaving by, so a
-    // piece starts neither inside the sheet it replaces nor inside the mass
-    // that sheet was hanging on — and, for a barrier pane, on the far side of
-    // the collider that is still standing until the authority says otherwise.
+    // piece starts neither inside the sheet it replaces nor inside the frame
+    // that sheet was hanging in — and on the far side of the collider, which is
+    // still standing until the authority says otherwise.
     // The `pieceH` term is the tilt below: a plate pitched a tenth of a radian
     // reaches that much further out of the plane than its own thickness.
     const standoff = side * (thick / 2 + g.shardCollide / 2 + pieceH * 0.06 + 0.02);

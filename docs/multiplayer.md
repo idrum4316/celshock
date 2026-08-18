@@ -847,13 +847,16 @@ every ray for all of them; not merged at all it costs ~17% on every ray in the
 process.
 
 **The bake carries a third list, and it is the one with an ORDER that matters.**
-`panes` is the map's glazing — seven numbers and an index each, the index being
-the pane's own position in `boxes` or -1 for the cosmetic majority that carry no
-collider at all. The authority needs them for two reasons, and the second is the
-one with teeth: it resolves every shot, so it has to know which windows a round
-crossed; and `validateMove` rejects a client standing inside `map.obstacles`, so
-a player who shot out a shopfront and walked through it is snapped back into the
-street unless this side broke the same pane.
+`panes` is the glass a round can take AWAY — seven numbers and an index each,
+the index being the pane's own position in `boxes`. Not the map's glazing, which
+is most of the glass drawn and none of it breakable: a sheet with something
+solid behind it opens nothing, so it is not in `GameMap.panes` on either side
+and the bake never mentions it (see `PaneSpec.breakable`). Coldharbour draws
+6,246 sheets and bakes twelve. The authority needs those twelve for two reasons,
+and the second is the one with teeth: it resolves every shot, so it has to know
+which windows a round crossed; and `validateMove` rejects a client standing
+inside `map.obstacles`, so a player who shot out a shopfront and walked through
+it is snapped back into the street unless this side broke the same pane.
 
 **A pane's index in that array is its NAME on the wire**, so the array's order is
 load-bearing in a way `boxes`' is not merely by convention: both processes build
@@ -862,12 +865,11 @@ in the order its builder declared them — and a disagreement means two sides
 breaking different windows while every other check passes.
 
 `worldFingerprint` carries `porousBoxes`, `rayGroups`, `rayBoxes`, a hash over
-the ray geometry, and `panes`/`paneBarriers`/`paneHash`, because **the nav graph
-is blind to all of it** — every other field in that comparison would match while
-the two sides resolved different shots. `paneBarriers` is counted apart from
-`panes` because it is the half with teeth: a cosmetic pane going missing is a
-window that never breaks, while a barrier pane going missing is geometry one
-side is standing in. Note also that the bake's `sourceHash` covers a map's
+the ray geometry, and `panes`/`paneHash`, because **the nav graph is blind to
+all of it** — every other field in that comparison would match while the two
+sides resolved different shots. The pane hash includes each pane's `box`,
+because a pane pointing at a different collider is two sides agreeing about the
+window and not about the wall. Note also that the bake's `sourceHash` covers a map's
 `layout.ts` and `heights.ts` — **a `porous` flag, a `strut` and a `pane` all live
 in a BUILDER, so changing one is a bake the staleness guard will not notice.
 Re-run `npm run collision` by hand after touching a collider's flags, a
@@ -894,29 +896,30 @@ may only decide half of it.** The split is the point:
 
 - The **visual** is predicted. `CombatSystem.onShotPath` runs on the client's own
   shot and `GlassSystem.shoot(..., authoritative = false)` collapses the pane and
-  throws the shards on the spot. There is nothing to be wrong about — 6,234 of
-  Coldharbour's 6,246 panes have no collider at all, so a predicted break of one
-  changes nothing but pixels, and a window that shatters a round trip after the
-  round went through it is a window that reads as broken by somebody else.
-- The **collider** is not. A barrier pane keeps blocking a body until the
-  authority's `glass` event says otherwise, which is the one round trip that
-  matters: it is not long enough to walk through a shopfront, and it is the
-  difference between an early break and a client standing where the server still
-  has a wall. `validateMove` is the thing that would report it, by snapping the
-  player back into the street.
+  throws the shards on the spot. There is nothing to be wrong about: a sheet that
+  vanished on the shooter's screen and not on the server's is pixels, and a
+  window that shatters a round trip after the round went through it is a window
+  that reads as broken by somebody else.
+- The **collider** is not, and every pane has one — a pane that breaks is a pane
+  with a room behind it. It keeps blocking a body until the authority's `glass`
+  event says otherwise, which is the one round trip that matters: it is not long
+  enough to walk through a shopfront, and it is the difference between an early
+  break and a client standing where the server still has a wall. `validateMove`
+  is the thing that would report it, by snapping the player back into the
+  street.
 
 **The event carries the panes, the crossing point and the direction**, because
 the shards are thrown from the last two and the authority is the only side that
 knows where the round actually was. It is an ARRAY: a round crosses everything in
-its path, so a shot down a glazed street breaks several at once and they share a
-direction by construction. `at` is the FIRST crossing, so the panes behind it
+its path, so a shot along a frontage breaks several bays at once and they share
+a direction by construction. `at` is the FIRST crossing, so the panes behind it
 throw their glass from a point a few metres off — a wrongness measured in metres,
 on an effect lasting a second and a half, against a message per pane.
 
 **A joiner is caught up by STATE, and it is the `scores` argument again.**
 Broken glass is cumulative and permanent within a round, so a client five
-minutes late has missed every event and would see a street of intact windows the
-rest of the match shot out. `Welcome.brokenPanes` is the list, omitted when
+minutes late has missed every event and would see intact shopfronts the rest of
+the match walks through. `Welcome.brokenPanes` is the list, omitted when
 empty, and deliberately NOT on `RoundStart` — a rotation rebuilds the map and
 puts every pane back, so the empty list is the only correct answer there and
 saying nothing is how it is said.

@@ -25,8 +25,8 @@ export const glass = {
    * How far a piece of `shardMax` is worth drawing, in metres. A smaller piece
    * gates proportionally nearer, because the question is how big it looks
    * rather than how far away it is: this number over `shardMax` is the one
-   * apparent size the gate is really made of, and a cottage window's 0.35 m
-   * pieces still stop at ~44 m against the flat 60 m gate this replaced.
+   * apparent size the gate is really made of, and a 0.35 m piece still stops
+   * at ~44 m against the flat 60 m gate this replaced.
    *
    * Deliberately NOT the fog wall, which is what `RagdollSystem` gates on. That
    * number is "how far can anything be seen at all", and on Coldharbour it is
@@ -78,15 +78,17 @@ export const glass = {
    * because a hand of gravel under a shopfront that has just vanished is the
    * mismatch the player actually sees. `DebrisSystem` divides the pane's face
    * into cells of `sqrt(area / shards)` and clamps that pitch here, so a 1.3 m
-   * cottage window throws 0.35 m pieces and a shopfront bay throws 0.95 m ones.
+   * window would throw 0.35 m pieces where a shopfront bay throws 0.95 m ones.
    *
-   * The floor keeps Havok from being asked about a speck. **The ceiling is the
-   * number to move if a burst stops covering its pane**: the panes this kit
-   * builds run 12–19 m², which is twelve cells of a metre or so, and a ceiling
-   * under that turns the burst into a patch around the hole instead of the
-   * whole sheet. That is the graceful failure rather than the intent — the
-   * glass that IS drawn stays where the player is looking — and it is what any
-   * pane much larger than these gets.
+   * The floor keeps Havok from being asked about a speck, and it is the end of
+   * the band nothing on the shipped maps reaches: every pane that breaks today
+   * is a shopfront bay, because that is where the glass has a room behind it
+   * (see `PaneSpec.breakable`). **The ceiling is the number to move if a burst
+   * stops covering its pane**: those bays run 12–19 m², which is twelve cells of
+   * a metre or so, and a ceiling under that turns the burst into a patch around
+   * the hole instead of the whole sheet. That is the graceful failure rather
+   * than the intent — the glass that IS drawn stays where the player is looking
+   * — and it is what any pane much larger than these gets.
    */
   shardMin: 0.12,
   shardMax: 1.2,

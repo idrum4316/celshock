@@ -2377,7 +2377,7 @@ export class Game {
     // editor that means in the middle of a rebuild. Editor builds register
     // nothing at all.
     this.physics.setMap(map, opts?.editor === true);
-    // The panes, and the collider meshes behind the few that are barriers. Same
+    // The panes, and the collider meshes standing behind them. Same
     // reason as every line above it: a system holding last build's geometry is
     // holding meshes that are already disposed, and glass is the one that would
     // then write vertices into them.

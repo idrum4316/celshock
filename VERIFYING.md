@@ -202,27 +202,30 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
     world `(sin, cos)`) and the segment crosses exactly that pane. Aiming
     sideways along a tower's face legitimately crosses two, which reads like a
     bug and is not.
-  - **A muzzle INSIDE a pane is not a crossing and is reachable.** A cosmetic
-    pane carries no collider, so a body can stand in one — a tower's curtain wall
-    is a 0.14 m sheet hanging off the shaft. `segmentHitsPane` requires `t0 > 0`
-    for that reason. A test that places its origin near a tower will otherwise
-    "break" a 32 m elevation it never aimed at, which was the only case a
-    brute-force control over 600 shots ever disagreed about.
+  - **A muzzle INSIDE a pane is not a crossing.** `segmentHitsPane` requires
+    `t0 > 0`, so a script whose origin lands in the 0.12 m sheet gets nothing
+    back and should not read that as a broken sweep. It was reachable by
+    standing against any tower when the curtain walls were panes; today it takes
+    `ObstacleField`'s push-out losing an argument, and the measurement is from
+    then — a brute-force control over 600 shots disagreed with the sweep on this
+    case and no other.
   - **The break is idempotent and a second shot down the same line returns an
     empty array** — assert on that rather than on a count, or a re-run of the
     same script reads as a broken sweep.
-  - **A pane's normal has no preferred SIGN, and half the panes on a map point
-    into the building.** `+z` local is one face and the shooter is as likely to
-    belong on the other, so a script that stands off `+n` unconditionally puts
-    its muzzle inside a tower shaft — which reads as the shard throw going the
-    wrong way (`DebrisSystem` drops a cosmetic pane's glass toward the SHOOTER,
-    and it did exactly that: into the shaft the shooter was standing in). Pick
+  - **A pane's normal has no preferred SIGN.** `+z` local is one face and the
+    shooter is as likely to belong on the other, so a script that stands off
+    `+n` unconditionally fires from inside the shop it meant to shoot into. Pick
     the side that is open air first: a point-in-box test over
     `map.colliderBoxes` is four lines and settles it.
-  - **A barrier pane is what to test the BODY half on**, and there are twelve on
-    Coldharbour against 6,234 cosmetic ones (`map.panes.filter(p => p.box >= 0)`).
-    `map.obstacles.resolve(x, y, z, CONFIG.nav.bodyRadius, out)` reports a
-    push-out of ~0.4 m at an intact one and nothing at a broken one; that pair is
+  - **`map.panes` is the glass that BREAKS and not the glass that is drawn.**
+    Coldharbour lists twelve — the two offices' shopfront bays — against 6,246
+    sheets in `map.paneGroups`, whose vertex count over 24 is the sheet count.
+    A curtain wall, a punched window and a windscreen are glazing: `sweep` will
+    never report one, and a test that aims at a tower expecting a break is
+    testing the rule rather than finding a bug.
+  - **The BODY half is testable on any pane, because every pane has a
+    collider.** `map.obstacles.resolve(x, y, z, CONFIG.nav.bodyRadius, out)`
+    reports a push-out at an intact one and nothing at a broken one; that pair is
     the assertion, not a screenshot.
 - **How the glazing LOOKS cannot be judged from one screenshot, and that is the
   feature rather than a testing problem.** It is a Fresnel between the tint of

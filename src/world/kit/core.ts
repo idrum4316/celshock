@@ -104,8 +104,8 @@ export interface BoxSpec {
   rayOnly?: true;
 
   /**
-   * A `porous` box that can stop being one: the collider half of a BARRIER
-   * pane. Declared by `Build.pane({ barrier: true })` and by nothing else.
+   * A `porous` box that can stop being one: the collider half of a BREAKABLE
+   * pane. Declared by `Build.pane({ breakable: true })` and by nothing else.
    *
    * Intact, it is exactly `porous` — a body walks into it, a round goes
    * through — which is why the two pick predicates in `solid.ts` need no new
@@ -126,11 +126,12 @@ export interface BoxSpec {
 }
 
 /**
- * A pane of glass: a sheet that shatters when a round crosses it.
+ * A pane of glass: a sheet in a wall, drawn see-through.
  *
  * Declared by `Build.pane`, which is the only place one is made. Same six
  * numbers a `BoxSpec` carries, because a pane IS a thin box — what makes it a
- * pane is that `MapBuilder` keeps it addressable through both merge passes so
+ * pane is the material, and what makes a `breakable` one a pane rather than a
+ * box is that `MapBuilder` keeps it addressable through both merge passes so
  * one sheet can be taken out of the world at runtime.
  */
 export interface PaneSpec {
@@ -142,24 +143,34 @@ export interface PaneSpec {
   z: number;
   rotY?: number;
   /**
-   * Stops a body until it is broken, and so is a genuine way into a building
-   * once it is not.
+   * A way IN once it is shot out — and the ONLY kind of pane that breaks.
    *
-   * **Not the default, and the reason is measured.** A barrier pane costs a
-   * collider, and `MapBuilder.struts`'s header records what loose collider
-   * boxes cost: 161 of them put ~17% on every ray in the game, `probeGround`
-   * — the most expensive per-frame call there is — included. Coldharbour
-   * carries some six thousand panes, and six thousand pickable boxes is not a
-   * trade, it is a regression. So the default pane is a sheet that shatters and
-   * changes nothing else, and `barrier` is authored one at a time for the
-   * handful of places glass is the ONLY thing in the way.
+   * **Glass is worth breaking exactly where there is enterable space behind
+   * it, and that is a design rule before it is a cost one.** A sheet hung on a
+   * solid mass is decoration: the round stops on the concrete either way, so
+   * breaking it changes nothing you can play with and takes the elevation's
+   * word for what is inside with it — a shopfront that shatters into a blank
+   * grey shaft says plainly that the building is a box. A tower's curtain wall
+   * hangs 4 cm off one and a punched window is drawn on the same shaft, so
+   * neither breaks; an office's upper window band is not even glazed, because
+   * glass over a spandrel that already stops a body would buy nothing at all.
+   * The two offices' ground-floor shopfronts are the whole of what does break,
+   * because behind those there is a room.
    *
-   * Glazing an opening something else already closes buys nothing: an office's
-   * window band sits over a 1 m spandrel that stops a body already, and a
-   * tower's curtain wall hangs 4 cm off a solid shaft. Reach for this where
-   * there is no wall behind the glass.
+   * So the collider comes WITH this flag rather than beside it: a pane with
+   * somewhere to get into is by construction the only thing in the way, which
+   * is a body's barrier until it goes. Set this and `MapBuilder.paneGroup`
+   * spawns the `glass` collider, records the `WorldPane` that gives the sheet
+   * its index on the wire, and bakes it for the authority; leave it off and the
+   * geometry is drawn and nothing else knows it exists.
+   *
+   * **That is also what keeps the cost honest.** `MapBuilder.struts`'s header
+   * records what loose collider boxes cost: 161 of them put ~17% on every ray
+   * in the game, `probeGround` — the most expensive per-frame call there is —
+   * included. Coldharbour draws some six thousand sheets of glass, and six
+   * thousand pickable boxes is not a trade, it is a regression. Twelve is.
    */
-  barrier?: true;
+  breakable?: true;
 }
 
 /**
@@ -243,12 +254,17 @@ export interface Structure {
   /**
    * Glazing, kept apart from `meshes` for the whole of its life.
    *
-   * A pane has to stay addressable through both merge passes, and `meshes` is
-   * the list that gets merged into oblivion — per colour here, then per 48 m
-   * block across neighbouring placements. `paneMeshes` is merged once, per
-   * placement, and never joins a block; `panes` is the parallel spec list
-   * `MapBuilder` records world rects and vertex ranges from. The two are
-   * index-for-index, exactly as `meshes`/`colliders` are not.
+   * Two reasons, and the first covers every sheet: glass is the world's one
+   * alpha-blended material and the one visual with no ink, so it merges on its
+   * own path (`MapBuilder.paneGroup`, then `PaneBlocks`) rather than through
+   * `mergeByMaterial` and `BlockMerge`, which would ink it and cast it. The
+   * second covers the handful that are `breakable`: a pane that can be taken
+   * out has to stay addressable through both of those merges, and `meshes` is
+   * the list that gets merged into oblivion.
+   *
+   * `panes` is the parallel spec list `MapBuilder` reads world rects and vertex
+   * ranges off. The two are index-for-index, exactly as `meshes`/`colliders`
+   * are not.
    */
   paneMeshes: Mesh[];
   panes: PaneSpec[];
@@ -534,15 +550,17 @@ export class Build implements Structure {
   }
 
   /**
-   * A pane of glass — the one thing in the world a round can take away.
+   * A pane of glass — and, where something can get in behind it, the one thing
+   * in the world a round can take away.
    *
    * The fourth box word, and the only one whose geometry leaves `meshes`. A
-   * pane passes a round like a `porous` `block`, is the only thing in the world
-   * drawn SEE-THROUGH (`CelMaterialFactory.getGlass` — a reflection of the sky
-   * over the tint of whatever stands behind it), and — uniquely — keeps an
-   * identity through both of `MapBuilder`'s merges, so `GlassSystem` can
-   * collapse this sheet and no other when something crosses it. See `PaneSpec`
-   * for what `barrier` costs and when it is worth it.
+   * pane passes a round like a `porous` `block` and is the only thing in the
+   * world drawn SEE-THROUGH (`CelMaterialFactory.getGlass` — a reflection of
+   * the sky over the tint of whatever stands behind it). A `breakable` one
+   * also keeps an identity through both of `MapBuilder`'s merges, so
+   * `GlassSystem` can collapse this sheet and no other when something crosses
+   * it; the rest are glazing, drawn and nothing more. See `PaneSpec` for which
+   * a sheet should be and why the answer is what is BEHIND it.
    *
    * The colour is the caller's because a shopfront and a windscreen are not the
    * same glass, but it is `GLASS` by default for the same reason `surface` has
@@ -555,7 +573,7 @@ export class Build implements Structure {
     x: number,
     y: number,
     z: number,
-    opts?: { color?: string; rotY?: number; barrier?: true },
+    opts?: { color?: string; rotY?: number; breakable?: true },
   ): Mesh {
     const m = MeshBuilder.CreateBox(
       `${this.tag}-pane${this.paneMeshes.length}`,
@@ -572,7 +590,7 @@ export class Build implements Structure {
       CONFIG.graphics.glass,
     );
     this.paneMeshes.push(m);
-    this.panes.push({ w, h, d, x, y, z, rotY: opts?.rotY, barrier: opts?.barrier });
+    this.panes.push({ w, h, d, x, y, z, rotY: opts?.rotY, breakable: opts?.breakable });
     return m;
   }
 

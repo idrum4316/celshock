@@ -17,13 +17,15 @@
  * from geometry may see them: a 0.1 m rail is a shape the nav grid can only get
  * wrong.
  *
- * `panes` is the glazing: 0 sheets, of which 0 are
- * BARRIERS with a collider in `boxes` (the eighth entry is its index there,
- * or -1). The authority needs them because it resolves every shot and because
- * its move validator has to agree about which shopfront somebody has just
- * walked through — see `systems/GlassSystem.ts`. The index into this array is
- * the pane's identity on the wire, so its ORDER is load-bearing and is the
- * client's build order.
+ * `panes` is the glass a round can take away: 0 sheets, each with a
+ * collider in `boxes` (the eighth entry is its index there) holding a body out
+ * of the opening until it goes. Not the city's glazing, which is most of the
+ * glass drawn and none of it breakable — a sheet with something solid behind it
+ * opens nothing, so the authority is told nothing about it. The ones here are
+ * needed because it resolves every shot and because its move validator has to
+ * agree about which shopfront somebody has just walked through — see
+ * `systems/GlassSystem.ts`. The index into this array is the pane's identity on
+ * the wire, so its ORDER is load-bearing and is the client's build order.
  *
  * `sourceHash` covers this map's `layout.ts` and `heights.ts`. The server
  * checks it at startup and refuses to run when it does not match, because a

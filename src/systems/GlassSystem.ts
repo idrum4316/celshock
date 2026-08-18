@@ -27,16 +27,28 @@
  * on the authority, which has the same panes off the collision bake and no
  * scene worth picking against.
  *
+ * ## What is in this system, and what is merely glass
+ *
+ * A pane is here because there is enterable space behind it — that is what
+ * `PaneSpec.breakable` declares and the only thing that puts a sheet in
+ * `GameMap.panes`. The six thousand sheets of curtain wall and windscreen on
+ * Coldharbour are hung on something solid, break nothing open, and are geometry
+ * this system has never heard of: they are not swept, not bucketed, not baked
+ * and not nameable on the wire. So the whole of this file runs over the twelve
+ * shopfront bays a round can actually open, and the sweep costs what twelve
+ * panes cost.
+ *
  * ## The three things a break touches, and the one it defers
  *
  * The VISUAL is a vertex range in a merged mesh: collapsing it onto its own
  * first vertex makes every triangle in the pane degenerate, which draws nothing
  * and takes the outline shell with it (see `MapBuilder.paneGroup`).
  *
- * The COLLIDER is a barrier pane's, and most panes have none. Clearing `solid`
- * takes it out of both pick predicates in one write; clearing `checkCollisions`
- * takes it out of `moveWithCollisions`; `ObstacleField.remove` takes it out of
- * the sub-cell push-out the bots and the server's move validator both read.
+ * The COLLIDER is every pane's, because a pane with a room behind it is the
+ * only thing in the way while it stands. Clearing `solid` takes it out of both
+ * pick predicates in one write; clearing `checkCollisions` takes it out of
+ * `moveWithCollisions`; `ObstacleField.remove` takes it out of the sub-cell
+ * push-out the bots and the server's move validator both read.
  *
  * The NAV GRAPH is `NavGrid.openBox`, which relinks the ground the pane was
  * severing. That is local and cheap.
@@ -90,10 +102,10 @@ export class GlassSystem {
   /** Intact is 0, broken is 1. Indexed by pane. */
   private broken = new Uint8Array(0);
   /**
-   * A barrier pane's collider mesh, by pane index. The authority rebuilds its
-   * colliders from the bake and has no `metadata.pane` on them, so this is
-   * empty there — and `clearCollider`'s other three effects are what matter on
-   * that side anyway.
+   * A pane's collider mesh, by pane index. The authority stamps `metadata.pane`
+   * itself when it rebuilds its colliders from the bake (see
+   * `buildServerWorld`), so this is filled on both sides from the two places
+   * that make the same mark.
    */
   private colliders = new Map<number, Mesh>();
   /** Fields owed a rebuild, oldest first. Drained one per frame by `update`. */
@@ -194,11 +206,11 @@ export class GlassSystem {
    * calls this with it FALSE on its own shot, which is a prediction: the pane
    * disappears and the shards fly immediately, and the collider is left alone
    * until the authority's `glass` event confirms it. That split is what makes
-   * predicting safe — 900 of the map's 910 panes have no collider at all, so
-   * they predict perfectly; the handful of barrier panes keep blocking a body
-   * for the one round trip it takes to be told, which is not long enough to
-   * walk through a window and is the difference between an early break and a
-   * client standing in a wall the server still has.
+   * predicting safe — the LOOK of a break is the client's to guess and the WAY
+   * IN is not. A pane keeps blocking a body for the one round trip it takes to
+   * be told, which is not long enough to walk through a window and is the
+   * difference between an early break and a client standing in a wall the
+   * server still has.
    *
    * Returns the panes it broke, so the caller can put them on the wire.
    */
@@ -303,8 +315,13 @@ export class GlassSystem {
   }
 
   /**
-   * Takes a barrier pane's collider out of the world, and the nav graph with
-   * it. A no-op for the cosmetic majority, and for a pane already cleared.
+   * Takes a pane's collider out of the world, and the nav graph with it. A
+   * no-op for a pane already cleared, which is what `box.glass` is read for.
+   *
+   * The `box < 0` guard is the bake's shape rather than a live case. Every
+   * pane a builder makes carries its collider's index; a bake old enough to
+   * predate that carries -1, and the guard is what keeps this from indexing
+   * `colliderBoxes` with it.
    */
   private clearCollider(pane: number): void {
     const map = this.map;
@@ -465,12 +482,13 @@ function segmentHitsPane(
     if (t0 > t1) return null;
   }
   // The round must ENTER the pane, not merely overlap it. `t0 === 0` is a
-  // muzzle already inside the glass, which is not a shot through a window —
-  // and it is reachable, because a cosmetic pane carries no collider and a body
-  // can stand in one: a tower's curtain wall is a 0.14 m sheet hanging off the
-  // shaft, so a player pressed against the tower is inside it, and firing down
-  // the street from there would otherwise take out the whole elevation they
-  // never aimed at. Measured against a brute-force control over 600 varied
-  // shots: this is the only case the two ever disagreed about.
+  // muzzle already inside the glass, which is not a shot through a window. A
+  // pane's own collider holds a walking body out of it, but `ObstacleField`'s
+  // push-out is a preference and never a veto (see `docs/bots.md`), so a bot
+  // shoved against a shopfront can have its muzzle in the sheet — and would
+  // otherwise blow out the bay it is standing in the moment it fires down the
+  // street. It was reachable more cheaply still when the curtain walls were
+  // panes, and the measurement is from then: against a brute-force control over
+  // 600 varied shots, this is the only case the two ever disagreed about.
   return t0 > 0 ? t0 : null;
 }

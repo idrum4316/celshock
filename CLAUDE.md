@@ -500,7 +500,7 @@ and a builder picks which by how it declares the box:
 | ordinary — `wall`, `block` | yes | yes | yes |
 | `porous` — a fence's coarse run | yes | **no** | yes |
 | `rayOnly` — a fence's posts and rails (`strut`) | **no** | yes | **no** |
-| `glass` — a barrier pane, intact | yes | **no** | nav only |
+| `glass` — a breakable pane, intact | yes | **no** | nav only |
 | `glass` — the same pane, broken | **no** | **no** | **no** |
 
 **`porous` and `rayOnly` exist as a pair and describe one object between them**,
@@ -514,7 +514,7 @@ shape `NavGrid` can only get wrong, which is the same reason `guard()` stands a
 deck rail off the surface it guards.
 
 **`glass` is the one thing in the world that CHANGES, and it needs no new
-predicate to do it.** A barrier pane is `porous` exactly — a body walks into it,
+predicate to do it.** A breakable pane is `porous` exactly — a body walks into it,
 a round goes through — so both predicates already get intact glass right;
 breaking it clears `solid` itself and the box leaves both in one property write.
 That is deliberate rather than clever: these are the hottest predicates in the
@@ -524,9 +524,9 @@ with a write rather than with a term every ray in the process evaluates.
 merely pass a round through it — `CoverMap`, the AO bake, and the collision bake
 that carries it to the authority.
 
-→ **[`docs/world.md`](docs/world.md)** on panes: why `barrier` is not the
-default (the measured ray cost of a collider box per pane), how a pane stays
-addressable through both merges, and what breaking one owes the nav graph.
+→ **[`docs/world.md`](docs/world.md)** on panes: why `breakable` is rare and
+what decides it, how a pane stays addressable through both merges, and what
+breaking one owes the nav graph.
 
 **`MapBuilder.struts` merges a placement's struts into ONE collider mesh, and
 that is what makes the fidelity affordable.** A pick costs per MESH — predicate,
@@ -658,6 +658,25 @@ pull-in.
 
 ### Breakable glass
 
+**Glass BREAKS where there is enterable space behind it, and is decoration
+everywhere else.** That is a design rule first: a sheet hung on a solid mass
+stops nothing, so shooting it out changes nothing you can play with and costs
+the building its word — a street-level shopfront that shatters into a blank grey
+shaft says plainly that there is no inside. Coldharbour draws 6,246 sheets and
+twelve of them break, all of them the two offices' shopfront bays. A tower's
+curtain wall hangs 4 cm off a solid shaft, a punched window is a hole drawn on
+the same shaft, a car's greenhouse is a cabin nobody gets into: those stay whole
+and the round sparks on what is behind them. (An office's upper window band is
+the case one step further on — it is left OPEN, because glass over a spandrel
+that already stops a body would be worth neither the pane nor the drawing.)
+
+The rule is declared as `PaneSpec.breakable` and it carries the collider with
+it, because a pane with a room behind it is by construction the only thing in
+the way. So there is one kind of pane rather than two: everything else is
+glazing that `MapBuilder` draws and no other part of the game has heard of — not
+in `GameMap.panes`, not bucketed for the sweep, not in the collision bake, and
+not nameable on the wire.
+
 A pane is the one piece of world geometry that is not static, and it moves in
 one direction only: it breaks and never mends inside a round. That monotonicity
 is what makes an incremental update to the nav graph safe rather than merely
@@ -668,16 +687,17 @@ a flow field computed before a window opened is stale rather than wrong.
 which means the hitscan's wall pick can never report one.** `CombatSystem.fire`
 raises `onShotPath` with the segment the round actually flew and `GlassSystem`
 answers it analytically, bucketed by map block: nothing on `Player.probeGround`,
-nothing on the bots' line of sight, and ~15 µs on a shot. The same code runs on
-the authority, which gets its panes off the collision bake and draws none of
-them.
+nothing on the bots' line of sight, and ~0.6 µs on a shot — twelve panes in two
+buckets, against ~15 µs when six thousand sheets of decorative glazing were
+panes too. The same code runs on the authority, which gets its panes off the
+collision bake and draws none of them.
 
 **A pane's index in `GameMap.panes` is its identity**, on both sides and on the
 wire, exactly as an index into `colliderBoxes` is — both processes build the list
 in the same order and `npm run parity` is what proves they still do. Breaking is
 the authority's; a client predicts the VISUAL on its own shot and leaves the
-collider standing until told, because all but twelve of Coldharbour's 6,246 panes
-have no collider at all and the dozen that do would otherwise let a player walk
+collider standing until told, because the look of a break is a guess worth
+making and the way IN is not: predicting that one would let a player walk
 through a shopfront the server still has closed.
 
 **A pane is also see-through, which is the one thing about glass that is a

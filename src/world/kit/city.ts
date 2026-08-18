@@ -45,16 +45,20 @@
  *
  * ## The glass, and where it is allowed to matter
  *
- * Every pane here is a `Build.pane`, which is what makes it breakable — but
- * only twelve of the map's 1,762 are `barrier` panes, and the distinction is
- * the design rather than an optimisation.
+ * Six thousand sheets are drawn here and TWELVE of them break, and which twelve
+ * is answered by what is behind the glass rather than by what is in front of
+ * it: a pane is `breakable` where there is enterable space behind it, and is
+ * glazing everywhere else.
  *
- * **Glazing an opening something else already closes buys nothing.** A tower's
- * curtain wall hangs 4 cm off a solid shaft, so a round has always stopped on
- * the concrete behind it; an upper floor's window band sits over a 1 m spandrel
- * that stops a body already. Both are worth glazing for the look and neither is
- * worth a collider — see `PaneSpec.barrier` for what one costs every ray in the
- * game.
+ * **Glass hung on a solid mass is decoration, and breaking decoration is worse
+ * than leaving it alone.** A tower's curtain wall hangs 4 cm off a solid shaft,
+ * so a round has always stopped on the concrete behind it, and the brick
+ * variant's punched windows are drawn on that shaft too. Shooting either out
+ * changes nothing you can play with and costs the elevation its word: a
+ * street-level shopfront that shatters into a blank grey shaft is a building
+ * admitting it is a box. So it stays whole, the round sparks on the concrete
+ * 4 cm behind it, and the sheet is never in `GameMap.panes`, the sweep, the
+ * collision bake or the wire at all — see `PaneSpec.breakable`.
  *
  * The one place glass is the ONLY thing in the way is `buildOffice`'s +Z
  * elevation, which is a glazed shopfront rather than the blank wall it was: a
@@ -64,12 +68,12 @@
  * as a building, and each bay is its own pane so one round takes out a bay
  * rather than a frontage.
  *
- * The tower's glazing is split ONE STOREY AT A TIME for the same reason at a
- * different scale. It was a sheet per elevation first, which is the same
- * triangles either way — but a pane is the unit that breaks, and one round
- * taking a 25 x 21 m face of glass out of a building is absurd from the street
- * below it. A storey band is what sits between two collars, so a break reads as
- * a floor's glazing going.
+ * The tower's glazing is split one storey band by one BAY for what is now a
+ * reason about the LOOK alone: a band is what sits between two collars and a
+ * bay is what sits between two fins, so the elevation reads as panels in a
+ * frame rather than as one mirror hung on a block. It was a sheet per
+ * elevation first — the same triangles either way, and every one of them
+ * merged into the same mesh, so the unit costs nothing and buys the reveal.
  *
  * ## What is deliberately NOT here
  *
@@ -229,19 +233,20 @@ export function buildTower(
    * shadow line and the bands are the thing catching the sun.
    *
    * **It is glazed one PANEL at a time — a storey tall and a bay wide — and
-   * that is what a pane is for.** The elevation was a single sheet first, then a
-   * storey band, and both were the same mistake at two scales: a pane is the
-   * unit that BREAKS, and one round taking a 25 x 21 m face of glass — or a
-   * 25 x 3.7 m ribbon of it — out of a building is absurd from the street it is
-   * standing on. Both units are the building's own: a band is what sits between
-   * two collars, and a bay is what sits between two FINS, so a break reads as
-   * one panel going out of its frame with the mullions either side of it still
-   * standing. It is also what makes the shards affordable — a burst is twelve
-   * pieces cut from the pane's own face, so the face has to be a size twelve
-   * pieces can account for (see `systems/DebrisSystem.ts`).
+   * both units are the building's own**: a band is what sits between two
+   * collars, a bay is what sits between two FINS, and the sheet stops short of
+   * each so the frame is drawn around the glass rather than over it. The
+   * elevation was a single sheet first and a storey ribbon after that, and both
+   * read as one mirror hung on a block, because a curtain wall's whole
+   * appearance is the grid it is divided by.
    *
-   * It is the shopfront's rule below, applied to the tower: per bay, because a
-   * pane is what breaks.
+   * The panel is FREE, which is what lets it be chosen for the look alone: none
+   * of this glass breaks (it hangs on a solid shaft — see the file header), so
+   * a panel is not a unit anything at runtime holds. It is the same triangles
+   * as a ribbon, merged into the same mesh by `MapBuilder.paneGroup`, and it is
+   * in no pane list, no sweep and no bake. The shopfront below is the opposite
+   * case and is cut per bay for the opposite reason: there, a pane is what
+   * BREAKS.
    */
   const glaze = (mw: number, md: number, y0: number, y1: number): void => {
     const tall = y1 - y0 - 0.6;
@@ -482,19 +487,22 @@ export function buildOffice(
   // The +Z elevation is a GLAZED SHOPFRONT, and it is the one place on the map
   // where glass is the only thing in the way.
   //
-  // Every other pane in this kit is decoration: a tower's curtain wall hangs
-  // 4 cm off a solid shaft, and the window bands upstairs sit over a 1 m
-  // spandrel that already stops a body. Glazing those changes nothing you can
-  // play with. A shopfront does — it is a wall until somebody shoots it, and
-  // then it is a way in, which is why it is the elevation that faces the street
-  // and why the two doorways are on the other three sides. A squad holding both
-  // doors now has a third opening they can hear go in behind them.
+  // Every other pane in this kit is decoration and stays whole: a tower's
+  // curtain wall hangs 4 cm off a solid shaft and its punched windows are drawn
+  // on the same shaft, so breaking either would change nothing you can play
+  // with. The bands upstairs go one further and carry no glass at all, over a
+  // 1 m spandrel that already stops a body. A shopfront does — it is a wall until
+  // somebody shoots it, and then it is a way in, which is why it is the
+  // elevation that faces the street and why the two doorways are on the other
+  // three sides. A squad holding both doors now has a third opening they can
+  // hear go in behind them.
   //
   // Structurally it is piers and bays: the piers are ordinary `wall`s so the
   // elevation still reads as a building and so the corners are never glass, and
-  // each bay between them is one BARRIER pane. Per bay rather than one sheet
-  // across the front, because a pane is what breaks — a single sheet would take
-  // the whole elevation out on one round.
+  // each bay between them is one BREAKABLE pane — the only twelve on the map,
+  // because these are the only twelve with a room behind them. Per bay rather
+  // than one sheet across the front, because a pane is what breaks — a single
+  // sheet would take the whole elevation out on one round.
   {
     const bays = Math.max(3, Math.round(w / 5));
     const pier = 0.6;
@@ -507,7 +515,7 @@ export function buildOffice(
       // Thinner than the piers and centred on the same plane, so a round that
       // stops on a pier sparks where the concrete is drawn and one through a
       // bay meets only the glass.
-      b.pane(span, gh, 0.12, x, g0 + gh / 2, d / 2, { barrier: true });
+      b.pane(span, gh, 0.12, x, g0 + gh / 2, d / 2, { breakable: true });
     }
   }
   // The +X doorway is cut by hand: `doorWall` runs along X, and this wall runs
@@ -847,6 +855,12 @@ export function buildBarrier(
  * the gravestone's lesson — a box squared off to the silhouette stops rounds
  * through the parts of it that are not there — and it is why the roof, the
  * pillars and the wheels are all outside the box.
+ *
+ * The greenhouse is glazing rather than a `breakable` pane. A cabin is empty,
+ * but it is not somewhere anybody gets into: a round already crosses it and
+ * comes out the far side, so breaking the glass would buy an effect and nothing
+ * else — and it would keep twenty-six sheets in the pane list, the sweep, the
+ * bake and the wire to do it. See `PaneSpec.breakable`.
  */
 export function buildCar(
   scene: Scene,

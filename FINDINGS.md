@@ -386,9 +386,9 @@ floor rather than an estimate.
 ## 9. A broken pane costs a flow-field rebuild, and the rebuild is not measured on real hardware
 
 **Status:** measured headless, amortised, and worth re-measuring before anyone
-raises the barrier-pane count.
+raises the breakable-pane count.
 
-Breaking a barrier pane relinks the nav graph locally — cheap, bounded by the
+Breaking a pane relinks the nav graph locally — cheap, bounded by the
 box — and then owes every flow field a rebuild, because a route computed before
 a wall opened still walks round it. `GlassSystem.update` drains **one field per
 frame** and coalesces every break inside that window into the same pass.
@@ -417,12 +417,14 @@ field per frame is comfortable or whether it wants spreading further. The
 cheapest way to settle it is the same harness as the table above with the page's
 own frame loop rather than a synchronous call.
 
-**How it scales with the barrier count.** Coldharbour has twelve barrier panes
-and a firefight breaks perhaps two or three of them, so the rebuild queue is
-usually one pass. A map that glazed every ground floor would break several
-per exchange — and while the coalescing means that is still one pass per burst
-rather than one per pane, nobody has stood in a fight and counted. Raise
-`PaneSpec.barrier` usage and this entry is the thing to re-read.
+**How it scales with the breakable count.** Coldharbour has twelve breakable
+panes — the two offices' shopfront bays, the only glass on the map with a room
+behind it — and a firefight breaks perhaps two or three of them, so the rebuild
+queue is usually one pass. A map that made every ground floor enterable would
+break several per exchange — and while the coalescing means that is still one
+pass per burst rather than one per pane, nobody has stood in a fight and
+counted. Reach for `PaneSpec.breakable` more often and this entry is the thing
+to re-read.
 
 ---
 

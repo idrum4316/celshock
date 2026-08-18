@@ -67,27 +67,27 @@ export interface WorldFingerprint {
   rayBoxes: number;
   rayHash: string;
   /**
-   * The glazing: how many panes, how many of those are barriers, and where
-   * they all are.
+   * The glazing that can BREAK: how many panes, and where they all are.
+   *
+   * Not how much glass is drawn — a sheet with something solid behind it is
+   * never in `GameMap.panes` and never in the bake (see `PaneSpec.breakable`),
+   * so what this counts is the openings, and Coldharbour's twelve shopfront
+   * bays are all of them.
    *
    * Here for `porousBoxes`' reason taken further. A pane's index is its NAME on
    * the wire, so two sides that built the same glass in a different order would
    * agree on every other field in this object and break different windows —
-   * and, for a barrier pane, would disagree about which shopfront a body may
-   * walk through, which the move validator turns into a player snapped back
-   * through a wall they can see is broken. The hash is order-dependent for
-   * exactly that reason.
-   *
-   * `paneBarriers` is counted separately because it is the half with teeth: a
-   * cosmetic pane going missing is a window that never breaks, while a barrier
-   * pane going missing is geometry one side is standing in.
+   * and, since every pane carries the collider that holds a body out of it,
+   * would disagree about which shopfront a body may walk through, which the
+   * move validator turns into a player snapped back through a wall they can see
+   * is broken. The hash is order-dependent for exactly that reason, and `box`
+   * is in it: a pane whose collider index moved names a different way in.
    *
    * Like `porousBoxes` this is declared in a BUILDER, so `sourceHash` — which
    * covers `layout.ts` and `heights.ts` — cannot notice it going stale. Re-run
    * `npm run collision` by hand after touching one.
    */
   panes: number;
-  paneBarriers: number;
   paneHash: string;
   /** Nav surfaces — a (cell, height) pair each, so this counts geometry. */
   surfaces: number;
@@ -121,13 +121,11 @@ export function worldFingerprint(map: GameMap): WorldFingerprint {
 
   // Order-dependent for a sharper reason than the timber's: a pane's position
   // in this list is what a `glass` event on the wire names it by. `box` is in
-  // the hash because a barrier pane and a cosmetic one at the same place are
-  // not the same object.
+  // the hash because it is the collider a break has to clear, and two sides
+  // pointing at different boxes agree about the window and not about the wall.
   const panes: number[] = [];
-  let barriers = 0;
   for (const p of map.panes) {
     panes.push(p.w, p.h, p.d, p.cx, p.cy, p.cz, p.rotY, p.box);
-    if (p.box >= 0) barriers++;
   }
 
   return {
@@ -137,7 +135,6 @@ export function worldFingerprint(map: GameMap): WorldFingerprint {
     rayBoxes: (ray.length - map.rayGroups.length) / 8,
     rayHash: hashNumbers(ray),
     panes: map.panes.length,
-    paneBarriers: barriers,
     paneHash: hashNumbers(panes),
     surfaces: map.nav.surfaceCount,
     walkable: map.nav.walkableCount,

@@ -168,7 +168,7 @@ export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameM
   const boxes = toWorldBoxes(collision);
 
   const colliders = boxes.map((box, i) => colliderBox(scene, box, i));
-  // A barrier pane's collider carries the pane index back, exactly as
+  // A pane's collider carries the pane index back, exactly as
   // `MapBuilder.paneGroup` stamps it on the client — so `GlassSystem` finds the
   // same mesh on both sides and a broken pane leaves the pick predicates here
   // too. The index is direct because `colliders` is `boxes` mapped one for one,
@@ -180,8 +180,8 @@ export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameM
     // mesh carries the pane index back, so `GlassSystem` finds the same mesh on
     // both sides. The BOX carries `glass`, which is what `clearCollider` reads
     // as its own idempotence flag — without it the authority breaks the visual
-    // nobody here draws and leaves the barrier standing, so a player who shot a
-    // shopfront out is snapped back out of it by `validateMove`.
+    // nobody here draws and leaves the collider standing, so a player who shot
+    // a shopfront out is snapped back out of it by `validateMove`.
     //
     // Derived from `panes` rather than baked as a tenth tuple entry: the pane
     // list already says which boxes are glass, and two sources for one fact is

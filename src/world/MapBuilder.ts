@@ -151,7 +151,7 @@ export interface WorldBox {
    */
   porous?: true;
   /**
-   * A barrier pane's collider — `porous` until `GlassSystem` breaks it, and
+   * A breakable pane's collider — `porous` until `GlassSystem` breaks it, and
    * nothing at all afterwards. See `BoxSpec.glass`.
    *
    * Carried here for the readers that must skip a pane rather than merely
@@ -165,11 +165,16 @@ export interface WorldBox {
  * A pane of glass in world space: the rect a round has to cross to break it,
  * and the two places breaking it has to reach.
  *
+ * **Only a `breakable` pane is one of these.** Most of a city's glazing is
+ * hung on something solid and never goes, and none of it is here — a sheet
+ * that cannot be taken away has nothing to say to the sweep, the wire or the
+ * authority, and is a mesh and nothing else (see `PaneSpec.breakable`).
+ *
  * **The index into `GameMap.panes` IS the pane's identity**, on the client and
  * on the authority alike, exactly as an index into `colliderBoxes` is. Both
  * sides build the list in the same order — placements in layout order, and each
- * placement's panes in the order its builder declared them — which is what lets
- * one number on the wire name one sheet of glass.
+ * placement's breakable panes in the order its builder declared them — which is
+ * what lets one number on the wire name one sheet of glass.
  */
 export interface WorldPane {
   /** Centre, extents and turn: the sheet as an oriented box. */
@@ -189,18 +194,21 @@ export interface WorldPane {
   /** Which `paneGroups` entry holds those vertices. */
   group: number;
   /**
-   * Position in `colliderBoxes` of the box that stops a body, or -1 for a
-   * cosmetic pane. See `PaneSpec.barrier` for why most panes are -1.
+   * Position in `colliderBoxes` of the box that stops a body until this pane
+   * goes. Every pane in the list has one — that is what `PaneSpec.breakable`
+   * means — and it is a number rather than a mesh because it has to survive
+   * the collision bake and name the same box on the authority.
    */
   box: number;
 }
 
 /**
- * One placement's glazing: the merged mesh, and the panes with vertices in it.
+ * One placement's glazing: the merged mesh, and the breakable panes with
+ * vertices in it — usually none, because most glass never goes anywhere.
  *
  * Merged per placement and kept out of `BlockMerge`, so a building's glass is
- * one draw call (two with the outline shell) and every pane in it is still
- * individually reachable. That is the trade the whole feature rests on — see
+ * one draw call and the panes in it that CAN break are still individually
+ * reachable. That is the trade the whole feature rests on — see
  * `MapBuilder.paneGroup`.
  */
 export interface PaneGroup {
@@ -274,15 +282,23 @@ export interface GameMap {
    */
   rayGroups: WorldBox[][];
   /**
-   * Every pane of glass on the map, in build order — and the index into this
-   * list is the pane's identity everywhere, including on the wire.
+   * Every pane of glass on the map that can BREAK, in build order — and the
+   * index into this list is the pane's identity everywhere, including on the
+   * wire.
+   *
+   * Not every sheet of glass: a building's glazing is in `paneGroups` whether
+   * or not anything can take it away, and only the panes with somewhere to get
+   * into behind them are here. Coldharbour draws ~6,200 and lists twelve.
    *
    * Empty on a map whose builders declare none, which is every map but
    * Coldharbour today. See `WorldPane`, and `systems/GlassSystem.ts` for the
    * one thing that writes through it.
    */
   panes: WorldPane[];
-  /** The merged glazing meshes those panes have their vertices in. */
+  /**
+   * The merged glazing meshes — all of the map's glass, not only the panes
+   * above, which hold their vertices in these.
+   */
   paneGroups: PaneGroup[];
   /**
    * The floor's collider blocks, a SUBSET of `colliders`.
@@ -649,7 +665,7 @@ export class MapBuilder {
       }
       // Glazing LAST of the three, and for the same reason the body boxes come
       // first: `item`'s parallel arrays are written in this order on both
-      // sides, so a barrier pane's collider lands at a known place in them
+      // sides, so a breakable pane's collider lands at a known place in them
       // whichever kinds a structure declares.
       if (s.panes.length > 0) {
         const glazing = this.paneGroup(`${p.kind}-glass`, s, origin, rotY, i);
@@ -1219,7 +1235,7 @@ export class MapBuilder {
     // reader; dropping `solid` instead would let the player fall through a
     // fence top their own capsule is still being held out of.
     //
-    // A barrier pane is `porous` and says so twice: once for the predicates,
+    // A breakable pane is `porous` and says so twice: once for the predicates,
     // which need nothing new to get glass right, and once as `glass` for the
     // three readers that must skip a pane rather than merely pass a round
     // through it (`CoverMap`, the AO bake, and the bake that reaches the
@@ -1235,20 +1251,25 @@ export class MapBuilder {
 
   /**
    * One placement's glazing: the merged sheet meshes, plus a collider for each
-   * pane that is a barrier.
+   * pane that is `breakable`.
    *
-   * **The merge here is the whole feature, and it is the opposite trade from
-   * `struts`.** A pane has to stay individually addressable — that is what
-   * `GlassSystem` breaks — and the obvious way to get that is a mesh each,
-   * which on Coldharbour's six thousand panes would be six thousand meshes
-   * against ~150 for the whole map. Worse than the count says, too: glazing is
-   * the one ALPHA-BLENDED thing in the world, and a transparent mesh is sorted
-   * by distance and drawn on its own rather than batched. So the glazing merges
-   * per PLACEMENT, exactly as `mergeByMaterial` merges a cottage's walls, and
-   * the addressability is kept in the vertex buffer instead: each pane's
-   * positions are a known range, and breaking one collapses that range onto its
-   * own first vertex. Every triangle in it is then degenerate and rasterizes
-   * nothing, at a cost of one `updateVerticesData` on one small buffer.
+   * **The merge is what makes a city's worth of glass affordable at all.**
+   * Glazing is the one ALPHA-BLENDED thing in the world, and a transparent
+   * mesh is sorted by distance and drawn on its own rather than batched — so
+   * Coldharbour's six thousand sheets as a mesh each would be six thousand
+   * unbatched draws against ~150 for the whole map. They merge per PLACEMENT
+   * instead, exactly as `mergeByMaterial` merges a cottage's walls, and then
+   * again per map block (`PaneBlocks`).
+   *
+   * **What survives both merges is the handful of panes that can be taken
+   * away**, and they survive as a vertex RANGE rather than as a mesh: each
+   * `breakable` pane's positions are a known span of the merged buffer, and
+   * breaking one collapses that span onto its own first vertex. Every triangle
+   * in it is then degenerate and rasterizes nothing, at a cost of one
+   * `updateVerticesData` on one small buffer. That is why the second merge is
+   * this file's own rather than `BlockMerge` — a block merge is what makes a
+   * placement unrecoverable, and these ranges are carried through it by a
+   * running vertex offset instead of being given up.
    *
    * What makes that collapse the whole of a break rather than the first half of
    * one is that a pane owns nothing else to take down with it. It casts no
@@ -1257,18 +1278,10 @@ export class MapBuilder {
    * revoke — and `bakeVertexAo` writes the COLOUR buffer, so the bake is
    * untouched by a later position rewrite and may still run last.
    *
-   * **A second merge per map block runs over these too**, and unlike the visual
-   * one it is this file's own (`PaneBlocks`) rather than `BlockMerge`. It has to
-   * be: a block merge is what makes a placement unrecoverable, and a pane's
-   * whole point is that it is not — so the ranges are carried through the second
-   * merge by the running vertex offset rather than being given up. Measured on
-   * Coldharbour: 910 panes are 73 meshes per placement and 27 per block, which
-   * is ~90 draws saved against a map that costs ~150.
-   *
-   * A barrier pane's collider is an ordinary `collider()` box, one mesh each,
-   * because `PaneSpec.barrier` is authored one at a time and there are a
-   * handful. Breaking one is then two property writes rather than vertex
-   * surgery — see `GlassSystem`.
+   * A breakable pane's collider is an ordinary `collider()` box, one mesh each,
+   * which is affordable for the same reason the flag is rare: there is a room
+   * behind twelve sheets on this map and behind none of the rest. Breaking one
+   * is then two property writes rather than vertex surgery — see `GlassSystem`.
    */
   private paneGroup(
     name: string,
@@ -1325,6 +1338,12 @@ export class MapBuilder {
       const paneIndices: number[] = [];
       for (const [k, j] of members.entries()) {
         const spec = s.panes[j];
+        // Fixed glazing stops here: it is drawn, it is merged, and no part of
+        // the game beyond this mesh knows it exists. Only a `breakable` sheet
+        // earns a `WorldPane` — an index on the wire, a row in the collision
+        // bake, a bucket in `GlassSystem`'s sweep and a collider — and it earns
+        // it by having somewhere behind it to get into. See `PaneSpec`.
+        if (!spec.breakable) continue;
         const at = rotateY(spec.x, spec.y, spec.z, parentRotY).addInPlace(
           origin,
         );
@@ -1346,8 +1365,11 @@ export class MapBuilder {
         };
         const index = this.panes.push(pane) - 1;
         paneIndices.push(index);
-        if (!spec.barrier) continue;
-        // The collider records its own place in `colliderBoxes` on the pane,
+        // The collider comes with the pane rather than being a second choice
+        // about it: a sheet worth breaking is one with a room behind it, which
+        // is a body's barrier for as long as it stands.
+        //
+        // It records its own place in `colliderBoxes` on the pane,
         // which is what the server and the fingerprint name it by; the mesh
         // carries the pane index back the other way, which is what
         // `GlassSystem` finds it with. Neither side can be derived from the
@@ -1591,10 +1613,12 @@ class BlockMerge {
  * caller of `BlockMerge` because the two want opposite things from a merge.
  *
  * `BlockMerge` exists to make a placement unrecoverable — that is the saving.
- * A pane must survive it, so this one carries every pane's vertex range across
- * by the running offset of the meshes ahead of it. Same key, same reason
- * (`renderOutline` draws each mesh twice, so a mesh is two draws), and measured
- * on Coldharbour: 910 panes go from 73 meshes to 27.
+ * A breakable pane must survive it, so this one carries every such pane's
+ * vertex range across by the running offset of the meshes ahead of it. Same
+ * key, same reason (glass is unbatched alpha, so a mesh is a sorted draw of its
+ * own), and measured on Coldharbour: 6,246 sheets across 75 glazed placements
+ * (47 towers, 26 cars, 2 offices) come out as 37 meshes, two of which hold a
+ * range anything will ever write.
  *
  * **The editor keys per placement instead**, so nothing merges across
  * placements there — the same exemption `BlockMerge` gets, for the same reason.
@@ -1691,9 +1715,16 @@ class PaneBlocks {
         // buffer and `bakeCurrentTransformIntoVertices` leaves whatever was
         // there. Without this the first break is a silent no-op — the array is
         // rewritten and never re-uploaded.
-        const positions = merged.getVerticesData(VertexBuffer.PositionKind);
-        if (positions) {
-          merged.setVerticesData(VertexBuffer.PositionKind, positions, true);
+        //
+        // Only where there is something to break. A block of pure glazing is
+        // immutable for the life of the map — nothing holds a range into it and
+        // nothing may write one — so it keeps the static buffer the merge gave
+        // it, which is what almost every block on Coldharbour is.
+        if (indices.length > 0) {
+          const positions = merged.getVerticesData(VertexBuffer.PositionKind);
+          if (positions) {
+            merged.setVerticesData(VertexBuffer.PositionKind, positions, true);
+          }
         }
         const groupIndex = out.length;
         for (const p of indices) panes[p].group = groupIndex;

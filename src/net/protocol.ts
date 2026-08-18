@@ -473,10 +473,10 @@ export interface Welcome {
    *
    * Broken glass is cumulative and permanent within a round, so a client that
    * joined five minutes in has missed every `glass` event and would otherwise
-   * see a street of intact windows everyone else has shot out — and, for the
-   * dozen barrier panes, would be held out of a shopfront the rest of the match
-   * walks through. Sending the list means a joiner is right on arrival and a
-   * dropped event is corrected by the next reconnect.
+   * see intact shopfronts everyone else has shot out — and, since every pane
+   * that breaks is a way into a building, would be held out of one the rest of
+   * the match walks through. Sending the list means a joiner is right on
+   * arrival and a dropped event is corrected by the next reconnect.
    *
    * Absent from an older server, which reads as a round with no broken glass.
    * It is deliberately NOT on `RoundStart`: a new round rebuilds the map, which
