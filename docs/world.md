@@ -385,9 +385,12 @@ will meet them: emit walked surfaces FIRST (see `docs/bots.md` on arrival
 order); a flight is `rise / 0.35` long and the slab it climbs to may not cover
 it, so put flights in a LANE at one edge and leave that lane out of the slab
 above — alternating edges storey by storey so two voids never stack, and keeping
-a LANDING back out of the void at the head of each flight, or the top tread is
-merely flush with the slab beside it and walking off the stair the way you
-climbed it drops you a storey; a walked
+the head of the lane out of the void as a LANDING that runs from the top tread
+to the elevation ahead of it, or the top tread is merely flush with the slab
+beside it and walking off the stair the way you climbed it drops you a storey (a
+landing of a fixed depth only moves that drop back by its own depth: measured on
+Coldharbour, 4.5 m of open lane still stood in front of an office landing over a
+3.4 m fall); a walked
 slab needs real depth behind its top face or its own outline shell paints it;
 and a mullion or a fin is a `strut`, never a wall.
 

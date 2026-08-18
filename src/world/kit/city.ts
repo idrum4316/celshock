@@ -50,9 +50,11 @@
  *   void around each flight, every building here puts its flights in a LANE at
  *   one edge and leaves that whole lane out of the slab above: the void is then
  *   one rectangle, the slab is one box, and the lane ALTERNATES between the
- *   two edges storey by storey, so the two voids never stack. What you get for
- *   free is an offset atrium on each side — a hole to shoot up and down
- *   through, which is most of what makes a building worth entering.
+ *   two edges storey by storey, so the two voids never stack. The head end of
+ *   the lane is floored back to the elevation, which is the LANDING and is what
+ *   keeps a flight from arriving at a drop; the void is what is left behind it.
+ *   What you get for free is an offset atrium on each side — a hole to shoot up
+ *   and down through, which is most of what makes a building worth entering.
  * - **A walked slab needs real depth behind its top face.** `renderOutline`
  *   draws its shell with a slope-scaled negative depth offset, and at the
  *   grazing angle a floor is seen from, a thin slab's shell wins the depth test
@@ -198,25 +200,36 @@ const GRADE = 0.35;
 /** Riser aimed for; the tread count is rounded off it. `buildStairs`'s. */
 const RISER = 0.18;
 /**
- * Depth of the LANDING at the head of a flight, and the floor every flight in
- * this file arrives on.
+ * The LEAST a landing at the head of a flight may be — not how deep one is,
+ * which is whatever is left of the lane past the top tread.
  *
  * A lane is void at the level its flight climbs to (see `buildOffice`), so
- * without this the top tread is merely FLUSH with the slab beside it: the way
- * on is sideways, and walking off the stair in the direction you climbed it
+ * without a landing the top tread is merely FLUSH with the slab beside it: the
+ * way on is sideways, and walking off the stair in the direction you climbed it
  * drops you a storey. Nothing said so — the nav graph links the top tread to
  * the slab across the lane edge, so bots route through it and every reachability
  * probe passes while the player still runs off a cliff at the top of the stairs.
  *
- * 2.4 m is a landing rather than a lip: over `NavGrid`'s 1.5 m cell, so it is
- * never rounded out of the graph, and long enough to stop a sprint on. What is
- * left of the lane past it is still the atrium — 4.7 m on the shipped plate —
- * which is the hole the whole lane arrangement exists to leave.
+ * **A landing of a FIXED depth only moved that cliff back, and the measurement
+ * is why it is not one any more.** At 2.4 m the void resumed on the far side of
+ * it, so the failure was the same failure two and a half metres later: on the
+ * shipped plates an office landing had 4.5 m of open lane in front of it over a
+ * 3.4 m drop and a parkade apron 6.1 m, and a shophouse's — where the back wall
+ * falls 0.54 m past the landing edge against a body radius of 0.45 — put the
+ * player's centre 9 cm out over a slot, which is all `probeGround`'s one ray
+ * needs to miss the floor and drop them into the close. So a landing runs from
+ * the top tread to the ENCLOSURE: the way on is still sideways, and the
+ * direction you climbed is floor until a wall. What is left of the lane is the
+ * atrium and it is all at the FOOT end — 16.6 m of it on an office plate, over
+ * the flight and the floor below — which is the hole the whole lane arrangement
+ * exists to leave, approached across open floor with the drop in front of you
+ * rather than met at a run off a stair.
  *
- * It is what a plate must be DEEP enough for, and the flight is the smaller
- * half of that: a flight overruns its own foot by 0.6 m and a landing stands
- * 2.4 m past its head, so `d` is what has to hold `run + 3.0`. Both builders
- * check it.
+ * The number survives as the minimum a plate has to leave: 2.4 m is over
+ * `NavGrid`'s 1.5 m cell, so a landing is never rounded out of the graph, and
+ * long enough to stop a sprint on. A flight overruns its own foot by 0.6 m and
+ * needs 2.4 m past its head, so `d` is still what has to hold `run + 3.0`. Both
+ * builders check it.
  */
 const LANDING = 2.4;
 /**
@@ -282,15 +295,18 @@ const levelY = (s: number): number => (s === 0 ? GROUND : s * STOREY);
  * - **The overrun at the foot.** 0.6 m past the bottom tread, so the joint at
  *   the floor is buried rather than floating; `Build.flight` drops every tread
  *   under the local ground line, which is what makes an overrun free.
- * - **The landing at the head.** `LANDING` deep and the lane's full width,
- *   because the lane is VOID at the level the flight climbs to — without one
- *   the top tread is merely flush with the slab beside it and walking off the
- *   stair in the direction you climbed it drops you a storey. See `LANDING`.
+ * - **The landing at the head, and it runs to the ENCLOSURE.** The lane's full
+ *   width, and from the top tread to the inner face of the elevation the flight
+ *   climbs toward — whatever depth that comes to, never a fixed one. The lane
+ *   is VOID at the level the flight climbs to, so a landing that stopped short
+ *   of the wall would leave the drop it exists to remove sitting two and a half
+ *   metres further on. See `LANDING`, which is what may not be left.
  * - **The DEV check that the plate can hold both.** The circulation runs from
- *   `run / 2 + 0.6` short of the -Z elevation to `run / 2 + LANDING` short of
- *   the +Z one, so a plate too shallow for it pushes a landing through a wall.
- *   It throws rather than building it, because the symptom otherwise is a
- *   storey that is drawn and reachable and has a landing outside the building.
+ *   `run / 2 + 0.6` short of the -Z elevation to the +Z one, so a plate too
+ *   shallow leaves a landing under `LANDING` deep — a lip rather than a floor,
+ *   and under `NavGrid`'s own cell. It throws rather than building it, because
+ *   the symptom otherwise is a storey that is drawn and reachable and whose
+ *   stair arrives on a ledge.
  */
 function laneFlight(o: {
   b: Build;
@@ -316,8 +332,8 @@ function laneFlight(o: {
   if (import.meta.env.DEV && run / 2 + LANDING > o.depth / 2 - WALL / 2) {
     throw new Error(
       `${o.tag}: a ${o.depth} m plate cannot hold a ${run.toFixed(1)} m flight and ` +
-        `its ${LANDING} m landing — the landing would stand in an elevation. ` +
-        "See laneFlight, and LANDING.",
+        `leave the ${LANDING} m its landing needs between the top tread and the ` +
+        "elevation — the stair would arrive on a ledge. See laneFlight, and LANDING.",
     );
   }
   b.flight({
@@ -331,9 +347,14 @@ function laneFlight(o: {
     steps: Math.max(4, Math.round(rise / RISER)),
     color: o.tread,
   });
-  const lz = dir * (run / 2 + LANDING / 2);
-  b.box(o.lane, SLAB, LANDING, o.x, o.to - SLAB / 2, lz, o.landing);
-  b.block({ w: o.lane, h: SLAB, d: LANDING, x: o.x, y: o.to - SLAB / 2, z: lz });
+  // From the top tread to the inner face of the elevation ahead: the lane's
+  // head end is floor, and the void is the whole of what is left behind it.
+  const head = (dir * run) / 2;
+  const far = dir * (o.depth / 2 - WALL / 2);
+  const deep = Math.abs(far - head);
+  const lz = (head + far) / 2;
+  b.box(o.lane, SLAB, deep, o.x, o.to - SLAB / 2, lz, o.landing);
+  b.block({ w: o.lane, h: SLAB, d: deep, x: o.x, y: o.to - SLAB / 2, z: lz });
 }
 
 /**
@@ -549,10 +570,13 @@ export function buildTower(
  * vertical sightline a fight in it needs.
  *
  * **What the lane keeps back from the void is the LANDING at the head of each
- * flight** — `LANDING` deep, the lane's full width, and part of the walked
- * group rather than an afterthought. A flight climbs into a lane that has no
- * floor in it, so without one the top tread ends level with the slab beside it
- * and over nothing at all in front. The slab two floors up covers a landing
+ * flight** — the lane's full width, running from the top tread to the +Z
+ * elevation, and part of the walked group rather than an afterthought. A flight
+ * climbs into a lane that has no floor in it, so without one the top tread ends
+ * level with the slab beside it and over nothing at all in front; with a landing
+ * that stopped short of the wall, the same drop stood 2.4 m further on and the
+ * stair still ended in a hole. So the void is all at the FOOT end, which is the
+ * end you meet across open floor. The slab two floors up covers a landing
  * exactly as it covers the flight, at the same 3.1 m.
  *
  * The ground floor is ENCLOSED — two doorways, no windows — and every floor
@@ -569,9 +593,10 @@ export function buildTower(
  * storey then reads as reachable from the stair and is not.
  *
  * The plate has to be DEEP enough for a flight and its landing: the circulation
- * runs from `run / 2 + 0.6` short of the -Z elevation to `run / 2 + LANDING`
- * short of the +Z one, so `depth` is what has to hold it. DEV throws rather than
- * pushing a landing through a wall.
+ * runs from `run / 2 + 0.6` short of the -Z elevation to the +Z one itself, and
+ * `LANDING` is the least that may be left between the top tread and that wall,
+ * so `depth` is what has to hold it. DEV throws rather than landing a stair on
+ * a ledge.
  */
 export function buildOffice(
   scene: Scene,
@@ -1279,7 +1304,19 @@ export function buildParkade(
     b.box(sw, SLAB, d, cx, y - SLAB / 2, 0, CONCRETE);
     b.block({ w: sw, h: SLAB, d, x: cx, y: y - SLAB / 2, z: 0 });
     // A painted edge line along the void, so the drop reads before you take it.
-    b.box(0.3, 0.06, d, cx + (laneSide(s - 1) * (sw - 0.3)) / 2, y + 0.03, 0, ROAD_PAINT);
+    // It stops where the void does — the apron at the ramp's head is floor, and
+    // a line drawn past it would be marking a drop that is not there.
+    const open = (deckY(s) - deckY(s - 1)) / GRADE / 2;
+    const lineD = d / 2 + open;
+    b.box(
+      0.3,
+      0.06,
+      lineD,
+      cx + (laneSide(s - 1) * (sw - 0.3)) / 2,
+      y + 0.03,
+      (open - d / 2) / 2,
+      ROAD_PAINT,
+    );
   }
 
   // The ramps. A plain pitched slab rather than `Build.flight`: treads on a car
@@ -1297,8 +1334,9 @@ export function buildParkade(
     const thick = 0.4;
     if (import.meta.env.DEV && run / 2 + LANDING > d / 2) {
       throw new Error(
-        `parkade: a ${d} m plate cannot hold a ${run.toFixed(1)} m ramp and its ` +
-          `${LANDING} m apron. See buildParkade, and LANDING.`,
+        `parkade: a ${d} m plate cannot hold a ${run.toFixed(1)} m ramp and leave ` +
+          `the ${LANDING} m its apron needs between the ramp head and the deck ` +
+          "edge. See buildParkade, and LANDING.",
       );
     }
     // Placed by its TOP face, whose half-thickness is measured VERTICALLY —
@@ -1314,13 +1352,19 @@ export function buildParkade(
       z: 0,
       rotX: -pitch,
     });
-    // The apron at the head of the ramp, which is `office`'s landing and the
-    // same constant: the deck the ramp climbs to omits this lane over its whole
+    // The apron at the head of the ramp, which is `office`'s landing on the
+    // same rule: the deck the ramp climbs to omits this lane over its whole
     // depth, so the top of the ramp is otherwise the lip of a two-storey drop
     // with the deck reachable only sideways off it.
-    const lz = run / 2 + LANDING / 2;
-    b.box(lane, SLAB, LANDING, x, to - SLAB / 2, lz, CONCRETE);
-    b.block({ w: lane, h: SLAB, d: LANDING, x, y: to - SLAB / 2, z: lz });
+    //
+    // It runs to the deck's own +Z edge, where the upstand is, rather than
+    // stopping at `LANDING` — a fixed apron left 6.1 m of open lane in front of
+    // it, which is the same drop with two and a half metres of concrete before
+    // it. There is no elevation to run to here, so the edge is the deck's.
+    const deep = d / 2 - run / 2;
+    const lz = run / 2 + deep / 2;
+    b.box(lane, SLAB, deep, x, to - SLAB / 2, lz, CONCRETE);
+    b.block({ w: lane, h: SLAB, d: deep, x, y: to - SLAB / 2, z: lz });
   }
 
   // --- cover and enclosure --------------------------------------------------

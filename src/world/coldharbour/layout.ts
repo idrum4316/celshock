@@ -410,7 +410,7 @@ export const ColdharbourLayout: MapLayout = {
    * Probing every walked level of both offices, all three parkade decks, all
    * eight shophouses and both depots — every stair landing included — for
    * "is it a surface, did the flood fill reach it, can both home fields route
-   * to it", the answer is the same at 3, 4 and 5: **34,088 / 34,101 / 34,101
+   * to it", the answer is the same at 3, 4 and 5: **34,150 / 34,163 / 34,163
    * walkable surfaces, every level reachable at all three**. The thirteen
    * surfaces between them are prop tops, not floors. Three is enough — because the
    * builders emit walked
