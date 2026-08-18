@@ -1993,9 +1993,19 @@ export function buildCar(
   // What is INSIDE it comes first, and it is not a detail: glass is
   // see-through, so an empty greenhouse is a window onto whatever stands on
   // the far side of the street and the whole cabin reads as an open frame with
-  // a plank over it. One dark mass at seat height is the fix, and it costs a
-  // mesh the block's roadway was drawing anyway.
-  b.box(1.7, 0.3, 1.44, -0.4, belt + 0.15, 0, ASPHALT);
+  // a plank over it.
+  //
+  // It is THREE masses and not one, and that is the whole of what makes them
+  // an interior. A single box at seat height fills the windscreen and the
+  // backlight with its own end face — a flat wall a hand behind the glass,
+  // which is a solid block in the window rather than a car with somebody's
+  // seats in it. So the dash and the parcel shelf are one low plane that stops
+  // 23 cm above the beltline, and the seat backs are two thin masses standing
+  // off it: what you see through the screen is a surface, a seat, and daylight
+  // over the top of it, which is what looking into a car looks like.
+  b.box(1.8, 0.13, 1.42, -0.4, 1.165, 0, ASPHALT);
+  b.box(0.13, 0.21, 1.24, -0.1, 1.285, 0, ASPHALT);
+  b.box(0.13, 0.19, 1.24, -0.8, 1.275, 0, ASPHALT);
   // Two raked sheets and a flank each side, inset 12 cm from the body so the
   // pillars have something to stand on. The side glass runs the whole cabin
   // and the B-pillar is drawn over it: one sheet with a post in front of it is
