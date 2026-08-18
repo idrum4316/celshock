@@ -1616,7 +1616,7 @@ class BlockMerge {
  * A breakable pane must survive it, so this one carries every such pane's
  * vertex range across by the running offset of the meshes ahead of it. Same
  * key, same reason (glass is unbatched alpha, so a mesh is a sorted draw of its
- * own), and measured on Coldharbour: 6,061 sheets across 82 glazed placements
+ * own), and measured on Coldharbour: 6,139 sheets across 82 glazed placements
  * (44 towers, 26 cars, 8 shophouses, 2 offices, 2 depots) come out as 40
  * meshes, eight of which hold a range anything will ever write.
  *

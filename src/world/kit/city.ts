@@ -167,6 +167,7 @@ import {
   DARK_CONCRETE,
   ENAMEL,
   IRON,
+  LAMP_RED,
   PLANK,
   PLASTER,
   RENDER,
@@ -1869,19 +1870,53 @@ export function buildBarrier(
 }
 
 /**
- * A parked car, along its own local X.
+ * A parked car, along its own local X, nose at +X.
  *
- * Its collider is the BODY and not the greenhouse: 1.0 m of steel is cover you
- * crouch behind, and the cabin above it is glass a round goes through. That is
- * the gravestone's lesson — a box squared off to the silhouette stops rounds
- * through the parts of it that are not there — and it is why the roof, the
- * pillars and the wheels are all outside the box.
+ * Its collider is the BODY and not the silhouette: one box a metre high, and
+ * 1.0 m of steel is cover you crouch behind while the cabin above it is glass
+ * a round goes through. That is the gravestone's lesson — a box squared off to
+ * the silhouette stops rounds through the parts of it that are not there — and
+ * the box here is EXACTLY the one this model replaced, which is what makes all
+ * of the below a drawing change: the cover, the nav graph, the cover bake and
+ * every ray in the game see what they saw before. The greenhouse, the door
+ * mirrors and two centimetres of rub strip are the only geometry outside it,
+ * and the first two are above it rather than beside it. Everything else is
+ * inside on purpose: the bumpers are the ENDS of the car rather than proud of
+ * it, so the spark lands where the panel is.
  *
- * The greenhouse is glazing rather than a `breakable` pane. A cabin is empty,
- * but it is not somewhere anybody gets into: a round already crosses it and
- * comes out the far side, so breaking the glass would buy an effect and nothing
- * else — and it would keep twenty-six sheets in the pane list, the sweep, the
- * bake and the wire to do it. See `PaneSpec.breakable`.
+ * **The shape is three volumes and a step, and the step is the wheel arch.**
+ * Below `arch` the body is 26 cm narrower than it is above, which leaves a
+ * channel down each side for the tyres to stand in with the full-width panel
+ * over them; the bonnet and the boot are lower than the beltline between them,
+ * which is the profile that stops a car reading as a brick. A box kit cannot
+ * cut an arc, so the arch is a change of WIDTH rather than a cut-out, and that
+ * is the one trick the whole model rests on.
+ *
+ * **The windscreen and the backlight are raked, and they are the reason
+ * `Build.pane` has a `rotZ` at all.** A sloped sheet lands in a different cel
+ * band from the flat panels either side of it, which is what a cabin reads as;
+ * upright, the same glass is a box on a box, which is what this was. Both are
+ * spanned between two points on the profile by `span()` so the pillars drawn
+ * along their edges cannot disagree with them — the A- and C-pillars take the
+ * screen's own centre, length and tilt.
+ *
+ * **The greenhouse is glazing rather than `breakable` panes**, and at four
+ * sheets a car that argument is now four times as strong. A cabin is empty but
+ * it is not somewhere anybody gets into: a round already crosses it and comes
+ * out the far side, so breaking it would buy an effect and nothing else — and
+ * it would put a hundred-odd sheets in the pane list, the sweep, the bake and
+ * the wire to do it. See `PaneSpec.breakable`. It is also why `rotZ` and
+ * `breakable` are mutually exclusive and nothing here is inconvenienced by it.
+ *
+ * **Five materials, and one colour the map did not already have.** The tyres,
+ * the underbody, the grille and the exhaust are `ASPHALT` — the roadway's own
+ * colour; the hubs, the lamps and the plate are `ROAD_PAINT`, the lane
+ * markings'; the bumpers and the rub strip are `DARK_CONCRETE`. All three are
+ * drawn already in any block with a street in it, so a car merges into meshes
+ * the block was going to draw anyway and only `LAMP_RED` is a group of its
+ * own. Measured over Coldharbour's twenty-six: the whole model costs the map
+ * **eighteen** merged meshes and 21k vertices, and not one solid mesh — 783
+ * before and 783 after.
  */
 export function buildCar(
   scene: Scene,
@@ -1892,22 +1927,177 @@ export function buildCar(
   const paint = p.tint ?? ENAMEL;
   const len = 4.4;
   const wide = 1.86;
-  b.box(len, 0.72, wide, 0, 0.74, 0, paint);
-  b.pane(len * 0.52, 0.62, wide - 0.2, -0.1, 1.4, 0);
-  b.box(len * 0.5, 0.1, wide - 0.16, -0.1, 1.72, 0, paint);
-  b.box(len + 0.16, 0.22, wide * 0.7, 0, 0.62, 0, DARK_CONCRETE);
+
+  // The three heights everything hangs off. `belt` is the top of the steel AND
+  // the top of the collider — the panel a round stops on is the panel the box
+  // is measured to — `arch` is the tyre's top plus clearance, and `sill` is
+  // where the bodywork stops and the shadow under the car starts.
+  const sill = 0.42;
+  const arch = 0.74;
+  const belt = 1.1;
+  const glassTop = 1.46;
+  const roofTop = 1.54;
+
+  // The X profile: where the bumper takes over from the panel, where the
+  // windscreen stands up off the beltline, and where the backlight comes down.
+  const nose = len / 2 - 0.18;
+  const cowl = 0.55;
+  const backlight = -1.32;
+  const wheelX = 1.42;
+  const wheelZ = 0.8;
+  const tyre = 0.68;
+  // Between the wheels the body is this wide and no wider: the tyres stand in
+  // the 13 cm it leaves each side and come out flush with the panel above.
+  const waist = 1.6;
+
+  /** A sheet spanning two points of the X/Y profile: centre, length and rake. */
+  const span = (x0: number, y0: number, x1: number, y1: number) => ({
+    x: (x0 + x1) / 2,
+    y: (y0 + y1) / 2,
+    len: Math.hypot(x1 - x0, y1 - y0),
+    rot: { z: Math.atan2(y1 - y0, x1 - x0) },
+  });
+  const screen = span(cowl, belt, 0.1, glassTop);
+  const rear = span(backlight, belt, -0.92, glassTop);
+
+  // --- the steel, bottom up -------------------------------------------------
+  b.box(nose * 2, arch - sill, waist, 0, (sill + arch) / 2, 0, paint);
+  b.box(
+    cowl - backlight,
+    belt - arch,
+    wide,
+    (cowl + backlight) / 2,
+    (arch + belt) / 2,
+    0,
+    paint,
+  );
+  // The bonnet falls 6 cm over its length. Tilting the whole box rather than
+  // stepping it is what puts a lit face on the nose: two flat tops at two
+  // heights are the same cel band twice.
+  b.box(nose - cowl, 0.28, wide, (nose + cowl) / 2, 0.85, 0, paint, {
+    z: -0.04,
+  });
+  // The boot is a step down and not a slope — a saloon's tail is flat.
+  b.box(nose + backlight, 0.3, wide, (backlight - nose) / 2, 0.89, 0, paint);
+  b.box(
+    screen.x - rear.x + 0.04,
+    roofTop - glassTop,
+    1.68,
+    (screen.x + rear.x) / 2,
+    (glassTop + roofTop) / 2,
+    0,
+    paint,
+  );
+
+  // --- the greenhouse -------------------------------------------------------
+  // What is INSIDE it comes first, and it is not a detail: glass is
+  // see-through, so an empty greenhouse is a window onto whatever stands on
+  // the far side of the street and the whole cabin reads as an open frame with
+  // a plank over it. One dark mass at seat height is the fix, and it costs a
+  // mesh the block's roadway was drawing anyway.
+  b.box(1.7, 0.3, 1.44, -0.4, belt + 0.15, 0, ASPHALT);
+  // Two raked sheets and a flank each side, inset 12 cm from the body so the
+  // pillars have something to stand on. The side glass runs the whole cabin
+  // and the B-pillar is drawn over it: one sheet with a post in front of it is
+  // the same picture as two sheets, at half the glazing.
+  b.pane(screen.len, 0.05, 1.62, screen.x, screen.y, 0, { rotZ: screen.rot.z });
+  b.pane(rear.len, 0.05, 1.62, rear.x, rear.y, 0, { rotZ: rear.rot.z });
+  // The rear quarter is a PANEL and not a post. A saloon's C-pillar is sheet
+  // metal a hand wide, and a bar there left the cabin reading as a frame with
+  // a plank across it — glass on three sides and daylight through all of them.
+  // It is pushed half its width forward off the backlight's own line so its
+  // back face IS that line, rather than hanging out over the boot; the side
+  // glass runs on underneath and is simply inside the panel, which the depth
+  // test hides for nothing.
+  const quarter = 0.22;
+  const qx = rear.x + (Math.sin(rear.rot.z) * quarter) / 2;
+  const qy = rear.y - (Math.cos(rear.rot.z) * quarter) / 2;
+  for (const sz of [-1, 1]) {
+    b.pane(
+      1.39,
+      glassTop - belt,
+      0.05,
+      -0.395,
+      (belt + glassTop) / 2,
+      sz * 0.81,
+    );
+    b.box(
+      screen.len,
+      0.1,
+      0.07,
+      screen.x,
+      screen.y,
+      sz * 0.815,
+      paint,
+      screen.rot,
+    );
+    b.box(rear.len, quarter, 0.07, qx, qy, sz * 0.815, paint, rear.rot);
+    b.box(
+      0.1,
+      glassTop - belt,
+      0.07,
+      -0.36,
+      (belt + glassTop) / 2,
+      sz * 0.815,
+      paint,
+    );
+    // Door mirrors. They are the one thing here outside the collider in Z, and
+    // they get away with it by being above it: at 1.16 m they are in the same
+    // air the cabin is, which a round has always crossed.
+    b.box(0.1, 0.09, 0.16, cowl - 0.14, belt + 0.11, sz * 0.96, paint);
+  }
+
+  // --- wheels ---------------------------------------------------------------
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
-      b.cyl(0.24, 0.68, 0.68, 8, (sx * len) / 3.1, 0.34, (sz * wide) / 2.5, "#22242a", {
+      b.cyl(0.24, tyre, tyre, 12, sx * wheelX, tyre / 2, sz * wheelZ, ASPHALT, {
         x: Math.PI / 2,
       });
+      b.cyl(
+        0.26,
+        0.34,
+        0.34,
+        8,
+        sx * wheelX,
+        tyre / 2,
+        sz * wheelZ,
+        ROAD_PAINT,
+        {
+          x: Math.PI / 2,
+        },
+      );
     }
   }
-  // Lamps, unlit metal rather than a glow: sixteen parked cars with headlights
-  // on would be sixteen emissive meshes in the bloom for nothing.
-  for (const sz of [-1, 1]) {
-    b.box(0.12, 0.22, 0.5, len / 2, 0.86, (sz * wide) / 3.4, ROAD_PAINT);
+  // Closes the gap under the sill: without it a car is a shape standing on
+  // four legs with the road visible through it from twenty metres away.
+  b.box(3.4, 0.16, waist - 0.06, 0, 0.34, 0, ASPHALT);
+
+  // --- the ends -------------------------------------------------------------
+  for (const sx of [-1, 1]) {
+    b.box(
+      len / 2 - nose,
+      0.28,
+      1.8,
+      (sx * (len / 2 + nose)) / 2,
+      0.57,
+      0,
+      DARK_CONCRETE,
+    );
+    b.box(3.0, 0.05, 0.04, -0.15, 0.83, sx * 0.93, DARK_CONCRETE);
   }
+  b.box(0.05, 0.16, 0.74, nose, 0.85, 0, ASPHALT);
+  b.box(0.04, 0.13, 0.4, -nose - 0.02, 0.86, 0, ROAD_PAINT);
+  b.cyl(0.12, 0.09, 0.09, 6, -nose - 0.04, 0.34, -0.5, ASPHALT, {
+    z: Math.PI / 2,
+  });
+  // Lamps, unlit metal and a flat lens rather than a glow: twenty-six parked
+  // cars with their headlights on would be twenty-six emissive meshes in the
+  // bloom for nothing, in the middle of the afternoon.
+  for (const sz of [-1, 1]) {
+    b.box(0.06, 0.18, 0.42, nose, 0.85, sz * 0.6, ROAD_PAINT);
+    b.box(0.06, 0.2, 0.36, -nose, 0.87, sz * 0.62, LAMP_RED);
+  }
+
   b.block({ w: len, h: 1.1, d: wide, x: 0, y: 0.55, z: 0 });
   return b;
 }

@@ -852,7 +852,7 @@ the index being the pane's own position in `boxes`. Not the map's glazing, which
 is most of the glass drawn and none of it breakable: a sheet with something
 solid behind it opens nothing, so it is not in `GameMap.panes` on either side
 and the bake never mentions it (see `PaneSpec.breakable`). Coldharbour draws
-6,061 sheets and bakes twenty-four. The authority needs those for two reasons,
+6,139 sheets and bakes twenty-four. The authority needs those for two reasons,
 and the second is the one with teeth: it resolves every shot, so it has to know
 which windows a round crossed; and `validateMove` rejects a client standing
 inside `map.obstacles`, so a player who shot out a shopfront and walked through

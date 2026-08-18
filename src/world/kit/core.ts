@@ -360,6 +360,18 @@ export const CITY_BRICK = "#6b463a";
 export const ENAMEL = "#3f4b52";
 /** Lane markings and kerb paint — the one thing here allowed to be bright. */
 export const ROAD_PAINT = "#9c9887";
+/**
+ * A vehicle's rear lens: the one saturated hue this palette allows itself, and
+ * the only colour a car adds to a map that did not already have it.
+ *
+ * It is allowed because of how little of it there is — two lenses the size of
+ * a hand on each parked car, against a downtown made of grey — and it is dark
+ * for the reason everything else here is: the cel bands posterise a bright hue
+ * into stripes, and a tail lamp has to read as a lamp rather than as a light.
+ * Nothing about it is emissive; see `buildCar` on why no car on this map has
+ * its headlights on.
+ */
+export const LAMP_RED = "#7b2f2c";
 /** A lit window or a shopfront at dusk; the city's `FLAME`. */
 export const WINDOW_LIGHT = "#ffd79a";
 /**
@@ -591,6 +603,17 @@ export class Build implements Structure {
    * The colour is the caller's because a shopfront and a windscreen are not the
    * same glass, but it is `GLASS` by default for the same reason `surface` has
    * one: the common case should need no thought.
+   *
+   * **A sheet may RAKE, and only in the drawing.** `rotZ` tilts one out of
+   * vertical — a windscreen is the whole reason it exists, and that tilt is
+   * what makes a car's cabin a cabin rather than a glass box — and it stops at
+   * this mesh, which is why it is an option here and NOT a field on
+   * `PaneSpec`. Everything downstream of the spec describes a sheet in a wall
+   * with six numbers and a yaw: the collider a breakable pane spawns, the
+   * `WorldPane` the wire names it by, and `GlassSystem`'s sweep, which tests a
+   * plane it assumes is upright. All three would silently stand a raked sheet
+   * back up, so the two are mutually exclusive and the guard is a throw rather
+   * than a comment. Glazing may lean; glass that BREAKS is a sheet in a wall.
    */
   pane(
     w: number,
@@ -599,8 +622,15 @@ export class Build implements Structure {
     x: number,
     y: number,
     z: number,
-    opts?: { color?: string; rotY?: number; breakable?: true },
+    opts?: { color?: string; rotY?: number; rotZ?: number; breakable?: true },
   ): Mesh {
+    if (import.meta.env.DEV && opts?.rotZ !== undefined && opts.breakable) {
+      throw new Error(
+        "pane: a raked sheet cannot be breakable — a PaneSpec carries no " +
+          "pitch, so the collider, the wire and GlassSystem would all stand " +
+          "it back up. See Build.pane.",
+      );
+    }
     const m = MeshBuilder.CreateBox(
       `${this.tag}-pane${this.paneMeshes.length}`,
       { width: w, height: h, depth: d },
@@ -608,6 +638,7 @@ export class Build implements Structure {
     );
     m.position.set(x, y, z);
     if (opts?.rotY) m.rotation.y = opts.rotY;
+    if (opts?.rotZ) m.rotation.z = opts.rotZ;
     // The one alpha-blended material in the world, and the only builder call
     // that reaches it: a pane is glass because `pane` made it, not because
     // somebody passed the glass colour to `box`.

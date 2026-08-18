@@ -676,7 +676,7 @@ pull-in.
 everywhere else.** That is a design rule first: a sheet hung on a solid mass
 stops nothing, so shooting it out changes nothing you can play with and costs
 the building its word — a street-level shopfront that shatters into a blank grey
-shaft says plainly that there is no inside. Coldharbour draws 6,061 sheets and
+shaft says plainly that there is no inside. Coldharbour draws 6,139 sheets and
 twenty-four of them break, all of them SHOPFRONT bays — twelve on the two
 offices and twelve on the eight shophouses. A tower's
 curtain wall hangs 4 cm off a solid shaft, a punched window is a hole drawn on

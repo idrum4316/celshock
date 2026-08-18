@@ -407,7 +407,7 @@ cost one: glass breaks where there is enterable space behind it.** A sheet hung
 on something solid stops nothing — the round has always ended on the concrete —
 so breaking it changes nothing you can play with, and it costs the building the
 one thing an elevation was saying: a street-level shopfront that shatters into a
-blank grey shaft is a building admitting it is a box. Coldharbour draws **6,061
+blank grey shaft is a building admitting it is a box. Coldharbour draws **6,139
 sheets and twenty-four of them break**, all twenty-four SHOPFRONT bays — twelve
 on the two offices and twelve on the eight shophouses.
 The curtain walls (4 cm off a solid shaft), the punched windows drawn on the
@@ -425,7 +425,7 @@ no other part of the game.
 
 **The DRAW CALLS are the one cost every sheet pays, and the answer is that
 glazing is merged and a pane is a vertex range rather than a mesh.** A mesh each
-would be 6,061 meshes against ~150 for the whole map — and worse than the count
+would be 6,139 meshes against ~150 for the whole map — and worse than the count
 says, because glazing is alpha-blended and a transparent mesh is sorted and
 drawn on its own rather than batched. Instead it merges per placement
 (`MapBuilder.paneGroup`) and then again per 48 m block (`PaneBlocks`), which on
@@ -464,6 +464,19 @@ here rather than there:
   and shoot through. `CONFIG.graphics.glass.tint` is what keeps that honest, and
   it is why the number is judged from a pavement against a lit interior rather
   than picked for looks.
+
+**A pane may RAKE, and a raked one may not break.** `Build.pane`'s `rotZ` tilts
+a sheet out of vertical, and the case it exists for is a car's windscreen: a
+cabin is a cabin because its glass leans, and upright it is a box on a box —
+which is what `buildCar` was before it. The tilt lives on the MESH and
+deliberately not on `PaneSpec`, because everything downstream of that spec
+describes a sheet in a wall with six numbers and a yaw — the collider a
+breakable pane spawns, the `WorldPane` the wire names it by, and
+`GlassSystem`'s sweep, which tests a plane it assumes is upright. Any of the
+three would stand a raked sheet silently back up, so the two options are
+mutually exclusive and `Build.pane` throws on the pair in a dev build rather
+than leaving it to be found. Glazing may lean; glass that BREAKS is a sheet in
+a wall.
 
 **The RAY TESTS are the cost only a breakable pane pays, and it pays them
 because it has to.** A pane with a room behind it is the only thing in the way
