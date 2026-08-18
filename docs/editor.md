@@ -193,6 +193,16 @@ and is never rewritten — the failure mode is always "leave it alone". Multi-li
 entries are the one thing that would break this; the editor treats one as a comment
 and refuses to touch it rather than corrupt it.
 
+**An entry may carry a `// …` note after its comma, and the note belongs to the
+LINE rather than to the entry.** `splitComment` takes it off before the tokenizer
+sees the literal, `emitItem` puts it back on a rewritten line, and a deleted entry
+takes its note with it — which is what a note on that line means. Getting this
+wrong is not a formatting complaint but a **locked map**: while the scanner tested
+the whole line for a `},` ending, the four buildings Coldharbour labels this way
+were `raw` lines, the region came up four entries short of the layout, and
+`bindBaselines` — which refuses to guess which line belongs to which entry —
+threw on open.
+
 **The validation list ranks honestly, and the ranking is the design.** Errors are
 definitely broken and are zero on a healthy map: a control point whose centre is not
 standable (the Flag-C-on-the-well bug), and a flag or spawn unreachable from a home

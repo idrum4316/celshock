@@ -193,7 +193,8 @@ export function snapshot<T>(value: T): T {
 /**
  * Rebuilds one entry's line. Retained fields keep their original order and
  * their original token; changed and added fields are formatted; fields the
- * editor removed simply do not appear.
+ * editor removed simply do not appear, and the line's trailing note comes back
+ * on the end.
  */
 function emitItem(
   line: ItemLine,
@@ -230,7 +231,9 @@ function emitItem(
     );
   }
 
-  return `${line.indent}{ ${out.join(", ")} },`;
+  // The note the line was authored with rides along: it annotates this entry,
+  // so it survives the entry being edited exactly as an untouched line's does.
+  return `${line.indent}{ ${out.join(", ")} },${line.trailing}`;
 }
 
 /** The original token when the value is untouched, a fresh one otherwise. */

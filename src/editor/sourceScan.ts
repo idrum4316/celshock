@@ -14,8 +14,14 @@
  *
  * Two facts make that practical, both checked against the real file:
  *
- * 1. Every entry in every array is exactly one line: `  { ... },`. There is no
- *    multi-line entry anywhere in the file.
+ * 1. Every entry in every array is exactly one line: `  { ... },` — optionally
+ *    with a `// …` note after the comma. There is no multi-line entry anywhere
+ *    in the file. That note belongs to the LINE and not to the entry, so it is
+ *    split off before tokenizing and put back when the entry is rewritten.
+ *    Coldharbour labels four of its buildings that way, and while the scanner
+ *    tested the whole line for a `},` ending, those four were not entries at
+ *    all: the region came up four short of the layout and the map could not be
+ *    opened in the editor.
  * 2. Each array is delimited by its own `const name: Type = [` and a closing
  *    `];` at column 0. Those are the region anchors — no marker comments are
  *    needed, so layout.ts needs no preparation to be editable.
@@ -47,6 +53,12 @@ export interface ItemLine {
   indent: string;
   /** The whole original line, re-emitted when the entry is unchanged. */
   source: string;
+  /**
+   * Anything after the entry's closing `},` — a ` // note` and the whitespace
+   * before it, or `""`. Re-appended when the entry is rewritten, so annotating
+   * a line does not cost the note the first time the editor touches it.
+   */
+  trailing: string;
   /** Null when the line could not be tokenized — then it is never rewritten. */
   fields: ParsedField[] | null;
 }
@@ -158,9 +170,36 @@ function topLevelColon(part: string): number {
   return -1;
 }
 
+/**
+ * Splits a line into its code and whatever `// …` note follows it, quote-aware
+ * so a `//` inside a string stays in the code half. Returns the note with its
+ * leading whitespace attached, which is what lets a rewritten line come back
+ * spaced exactly as it was authored.
+ */
+export function splitComment(line: string): [string, string] {
+  let quote: string | null = null;
+  for (let i = 0; i < line.length - 1; i++) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+    else if (ch === "/" && line[i + 1] === "/") {
+      const code = line.slice(0, i);
+      return [code.trimEnd(), line.slice(code.trimEnd().length)];
+    }
+  }
+  return [line, ""];
+}
+
 /** Parses one line into an entry or a raw line. */
 function classify(line: string): Line {
-  const trimmed = line.trim();
+  // The note after an entry is not part of the entry: taken off here, carried
+  // on the ItemLine, and put back by `emitItem`.
+  const [code, trailing] = splitComment(line);
+  const trimmed = code.trim();
   // An entry is a whole object literal with a trailing comma, alone on a line.
   if (!trimmed.startsWith("{") || !trimmed.endsWith("},")) {
     return { kind: "raw", source: line };
@@ -170,6 +209,7 @@ function classify(line: string): Line {
     kind: "item",
     indent: line.slice(0, line.length - line.trimStart().length),
     source: line,
+    trailing,
     fields: splitFields(inner),
   };
 }
