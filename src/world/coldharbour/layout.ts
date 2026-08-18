@@ -156,7 +156,7 @@ const placements: Placement[] = [
   // on the map agreed with it. The valley floor's own `gravel` surface already
   // reads as aggregate paving (see the environment's `floorSurface`), so what
   // makes the square a square is the block it stands in and the monument on it.
-  { kind: "monument", x: -12, z: 12, params: { width: 11 } }, // the square's landmark
+  { kind: "monument", x: -3, z: -1.368, params: { width: 11 } }, // the square's landmark
 
   // --- the built blocks -----------------------------------------------------
   // Towers are solid and carry three colliders each; the two offices and the
@@ -237,14 +237,14 @@ const placements: Placement[] = [
   // All of this is one collider apiece and all of it is cover. The lamps carry
   // NO light: it is the middle of the afternoon, and a fixture would spend one
   // of the sixteen shader slots saying so (see kit/city.ts).
-  { kind: "planter", x: -18, z: -8, params: { width: 2.6, depth: 1.4 } },
-  { kind: "planter", x: 14, z: -16, params: { width: 2.6, depth: 1.4 } },
-  { kind: "planter", x: 18, z: 10, params: { width: 2.6, depth: 1.4 } },
-  { kind: "planter", x: -4, z: 22, params: { width: 2.6, depth: 1.4 } },
-  { kind: "barrier", x: 6, z: -22, params: { length: 8 } },
+  { kind: "planter", x: -18, z: 4, params: { width: 2.6, depth: 1.4 } },
+  { kind: "planter", x: 16, z: -7, params: { width: 2.6, depth: 1.4 } },
+  { kind: "planter", x: 2.5, z: 13.5, rotY: Math.PI / 2, params: { width: 2.6, depth: 1.4 } },
+  { kind: "planter", x: 2.5, z: -15.5, rotY: Math.PI / 2, params: { width: 2.6, depth: 1.4 } },
+  { kind: "barrier", x: 2, z: -25, params: { length: 8 } },
   { kind: "barrier", x: -24, z: 4, rotY: Math.PI / 2, params: { length: 8 } },
-  { kind: "car", x: 24, z: -24, params: { tint: "#5d4a3a" } },
-  { kind: "car", x: -26, z: -22, rotY: Math.PI / 2, params: { tint: "#4a4f45" } },
+  { kind: "car", x: 24, z: -33.5, params: { tint: "#5d4a3a" } },
+  { kind: "car", x: -34, z: -22, rotY: Math.PI / 2, params: { tint: "#4a4f45" } },
   { kind: "streetLight", x: -129.6, z: -129.6, params: { height: 7.5 } },
   { kind: "streetLight", x: -129.6, z: -49.6, params: { height: 7.5 } },
   { kind: "streetLight", x: -129.6, z: 30.4, params: { height: 7.5 } },
@@ -261,8 +261,8 @@ const placements: Placement[] = [
   { kind: "streetLight", x: 110.4, z: -49.6, params: { height: 7.5 } },
   { kind: "streetLight", x: 110.4, z: 30.4, params: { height: 7.5 } },
   { kind: "streetLight", x: 110.4, z: 110.4, params: { height: 7.5 } },
-  { kind: "streetLight", x: -34, z: 0, params: { height: 7.5 } },
-  { kind: "streetLight", x: 34, z: 0, params: { height: 7.5 } },
+  { kind: "streetLight", x: -14, z: 4.5, rotY: Math.PI / 2, params: { height: 7.5 } },
+  { kind: "streetLight", x: 12.5, z: -7.5, rotY: -Math.PI / 2, params: { height: 7.5 } },
   { kind: "streetLight", x: 0, z: -34, params: { height: 7.5 } },
   { kind: "streetLight", x: 0, z: 34, params: { height: 7.5 } },
   { kind: "car", x: -46, z: -136, rotY: Math.PI / 2, params: { tint: "#3f4b52" } },
@@ -304,6 +304,8 @@ const placements: Placement[] = [
   { kind: "planter", x: -62, z: 50, params: { width: 2.6, depth: 1.4 } },
   { kind: "planter", x: 60, z: -50, params: { width: 2.6, depth: 1.4 } },
   { kind: "planter", x: 92, z: -50, params: { width: 2.6, depth: 1.4 } },
+  { kind: "road", x: -2.912, z: 0.059, params: { length: 64 } },
+  { kind: "road", x: -0.063, z: -1.438, rotY: Math.PI / 2, params: { length: 64 } },
 ];
 
 /**
@@ -334,8 +336,10 @@ const scatter: ScatterSpec[] = [
   { prop: "barrel", x: 46, z: 96, radius: 5, count: 4, blocking: true, clearance: 0.55 },
   // The square's planting, what is left of it. Well outside C's 16 m ring: the
   // nearest is 36.8 m from the flag against a radius plus clearance of 21.
-  { prop: "deadTree", x: 20, z: 22, radius: 4, count: 3, scale: [0.8, 1.2], blocking: true, clearance: 0.55 },
-  { prop: "deadTree", x: -22, z: -20, radius: 4, count: 3, scale: [0.8, 1.2], blocking: true, clearance: 0.55 },
+  { prop: "pine", x: 16, z: 18.5, width: 24, depth: 24, count: 15, scale: [0.8, 1.2], blocking: true, clearance: 0.55 },
+  { prop: "pine", x: -18.5, z: -17.5, width: 24, depth: 24, count: 15, scale: [0.8, 1.2], blocking: true, clearance: 0.55 },
+  { prop: "pine", x: -18.847, z: 18.43, width: 24, depth: 24, count: 15, scale: [0.9, 1.3], blocking: true, clearance: 1.2 },
+  { prop: "pine", x: 18.586, z: -17.039, width: 24, depth: 24, count: 15, scale: [0.9, 1.3], blocking: true, clearance: 1.2 },
 ];
 
 /**
@@ -383,7 +387,7 @@ const spawns: SpawnPointDef[] = [
   // round turns on hands one side a shorter walk back to it than the other.
   // 41 m out, which clears the 16 m ring with room, and inside the square's own
   // block so a squad deploys under cover of the buildings round it.
-  { team: null, controlPoint: "C", pos: new Vector3(29, 0, 29), yaw: (-Math.PI * 3) / 4 },
+  { team: null, controlPoint: "C", pos: new Vector3(-2.466, 0, 8.14), yaw: (-Math.PI * 3) / 4 },
   { team: null, controlPoint: "D", pos: new Vector3(52, 0, 44), yaw: 0.54 },
   { team: null, controlPoint: "E", pos: new Vector3(78, 0, -44), yaw: Math.PI },
 ];
