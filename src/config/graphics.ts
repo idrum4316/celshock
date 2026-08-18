@@ -222,8 +222,20 @@ export const graphics = {
    * and one tuned along the street leaves a shopfront blank.
    */
   glass: {
-    /** Sky returned face-on. Above glass's real 0.04-0.08 — see `GlassSpec`. */
-    reflectance: 0.28,
+    /**
+     * What a pane returns face-on. Above glass's real 0.04-0.08 — see
+     * `GlassSpec` — and raised again when the reflection stopped being a bare
+     * sky gradient and became a picture of the city: 0.28 was picked against a
+     * flat wash, where more of it only made a shopfront paler, and the same
+     * number over a reflection with buildings in it under-reads.
+     *
+     * It is not free, and what it costs is stated in `GlassSpec.tint`: what
+     * shows THROUGH a pane face-on is `1 - (this + tint * (1 - this))`, so this
+     * and the tint spend the same budget. 0.28 left 43% of a lit interior
+     * legible from the pavement and 0.36 leaves 38%, which is the most this may
+     * take without the tint being reconsidered beside it.
+     */
+    reflectance: 0.36,
     /** Schlick's is 5; 3 brings the sheen on while you are still square-on. */
     falloff: 3,
     /** ~21 degrees of sun halo. Broad because the sky draws no disc. */
@@ -235,6 +247,44 @@ export const graphics = {
      * a look.
      */
     tint: 0.4,
+  },
+  /**
+   * The one cube behind the glazing: what `ReflectionSystem` bakes per map
+   * install, and what the shader mixes over the sky gradient inside it.
+   *
+   * There is exactly one of these for the whole map, which is the entire
+   * reason the feature is affordable — see the system for the argument. What
+   * follows from it is that all three numbers are about a compromise rather
+   * than about a look, and are judged from a street with a tower on both sides
+   * of it, never square-on to one pane.
+   */
+  reflection: {
+    /**
+     * Face resolution. 256 is 6 x 256 x 256 of RGBA8 plus its mip chain, about
+     * 2 MB, held for the process — the bake is the same geometry the frame
+     * already draws, so the cost that matters is the six renders at install
+     * and not the memory. Higher buys detail a Fresnel-weighted, tinted,
+     * fogged reflection cannot show; lower starts losing the street between
+     * the towers, which is the part with the contrast in it.
+     */
+    size: 256,
+    /**
+     * How far above the ground at the map's centre the bake is taken from.
+     * Halfway up the skyline rather than at eye level: a cube baked from the
+     * pavement has the underside of every awning in it and nothing above the
+     * second floor, and one baked from over the roofs is a reflection of roofs.
+     * 18 m is mid-height for Coldharbour's 12-50 m blocks.
+     */
+    height: 18,
+    /**
+     * How much of the bake a pane returns, against the analytic sky it would
+     * otherwise show there. Deliberately short of 1: the bake is the right
+     * city from slightly the wrong place, and the last tenth of it is what
+     * turns a plausible reflection into one the player can catch out by
+     * walking along it. It also keeps the sky's own haze in the mix, which is
+     * what the reflection would have anyway at these distances.
+     */
+    strength: 0.9,
   },
   /**
    * Albedo weathering on flat cel colours — a slow value drift over world space

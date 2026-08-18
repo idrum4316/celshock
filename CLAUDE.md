@@ -390,7 +390,13 @@ another does not.
 
 **The world is OPAQUE with exactly one exception, and it is glazing.**
 `getGlass` (`#define CEL_GLASS`, `needAlphaBlending`) writes a Fresnel alpha per
-pixel: a reflection of the sky over the tint of whatever stands behind the pane.
+pixel: a reflection over the tint of whatever stands behind the pane. That
+reflection is an analytic sky with the CITY composited into it out of a cube
+`ReflectionSystem` bakes from the map's own geometry, once per `installMap` —
+the only render target here besides the shadow map, and the only thing that
+draws the world twice. It is affordable for the reason the world layer is
+merged and frozen at all: the world is static, so a bake is a build step rather
+than a pass.
 Everything else here is a flat opaque colour — the water fakes its depth rather
 than showing the bed through itself, and the capture zone's skirt is annotation
 rather than world. Blended draws write no depth, so a pane is sorted rather than
@@ -403,6 +409,9 @@ buffer carries), the three light flavours and the muzzle-flash budget, the
 per-pixel/per-mesh fog split and `OutlineFog`'s three cache-invalidation rules,
 the shadow window, its four-tap lookup and the registry that lets grass and water
 share it, the glazing's two layers and why its Fresnel is the one unbanded term,
+the reflection bake's four load-bearing details (the alpha that separates city
+from sky, the box the ray is corrected against, the cube's Y flip, and the eye
+it borrows),
 why the dither is in the surface shaders rather than the grade, the
 constraints that look like bugs if you undo them (image processing, rendering
 group 1, thick boxes under walked surfaces, coplanar faces), and the painted sky.

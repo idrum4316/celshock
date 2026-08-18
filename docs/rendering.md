@@ -247,19 +247,68 @@ near plane is spoken for and `maxZ` is worth nothing here (measured). What it
 costs is the fins and collars standing 0.1–0.2 m proud of the glass, which the
 bias overdraws past ~100 m where they are a pixel or two of trim.
 
-**The reflection is an analytic sky and nothing else.** There is no probe, no
-cube map and no second pass anywhere in this renderer, so a pane cannot show the
-building opposite — it mixes `fogColor` at the horizon toward `skyZenithColor`
-overhead, down the mirrored eye ray, plus the key light as a broad halo where
-that ray points at the sun. Two things make that enough rather than a compromise:
-a curtain wall's reflection genuinely is mostly sky, and the gradient does the
-work on its own as the reflected ray sweeps from horizon to zenith while you walk
-toward a tower and look up it. `skyZenithColor` is the one uniform taken from the
-map's DOME rather than from its lighting block (`SkySpec.zenithColor`, falling
-back to the flat `skyColor`) — a reflection is a picture of the sky, not the light
-the sky throws, which is what `skyLightColor` beside it already is. The horizon
-end is `fogColor` because `SkySpec.horizonColor` is required to sit close to it,
-which is the one place that requirement is load-bearing rather than cosmetic.
+**The reflection is built in two goes: an analytic sky, and the city over the
+top of it out of a cube.** The sky half is the older one and is unchanged — it
+mixes `fogColor` at the horizon toward `skyZenithColor` overhead, down the
+mirrored eye ray, plus the key light as a broad halo where that ray points at
+the sun. `skyZenithColor` is the one uniform taken from the map's DOME rather
+than from its lighting block (`SkySpec.zenithColor`, falling back to the flat
+`skyColor`) — a reflection is a picture of the sky, not the light the sky
+throws, which is what `skyLightColor` beside it already is. The horizon end is
+`fogColor` because `SkySpec.horizonColor` is required to sit close to it, which
+is the one place that requirement is load-bearing rather than cosmetic.
+
+**The city half is `systems/ReflectionSystem.ts`, and it is the only render
+target in the game besides the shadow map.** One `ReflectionProbe` stands at the
+map's centre, `graphics.reflection.height` (18 m) over the ground, and bakes the
+map's opaque visuals into a 256-per-face cube once per `installMap`. It is
+affordable for one reason and it is the same reason the whole world layer is
+merged and frozen: the world is static, so this is not a pass, it is a build
+step that happens to run on the GPU. Measured under SwiftShader, where an
+ordinary frame costs 230-2500 ms, all six faces come to **70-110 ms** — a
+fraction of one headless frame, once, under the building card.
+
+Four things about it are load-bearing:
+
+- **The bake draws no sky and no glazing, and the cube's ALPHA is what says
+  so.** It clears to a transparent black and every cel variant but the glazing
+  writes alpha 1, so a texel is 1 where the bake drew world and 0 where it saw
+  nothing — which is exactly where the sky gradient above is what a pane should
+  show. The shader composites on that alpha and un-premultiplies by hand, the
+  same arithmetic and for the same reason as the Fresnel composite. The dome is
+  left out because it rides at `infiniteDistance` and the box projection below
+  would drag it around with the viewer; the panes are left out because a
+  blended draw over a transparent clear comes back already multiplied.
+- **The mirrored ray is parallax-corrected against the map's own extent**
+  before it samples. A cube sampled with the raw ray behaves as if everything
+  in it were infinitely far away, so the city in a pane would sit still while
+  the player walks past it — a decal rather than a reflection. The box is not
+  an approximation of anything: it is the boundary the four rim colliders
+  already are, floor to tallest roofline.
+- **The sample direction is flipped in Y**, and it is not a correction to any
+  of the above. A cube face is stored top-down while a framebuffer is bottom-up,
+  so a cube rendered into comes out mirrored about the horizon; Babylon says as
+  much by giving a cube render target `INVCUBIC_MODE`, and its own reflection
+  path spends `INVERTCUBICMAP` on the same line. Getting it wrong puts the
+  pavement where the sky belongs, which reads as glass that is merely too dark.
+- **The bake borrows the shader's eye and must give it back.** Every cel
+  material fogs and rims against `camPos`, so the six faces are rendered with
+  it moved to the probe — read on face 0 and *only* face 0, because by face 1
+  the eye already is the probe. Before that guard the whole cache came out of
+  the bake holding the probe's position and the main pass of the install frame
+  fogged the map against a point in the middle of it.
+
+What one cube gets wrong is position: a pane returns the right city, the right
+colour, moving the right way, seen from the middle of the map rather than from
+the pane. The honest alternatives are a probe per building (six renders each,
+out of a budget whose whole argument is that the world is drawn once) and a
+screen-space pass, which cannot answer the question the feature exists for — a
+pane you are looking at reflects what is behind YOU. `graphics.reflection.
+strength` (0.9) is deliberately short of 1 for the same reason: the last tenth
+is what lets a player catch the approximation out by walking along a frontage.
+A map with no glazing bakes nothing and publishes strength 0; the cube stays
+bound regardless, because a `samplerCube` with nothing on its unit is undefined
+behaviour rather than a black fetch.
 
 **The Fresnel is deliberately NOT banded**, alone among the terms in this shader.
 A band edge on a flat sheet is a contour drawn where the view angle crosses a

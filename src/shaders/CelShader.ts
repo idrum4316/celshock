@@ -11,9 +11,11 @@
  * pipeline.imageProcessingEnabled must stay false. Output is also opaque —
  * gl_FragColor's alpha is 1 for every variant but getGlass(), the world's one
  * alpha-blended material, which writes a Fresnel alpha, needs no depth write
- * (see there, and MapBuilder's pane rules) and carries the one depth bias in
+ * (see there, and MapBuilder's pane rules), carries the one depth bias in
  * the renderer — GLASS_DEPTH_UNITS, without which a pane past ~100 m is not
- * drawn at all. Materials are cached/shared per color — don't create per-mesh
+ * drawn at all — and is the one variant that samples anything the renderer
+ * drew for itself (setReflection, whose cube ReflectionSystem bakes and whose
+ * strength is 0 until it has). Materials are cached/shared per color — don't create per-mesh
  * materials. A NEW material is seeded with
  * every piece of shared state on the spot (applyCamera/applyEnvironment/
  * applyPointLights/applyShadow): the per-frame walks are guarded on change and
@@ -80,11 +82,12 @@ import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
  * coming THROUGH a thin surface rather than off it, for awnings and foliage.
  * Everything not explicitly translucent stays opaque.
  * Opt-in at COMPILE time (getGlass, `#define CEL_GLASS`): a pane of glazing —
- * a Fresnel between what is behind it and a reflection of the sky, written out
- * as a per-pixel alpha. A define rather than a uniform because, unlike the two
- * above, its terms cannot be multiplied out to nothing by a zero colour: a
- * reflect(), a pow() and a sky gradient on every pixel of the world is not a
- * price the other thousand meshes should pay to keep the roster uniform.
+ * a Fresnel between what is behind it and a reflection of the sky with the
+ * city composited into it, written out as a per-pixel alpha. A define rather
+ * than a uniform because, unlike the two above, its terms cannot be multiplied
+ * out to nothing by a zero colour: a reflect(), a pow(), a sky gradient and a
+ * cube fetch on every pixel of the world is not a price the other thousand
+ * meshes should pay to keep the roster uniform.
  *
  * The rim highlight is gated OFF near-level surfaces, and must stay that way:
  * on a plane the grazing angle is just the distance from the eye, so an
@@ -362,6 +365,20 @@ uniform vec4 glassParams;
 // close to — the one place that requirement is load-bearing rather than
 // cosmetic.
 uniform vec3 skyZenithColor;
+// The world as glass sees it: one cube baked per map install from the map's
+// own geometry (systems/ReflectionSystem.ts). Alpha 1 where the bake drew
+// something and 0 where it saw nothing at all, which is what lets the sky
+// above stay the analytic gradient and the city below be a picture of the
+// city. Colour is NOT premultiplied — see the sample below.
+uniform samplerCube reflectionCube;
+// The box the mirrored ray is parallax-corrected against (the map's own
+// extent, floor to roofline) and the point the cube was baked from:
+// reflectProbe.xyz is that point, and .w is how much of the bake a pane
+// returns — 0 on a map that baked nothing, which is every map with no glazing
+// on it.
+uniform vec3 reflectBoxMin;
+uniform vec3 reflectBoxMax;
+uniform vec4 reflectProbe;
 #endif
 
 // Geometric (per-triangle) normal from the world position's screen-space
@@ -452,6 +469,49 @@ vec3 perturbNormal(vec3 n) {
   // projection is what keeps a sloped road or a pitched deck honest.
   grad -= n * dot(grad, n);
   return normalize(n - grad);
+}
+#endif
+
+#ifdef CEL_GLASS
+// Parallax correction for the reflection cube: where the mirrored ray leaves
+// the map, expressed as a direction from the point the cube was baked at.
+//
+// A cube map is a picture taken from ONE place, and sampled with the raw
+// mirrored ray it behaves as if everything in it were infinitely far away —
+// so the city in a pane would sit still while the player walks past it, which
+// reads as a decal rather than as a reflection. Intersecting the ray with a
+// box that stands in for the world and re-aiming from the bake point at the
+// hit is the standard correction, and here the box is not an approximation of
+// anything: it is the map's own extent, which is a square with a hard boundary
+// on all four sides and a roofline over it.
+//
+// The reciprocal is taken against a floor rather than the component itself. A
+// ray exactly parallel to a face divides by zero, which is a well-behaved
+// infinity that never wins the min below — but a ray parallel to a face it is
+// also exactly ON divides zero by zero, and one NaN takes the whole sample
+// with it. sign() cannot supply the missing direction (sign(0) is 0), so the
+// magnitude is clamped and the sign restored by hand.
+vec3 reflectBoxDir(vec3 dir, vec3 pos) {
+  vec3 sgn = sign(dir);
+  sgn += 1.0 - abs(sgn);
+  vec3 inv = 1.0 / (sgn * max(abs(dir), vec3(1e-5)));
+  vec3 tHi = (reflectBoxMax - pos) * inv;
+  vec3 tLo = (reflectBoxMin - pos) * inv;
+  // The far intersection on each axis; the nearest of the three is the face
+  // the ray actually leaves through. max() picks the far one per axis because
+  // one of the pair is behind the ray whenever pos is inside the box.
+  vec3 t = max(tHi, tLo);
+  float hit = min(min(t.x, t.y), t.z);
+  vec3 aimed = (pos + dir * max(hit, 0.0)) - reflectProbe.xyz;
+  // And then flipped in Y, which is not a correction to any of the above: a
+  // cube face is stored top-down while a framebuffer is bottom-up, so a cube
+  // RENDERED into comes out mirrored about the horizon. Babylon says as much
+  // by giving a cube render target INVCUBIC_MODE, and its own reflection path
+  // spends that define on this one line. Without it a pane reflects the
+  // pavement where the sky should be, which reads as glass that is simply too
+  // dark rather than as anything upside down — the mistake is invisible until
+  // it is looked for.
+  return vec3(aimed.x, -aimed.y, aimed.z);
 }
 #endif
 
@@ -644,13 +704,11 @@ void main() {
   // the angle you are standing at — face-on a shopfront is the room behind it,
   // and from down the street the same glass is a sheet of sky.
   //
-  // What it reflects is an analytic sky sampled down the mirrored eye ray, and
-  // that is the whole reflection: there is no probe, no cube map and no second
-  // pass anywhere in this renderer, so a pane cannot show the building
-  // opposite. It does not need to. A curtain wall's reflection is overwhelmingly
-  // sky — that is what a building of glass looks like from the street — and the
-  // gradient carries the read on its own, because the reflected ray sweeps from
-  // the horizon to the zenith as you walk toward a tower and look up it.
+  // What it reflects is built in two goes down the mirrored eye ray: the sky,
+  // analytically, and then the city over the top of it out of a cube baked
+  // from the map's own geometry. The sky half comes first because it is what
+  // the cube does NOT hold — the bake draws no dome, so everything above the
+  // roofline comes back with alpha 0 and this gradient is what is left there.
   vec3 mirrored = reflect(-viewDir, n);
   vec3 sky = mix(fogColor, skyZenithColor,
     smoothstep(0.0, 0.55, mirrored.y));
@@ -661,6 +719,27 @@ void main() {
   // glass in a tower's shade does not glare.
   float halo = smoothstep(glassParams.z, 1.0, dot(mirrored, -lightDir));
   sky += lightColor * halo * shadow;
+
+  // And the world, which is the half that makes a curtain wall read as glass
+  // rather than as a tinted slab: the tower opposite, the street under it and
+  // the traffic on the street, all moving across the pane as the player walks
+  // because the ray is parallax-corrected before it is sampled.
+  //
+  // The bake is ONE cube from ONE point on the map (see ReflectionSystem), so
+  // what a pane returns is the right city seen from slightly the wrong place.
+  // That is the trade the feature is: six face renders once per map install
+  // against a per-frame probe per building, on a renderer whose whole budget
+  // argument is that the world is static and drawn once. Sold by the fact that
+  // a reflection is read as motion and colour rather than as a picture —
+  // nobody counts the windows in a window.
+  //
+  // Un-premultiplied by hand. The bake clears to a transparent black and the
+  // world draws over it opaque, so a texel on a silhouette filters to a
+  // fraction of the colour AND a fraction of the alpha; mixing toward that
+  // colour directly would draw a dark seam around every roofline in the
+  // reflection. Same arithmetic, and the same reason, as the composite below.
+  vec4 world = textureCube(reflectionCube, reflectBoxDir(mirrored, vPosW));
+  sky = mix(sky, world.rgb / max(world.a, 0.001), world.a * reflectProbe.w);
 
   // Schlick, and deliberately NOT banded. Every other term in this shader is
   // quantized and this one must not be: the band edge would be a contour line
@@ -924,6 +1003,29 @@ export class CelMaterialFactory {
   private shadowMatrix = Matrix.Identity();
   private shadowParams = new Vector4(0.0025, 0.15, 0.06, 0);
 
+  /**
+   * The glazing materials, which are the only ones any of the reflection state
+   * below means anything to.
+   *
+   * A list of its own rather than a walk over `this.cache`, for the reason the
+   * per-frame guards elsewhere in here exist: a `setVector4` for a uniform a
+   * material's effect does not declare is not an error, it is a lookup that
+   * returns null and a bind that returns early — on every material, on every
+   * draw, forever. `applyShadow` may push onto the whole cache because every
+   * cel material declares `shadowMap`; nothing but `CEL_GLASS` declares these.
+   */
+  private glassMats: ShaderMaterial[] = [];
+  /** The bake, and where it was taken from. Null until a map has been installed. */
+  private reflectionCube: BaseTexture | null = null;
+  private reflectBoxMin = Vector3.Zero();
+  private reflectBoxMax = Vector3.Zero();
+  /**
+   * xyz the bake point, w how much of the bake a pane returns. Zero strength
+   * is the state before any bake and on any map with no glazing on it, and it
+   * is what makes the cube's contents not matter there — see `setReflection`.
+   */
+  private reflectProbe = new Vector4(0, 0, 0, 0);
+
   constructor(private scene: Scene) {}
 
   /** Returns the shared cel material for a hex color, creating it on demand. */
@@ -1061,8 +1163,11 @@ export class CelMaterialFactory {
             ...CelMaterialFactory.UNIFORMS,
             "glassParams",
             "skyZenithColor",
+            "reflectBoxMin",
+            "reflectBoxMax",
+            "reflectProbe",
           ],
-          samplers: [...CelMaterialFactory.SAMPLERS],
+          samplers: [...CelMaterialFactory.SAMPLERS, "reflectionCube"],
           defines: ["#define CEL_GLASS"],
           // What puts these subMeshes in the transparent pass at all. The
           // material's own `alpha` stays 1: the alpha that matters is written
@@ -1082,6 +1187,8 @@ export class CelMaterialFactory {
       this.applySpec(mat, null);
       this.applyTranslucency(mat, null);
       this.applyGlass(mat, glass);
+      this.applyReflection(mat);
+      this.glassMats.push(mat);
       this.cache.set(cacheKey, mat);
     }
     return mat;
@@ -1363,6 +1470,19 @@ export class CelMaterialFactory {
   }
 
   /**
+   * Copies the eye the cache is currently holding into `out`.
+   *
+   * For the one caller that has to BORROW it: `ReflectionSystem` renders the
+   * world from the probe rather than from the player, so every cel material in
+   * that bake has to fog and rim against the probe — and the six faces have to
+   * put back exactly what they found, because the main pass of the same frame
+   * follows them.
+   */
+  readEye(out: Vector3): Vector3 {
+    return out.copyFrom(this.camPos);
+  }
+
+  /**
    * Materials that sample the depth map but are not cel materials — the grass
    * and the water, each of which reproduces the cel lighting model in its own
    * shader (see `SHADOW_GLSL`).
@@ -1404,6 +1524,36 @@ export class CelMaterialFactory {
   setShadowMap(map: BaseTexture): void {
     this.shadowMap = map;
     this.eachShadowReader((mat) => mat.setTexture("shadowMap", map));
+  }
+
+  /**
+   * The world as glass reflects it: the baked cube, the box the mirrored ray
+   * is corrected against, the point the bake was taken from, and how much of
+   * it a pane returns.
+   *
+   * Pushed once per map install by `ReflectionSystem`, which owns all four —
+   * this is the same publish-once shape as `setShadowMap` and for the same
+   * reason: the glazing material is shared and permanent while what it
+   * reflects is rebuilt with the map.
+   *
+   * **`strength` 0 is what a map with no glazing on it passes**, and it is the
+   * whole of the "off" state. The cube stays bound either way, because a
+   * `samplerCube` with nothing on its unit is a 2D texture as far as the
+   * driver is concerned and that is undefined behaviour rather than a black
+   * fetch; multiplying an undefined RGBA8 read by zero is defined and free.
+   */
+  setReflection(
+    cube: BaseTexture,
+    boxMin: Vector3,
+    boxMax: Vector3,
+    probe: Vector3,
+    strength: number,
+  ): void {
+    this.reflectionCube = cube;
+    this.reflectBoxMin.copyFrom(boxMin);
+    this.reflectBoxMax.copyFrom(boxMax);
+    this.reflectProbe.copyFromFloats(probe.x, probe.y, probe.z, strength);
+    for (const mat of this.glassMats) this.applyReflection(mat);
   }
 
   /** The light's view*projection; re-uploaded when the shadow camera moves. */
@@ -1553,6 +1703,18 @@ export class CelMaterialFactory {
       "glassParams",
       new Vector4(glass.reflectance, glass.falloff, glass.halo, glass.tint),
     );
+  }
+
+  /**
+   * The reflection state, onto one glazing material. Called on create as well
+   * as from `setReflection`, for the reason every other `apply*` is: a pane
+   * material minted after the bake has to be born holding it.
+   */
+  private applyReflection(mat: ShaderMaterial): void {
+    if (this.reflectionCube) mat.setTexture("reflectionCube", this.reflectionCube);
+    mat.setVector3("reflectBoxMin", this.reflectBoxMin);
+    mat.setVector3("reflectBoxMax", this.reflectBoxMax);
+    mat.setVector4("reflectProbe", this.reflectProbe);
   }
 }
 

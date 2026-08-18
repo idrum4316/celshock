@@ -92,6 +92,7 @@ import { GlassSystem } from "../systems/GlassSystem";
 import { GrenadeSystem } from "../systems/GrenadeSystem";
 import { PhysicsWorld, type HavokInstance } from "../systems/PhysicsWorld";
 import { RagdollSystem } from "../systems/RagdollSystem";
+import { ReflectionSystem } from "../systems/ReflectionSystem";
 import { LightingSystem } from "../systems/LightingSystem";
 import { ShadowSystem } from "../systems/ShadowSystem";
 import { Sky } from "../systems/Sky";
@@ -184,6 +185,11 @@ export class Game {
   private zones: CaptureZoneSystem;
   private lighting: LightingSystem;
   private shadows: ShadowSystem;
+  /**
+   * The world as the glazing reflects it — one cube, baked per map install.
+   * The only render target here besides the shadow map.
+   */
+  private reflections: ReflectionSystem;
   private atmosphere: Atmosphere;
   private sky: Sky;
   private water: WaterSystem;
@@ -566,6 +572,10 @@ export class Game {
     // which both now sample (see `SHADOW_GLSL`).
     this.water = new WaterSystem(this.scene, glow, this.mats);
     this.grass = new GrassSystem(this.scene, glow, this.mats);
+    // Same relationship to `mats` as the two above, in the other direction:
+    // this one PUBLISHES to it — the cube the glazing samples, baked from the
+    // map itself. Built here so a pane material is born holding the sampler.
+    this.reflections = new ReflectionSystem(this.scene, this.mats);
     this.mapBuilder = new MapBuilder(this.scene, this.mats, this.lighting);
     this.combat = new CombatSystem(this.scene, this.mats);
     this.grenades = new GrenadeSystem(this.scene, this.mats);
@@ -2356,6 +2366,10 @@ export class Game {
     // night village reads as a lens fault over a bright one.
     this.post.setGrade(environment.grade);
     this.shadows.setCasters(map.visuals);
+    // And the other thing baked off the fresh map's visuals: what its glass
+    // reflects. Same reason as the line above it — last build's meshes are
+    // disposed, and this one holds a render list of them until it is told.
+    this.reflections.build(map);
     this.atmosphere.apply(environment.particles, map.size, map.size);
     this.water.build(map.water, environment, map.terrain);
     this.grass.build(
