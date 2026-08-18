@@ -66,6 +66,29 @@ export interface WorldFingerprint {
   rayGroups: number;
   rayBoxes: number;
   rayHash: string;
+  /**
+   * The glazing: how many panes, how many of those are barriers, and where
+   * they all are.
+   *
+   * Here for `porousBoxes`' reason taken further. A pane's index is its NAME on
+   * the wire, so two sides that built the same glass in a different order would
+   * agree on every other field in this object and break different windows —
+   * and, for a barrier pane, would disagree about which shopfront a body may
+   * walk through, which the move validator turns into a player snapped back
+   * through a wall they can see is broken. The hash is order-dependent for
+   * exactly that reason.
+   *
+   * `paneBarriers` is counted separately because it is the half with teeth: a
+   * cosmetic pane going missing is a window that never breaks, while a barrier
+   * pane going missing is geometry one side is standing in.
+   *
+   * Like `porousBoxes` this is declared in a BUILDER, so `sourceHash` — which
+   * covers `layout.ts` and `heights.ts` — cannot notice it going stale. Re-run
+   * `npm run collision` by hand after touching one.
+   */
+  panes: number;
+  paneBarriers: number;
+  paneHash: string;
   /** Nav surfaces — a (cell, height) pair each, so this counts geometry. */
   surfaces: number;
   walkable: number;
@@ -96,12 +119,26 @@ export function worldFingerprint(map: GameMap): WorldFingerprint {
     for (const b of group) ray.push(b.w, b.h, b.d, b.cx, b.cy, b.cz, b.rotX, b.rotY);
   }
 
+  // Order-dependent for a sharper reason than the timber's: a pane's position
+  // in this list is what a `glass` event on the wire names it by. `box` is in
+  // the hash because a barrier pane and a cosmetic one at the same place are
+  // not the same object.
+  const panes: number[] = [];
+  let barriers = 0;
+  for (const p of map.panes) {
+    panes.push(p.w, p.h, p.d, p.cx, p.cy, p.cz, p.rotY, p.box);
+    if (p.box >= 0) barriers++;
+  }
+
   return {
     boxes: map.colliderBoxes.length,
     porousBoxes: porous,
     rayGroups: map.rayGroups.length,
     rayBoxes: (ray.length - map.rayGroups.length) / 8,
     rayHash: hashNumbers(ray),
+    panes: map.panes.length,
+    paneBarriers: barriers,
+    paneHash: hashNumbers(panes),
     surfaces: map.nav.surfaceCount,
     walkable: map.nav.walkableCount,
     navDim: snap.dim,

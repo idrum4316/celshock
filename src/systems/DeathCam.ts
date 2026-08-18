@@ -23,10 +23,12 @@
  *   `RagdollSubject` stood up at the player's last position on the frame they
  *   die and hidden again when the cam ends, so nothing in movement, collision
  *   or hit detection ever gains a mesh to disagree with.
- * - **Physics is optional here exactly as it is for a bot.** Every refusal the
- *   pool can make — WASM missing, WASM failed, setting off, pool full — falls
- *   through to the same collapse tween `Bot` runs, so the cam is never a
- *   four-second shot of a body standing to attention.
+ * - **This body is never refused, and it needs no exception to say so.** Havok
+ *   is required, the corpse is at the camera so the pool's one remaining
+ *   refusal (distance) cannot reach it, and a full pool evicts its oldest
+ *   corpse — which for the whole four seconds is never this one. The cam used
+ *   to carry a `priority` flag and a collapse tween for the cases that answer
+ *   made and the cases it did not; both are gone.
  * - **The camera's pull-in lives here**, and it is the only occlusion pick in
  *   the game outside combat. `CameraSystem` has none because the camera is
  *   normally inside the head and has nothing to be occluded by; a camera three
@@ -75,11 +77,12 @@ class Corpse implements RagdollSubject {
 
 export class DeathCam {
   /**
-   * Wired by `Game`, because a system may not import another one. The defaults
-   * are the refusal and a no-op, so an unwired cam runs the collapse tween and
-   * still works.
+   * Wired by `Game`, because a system may not import another one. Both default
+   * to a no-op, so an unwired cam still runs — it just frames a body that
+   * stands where it was stood up, which is what the whole state exists to
+   * avoid and is therefore a wiring bug rather than a mode.
    */
-  onSpawnRagdoll: (subject: RagdollSubject) => boolean = () => false;
+  onSpawnRagdoll: (subject: RagdollSubject) => void = () => {};
   onRetireRagdoll: (subject: RagdollSubject) => void = () => {};
 
   /** This frame's camera pose. `Game` hands both to `CameraSystem.place`. */
@@ -92,13 +95,6 @@ export class DeathCam {
   private running = false;
   /** Seconds since the killing round landed. */
   private t = 0;
-  /**
-   * The stance the player died in, held for the fallback tween — which unfolds
-   * it as the body goes down and therefore has to know where it started. The
-   * ragdoll path never reads it: the pose is already in the rig by then and the
-   * solver owns the joints.
-   */
-  private crouch = 0;
   /** Where the orbit currently is, as a world yaw. */
   private orbit = 0;
 
@@ -205,7 +201,6 @@ export class DeathCam {
     const corpse = this.corpse;
     const rig = corpse.rig;
 
-    this.crouch = crouch;
     corpse.position.copyFrom(feet);
     // The CENTRE rides the stance and the ROOT does not, which is the same
     // split `NetPlayer` draws for a remote body: the crouch lives inside the
@@ -228,7 +223,7 @@ export class DeathCam {
     // so the throw starts from the shape they were in rather than from whatever
     // the last corpse left behind.
     resetSoldierPose(rig);
-    animateSoldier(rig, 0, 0, 0, 0, 0, crouch);
+    animateSoldier(rig, 0, 0, 0, 0, crouch);
     rig.root.position.set(feet.x, feet.y + rig.centerHeight, feet.z);
     rig.root.rotation.y = yaw;
     corpse.setEnabled(true);
@@ -250,38 +245,23 @@ export class DeathCam {
     this.look.copyFrom(this.fromLook);
 
     // Offered AFTER the pose is set, because the pool reads each joint's world
-    // transform to place its proxies. A refusal is not an error — the tween in
-    // `update` is what runs instead.
+    // transform to place its proxies. This body is never refused — it is at
+    // the camera, so the distance gate cannot touch it, and a full pool now
+    // evicts its oldest corpse rather than saying no.
     this.onSpawnRagdoll(corpse);
   }
 
   /**
-   * Ages the cam, poses the fallback tween if physics declined, and works out
-   * where the camera goes. Called only from `Game`'s `dying` branch, which sits
-   * inside the same `updateGameplay` the ragdoll is stepped from — so a pause
-   * holds the shot exactly as it holds everything else.
+   * Ages the cam and works out where the camera goes. Called only from `Game`'s
+   * `dying` branch, which sits inside the same `updateGameplay` the ragdoll is
+   * stepped from — so a pause holds the shot exactly as it holds everything
+   * else.
    */
   update(dt: number): void {
     if (!this.running || !this.corpse) return;
     const c = CONFIG.player.deathCam;
     const rig = this.corpse.rig;
     this.t += dt;
-
-    // The tween, for every death the pool declined. Same curve and the same
-    // number as `Bot`'s dead branch — but it is NOT followed by the hide at
-    // `hideTime`, because a body that vanishes two thirds of a second into a
-    // four-second shot of it is the thing this whole state exists to stop.
-    if (!this.corpse.ragdolling) {
-      animateSoldier(
-        rig,
-        0,
-        0,
-        0,
-        0,
-        Math.min(1, this.t / CONFIG.bots.death.collapseTime),
-        this.crouch,
-      );
-    }
 
     // The chest, computed rather than read: outside the render loop
     // `getAbsolutePosition` returns a stale cache, and while the ragdoll owns
@@ -317,8 +297,8 @@ export class DeathCam {
   stop(): void {
     if (this.corpse) {
       this.onRetireRagdoll(this.corpse);
-      // The pool restores the rig on release; this covers the tween path, where
-      // it was never handed over in the first place.
+      // The pool restores the rig on release; this covers a cam that was never
+      // wired to one, where the rig was never handed over in the first place.
       this.corpse.setEnabled(false);
       resetSoldierPose(this.corpse.rig);
     }

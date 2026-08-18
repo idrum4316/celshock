@@ -200,12 +200,83 @@ and `getTranslucent` the translucency band (`transColor`) — the key light comi
 **black colour**, which is what makes them free on materials that skip them: every
 cel material carries both uniforms and zero multiplies the term out. A material is
 matte, glossy *or* translucent — never two — because the cache is per colour and an
-axis that multiplies is an axis that costs. A fourth variant means a spec type, an
-`apply*`, a `get*` under its own key, one entry in `UNIFORMS`, **and** teaching
+axis that multiplies is an axis that costs. Another such variant means a spec type,
+an `apply*`, a `get*` under its own key, one entry in `UNIFORMS`, **and** teaching
 `outlineInkFor`'s regex the new `cel-<variant>-#rrggbb` name, or the ink falls back
 to the palette-neutral colour. The translucency term is directional both ways — it
 needs the eye looking into the key light *and* the facet turned away from it — so it
 can only be judged from under the thing, moonward.
+
+## The glazing: the one thing here that is not opaque
+
+`getGlass` is the fourth variant and the odd one out three times over, and each
+difference is forced by what a window is.
+
+**It is a DEFINE (`CEL_GLASS`) rather than a uniform**, unlike the two above. The
+trick that makes those free is that a black colour multiplies the term out — but
+this one is a `reflect()`, a `pow()` and a sky gradient, and there is no value of
+any uniform that makes a GPU skip them. Every wall, roof, road and rig in the
+frame would evaluate a reflection to keep the roster uniform.
+
+**It writes a per-pixel ALPHA, and it is the only material in the world layer
+that does.** A pane is two layers over one another: what it reflects, and the
+tint of what you see through it. `CONFIG.graphics.glass` carries the four numbers
+— `reflectance` face-on, the Fresnel `falloff`, the sun `halo`'s width and how
+dark the `tint` is — and the shader composites the pair into one colour and one
+alpha, dividing by that alpha because the rasterizer is about to multiply by it.
+The material's own `alpha` stays 1; what puts these subMeshes in the transparent
+pass is `needAlphaBlending` in the `ShaderMaterial` options. Depth writes turn
+themselves off — Babylon's `setAlphaMode` clears the depth mask for any blended
+draw — so panes are sorted rather than z-buffered, which is why the glazing
+merges per map block (`MapBuilder.paneGroup`) and why a transparent mesh costs
+more than its triangle count says.
+
+**It is also the one material in the renderer with a depth BIAS, and that is
+not about transparency at all.** A pane hangs a few centimetres off the wall
+behind it — `kit/city.ts`'s `glaze` stands 0.04 m of glass over the shaft, with
+the collars proud of that again — and the depth buffer loses that gap with
+distance. The near plane is 5 cm because the viewmodel's optics sit inside 5 cm
+of the eye, and against a 24-bit buffer that leaves a step of 1 cm at 90 m, 3 cm
+at 160 m and 27 cm at Coldharbour's fog wall. Measured square-on with the pane
+held at a constant size on screen: full contribution at 40 and 90 m, **nothing
+at all from 130 m out** — every distant tower back to blank concrete, with a
+correct shader and correct geometry. `CelMaterialFactory.GLASS_DEPTH_UNITS`
+(-16) is a polygon offset in the buffer's own units, so the correction is
+millimetres up close and metres at the far end, exactly where the error is; the
+near plane is spoken for and `maxZ` is worth nothing here (measured). What it
+costs is the fins and collars standing 0.1–0.2 m proud of the glass, which the
+bias overdraws past ~100 m where they are a pixel or two of trim.
+
+**The reflection is an analytic sky and nothing else.** There is no probe, no
+cube map and no second pass anywhere in this renderer, so a pane cannot show the
+building opposite — it mixes `fogColor` at the horizon toward `skyZenithColor`
+overhead, down the mirrored eye ray, plus the key light as a broad halo where
+that ray points at the sun. Two things make that enough rather than a compromise:
+a curtain wall's reflection genuinely is mostly sky, and the gradient does the
+work on its own as the reflected ray sweeps from horizon to zenith while you walk
+toward a tower and look up it. `skyZenithColor` is the one uniform taken from the
+map's DOME rather than from its lighting block (`SkySpec.zenithColor`, falling
+back to the flat `skyColor`) — a reflection is a picture of the sky, not the light
+the sky throws, which is what `skyLightColor` beside it already is. The horizon
+end is `fogColor` because `SkySpec.horizonColor` is required to sit close to it,
+which is the one place that requirement is load-bearing rather than cosmetic.
+
+**The Fresnel is deliberately NOT banded**, alone among the terms in this shader.
+A band edge on a flat sheet is a contour drawn where the view angle crosses a
+step and nowhere else, so it would slide across the glazing as the player walks —
+exactly the artefact the rim light is gated off level surfaces to avoid, and for
+exactly the same geometric reason. The water's fresnel is smooth and is the
+precedent; the dither is what keeps the ramp from banding on its own.
+
+**Glass is not outlined and casts no shadow**, and `MapBuilder` marks both on the
+merged pane meshes. The shadow half is obvious once the pane is see-through. The
+ink half is mechanical: Babylon draws an outline as an inverted hull BEFORE the
+mesh and keeps it out of a transparent mesh's own area with a stencil pass, and
+this engine is built with no stencil buffer at all (see `Game`'s constructor), so
+the shell is not a ring around a pane but a dark plate behind the whole of it.
+A window's frame is drawn by the mullion, the collar and the reveal, all of which
+are geometry with ink of their own. Because nothing ever outlines a pane, glass
+is also the one variant that owes `outlineInkFor`'s regex nothing.
 
 **The shadow lookup is FOUR taps, and four is a ceiling rather than a budget.**
 One tap put the depth map's own grid on screen — at 110 m over 2048 texels an

@@ -102,6 +102,64 @@ export interface BoxSpec {
    * coarse box beside it is what navigation reads.
    */
   rayOnly?: true;
+
+  /**
+   * A `porous` box that can stop being one: the collider half of a BARRIER
+   * pane. Declared by `Build.pane({ barrier: true })` and by nothing else.
+   *
+   * Intact, it is exactly `porous` — a body walks into it, a round goes
+   * through — which is why the two pick predicates in `solid.ts` need no new
+   * term for glass at all. Broken, `GlassSystem` clears `solid` outright and
+   * it leaves both. That is the whole of the mechanism; the flag exists so the
+   * things that must NOT see a pane can name it.
+   *
+   * Three of them: `CoverMap` (bots would take cover behind a window),
+   * `ambientOcclusion` (glass casts no ambient shadow), and the collision bake,
+   * which carries the flag to the server so both sides can break the same pane.
+   *
+   * A pane is the ONE mutable thing in the world layer, and monotonically so —
+   * it only ever goes from blocking to not-blocking within a round, so the nav
+   * graph only ever gains links and no cached route can become invalid, only
+   * stale. See `MapBuilder.panes` and `systems/GlassSystem.ts`.
+   */
+  glass?: true;
+}
+
+/**
+ * A pane of glass: a sheet that shatters when a round crosses it.
+ *
+ * Declared by `Build.pane`, which is the only place one is made. Same six
+ * numbers a `BoxSpec` carries, because a pane IS a thin box — what makes it a
+ * pane is that `MapBuilder` keeps it addressable through both merge passes so
+ * one sheet can be taken out of the world at runtime.
+ */
+export interface PaneSpec {
+  w: number;
+  h: number;
+  d: number;
+  x: number;
+  y: number;
+  z: number;
+  rotY?: number;
+  /**
+   * Stops a body until it is broken, and so is a genuine way into a building
+   * once it is not.
+   *
+   * **Not the default, and the reason is measured.** A barrier pane costs a
+   * collider, and `MapBuilder.struts`'s header records what loose collider
+   * boxes cost: 161 of them put ~17% on every ray in the game, `probeGround`
+   * — the most expensive per-frame call there is — included. Coldharbour
+   * carries some six thousand panes, and six thousand pickable boxes is not a
+   * trade, it is a regression. So the default pane is a sheet that shatters and
+   * changes nothing else, and `barrier` is authored one at a time for the
+   * handful of places glass is the ONLY thing in the way.
+   *
+   * Glazing an opening something else already closes buys nothing: an office's
+   * window band sits over a 1 m spandrel that stops a body already, and a
+   * tower's curtain wall hangs 4 cm off a solid shaft. Reach for this where
+   * there is no wall behind the glass.
+   */
+  barrier?: true;
 }
 
 /**
@@ -182,6 +240,18 @@ export interface Structure {
   meshes: Mesh[];
   colliders: BoxSpec[];
   lights: LocalLight[];
+  /**
+   * Glazing, kept apart from `meshes` for the whole of its life.
+   *
+   * A pane has to stay addressable through both merge passes, and `meshes` is
+   * the list that gets merged into oblivion — per colour here, then per 48 m
+   * block across neighbouring placements. `paneMeshes` is merged once, per
+   * placement, and never joins a block; `panes` is the parallel spec list
+   * `MapBuilder` records world rects and vertex ranges from. The two are
+   * index-for-index, exactly as `meshes`/`colliders` are not.
+   */
+  paneMeshes: Mesh[];
+  panes: PaneSpec[];
 }
 
 // --- village palette -------------------------------------------------------
@@ -248,7 +318,16 @@ export const CONCRETE = "#57564f";
 export const DARK_CONCRETE = "#3a3936";
 /** Blacktop: the roadway, and the flat roofs that are the same stuff. */
 export const ASPHALT = "#26272c";
-/** Curtain-wall glazing, unlit: a dark slate that reads as reflected sky. */
+/**
+ * Curtain-wall glazing: the TINT, not the pane.
+ *
+ * This is the colour a round of daylight picks up on its way through the
+ * glass, and it is all this hex decides — what the pane actually shows is
+ * composited from it and a reflection of the sky by `CelMaterialFactory
+ * .getGlass`. So it is dark for the reason a tinted commercial glazing is
+ * dark, and NOT because it is standing in for a reflection the way it did
+ * while a pane was an opaque box.
+ */
 export const GLASS = "#2a333b";
 /** Anodised mullions, handrails, lamp columns, signal poles. */
 export const ALLOY = "#4a4f54";
@@ -283,6 +362,8 @@ export class Build implements Structure {
   meshes: Mesh[] = [];
   colliders: BoxSpec[] = [];
   lights: LocalLight[] = [];
+  paneMeshes: Mesh[] = [];
+  panes: PaneSpec[] = [];
 
   constructor(
     private scene: Scene,
@@ -450,6 +531,49 @@ export class Build implements Structure {
       rayOnly: true,
     });
     return this.box(w, h, d, x, y, z, color, rot);
+  }
+
+  /**
+   * A pane of glass — the one thing in the world a round can take away.
+   *
+   * The fourth box word, and the only one whose geometry leaves `meshes`. A
+   * pane passes a round like a `porous` `block`, is the only thing in the world
+   * drawn SEE-THROUGH (`CelMaterialFactory.getGlass` — a reflection of the sky
+   * over the tint of whatever stands behind it), and — uniquely — keeps an
+   * identity through both of `MapBuilder`'s merges, so `GlassSystem` can
+   * collapse this sheet and no other when something crosses it. See `PaneSpec`
+   * for what `barrier` costs and when it is worth it.
+   *
+   * The colour is the caller's because a shopfront and a windscreen are not the
+   * same glass, but it is `GLASS` by default for the same reason `surface` has
+   * one: the common case should need no thought.
+   */
+  pane(
+    w: number,
+    h: number,
+    d: number,
+    x: number,
+    y: number,
+    z: number,
+    opts?: { color?: string; rotY?: number; barrier?: true },
+  ): Mesh {
+    const m = MeshBuilder.CreateBox(
+      `${this.tag}-pane${this.paneMeshes.length}`,
+      { width: w, height: h, depth: d },
+      this.scene,
+    );
+    m.position.set(x, y, z);
+    if (opts?.rotY) m.rotation.y = opts.rotY;
+    // The one alpha-blended material in the world, and the only builder call
+    // that reaches it: a pane is glass because `pane` made it, not because
+    // somebody passed the glass colour to `box`.
+    m.material = this.mats.getGlass(
+      opts?.color ?? GLASS,
+      CONFIG.graphics.glass,
+    );
+    this.paneMeshes.push(m);
+    this.panes.push({ w, h, d, x, y, z, rotY: opts?.rotY, barrier: opts?.barrier });
+    return m;
   }
 
   /** A box that also blocks movement and stops bullets. */

@@ -198,12 +198,6 @@ const PAGES: readonly Page[] = [
         hint: "Vignette, grain, and the red damage flash",
         options: OFF_ON,
       },
-      {
-        key: "ragdolls",
-        label: "Ragdolls",
-        hint: "Bodies fall under physics instead of collapsing",
-        options: OFF_ON,
-      },
     ],
   },
 ];

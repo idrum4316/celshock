@@ -17,6 +17,7 @@ export type {
   BuildCtx,
   BuildParams,
   LocalLight,
+  PaneSpec,
   Structure,
 } from "./kit/core";
 

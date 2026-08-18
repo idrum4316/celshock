@@ -383,6 +383,49 @@ floor rather than an estimate.
 
 ---
 
+## 9. A broken pane costs a flow-field rebuild, and the rebuild is not measured on real hardware
+
+**Status:** measured headless, amortised, and worth re-measuring before anyone
+raises the barrier-pane count.
+
+Breaking a barrier pane relinks the nav graph locally — cheap, bounded by the
+box — and then owes every flow field a rebuild, because a route computed before
+a wall opened still walks round it. `GlassSystem.update` drains **one field per
+frame** and coalesces every break inside that window into the same pass.
+
+Measured on Coldharbour, headless (so inflated; the ranking is the trustworthy
+part):
+
+| | ms |
+| --- | --- |
+| one field (`NavGrid.rebuildField`) | 4.7 |
+| all seven | 15.9 |
+| the local relink + flood (`NavGrid.openBox`) | under the timer's resolution |
+
+183,184 surfaces, 32,529 walkable, seven fields (five control points and both
+home spawns). 15.9 ms in one frame is a dropped frame on a 60 Hz budget that
+FINDINGS #1 already says drops one every 1.7 s; spread over seven it is
+invisible, and the staleness in between costs nothing because breaking is
+monotonic — the graph only ever gains links, so a stale field walks the long way
+and is never wrong.
+
+### What is not known
+
+**The real-hardware figure.** 4.7 ms headless is probably 1–2 ms on a real
+machine, but that is a guess, and it is the number that decides whether one
+field per frame is comfortable or whether it wants spreading further. The
+cheapest way to settle it is the same harness as the table above with the page's
+own frame loop rather than a synchronous call.
+
+**How it scales with the barrier count.** Coldharbour has twelve barrier panes
+and a firefight breaks perhaps two or three of them, so the rebuild queue is
+usually one pass. A map that glazed every ground floor would break several
+per exchange — and while the coalescing means that is still one pass per burst
+rather than one per pane, nobody has stood in a fight and counted. Raise
+`PaneSpec.barrier` usage and this entry is the thing to re-read.
+
+---
+
 ## 8. A tumbling ragdoll is the most expensive thing in the frame while it lasts
 
 **Status: the table below DOES NOT REPRODUCE, and the headline is withdrawn.**
@@ -425,11 +468,12 @@ Two things bound it either way, and they are what still hold:
   20, velocity under `sleepSpeed` by frame 30, frozen by ~frame 65), and from
   then to the sink at 6 s it costs ~0 (re-measured: 0.0004 ms/frame with eight
   settled corpses — `update` does not touch the engine). The window is the fall.
-- **It is capped and gated.** Eight at once now, none past the fog wall, and
-  every refusal takes the collapse tween instead. The cap is what makes the cost
-  bounded rather than a function of how many people are dying; the unused slots
-  are free (four corpses cost 0.061 ms in a pool of four and 0.062 ms in a pool
-  of eight).
+- **It is capped and gated.** Eight at once, and none past the fog wall. The cap
+  is what makes the cost bounded rather than a function of how many people are
+  dying — and it still is, now that a ninth body EVICTS the oldest corpse rather
+  than being refused: the eviction changes which bodies are falling, never how
+  many. The unused slots are free (four corpses cost 0.061 ms in a pool of four
+  and 0.062 ms in a pool of eight).
 
 The static world build is separate and one-off: **33–50 ms** inside
 `installMap` for 733 boxes plus 25 terrain mesh blocks, against a map build

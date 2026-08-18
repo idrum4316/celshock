@@ -8,8 +8,13 @@
  * uniforms, uploaded by LightingSystem once per frame. Flat/faceted shading is
  * recovered in the fragment shader from screen-space derivatives — NEVER call
  * convertToFlatShadedMesh(). Output is display-ready color, which is why
- * pipeline.imageProcessingEnabled must stay false. Materials are cached/shared
- * per color — don't create per-mesh materials. A NEW material is seeded with
+ * pipeline.imageProcessingEnabled must stay false. Output is also opaque —
+ * gl_FragColor's alpha is 1 for every variant but getGlass(), the world's one
+ * alpha-blended material, which writes a Fresnel alpha, needs no depth write
+ * (see there, and MapBuilder's pane rules) and carries the one depth bias in
+ * the renderer — GLASS_DEPTH_UNITS, without which a pane past ~100 m is not
+ * drawn at all. Materials are cached/shared per color — don't create per-mesh
+ * materials. A NEW material is seeded with
  * every piece of shared state on the spot (applyCamera/applyEnvironment/
  * applyPointLights/applyShadow): the per-frame walks are guarded on change and
  * skip a still frame entirely, so what a material is born with is what it keeps
@@ -74,6 +79,12 @@ import "@babylonjs/core/Shaders/ShadersInclude/bonesVertex";
  * Opt-in the same way (getTranslucent): a translucency band — the key light
  * coming THROUGH a thin surface rather than off it, for awnings and foliage.
  * Everything not explicitly translucent stays opaque.
+ * Opt-in at COMPILE time (getGlass, `#define CEL_GLASS`): a pane of glazing —
+ * a Fresnel between what is behind it and a reflection of the sky, written out
+ * as a per-pixel alpha. A define rather than a uniform because, unlike the two
+ * above, its terms cannot be multiplied out to nothing by a zero colour: a
+ * reflect(), a pow() and a sky gradient on every pixel of the world is not a
+ * price the other thousand meshes should pay to keep the roster uniform.
  *
  * The rim highlight is gated OFF near-level surfaces, and must stay that way:
  * on a plane the grazing angle is just the distance from the eye, so an
@@ -340,6 +351,18 @@ uniform float specShininess;
 // it — a canvas awning or a pine crown with the moon behind it. Premultiplied
 // by intensity — black (the default) is opaque.
 uniform vec3 transColor;
+
+#ifdef CEL_GLASS
+// Glazing. x = reflectance face-on, y = the Fresnel falloff's exponent,
+// z = cosine half-width of the sun's halo in the reflection, w = how much of
+// the tint a face-on pane keeps. See CelMaterialFactory.getGlass.
+uniform vec4 glassParams;
+// The top of the sky dome. The HORIZON end of the same gradient is fogColor,
+// which is already here and which SkySpec.horizonColor is required to sit
+// close to — the one place that requirement is load-bearing rather than
+// cosmetic.
+uniform vec3 skyZenithColor;
+#endif
 
 // Geometric (per-triangle) normal from the world position's screen-space
 // derivatives. The cross product's sign depends on triangle winding and
@@ -611,6 +634,53 @@ void main() {
   float through = max(dot(viewDir, lightDir), 0.0) * max(dot(n, lightDir), 0.0);
   col += transColor * band(through, 2.0) * shadow;
 
+  // Opaque unless this is glazing, and the whole of what makes a pane a pane.
+  float alpha = 1.0;
+
+#ifdef CEL_GLASS
+  // A window is two layers over one another and nothing else in the world is:
+  // what it REFLECTS, and the tint of what you see THROUGH it. Both are
+  // composited here rather than picked between, because which one you get is
+  // the angle you are standing at — face-on a shopfront is the room behind it,
+  // and from down the street the same glass is a sheet of sky.
+  //
+  // What it reflects is an analytic sky sampled down the mirrored eye ray, and
+  // that is the whole reflection: there is no probe, no cube map and no second
+  // pass anywhere in this renderer, so a pane cannot show the building
+  // opposite. It does not need to. A curtain wall's reflection is overwhelmingly
+  // sky — that is what a building of glass looks like from the street — and the
+  // gradient carries the read on its own, because the reflected ray sweeps from
+  // the horizon to the zenith as you walk toward a tower and look up it.
+  vec3 mirrored = reflect(-viewDir, n);
+  vec3 sky = mix(fogColor, skyZenithColor,
+    smoothstep(0.0, 0.55, mirrored.y));
+  // The sun in that sky, as a HALO rather than a disc, which is what makes it
+  // agree with the dome: SkySpec.discRadius is 0 on the one map with glass on
+  // it, so a hard disc here would be a reflection of something the player
+  // cannot look up and see. Gated by the same shadow map as everything else —
+  // glass in a tower's shade does not glare.
+  float halo = smoothstep(glassParams.z, 1.0, dot(mirrored, -lightDir));
+  sky += lightColor * halo * shadow;
+
+  // Schlick, and deliberately NOT banded. Every other term in this shader is
+  // quantized and this one must not be: the band edge would be a contour line
+  // across a FLAT sheet, drawn where the view angle crosses a step and nowhere
+  // else — so it would slide over the glazing as the player walks, which is
+  // exactly the artefact the rim light is gated off level surfaces to avoid.
+  // The water's fresnel is smooth for the same reason and is the precedent.
+  float fres = glassParams.x + (1.0 - glassParams.x)
+    * pow(1.0 - max(dot(viewDir, n), 0.0), glassParams.y);
+
+  // Composite the two layers into one colour and one alpha. The reflection
+  // covers the tint, the tint covers what is behind the pane, and dividing by
+  // the total is what keeps the blend from darkening the result twice — the
+  // rasterizer is about to multiply the colour by this alpha, so what goes out
+  // has to be the layers' colour rather than their contribution.
+  float tint = glassParams.w;
+  alpha = fres + tint * (1.0 - fres);
+  col = (sky * fres + col * tint * (1.0 - fres)) / max(alpha, 0.001);
+#endif
+
   // --- atmosphere ---
   float dist = length(vPosW - camPos);
 
@@ -623,11 +693,16 @@ void main() {
   col = mix(col, mistColor, clamp(mist, 0.0, 0.9));
 
   // Theme-tinted distance fog — reaches full strength so far walls vanish.
+  //
+  // The two atmosphere terms are applied to the colour and NOT to the alpha,
+  // and a half-transparent pane in full fog still comes out right: whatever is
+  // behind it is at least as far away and has already been mixed to the same
+  // fogColor, so blending fog over fog lands on fog whatever the weight is.
   float fog = clamp((dist - fogParams.x) / (fogParams.y - fogParams.x), 0.0, 1.0);
   col = mix(col, fogColor, fog * fog);
 
   // Last thing before the write, because the write is the quantiser.
-  gl_FragColor = vec4(dither(col), 1.0);
+  gl_FragColor = vec4(dither(col), alpha);
 }
 `;
 
@@ -665,6 +740,46 @@ export interface TranslucencySpec {
    */
   color: string;
   intensity: number;
+}
+
+/**
+ * Glazing settings for one pane material (see CONFIG.graphics.glass).
+ *
+ * Four numbers describing one surface, and they are read together: `tint` and
+ * `reflectance` are the two layers a pane is made of, and `falloff` is how
+ * fast the second takes over from the first as the angle opens out.
+ */
+export interface GlassSpec {
+  /**
+   * How much of the sky a pane returns FACE-ON, 0..1. Real glass is 0.04-0.08
+   * and this is allowed to sit a little above it: the reflection is the only
+   * thing telling the player a window is glass rather than a hole, and at a
+   * physical 0.04 an office frontage seen square-on has nothing on it at all.
+   */
+  reflectance: number;
+  /**
+   * The Fresnel exponent. 5 is Schlick's; lower brings the sheen on sooner as
+   * the angle opens, which is what makes a street of glass read as glass while
+   * you walk down the middle of it rather than only at the far end of it.
+   */
+  falloff: number;
+  /**
+   * Cosine half-width of the sun's halo in the reflection — 1 is a point and
+   * 0.9 is a 25-degree wash. Broad on purpose: this stands in for a disc the
+   * sky does not draw (see the shader), and a hard glint would advertise that.
+   */
+  halo: number;
+  /**
+   * How much of the pane's own colour a face-on view keeps, 0..1 — so this is
+   * how DARK the glass is, and it is the number that decides what can be seen
+   * through a shopfront.
+   *
+   * It has a fairness dimension and not only a look: a bot's line of sight
+   * already passes through glass (`OPAQUE_ONLY` subtracts a pane), so a window
+   * the player cannot see through is one the AI can shoot them through. Tint
+   * it enough to read as glass and no further.
+   */
+  tint: number;
 }
 
 /**
@@ -716,6 +831,45 @@ export class CelMaterialFactory {
   private static readonly ATTRIBUTES = ["position", "normal", "color"];
   /** Every cel material samples the shadow map, whatever its albedo path. */
   private static readonly SAMPLERS = ["shadowMap"];
+  /**
+   * How far toward the eye a pane is biased in the depth test, in polygon
+   * offset UNITS — one unit being the depth buffer's own smallest resolvable
+   * step at that fragment. **Without it, glazing past ~100 m is not drawn at
+   * all**, which is the bug this exists for and it is a depth-precision one
+   * rather than anything about the shading.
+   *
+   * A pane stands a few centimetres off the wall behind it (`kit/city.ts`'s
+   * `glaze`: 0.04 m of glass over the shaft, the collars proud of that again),
+   * and the depth buffer stops being able to tell the two apart with distance.
+   * The camera's near plane is 5 cm — it has to be, the viewmodel's optics sit
+   * inside 5 cm of the eye — and against a 24-bit buffer that leaves a step of
+   * 1 cm at 90 m, 3 cm at 160 m and 27 cm at the fog wall, while the standoff
+   * stays what the builder gave it. Measured on Coldharbour's curtain wall,
+   * square on, with the pane held at a constant size on screen: full at 40 and
+   * 90 m, **gone entirely from 130 m out** — the tower goes back to being blank
+   * concrete, with nothing wrong in the shader and nothing wrong in the
+   * geometry.
+   *
+   * A polygon offset is the fix rather than a workaround because it is stated
+   * in exactly the units the problem is: it scales with the buffer's step at
+   * the fragment's own depth, so it is millimetres up close, where the pane
+   * needs nothing, and metres at the far end of the map, where the buffer's own
+   * step is that coarse. Nothing else on offer moves: `maxZ` is worth nothing
+   * (measured — the near plane is the whole of the precision), a bigger
+   * standoff would have to be half a metre of glass proud of the wall by the
+   * fog wall, and the near plane is spoken for.
+   *
+   * Sixteen against a measured knee of eight, because `r` is
+   * implementation-defined and this was measured on one implementation. What it
+   * costs at the far end is that the fins and collars standing 0.1-0.2 m proud
+   * of the glass are overdrawn by it past ~100 m, where they are a pixel or two
+   * of trim — against a whole elevation of glazing, which is the thing the
+   * player can actually see.
+   *
+   * Only the depth TEST is biased: a blended draw writes no depth (see
+   * `getGlass`), so nothing downstream inherits the offset.
+   */
+  private static readonly GLASS_DEPTH_UNITS = -16;
 
   private cache = new Map<string, ShaderMaterial>();
   private emissiveCache = new Map<string, StandardMaterial>();
@@ -724,6 +878,13 @@ export class CelMaterialFactory {
   private lightColor = new Color3(0.55, 0.62, 0.8);
   private ambientColor = new Color3(0.16, 0.18, 0.24);
   private skyLightColor = new Color3(0.08, 0.11, 0.18);
+  /**
+   * The top of the sky dome, as glazing reflects it — a picture of the sky
+   * rather than the light it throws, which is what `skyLightColor` above is
+   * and why the two are different values. Falls back to the map's flat
+   * `skyColor` when it states no dome at all; see `applyEnvironment`.
+   */
+  private skyZenithColor = new Color3(0.1, 0.14, 0.22);
   private rimColor = new Color3(0.18, 0.2, 0.26);
   private mistColor = new Color3(0.1, 0.12, 0.15);
   private mistParams = new Vector2(2.2, 0.45);
@@ -859,6 +1020,68 @@ export class CelMaterialFactory {
       this.applyShadow(mat);
       this.applySpec(mat, null);
       this.applyTranslucency(mat, trans);
+      this.cache.set(cacheKey, mat);
+    }
+    return mat;
+  }
+
+  /**
+   * The glazing material: the same flat cel colour as get(), composited over
+   * what is behind it and carrying a reflection of the sky.
+   *
+   * **This is the one ALPHA-BLENDED material in the world layer**, and it is
+   * the only one that has any business being one. Everything else here is a
+   * flat opaque cel colour, the water fakes its depth with a fresnel between
+   * two opaque colours rather than showing the bed through itself, and the only
+   * other transparent thing in the scene at all is the capture zone's skirt,
+   * which is annotation rather than world. What it costs is the two things
+   * transparency always costs and they are paid for below in `MapBuilder`: a
+   * pane writes no depth and so is sorted rather than z-buffered, and it must
+   * be neither an outline nor a shadow caster.
+   *
+   * **It is also the one material with a depth BIAS**, and that is not about
+   * transparency at all: a pane hangs centimetres off the wall behind it, which
+   * is a gap the depth buffer loses with distance. See `GLASS_DEPTH_UNITS`.
+   *
+   * Cached under its own key and named `cel-glass-#rrggbb`, like the glossy and
+   * translucent variants — though unlike them nothing recovers ink from it,
+   * because glass is not outlined.
+   */
+  getGlass(hex: string, glass: GlassSpec): ShaderMaterial {
+    const cacheKey = `\0glass-${hex}`;
+    let mat = this.cache.get(cacheKey);
+    if (!mat) {
+      mat = new ShaderMaterial(
+        `cel-glass-${hex}`,
+        this.scene,
+        { vertex: "cel", fragment: "cel" },
+        {
+          attributes: [...CelMaterialFactory.ATTRIBUTES],
+          uniforms: [
+            ...CelMaterialFactory.UNIFORMS,
+            "glassParams",
+            "skyZenithColor",
+          ],
+          samplers: [...CelMaterialFactory.SAMPLERS],
+          defines: ["#define CEL_GLASS"],
+          // What puts these subMeshes in the transparent pass at all. The
+          // material's own `alpha` stays 1: the alpha that matters is written
+          // per pixel by the shader, and a material-wide one would fade the
+          // reflection along with everything else.
+          needAlphaBlending: true,
+        },
+      );
+      // Biased toward the eye by the depth buffer's own step, which is what
+      // keeps a distant window a window — see GLASS_DEPTH_UNITS.
+      mat.zOffsetUnits = CelMaterialFactory.GLASS_DEPTH_UNITS;
+      mat.setColor3("baseColor", Color3.FromHexString(hex));
+      this.applyCamera(mat);
+      this.applyEnvironment(mat);
+      this.applyPointLights(mat);
+      this.applyShadow(mat);
+      this.applySpec(mat, null);
+      this.applyTranslucency(mat, null);
+      this.applyGlass(mat, glass);
       this.cache.set(cacheKey, mat);
     }
     return mat;
@@ -1007,6 +1230,7 @@ export class CelMaterialFactory {
     lightColor: Color3;
     ambientColor: Color3;
     skyLightColor: Color3;
+    skyZenithColor: Color3;
     rimColor: Color3;
     fogColor: Color3;
     fogStart: number;
@@ -1019,6 +1243,7 @@ export class CelMaterialFactory {
     this.lightColor = env.lightColor;
     this.ambientColor = env.ambientColor;
     this.skyLightColor = env.skyLightColor;
+    this.skyZenithColor = env.skyZenithColor;
     this.rimColor = env.rimColor;
     fogState.color.copyFrom(env.fogColor);
     fogState.start = env.fogStart;
@@ -1211,6 +1436,11 @@ export class CelMaterialFactory {
     mat.setColor3("lightColor", this.lightColor);
     mat.setColor3("ambientColor", this.ambientColor);
     mat.setColor3("skyLightColor", this.skyLightColor);
+    // The sky's own colour rather than the light it casts, and only the glass
+    // materials declare it — a `setColor3` for a uniform an effect does not
+    // have is dropped when the material binds, which is what lets this ride
+    // along here instead of needing a second walk over a second list.
+    mat.setColor3("skyZenithColor", this.skyZenithColor);
     mat.setColor3("rimColor", this.rimColor);
     mat.setColor3("fogColor", fogState.color);
     mat.setVector2("fogParams", new Vector2(fogState.start, fogState.end));
@@ -1309,6 +1539,19 @@ export class CelMaterialFactory {
       trans
         ? Color3.FromHexString(trans.color).scale(trans.intensity)
         : Color3.Black(),
+    );
+  }
+
+  /**
+   * Glazing is per-material like the other two, but unlike them it has no
+   * null arm: `CEL_GLASS` is a compile-time define, so the only material this
+   * is ever called on is one built to be glass and there is no "off" value to
+   * push onto the rest of the cache.
+   */
+  private applyGlass(mat: ShaderMaterial, glass: GlassSpec): void {
+    mat.setVector4(
+      "glassParams",
+      new Vector4(glass.reflectance, glass.falloff, glass.halo, glass.tint),
     );
   }
 }

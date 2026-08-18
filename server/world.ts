@@ -34,6 +34,7 @@ import { CONFIG } from "../src/config";
 import {
   toRayGroups,
   toWorldBoxes,
+  toWorldPanes,
   type MapCollision,
 } from "../src/world/collision";
 import { CoverMap } from "../src/world/CoverMap";
@@ -167,6 +168,28 @@ export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameM
   const boxes = toWorldBoxes(collision);
 
   const colliders = boxes.map((box, i) => colliderBox(scene, box, i));
+  // A barrier pane's collider carries the pane index back, exactly as
+  // `MapBuilder.paneGroup` stamps it on the client — so `GlassSystem` finds the
+  // same mesh on both sides and a broken pane leaves the pick predicates here
+  // too. The index is direct because `colliders` is `boxes` mapped one for one,
+  // which is the same property that makes `WorldPane.box` a bake-able number.
+  const panes = toWorldPanes(collision);
+  for (const [i, p] of panes.entries()) {
+    if (p.box < 0 || !colliders[p.box]) continue;
+    // Two marks, in the two places the client's `MapBuilder` puts them. The
+    // mesh carries the pane index back, so `GlassSystem` finds the same mesh on
+    // both sides. The BOX carries `glass`, which is what `clearCollider` reads
+    // as its own idempotence flag — without it the authority breaks the visual
+    // nobody here draws and leaves the barrier standing, so a player who shot a
+    // shopfront out is snapped back out of it by `validateMove`.
+    //
+    // Derived from `panes` rather than baked as a tenth tuple entry: the pane
+    // list already says which boxes are glass, and two sources for one fact is
+    // one that can go stale. `porous` IS baked, because it is a property of the
+    // box independent of any pane.
+    colliders[p.box].metadata.pane = i;
+    boxes[p.box].glass = true;
+  }
   const rayGroups = toRayGroups(collision);
   colliders.push(...rayGroups.map((group, i) => strutMesh(scene, group, i)));
   const floor = terrainColliders(scene, terrain, size);
@@ -200,6 +223,14 @@ export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameM
     colliders,
     colliderBoxes: boxes,
     rayGroups,
+    // Panes come off the bake with the boxes, and `paneGroups` deliberately
+    // stays empty: a group is the MERGED MESH a pane's vertices live in, and
+    // there is nothing to draw here. The authority needs a pane's rect to know
+    // a round crossed it and its `box` to stop blocking a body — both of which
+    // are on the pane itself. See `GlassSystem`, which reads exactly those two
+    // fields on both sides and touches `paneGroups` only where it draws.
+    panes,
+    paneGroups: [],
     terrainColliders: floor,
     visuals: [],
     nav,

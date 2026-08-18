@@ -256,6 +256,13 @@ export function applyEnvironment(
     skyLightColor: Color3.FromHexString(lit.skyLightColor).scale(
       lit.skyLightIntensity,
     ),
+    // What glazing reflects, and the one thing here taken from the DOME rather
+    // than from the lighting block: a reflection is a picture of the sky, so it
+    // wants the colour the sky is painted, not the light the sky throws. The
+    // other end of that gradient is `fogColor`, which `SkySpec.horizonColor` is
+    // already required to sit close to. A map with no dome falls back to its
+    // flat clear colour, which is then literally what is overhead.
+    skyZenithColor: Color3.FromHexString(env.sky?.zenithColor ?? env.skyColor),
     rimColor: Color3.FromHexString(lit.rimColor).scale(lit.rimIntensity),
     fogColor: Color3.FromHexString(env.fogColor),
     fogStart: env.fogStart,

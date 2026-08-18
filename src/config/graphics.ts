@@ -211,6 +211,32 @@ export const graphics = {
     canopy: { color: "#8fb567", intensity: 0.45 },
   },
   /**
+   * Glazing: what a pane of glass returns and what it lets past. One entry,
+   * unlike `spec` and `translucency` above, because glass is one material —
+   * a shopfront and a curtain wall differ in colour and not in behaviour, and
+   * the colour is the builder's (`Build.pane`).
+   *
+   * These are judged from a STREET and not from a screenshot of one pane: the
+   * whole point of the pair is that the same glass reads differently at the
+   * two ends of a block, so a value tuned face-on turns a tower into a mirror
+   * and one tuned along the street leaves a shopfront blank.
+   */
+  glass: {
+    /** Sky returned face-on. Above glass's real 0.04-0.08 — see `GlassSpec`. */
+    reflectance: 0.28,
+    /** Schlick's is 5; 3 brings the sheen on while you are still square-on. */
+    falloff: 3,
+    /** ~21 degrees of sun halo. Broad because the sky draws no disc. */
+    halo: 0.93,
+    /**
+     * How dark the glass is. 0.4 leaves a lit office interior legible from the
+     * pavement, which is the number's real job — see `GlassSpec.tint` on why
+     * a pane the player cannot see through is a fairness problem and not only
+     * a look.
+     */
+    tint: 0.4,
+  },
+  /**
    * Albedo weathering on flat cel colours — a slow value drift over world space
    * so a merged block stops arriving as one tone. Costs three ALU and no data.
    */

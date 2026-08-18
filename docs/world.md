@@ -391,6 +391,105 @@ climbed it drops you a storey; a walked
 slab needs real depth behind its top face or its own outline shell paints it;
 and a mullion or a fin is a `strut`, never a wall.
 
+## Panes: the one thing in the world that is not static
+
+`Build.pane` is the fourth box word, and the only one whose geometry leaves
+`Structure.meshes`. A pane is drawn like a `box`, passes a round like a `porous`
+`block`, and — uniquely — keeps an identity through both merge passes so
+`GlassSystem` can take one sheet out of the world at runtime. Everything about
+it is arranged around two costs.
+
+**The first is DRAW CALLS, and the answer is that a pane is a vertex range
+rather than a mesh.** The obvious way to make a pane addressable is to give it
+its own mesh, which on Coldharbour's 6,246 panes would be 6,246 meshes against
+~150 for the whole map — and worse than the count says, because glazing is
+alpha-blended and a transparent mesh is sorted and drawn on its own rather than
+batched. Instead the glazing merges per placement (`MapBuilder.paneGroup`) and
+then again per 48 m block (`PaneBlocks`), and each pane's positions are a known
+range in the result: breaking one collapses that range onto its own first
+vertex, every triangle in it becomes degenerate and rasterizes nothing, and the
+cost is one `updateVerticesData` on one small buffer. Measured: 6,246 panes are
+**37 meshes merged per block** — the same 37 the map had when the same glazing
+was 1,762 larger panes, because a block is a block and only the vertex count in
+each one grew. That is what makes the glazing unit a free choice: it is bounded
+by the SWEEP (12 µs a shot, bucketed per block — see `GlassSystem`) and by the
+collision bake's size, and not by anything the renderer pays per frame.
+
+What makes that collapse the whole of a break rather than the first half of one
+is that a pane owns nothing else to take down with it: it carries no outline and
+casts no shadow (below), so there is no second registration anywhere to revoke.
+And `bakeVertexAo` writes the COLOUR buffer, so it is untouched by a later
+position rewrite and the bake may still run last.
+
+**A pane is CLEAR, and that is a rule about the world and not only a look.**
+`Build.pane` is the only builder call that reaches `CelMaterialFactory.getGlass`
+— the world's one alpha-blended material, which composites a reflection of the
+sky over the tint of whatever is behind the glass (see
+[`docs/rendering.md`](rendering.md) for the shader). Two consequences belong
+here rather than there:
+
+- **The merged pane meshes are marked `noOutline` and `noShadowCaster`**, in the
+  `paneBlocks.finish` loop in `MapBuilder.build`. Ink on a transparent mesh
+  needs a stencil buffer this engine does not have and lands as a dark plate
+  behind the pane; a clear sheet laying a hard shadow on the pavement is simply
+  wrong. A window's frame is drawn by the mullion, the collar and the reveal.
+- **It settles a fairness question that was open while glass was opaque.** A
+  pane is `porous`, so `OPAQUE_ONLY` already lets a bot's line of sight through
+  one — a shopfront the player could not see through was one the AI could see
+  and shoot through. `CONFIG.graphics.glass.tint` is what keeps that honest, and
+  it is why the number is judged from a pavement against a lit interior rather
+  than picked for looks.
+
+**The second cost is RAY TESTS, and the answer is `PaneSpec.barrier`.**
+`MapBuilder.struts`'s header records what loose collider boxes cost: 161 of them
+put ~17% on every ray in the game, `Player.probeGround` — already the most
+expensive per-frame call at 2.45 ms (FINDINGS #6) — included. Six thousand
+pickable boxes is not a trade, it is a regression. So the default pane carries
+**no collider at all**: it shatters and changes nothing else. `barrier` is
+authored one at a time for the handful of places glass is the ONLY thing in the
+way, and Coldharbour has **twelve** of them, all on the two offices' glazed
+shopfronts.
+
+That last point is the design one and is easy to get wrong: **glazing an opening
+something else already closes buys nothing.** An office's window band sits over a
+1 m spandrel that stops a body already; a tower's curtain wall hangs 4 cm off a
+solid shaft. Both are worth glazing for the look and neither is worth a collider.
+Reach for `barrier` only where there is no wall behind the glass.
+
+**A pane is the unit that BREAKS, so it is sized like one — and the elevation's
+own framing is what says how big that is.** `kit/city.ts` glazes a tower one
+storey band by one BAY, which is exactly what sits between two collars and two
+fins, and the shopfront the same way: a break then reads as one panel out of its
+frame with the mullions either side still standing. It was a whole elevation
+once and a whole storey ribbon after that, and both were the same mistake at two
+scales — one round taking 25 x 3.7 m of glass out of a building is absurd from
+the street. The second reason is the shards: `DebrisSystem` cuts a burst of
+twelve pieces from the pane's own face, so a pane much past ~20 m² is one the
+burst can only cover a patch of. Coldharbour's are 12–19 m², which twelve pieces
+of about a metre account for. The cost of cutting finer is the collision bake's
+size and the sweep's per-block bucket, and neither is a frame cost — see the
+draw-call note above.
+
+**Breaking a barrier pane is five writes and one deferred rebuild.** The visual
+range collapses; `solid` is cleared, which takes the box out of `SOLID_ONLY` and
+`OPAQUE_ONLY` together; `checkCollisions` is cleared, which is the movement
+half; `ObstacleField.remove` takes it out of the sub-cell push-out the bots and
+the server's move validator both read; and `NavGrid.openBox` relinks the ground
+it was severing and floods walkability into whatever that opened. All of that is
+local and cheap.
+
+**What is deferred is the flow fields, and they are the only expensive part.**
+A field is a breadth-first sweep over every walkable surface; Coldharbour has
+183k of them and seven fields, measured at **4.7 ms each and 15.9 ms for the
+set** (headless, so inflated — the ranking is what to trust). `GlassSystem.update`
+rebuilds ONE PER FRAME and every break inside that window folds into the same
+pass. Bots keep steering on the field they have, which monotonicity guarantees
+is stale rather than wrong.
+
+Two contracts say the map never changes and both now say it changes in exactly
+this one way: `ObstacleField`'s header, and `MapBuilder.build`'s note beside the
+nav bake. Neither may grow at runtime and nothing may be added back.
+
 Layout gotchas that have already cost time:
 
 - **A blocking scatter prop's collider comes from `PROP_BODIES`, not from its

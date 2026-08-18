@@ -81,6 +81,14 @@ const NEIGHBOURS: [number, number][] = [
 /** Index of the NEIGHBOURS entry pointing the other way. Keep in step. */
 const OPPOSITE = [1, 0, 3, 2, 7, 6, 5, 4];
 
+/** An inclusive rectangle of cells. Grid coordinates, never world ones. */
+interface CellRect {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
 /** A precomputed route to one goal: per-surface step count, lower is closer. */
 export class FlowField {
   constructor(
@@ -115,6 +123,21 @@ export class NavGrid {
   private readonly links: Int32Array;
 
   private readonly fields = new Map<string, FlowField>();
+
+  /**
+   * What each field was built FROM, so one can be built again.
+   *
+   * The graph was immutable when `buildField` was written, so a field's own goal
+   * was spent on the way in and never kept. Glass made the graph mutable in one
+   * direction (see `openBox`), and a route computed before a wall opened is a
+   * route that still walks round it — so the arguments are held. Nothing else
+   * reads this: `rebuildFields` is the one caller, and it is what `GlassSystem`
+   * amortises over the frames after a break.
+   */
+  private readonly fieldGoals = new Map<
+    string,
+    { goal: Vector3; radius: number }
+  >();
 
   constructor(
     size: number,
@@ -300,42 +323,12 @@ export class NavGrid {
    * free to run before the graph it now informs.
    */
   private link(boxes: WorldBox[]): void {
-    const step = CONFIG.nav.stepHeight;
     const linkStride = NEIGHBOURS.length;
 
     // Anything with a solid box sitting on top of it is not standable.
     this.clearBlocked(boxes);
 
-    for (let cz = 0; cz < this.dim; cz++) {
-      for (let cx = 0; cx < this.dim; cx++) {
-        const cell = cz * this.dim + cx;
-        for (let si = 0; si < this.counts[cell]; si++) {
-          const surface = cell * this.maxSurfaces + si;
-          const y = this.heights[surface];
-          for (let n = 0; n < linkStride; n++) {
-            const [dx, dz] = NEIGHBOURS[n];
-            const nx = cx + dx;
-            const nz = cz + dz;
-            if (nx < 0 || nz < 0 || nx >= this.dim || nz >= this.dim) continue;
-            const ncell = nz * this.dim + nx;
-            // Nearest STANDABLE neighbouring surface within a step, if any.
-            let best = -1;
-            let bestDy = Infinity;
-            for (let ni = 0; ni < this.counts[ncell]; ni++) {
-              const other = ncell * this.maxSurfaces + ni;
-              if (this.blocked[other]) continue;
-              const ny = this.heights[other];
-              const dy = Math.abs(ny - y);
-              if (dy <= step && dy < bestDy) {
-                bestDy = dy;
-                best = other;
-              }
-            }
-            this.links[surface * linkStride + n] = best;
-          }
-        }
-      }
-    }
+    this.linkCells(0, this.dim - 1, 0, this.dim - 1);
 
     // Links that pass straight through a wall thinner than a cell.
     this.severLinks(boxes);
@@ -363,6 +356,54 @@ export class NavGrid {
         if (next < 0 || this.walkable[next] || this.blocked[next]) continue;
         this.walkable[next] = 1;
         queue.push(next);
+      }
+    }
+  }
+
+  /**
+   * Writes every link out of every surface in a cell rectangle, from the
+   * heights and the blocked table alone.
+   *
+   * The whole-grid form is what `link` runs; the bounded form is what `openBox`
+   * runs, and it is the SAME code rather than a second implementation because
+   * the two must agree exactly — a relink that linked by slightly different
+   * rules would open a route the original bake would never have drawn, in one
+   * spot on one map, and nothing would say so. It writes rather than adds, so
+   * running it a second time over ground that has already been severed restores
+   * the links that severing removed; `openBox` re-severs afterwards, which is
+   * what makes that safe.
+   */
+  private linkCells(x0: number, x1: number, z0: number, z1: number): void {
+    const step = CONFIG.nav.stepHeight;
+    const linkStride = NEIGHBOURS.length;
+    for (let cz = z0; cz <= z1; cz++) {
+      for (let cx = x0; cx <= x1; cx++) {
+        const cell = cz * this.dim + cx;
+        for (let si = 0; si < this.counts[cell]; si++) {
+          const surface = cell * this.maxSurfaces + si;
+          const y = this.heights[surface];
+          for (let n = 0; n < linkStride; n++) {
+            const [dx, dz] = NEIGHBOURS[n];
+            const nx = cx + dx;
+            const nz = cz + dz;
+            if (nx < 0 || nz < 0 || nx >= this.dim || nz >= this.dim) continue;
+            const ncell = nz * this.dim + nx;
+            // Nearest STANDABLE neighbouring surface within a step, if any.
+            let best = -1;
+            let bestDy = Infinity;
+            for (let ni = 0; ni < this.counts[ncell]; ni++) {
+              const other = ncell * this.maxSurfaces + ni;
+              if (this.blocked[other]) continue;
+              const ny = this.heights[other];
+              const dy = Math.abs(ny - y);
+              if (dy <= step && dy < bestDy) {
+                bestDy = dy;
+                best = other;
+              }
+            }
+            this.links[surface * linkStride + n] = best;
+          }
+        }
       }
     }
   }
@@ -413,7 +454,7 @@ export class NavGrid {
    * the link cut. Cutting them costs no connectivity anywhere — the walkable
    * count and all seven fields' reach are identical on both maps.
    */
-  private severLinks(boxes: WorldBox[]): void {
+  private severLinks(boxes: readonly WorldBox[], within?: CellRect): void {
     const linkStride = NEIGHBOURS.length;
     const step = CONFIG.nav.stepHeight;
     for (const box of boxes) {
@@ -422,16 +463,15 @@ export class NavGrid {
       const sinY = Math.sin(-box.rotY);
       const hd = halfDepth(box);
       const thickness = slabThickness(box);
-      // The pitch term is what the footprint gains by leaning; the rest is the
-      // generous bound this always used.
-      const reach =
-        (Math.abs(box.w) + Math.abs(box.d)) / 2 +
-        (box.h / 2) * Math.abs(Math.sin(box.rotX)) +
-        this.cellSize * 2;
-      const minX = Math.max(0, this.toCell(box.cx - reach));
-      const maxX = Math.min(this.dim - 1, this.toCell(box.cx + reach));
-      const minZ = Math.max(0, this.toCell(box.cz - reach));
-      const maxZ = Math.min(this.dim - 1, this.toCell(box.cz + reach));
+      const span = this.cellsOf(box);
+      // Clipped to the caller's window when there is one. `openBox` re-severs
+      // only the ground it has just relinked, so a box reaching into that
+      // window contributes the part of itself that overlaps and nothing else —
+      // the rest of its links were never touched and must not be recomputed.
+      const minX = within ? Math.max(span.minX, within.minX) : span.minX;
+      const maxX = within ? Math.min(span.maxX, within.maxX) : span.maxX;
+      const minZ = within ? Math.max(span.minZ, within.minZ) : span.minZ;
+      const maxZ = within ? Math.min(span.maxZ, within.maxZ) : span.maxZ;
 
       for (let cx = minX; cx <= maxX; cx++) {
         for (let cz = minZ; cz <= maxZ; cz++) {
@@ -475,6 +515,86 @@ export class NavGrid {
         }
       }
     }
+  }
+
+  /**
+   * The cell rectangle a box can reach, generously.
+   *
+   * Shared by `severLinks` and `openBox` so the ground one of them re-links is
+   * exactly the ground the other severs — the two ran identical arithmetic in
+   * two places first, which is a pair that can drift by a cell and leave a
+   * relinked strip nothing re-severs.
+   */
+  private cellsOf(box: WorldBox): CellRect {
+    // The pitch term is what the footprint gains by leaning; the rest is the
+    // generous bound this always used.
+    const reach =
+      (Math.abs(box.w) + Math.abs(box.d)) / 2 +
+      (box.h / 2) * Math.abs(Math.sin(box.rotX)) +
+      this.cellSize * 2;
+    return {
+      minX: Math.max(0, this.toCell(box.cx - reach)),
+      maxX: Math.min(this.dim - 1, this.toCell(box.cx + reach)),
+      minZ: Math.max(0, this.toCell(box.cz - reach)),
+      maxZ: Math.min(this.dim - 1, this.toCell(box.cz + reach)),
+    };
+  }
+
+  /**
+   * Takes one box out of the graph: relinks the ground it was severing, and
+   * floods walkability into whatever that opened.
+   *
+   * **This is the only mutation the graph admits, and it is monotonic.** A pane
+   * of glass breaks and never mends, so the graph only ever GAINS links — which
+   * is what makes an incremental update safe rather than merely cheap. No route
+   * that was valid can become invalid; a field computed before the break is
+   * stale (it walks the long way) and never wrong, so a bot steering on one
+   * while `rebuildField` catches up is following a route that still exists.
+   *
+   * `boxes` must be the collider set with `box` ALREADY REMOVED, or the sever
+   * pass puts back exactly what this was called to take away.
+   *
+   * The work is bounded by the box: relink its own cell rectangle, re-sever
+   * that rectangle against everything else, then flood from the surfaces around
+   * its edge. What it does NOT do is rebuild the flow fields — those are the
+   * expensive half and are the caller's to amortise. See `GlassSystem`.
+   *
+   * Returns the number of surfaces that became walkable, which is 0 for the
+   * ordinary case of a window in a wall a body could already walk round, and
+   * positive when the break opened a space that was genuinely sealed.
+   */
+  openBox(box: WorldBox, boxes: readonly WorldBox[]): number {
+    const rect = this.cellsOf(box);
+    this.linkCells(rect.minX, rect.maxX, rect.minZ, rect.maxZ);
+    this.severLinks(boxes, rect);
+
+    // Flood outward from every walkable surface in the window. The links out of
+    // it now include whatever the box was cutting, so this reaches anything the
+    // break opened — and it terminates immediately in the common case, where
+    // both sides were already connected by another route.
+    const linkStride = NEIGHBOURS.length;
+    const queue: number[] = [];
+    for (let cz = rect.minZ; cz <= rect.maxZ; cz++) {
+      for (let cx = rect.minX; cx <= rect.maxX; cx++) {
+        const cell = cz * this.dim + cx;
+        for (let si = 0; si < this.counts[cell]; si++) {
+          const surface = cell * this.maxSurfaces + si;
+          if (this.walkable[surface]) queue.push(surface);
+        }
+      }
+    }
+    let opened = 0;
+    for (let head = 0; head < queue.length; head++) {
+      const surface = queue[head];
+      for (let n = 0; n < linkStride; n++) {
+        const next = this.links[surface * linkStride + n];
+        if (next < 0 || this.walkable[next] || this.blocked[next]) continue;
+        this.walkable[next] = 1;
+        opened++;
+        queue.push(next);
+      }
+    }
+    return opened;
   }
 
   private blocked = new Uint8Array(0);
@@ -595,11 +715,38 @@ export class NavGrid {
 
     const field = new FlowField(name, dist);
     this.fields.set(name, field);
+    this.fieldGoals.set(name, { goal: goal.clone(), radius });
     return field;
   }
 
   field(name: string): FlowField | undefined {
     return this.fields.get(name);
+  }
+
+  /** Every field's name, in the order they were first built. */
+  get fieldNames(): string[] {
+    return [...this.fields.keys()];
+  }
+
+  /**
+   * Rebuilds one field from the goal it was first built with.
+   *
+   * **A field is REPLACED rather than written through**, because a bot may be
+   * steering on it in the same frame: `buildField` allocates a fresh
+   * `Float32Array`, fills it and only then swaps the map entry, so a reader
+   * holding the old `FlowField` sees a complete route that is merely one break
+   * out of date. Filling in place would hand it a half-swept field with
+   * `Infinity` in the half not reached yet, and a bot on one of those surfaces
+   * would read itself as stranded and stop.
+   *
+   * Returns false for a name that was never built, which is the only way this
+   * can be asked about a field that does not exist.
+   */
+  rebuildField(name: string): boolean {
+    const from = this.fieldGoals.get(name);
+    if (!from) return false;
+    this.buildField(name, from.goal, from.radius);
+    return true;
   }
 
   /**

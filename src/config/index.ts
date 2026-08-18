@@ -19,6 +19,7 @@ import { weapons, combat, gunfeel } from "./weapons";
 import { recoil } from "./recoil";
 import { sights } from "./sights";
 import { viewmodel } from "./viewmodel";
+import { glass } from "./glass";
 import { grenade } from "./grenade";
 import { camera } from "./camera";
 import { aimAssist } from "./aimAssist";
@@ -45,6 +46,7 @@ export const CONFIG = {
   combat,
   recoil,
   gunfeel,
+  glass,
   grenade,
   camera,
   sights,

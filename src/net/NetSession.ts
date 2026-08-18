@@ -135,6 +135,28 @@ export class NetSession {
   onSeated: (team: Team) => void = () => {};
 
   /**
+   * The panes already broken when this client was seated.
+   *
+   * A FIELD rather than a callback argument, and for the same reason `team` is
+   * raised as well as stored: the welcome can arrive on either side of the
+   * local map build. Applied too early it would be written into a `GameMap`
+   * that `installMap` is about to replace, and applied only on the edge it
+   * would be missed whenever the welcome was the first of the two. `Game` reads
+   * it in both places and `GlassSystem.catchUp` is idempotent, which is what
+   * makes doing it twice correct rather than merely harmless.
+   *
+   * It is the running list for the whole round rather than a snapshot of the
+   * welcome: every `glass` event appends to it as well as being shown, because
+   * `installMap` resets `GlassSystem` and an event that arrived between the
+   * welcome and the local build would otherwise be applied to a map about to be
+   * replaced. See the `events` case.
+   *
+   * Cleared on `roundstart`: a rotation rebuilds the map and puts every pane
+   * back, so last round's list is the one thing that must not survive it.
+   */
+  brokenPanes: number[] = [];
+
+  /**
    * The live control points, kept as a field because a snapshot arrives on a
    * socket callback rather than on a frame — there is no call stack to thread
    * them down. `update` refreshes the reference every frame.
@@ -318,6 +340,7 @@ export class NetSession {
         this.team = msg.team;
         this.mapId = msg.mapId;
         this.matchId = msg.matchId;
+        this.brokenPanes = msg.brokenPanes ?? [];
         this.seated = true;
         // Interpreting the welcome is this class's job, not `Connection`'s —
         // so the match we actually landed in is handed back down for the
@@ -346,6 +369,10 @@ export class NetSession {
         // finished round's kills against a map that has just been built.
         this.slotKills.length = 0;
         this.slotDeaths.length = 0;
+        // Last round's broken glass, over last round's map. A rotation rebuilds
+        // the world and every pane with it, so carrying the list would put
+        // holes in this round's windows wherever last round's happened to fall.
+        this.brokenPanes.length = 0;
         // Last round's grenades, over last round's terrain. Nothing will ever
         // send the end of a flight the rotation interrupted, so the pool is
         // dropped here for the same reason `Game.installMap` drops the local
@@ -387,6 +414,19 @@ export class NetSession {
 
       case "events":
         for (const e of msg.events) {
+          // Broken glass ACCUMULATES here as well as being shown, and that is
+          // not bookkeeping — it closes a race with the local map build.
+          //
+          // `?mp` books the round before the socket is open, so the welcome and
+          // `buildRound` arrive in either order, and every `installMap` resets
+          // `GlassSystem` because a fresh build puts every pane back. An event
+          // that landed in the gap was therefore applied to a map that was
+          // about to be replaced and then lost — the client showing intact
+          // windows the rest of the match had shot out, with nothing wrong
+          // anywhere. Keeping the running list means `buildRound` can catch up
+          // on the whole round rather than on whatever the welcome happened to
+          // carry, and a reconnect gets the same treatment for free.
+          if (e.e === "glass") this.brokenPanes.push(...e.panes);
           // Our own spawn is the one event that moves the local body, so it is
           // routed rather than merely shown.
           if (e.e === "spawn" && e.slot === this.slot) {

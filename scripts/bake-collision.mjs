@@ -107,9 +107,16 @@ async function bakeMap(browser, url, id) {
     // and the server merges the same way. Flattening it would leave the server
     // guessing where one fence ends and the next begins, and the wrong guess
     // (one mesh for the map) puts a bounding box around the whole village.
+    // Panes, in build order — which is what makes the index into this array a
+    // name the client and the authority both know a pane by. Seven numbers and
+    // an index: no `rotX` (nothing in the kit tilts a sheet), and `box` is the
+    // pane's own position in `boxes` or -1 for the cosmetic majority that
+    // carry no collider at all.
+    const pane = (p) => [p.w, p.h, p.d, p.cx, p.cy, p.cz, p.rotY, p.box];
     return {
       boxes: g.map.colliderBoxes.map(row),
       rayGroups: g.map.rayGroups.map((group) => group.map(row)),
+      panes: g.map.panes.map(pane),
     };
   });
 
@@ -119,8 +126,10 @@ async function bakeMap(browser, url, id) {
 
 /** The generated module, as text. */
 function emit(id, constant, baked, hash) {
-  const { boxes, rayGroups } = baked;
+  const { boxes, rayGroups, panes } = baked;
   const rows = boxes.map((b) => `  [${b.join(",")}],`).join("\n");
+  const paneRows = panes.map((p) => `  [${p.join(",")}],`).join("\n");
+  const barriers = panes.filter((p) => p[7] >= 0).length;
   const rayRows = rayGroups
     .map((group) => `  [${group.map((b) => `[${b.join(",")}]`).join(",")}],`)
     .join("\n");
@@ -144,6 +153,14 @@ function emit(id, constant, baked, hash) {
  * from geometry may see them: a 0.1 m rail is a shape the nav grid can only get
  * wrong.
  *
+ * \`panes\` is the glazing: ${panes.length} sheets, of which ${barriers} are
+ * BARRIERS with a collider in \`boxes\` (the eighth entry is its index there,
+ * or -1). The authority needs them because it resolves every shot and because
+ * its move validator has to agree about which shopfront somebody has just
+ * walked through — see \`systems/GlassSystem.ts\`. The index into this array is
+ * the pane's identity on the wire, so its ORDER is load-bearing and is the
+ * client's build order.
+ *
  * \`sourceHash\` covers this map's \`layout.ts\` and \`heights.ts\`. The server
  * checks it at startup and refuses to run when it does not match, because a
  * stale bake is a server whose walls are somewhere else from its clients' — a
@@ -158,6 +175,9 @@ ${rows}
   ],
   rayGroups: [
 ${rayRows}
+  ],
+  panes: [
+${paneRows}
   ],
 };
 
@@ -182,7 +202,10 @@ const outPath = (id) => join(root, "src", "world", id, "collision.ts");
  */
 function ensureStub(id, constant) {
   if (existsSync(outPath(id))) return false;
-  writeFileSync(outPath(id), emit(id, constant, { boxes: [], rayGroups: [] }, ""));
+  writeFileSync(
+    outPath(id),
+    emit(id, constant, { boxes: [], rayGroups: [], panes: [] }, ""),
+  );
   return true;
 }
 

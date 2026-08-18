@@ -17,6 +17,14 @@
  * from geometry may see them: a 0.1 m rail is a shape the nav grid can only get
  * wrong.
  *
+ * `panes` is the glazing: 0 sheets, of which 0 are
+ * BARRIERS with a collider in `boxes` (the eighth entry is its index there,
+ * or -1). The authority needs them because it resolves every shot and because
+ * its move validator has to agree about which shopfront somebody has just
+ * walked through — see `systems/GlassSystem.ts`. The index into this array is
+ * the pane's identity on the wire, so its ORDER is load-bearing and is the
+ * client's build order.
+ *
  * `sourceHash` covers this map's `layout.ts` and `heights.ts`. The server
  * checks it at startup and refuses to run when it does not match, because a
  * stale bake is a server whose walls are somewhere else from its clients' — a
@@ -867,6 +875,9 @@ export const HollowmereCollision: MapCollision = {
   [[0.18,1.5,0.18,26,0.6288888888888895,-70,0,0],[0.18,1.5,0.18,28.5,0.6288888888888895,-70,0,0],[0.18,1.5,0.18,31,0.6288888888888895,-70,0,0],[0.18,1.5,0.18,33.5,0.6288888888888895,-70,0,0],[0.18,1.5,0.18,36,0.6288888888888895,-70,0,0],[10,0.12,0.1,31,1.0788888888888895,-70,0,0],[10,0.12,0.1,31,0.4788888888888895,-70,0,0]],
   [[0.18,1.5,0.18,44,0.75,-70,0,0],[0.18,1.5,0.18,46.5,0.75,-70,0,0],[0.18,1.5,0.18,49,0.75,-70,0,0],[0.18,1.5,0.18,51.5,0.75,-70,0,0],[0.18,1.5,0.18,54,0.75,-70,0,0],[10,0.12,0.1,49,1.2,-70,0,0],[10,0.12,0.1,49,0.6,-70,0,0]],
   [[0.18,1.5,0.18,25.285,0.75,-12.321000000000002,0,1.5707963267948966],[0.18,1.5,0.18,25.285,0.75,-14.654333333333334,0,1.5707963267948966],[0.18,1.5,0.18,25.285,0.75,-16.98766666666667,0,1.5707963267948966],[0.18,1.5,0.18,25.285,0.75,-19.321,0,1.5707963267948966],[0.18,1.5,0.18,25.285,0.75,-21.654333333333334,0,1.5707963267948966],[0.18,1.5,0.18,25.285,0.75,-23.98766666666667,0,1.5707963267948966],[0.18,1.5,0.18,25.285,0.75,-26.321,0,1.5707963267948966],[14,0.12,0.1,25.285,1.2,-19.321,0,1.5707963267948966],[14,0.12,0.1,25.285,0.6,-19.321,0,1.5707963267948966]],
+  ],
+  panes: [
+
   ],
 };
 

@@ -21,7 +21,7 @@
  * dropped it would rebuild a world whose fences stop rounds the client sent
  * through them.
  */
-import type { WorldBox } from "./MapBuilder";
+import type { WorldBox, WorldPane } from "./MapBuilder";
 
 /**
  * One collider, as `[w, h, d, cx, cy, cz, rotX, rotY]`, plus a ninth entry on
@@ -49,6 +49,30 @@ export type CollisionBox = readonly [
   porous?: 0 | 1,
 ];
 
+/**
+ * One pane of glass, as `[w, h, d, cx, cy, cz, rotY, box]`.
+ *
+ * Seven numbers and an index. There is no `rotX` — a pane is a sheet in a wall
+ * and nothing in the kit tilts one — and `box` is its position in `boxes`, or
+ * -1 for the cosmetic majority that have no collider at all.
+ *
+ * **What is deliberately NOT baked is the vertex range.** A pane's identity on
+ * the wire is its position in this array, which both sides build in the same
+ * order; where its 24 positions sit in a merged mesh is a fact about geometry
+ * the server does not have and will never draw. `WorldPane` carries both
+ * because the client fills in the half the bake omits.
+ */
+export type CollisionPane = readonly [
+  w: number,
+  h: number,
+  d: number,
+  cx: number,
+  cy: number,
+  cz: number,
+  rotY: number,
+  box: number,
+];
+
 /** One map's baked collider set. Generated — see `scripts/bake-collision.mjs`. */
 export interface MapCollision {
   /**
@@ -72,6 +96,15 @@ export interface MapCollision {
    * triangles.
    */
   rayGroups: readonly (readonly CollisionBox[])[];
+  /**
+   * Every pane of glass, in the client's build order — which is what makes the
+   * index into this array a name both processes agree on, and therefore what a
+   * `glass` event on the wire is allowed to carry.
+   *
+   * Optional so a map baked before glass existed still loads: absent reads as a
+   * map with no glazing, which is what every map but Coldharbour is.
+   */
+  panes?: readonly CollisionPane[];
 }
 
 function toWorldBox([
@@ -101,4 +134,30 @@ export function toWorldBoxes(collision: MapCollision): WorldBox[] {
 /** The ray-only geometry, still grouped by the mesh each group merges into. */
 export function toRayGroups(collision: MapCollision): WorldBox[][] {
   return collision.rayGroups.map((group) => group.map(toWorldBox));
+}
+
+/**
+ * Expands the baked panes into the `WorldPane`s `GlassSystem` sweeps against.
+ *
+ * The two vertex fields come back as zeroes rather than being made up, and that
+ * is honest rather than lossy: they address a merged mesh, the server has none,
+ * and `paneGroups` is empty there for the same reason. Anything reading them on
+ * this side is reading a mesh it does not have.
+ */
+export function toWorldPanes(collision: MapCollision): WorldPane[] {
+  return (collision.panes ?? []).map(
+    ([w, h, d, cx, cy, cz, rotY, box]): WorldPane => ({
+      w,
+      h,
+      d,
+      cx,
+      cy,
+      cz,
+      rotY,
+      vertexStart: 0,
+      vertexCount: 0,
+      group: -1,
+      box,
+    }),
+  );
 }

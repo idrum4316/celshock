@@ -113,7 +113,7 @@ export interface ShotOptions {
  * and a `surface` argument on `collider()` — no signature between here and
  * the world layer moves.
  */
-export type ImpactKind = "flesh" | "ground" | "hard";
+export type ImpactKind = "flesh" | "ground" | "hard" | "glass";
 
 /** How each kind looks: the hot core, the dust disc, and how big it opens. */
 const IMPACTS: Record<
@@ -131,6 +131,12 @@ const IMPACTS: Record<
   // Earth does not spark. It throws more and glows less, so the disc alone,
   // bigger and duller.
   ground: { spark: null, disc: "#6b5a44", from: 0.2, to: 0.75 },
+  // Glass is the odd one, and it is the ONLY kind not chosen by
+  // `metadata.surface`: a round passes through a pane rather than stopping on
+  // it, so there is no pick to read a surface off. `GlassSystem` names this
+  // one directly at the crossing point. A bright cold spark and no disc —
+  // glass throws shards, which `DebrisSystem` draws, not dust.
+  glass: { spark: "#cfeaf2", disc: null, from: 0, to: 0 },
 };
 
 interface Tracer {
@@ -212,6 +218,24 @@ export class CombatSystem {
    * is. `at` is the tracer's own scratch vector: read it, do not keep it.
    */
   onImpact: (at: Vector3, kind: ImpactKind) => void = () => {};
+
+  /**
+   * Wired by Game: the segment a round actually flew, from the shooter's origin
+   * along `dir` for `dist` — where `dist` is where it STOPPED, not its range.
+   *
+   * This exists for glass and only for glass, and it is a hook rather than a
+   * second pick because a pane is the one thing in the world a round goes
+   * through: it cannot be in `OPAQUE_ONLY` without stopping the round, so the
+   * wall pick above can never report one however the pane is declared. See
+   * `GlassSystem`, which answers this analytically and puts nothing on the
+   * per-frame ray budget.
+   *
+   * Raised for every round from every shooter, the bots' included, and AFTER
+   * the wall pick has bounded the segment — so a window behind the wall a round
+   * stopped on is not broken by it. `dir` is this method's own scratch: read
+   * it, do not keep it.
+   */
+  onShotPath: (origin: Vector3, dir: Vector3, dist: number) => void = () => {};
 
   constructor(
     private scene: Scene,
@@ -393,6 +417,12 @@ export class CombatSystem {
       normal = wallPick!.getNormal(true);
     }
     this.spawnTracer(muzzle, hitPoint, kind, normal);
+    // Glass last, and bounded by `hitDist` rather than by `range`: the segment
+    // the round actually flew is the one that crosses windows, so a wall — or a
+    // body — between the shooter and a pane protects it, exactly as it protects
+    // whatever is behind it. Raised after the tracer so a break's own effects
+    // are ordered behind the round that caused them.
+    this.onShotPath(origin, dir, hitDist);
     return { target: hitTarget, killed, hitWall, headshot, dir };
   }
 

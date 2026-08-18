@@ -338,17 +338,14 @@ export const bots = {
   },
 
   /**
-   * Dying: the ragdoll, and the collapse tween it falls back to.
+   * Dying: the ragdoll.
    *
    * The ragdoll is Havok-powered and strictly cosmetic — nothing here feeds
-   * navigation, cover or hit detection, so a machine where the WASM never
-   * loads plays an identical round with the tween instead.
-   *
-   * That tween came first and is still the floor under everything here: it
-   * runs whenever physics is unavailable, out of budget, or too far away to
-   * be worth simulating, so `collapseTime`/`hideTime` are load-bearing rather
-   * than legacy. They were hardcoded in `Bot.update` and are here now because
-   * this file's own header says they should be.
+   * navigation, cover or hit detection. It is not OPTIONAL, though: the engine
+   * is awaited at boot and a failure is the boot screen's, so there is no
+   * second way for a body to go down and no `ragdoll` switch to pick between
+   * them. What used to be here — `collapseTime`, and the master toggle the
+   * settings screen wrote — went with the collapse tween.
    *
    * The ragdoll's SHAPE — which joints are bones, how big they are, where
    * they pin and how far they may swing — is NOT here. That is measured off
@@ -357,21 +354,21 @@ export const bots = {
    */
   death: {
     /**
-     * Seconds for the fallback collapse to pitch forward and sink, and when
-     * the rig is hidden afterwards. The 0.2 s gap is the body lying still
-     * for a beat, so it does not vanish on the frame it lands.
+     * When a body the pool did NOT take is hidden.
+     *
+     * That is only ever a death past `maxDistance` — the fog wall, where the
+     * rig has already stopped being drawn — so this is a bookkeeping clock and
+     * not a piece of timing anybody watches. It is still on the wire: netplay
+     * sends `deathProgress` as `since / hideTime` and a client hides a body it
+     * did not ragdoll when that reaches 1.
      */
-    collapseTime: 0.7,
     hideTime: 0.9,
-    /** Master switch. False keeps the tween everywhere. */
-    ragdoll: true,
     /**
-     * Bodies simulating at once. The next death takes the tween rather than
-     * stealing a live slot — the same refusal `GrenadeSystem`'s pool makes,
-     * and for the same reason: a corpse yanked out of a tumble is worse than
-     * one that never tumbled. A slot already sinking is committed to
-     * vanishing and may be reclaimed. The death cam's own body is the one
-     * exception and takes the oldest corpse; see `RagdollSystem.takeSlot`.
+     * Bodies simulating at once. Past this the next death EVICTS the oldest
+     * corpse rather than being refused — the pool has nothing to refuse into
+     * since the tween went, and a body standing to attention in the middle of
+     * a firefight is worse than one cut short on its way out. A free slot goes
+     * first and a sinking one second; see `RagdollSystem.takeSlot`.
      *
      * Eight is two squads, and it is now MEASURED rather than reasoned about.
      * Four was a guess made against FINDINGS.md #8's 1.37 ms for four falling
@@ -399,10 +396,15 @@ export const bots = {
      * does not move, and re-testing per frame would switch a tumble off
      * halfway through because the player backed away.
      *
+     * **It is the pool's ONE remaining refusal**, and that is why it has to be
+     * exactly where a body stops being drawn rather than merely near it: a
+     * body refused inside the fog would stand where it died until `hideTime`,
+     * with nothing left to pose it.
+     *
      * It is the FOG WALL, and it is the same number as `lodDisableDistance`
      * BY CONSTRUCTION rather than by coincidence: that is where the rig stops
      * being drawn, so one metre further is a solver tumbling something the
-     * player cannot see. Every death inside the fog is now eligible, which is
+     * player cannot see. Every death inside the fog is eligible, which is
      * what a marksman rifle needs — its own range is bounded by the same wall.
      *
      * It is deliberately NOT `lodFreezeDistance` (35), which is what this was

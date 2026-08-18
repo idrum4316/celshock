@@ -70,17 +70,17 @@ export class NetPlayer implements Combatant {
   deployRequest: number | null = null;
 
   /**
-   * Collapse tween progress, 0 while alive and 1 once fully down — the same
-   * quantity `Bot.deathProgress` reports, riding the same snapshot field, so a
-   * client draws a person going down exactly as it draws a bot and still cannot
-   * tell which slots are people.
+   * How far through a death this body is, 0 while alive and 1 once it is done —
+   * the same quantity `Bot.deathProgress` reports, riding the same snapshot
+   * field, so a client draws a person going down exactly as it draws a bot and
+   * still cannot tell which slots are people.
    *
    * Derived from the respawn clock rather than from a timer of its own: that
    * clock is already the only thing counting since the moment of death, and a
    * second one is a second thing to forget to advance. Sending a bare 1 instead
    * — which is what this replaced — makes a killed player VANISH on the tick
-   * they die rather than fall over, and it takes the ragdoll with them, because
-   * a corpse the pool declined has nothing left to fall back on.
+   * they die rather than fall, and it takes the ragdoll with them, because 1 is
+   * what tells a client to stop drawing the body.
    *
    * A slot that has never been spawned reads 1, and that is right: it is not a
    * body falling, it is a body that was never there, and 1 is what tells a
@@ -89,7 +89,7 @@ export class NetPlayer implements Combatant {
   get deathProgress(): number {
     if (this.alive) return 0;
     const since = CONFIG.conquest.respawnDelay - this.respawnT;
-    return Math.min(1, since / CONFIG.bots.death.collapseTime);
+    return Math.min(1, since / CONFIG.bots.death.hideTime);
   }
 
   /**

@@ -66,7 +66,7 @@ export type BoneJoint =
  *
  * `resetSoldierPose` restores all of them, which is why this is a wider list
  * than `RAGDOLL_BONES`: the rifle and the muzzle are carried by a bone rather
- * than being one, and `body` is the node the collapse tween moves.
+ * than being one, and `body` is the node the crouch drops.
  */
 const POSED_JOINTS = [
   "body",
@@ -619,7 +619,7 @@ export function buildSoldier(
  * Puts every joint back to the transform `buildSoldier` gave it.
  *
  * This is the ONLY correct reset after anything that re-parented or
- * quaternion-posed the rig, and `animateSoldier(rig, 0, 0, 0, 0, 0)` is not a
+ * quaternion-posed the rig, and `animateSoldier(rig, 0, 0, 0, 0)` is not a
  * substitute for it. That call writes fourteen Euler channels — `body.x`,
  * `body.position.y`, both hips' `x`, both knees' `x`, both ankles' `x`, both
  * shoulders' `x` and `z`, `torso.x`, `torso.y`, `head.x`, `head.y` — and the rig
@@ -661,7 +661,7 @@ export function resetSoldierPose(rig: SoldierRig): void {
     node.position.copyFrom(position);
     node.scaling.setAll(1);
   }
-  animateSoldier(rig, 0, 0, 0, 0, 0);
+  animateSoldier(rig, 0, 0, 0, 0);
 }
 
 /**
@@ -697,29 +697,15 @@ export function animateSoldier(
   moving: number,
   aim: number,
   twist: number,
-  dead: number,
   crouch = 0,
 ): void {
-  if (dead > 0) {
-    // Pitch forward and sink; the rig is hidden once the tween completes.
-    //
-    // A body shot out of a crouch UNFOLDS as it goes down, over the same tween.
-    // This is the TWEEN's own reason and no longer the ragdoll's — the legs
-    // have knees and ankles of their own in `RAGDOLL_BONES` now, so the solver
-    // takes a folded body as it stands. What the tween cannot do is fold: it
-    // pitches the whole body about one joint, and a corpse that kept its squat
-    // through that would go down as a seated figure tipping over sideways. It
-    // must not straighten by standing up on the frame it died either — half a
-    // metre of pop is worse than anything the tween is hiding — hence the
-    // unfold riding `1 - dead` rather than landing on the first frame.
-    const dying = crouchDrop(crouch) * (1 - dead);
-    rig.body.rotation.x = dead * 1.5;
-    rig.body.position.y = -dead * 0.7 - dying;
-    rig.torso.rotation.x = 0;
-    rig.torso.rotation.y = 0;
-    poseLegs(rig, dying, 0);
-    return;
-  }
+  // This posed a DEATH too, on a `dead` progress argument every caller now
+  // passes nothing for. It pitched the body forward about one joint and sank
+  // it, unfolding a crouch on the way down — the collapse tween that stood in
+  // wherever the ragdoll pool refused a body. Havok is required and the pool
+  // refuses nothing the player can see, so the only bodies that reach a death
+  // without a solver are ones already past the fog wall, and they are not
+  // drawn. See `Bot.update`'s dead branch, which is what is left of it.
   rig.body.rotation.x = 0;
 
   const lean = CROUCH_LEAN * crouch;

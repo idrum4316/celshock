@@ -25,9 +25,19 @@
  * failure message on a machine that cannot run the game at all. That message
  * is the second half of the same job: without it, "no WebGL2" and "still
  * loading" are the same black screen forever.
+ *
+ * **There are TWO things the game cannot start without, and they are checked
+ * here for the same reason.** WebGL2 is one; Havok is the other. The physics
+ * WASM used to be fetched from inside the `Game` constructor and never awaited,
+ * with a collapse tween and a scripted shard arc standing in until it landed —
+ * two code paths for every falling thing, exercised only on machines nobody was
+ * testing on. It is awaited here now, which costs the boot screen the length of
+ * a ~2 MB precached download and buys the entire game the right to assume a
+ * solver exists. A rejection is this file's failure message like any other.
  */
 import "./src/ui/base.css";
 import { Game } from "./src/core/Game";
+import { loadHavok } from "./src/systems/PhysicsWorld";
 import { registerServiceWorker } from "./src/pwa/register";
 
 registerServiceWorker();
@@ -75,7 +85,7 @@ function bootDone(): void {
   );
 }
 
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
   const canvas = document.getElementById("game-canvas") as HTMLCanvasElement;
   if (!hasWebGL2()) {
     bootFailed(
@@ -85,8 +95,24 @@ window.addEventListener("DOMContentLoaded", () => {
     );
     return;
   }
+  // The physics engine, and the one thing the boot screen genuinely waits on.
+  // Its own failure message rather than the constructor's: a 404 or a bad MIME
+  // type on the WASM is a deployment fault with a known shape (see the
+  // `optimizeDeps.exclude` note in CLAUDE.md), and telling the player to reload
+  // would be advice that cannot work.
+  let havok;
   try {
-    new Game(canvas);
+    havok = await loadHavok();
+  } catch (err) {
+    bootFailed(
+      "The physics engine could not be loaded, so the game cannot start. " +
+        "Check the connection and reload; if it keeps happening, the build is " +
+        "missing a file.",
+    );
+    throw err;
+  }
+  try {
+    new Game(canvas, havok);
   } catch (err) {
     // Re-thrown: the message is for the player, the console is for whoever
     // has to work out which of a hundred systems failed to construct.

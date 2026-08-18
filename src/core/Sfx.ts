@@ -414,25 +414,37 @@ export class Sfx {
    * second, and refused against a RESERVE rather than against `maxVoices` —
    * see `CONFIG.audio` for why the reserve is the load-bearing one.
    *
-   * The three kinds differ only in filter, length and level, which is all the
+   * The kinds differ only in filter, length and level, which is all the
    * ear needs: a tick off stone, a duller thud into earth, and a wet slap
    * into a body. All noise and no oscillator, per this class's own rule —
    * an impact is the most obviously *struck* thing in the game.
+   *
+   * **Glass is the exception to the gates as well as to the filter**, because
+   * it is not an impact at the same rate as the others: a round that crosses a
+   * pane breaks it once and every round after it crosses a hole. So it skips
+   * the rate limiter — a pane can only break once, so there is no stream of
+   * them to limit — and carries further, because a window going in is a thing
+   * the whole street hears and is worth hearing at a range a spark off a wall
+   * is not.
    */
-  impact(at: Vector3, kind: "flesh" | "ground" | "hard"): void {
+  impact(at: Vector3, kind: "flesh" | "ground" | "hard" | "glass"): void {
     const a = CONFIG.audio;
     if (!this.ctx) return;
     // Against the reserve, and BEFORE any work: the point is to leave voices
     // standing for the gunshots, not to discover there are none left.
     if (this.voices >= a.maxVoices - a.impactReserve) return;
     const now = this.ctx.currentTime;
-    if (now - this.lastImpact < a.impactInterval) return;
+    const glass = kind === "glass";
+    if (!glass && now - this.lastImpact < a.impactInterval) return;
+    const range = glass ? a.glassRange : a.impactRange;
     const dist = this.distanceToListener(at);
-    if (dist > a.impactRange) return;
+    if (dist > range) return;
     const panner = this.panner(at);
     if (!panner) return;
-    this.lastImpact = now;
-    const far = dist / a.impactRange;
+    // A break does not spend the rate limiter either, or one window going in
+    // would silence the next four rounds' worth of sparks around it.
+    if (!glass) this.lastImpact = now;
+    const far = dist / range;
     // The delay is honest for every round but your own, and that is the case
     // to keep it for. A bot shooting a wall thirty metres away owes you
     // `dist/343`; your own round owes you that too, on top of a tracer already
@@ -444,7 +456,23 @@ export class Sfx {
     const send = a.reverbMix * (0.4 + far * a.reverbDistanceSend);
     const v = 0.88 + Math.random() * 0.24;
     const near = 1 - far * 0.5;
-    if (kind === "hard") {
+    if (glass) {
+      // Two layers, and the pair is what makes it read as a sheet failing
+      // rather than a bottle dropping: a bright crack as the pane goes, and a
+      // longer, quieter tail of pieces landing under it. Both are noise, and
+      // the tail's own delay is on top of the flight time so the fall is heard
+      // after the break rather than with it.
+      this.burst({
+        dur: 0.06, vol: 0.4 * near, type: "highpass",
+        freq: 3400 * v, freqEnd: 5200, q: 0.7,
+        delay, out: panner, send,
+      });
+      this.burst({
+        dur: 0.34, vol: 0.2 * near, type: "bandpass",
+        freq: 5200 * v, freqEnd: 2400, q: 2.4,
+        delay: delay + 0.05, out: panner, send,
+      });
+    } else if (kind === "hard") {
       this.burst({
         dur: 0.05, vol: 0.34 * near, type: "bandpass",
         freq: 2600 * v * (1 - far * 0.4), freqEnd: 900, q: 1.1,

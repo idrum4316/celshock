@@ -45,14 +45,6 @@ export type Settings = {
    */
   horrorGrade: boolean;
   /**
-   * Physics-driven bot deaths. Off falls back to the collapse tween, which is
-   * the same path a machine without the Havok WASM takes anyway.
-   *
-   * It does not avoid the download — the binary is precached with the rest of
-   * the build — only the simulation.
-   */
-  ragdolls: boolean;
-  /**
    * How much of the panel's native resolution the scene is drawn at.
    *
    * This is the one setting that was silently pinned before it existed. The
@@ -148,7 +140,6 @@ export const SETTING_DEFAULTS: Settings = {
   fpsCounter: false,
   motionBlur: CONFIG.graphics.motionBlur.strength > 0,
   horrorGrade: true,
-  ragdolls: CONFIG.bots.death.ragdoll,
   renderScale: defaultRenderScale(),
   // 1 on both, and it is the one default that means "change nothing": the rates
   // in `CONFIG.camera` are what every other number there was tuned against.
@@ -228,7 +219,6 @@ const CODECS: { [K in keyof Settings]: Codec<Settings[K]> } = {
   fpsCounter: bool,
   motionBlur: bool,
   horrorGrade: bool,
-  ragdolls: bool,
   renderScale: oneOf(CONFIG.graphics.renderScales),
   mouseSensitivity: oneOf(CONFIG.camera.lookScales),
   stickSensitivity: oneOf(CONFIG.camera.lookScales),

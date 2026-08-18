@@ -424,6 +424,33 @@ export type ServerEvent =
    */
   | { e: "reload"; slot: number }
   | { e: "explode"; at: Vec3 }
+  /**
+   * Panes of glass that just went in, by their index in `GameMap.panes`.
+   *
+   * **The index is the identity, and it is an identity because both sides build
+   * the pane list in the same order** — placements in layout order, each
+   * placement's panes in the order its builder declared them. The client gets
+   * that order from `MapBuilder`; the authority gets it from the collision
+   * bake, which is written FROM a client build. `npm run parity` is what proves
+   * they still agree.
+   *
+   * It carries the crossing point and the round's direction as well, because
+   * the shards are thrown from them and the authority is the only side that
+   * knows where the round actually was. Without the pair a remote break is a
+   * pane vanishing with a puff of glass going straight up.
+   *
+   * An ARRAY rather than one per pane: a round crosses everything in its path,
+   * so a shot down a glazed street breaks several at once and they share a
+   * direction by construction. `at` is the FIRST crossing — the shards of the
+   * ones behind it are thrown from a point a few metres off, which is a
+   * wrongness measured in metres on an effect that lasts a second and a half,
+   * against a message per pane on the wire.
+   *
+   * Additive: a client that has never heard of it ignores it, and a new client
+   * against an older server simply sees glass that never breaks. Neither is a
+   * protocol break, so this arrived without a `PROTOCOL_VERSION` bump.
+   */
+  | { e: "glass"; panes: number[]; at: Vec3; dir: Vec3 }
   | { e: "captured"; point: string; by: NetTeam }
   | { e: "neutralised"; point: string }
   | { e: "spawn"; slot: number; pos: Vec3; yaw: number }
@@ -440,6 +467,23 @@ export interface Welcome {
   team: NetTeam;
   mapId: string;
   now: number;
+  /**
+   * Every pane already broken in this round, by index — STATE, not the events
+   * that produced it, and for `ScoresMessage`'s reason exactly.
+   *
+   * Broken glass is cumulative and permanent within a round, so a client that
+   * joined five minutes in has missed every `glass` event and would otherwise
+   * see a street of intact windows everyone else has shot out — and, for the
+   * dozen barrier panes, would be held out of a shopfront the rest of the match
+   * walks through. Sending the list means a joiner is right on arrival and a
+   * dropped event is corrected by the next reconnect.
+   *
+   * Absent from an older server, which reads as a round with no broken glass.
+   * It is deliberately NOT on `RoundStart`: a new round rebuilds the map, which
+   * puts every pane back, so the empty list is the only correct answer there
+   * and saying nothing is how it is said.
+   */
+  brokenPanes?: number[];
 }
 
 export interface RosterMessage {

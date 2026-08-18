@@ -1,8 +1,10 @@
 /**
- * RagdollSystem.ts — Physics-driven deaths: the ONLY thing in this game that
- * runs a physics engine, and the only place `@babylonjs/havok` is reached.
- * Owns the Havok world, the static map registered into it, a pool of corpses,
- * and the hand-off of a rig's joints to the solver and back.
+ * RagdollSystem.ts — Physics-driven deaths: a pool of corpses, and the hand-off
+ * of a rig's joints to the solver and back.
+ * Owns the pool, the bone bodies, the constraints and the proxies. It does NOT
+ * own the engine — `PhysicsWorld` does, and hands it in — so this file no longer
+ * names `@babylonjs/havok`, builds the static map, or steps anything. See that
+ * file's header for why the split exists.
  *
  * It holds `RagdollSubject`s, not `Bot`s, and deliberately cannot tell the two
  * kinds apart: a bot killed in the fight and the stand-in body `DeathCam`
@@ -11,11 +13,6 @@
  * second copy of any of it.
  *
  * Invariants, each of which has a way of failing silently:
- * - `scene.physicsEnabled` is FALSE and stays false. Babylon steps physics from
- *   `scene.animate()` on every RENDERED frame, and this game renders under the
- *   menu, the deploy map and a pause — so a scene-driven step would be the one
- *   thing still moving behind a pause card. Stepping is `update()`'s job and is
- *   only ever called from `Game.updateGameplay`.
  * - Havok never touches a rig node. It writes POOL-OWNED PROXY nodes and the
  *   rig's joints are parented to those, because Havok's sync force-creates a
  *   `rotationQuaternion` on any node with a parent — and while one is set
@@ -26,27 +23,26 @@
  *   through bodies and rounds pass through them, exactly as they did before
  *   this file existed. Do NOT "fix" that by feeding corpses into
  *   `ObstacleField` — its buckets are baked at map load for a reason.
- * - It is strictly cosmetic and always optional. Every refusal (WASM not
- *   loaded, WASM failed, setting off, pool full, too far away) falls back to
- *   `Bot`'s collapse tween, which is why that tween is load-bearing rather
- *   than legacy. The death cam's body is the ONE thing that may not be refused
- *   for a full pool — it is the sole subject of a four-second shot — and
- *   `takeSlot` is where that exception lives and where it stops.
+ * - It is strictly cosmetic, and it is no longer optional. Havok is required
+ *   (see `PhysicsWorld`), so the three refusals that were about the engine
+ *   having arrived are gone along with the collapse tween that answered them.
+ *   **What is left is ONE refusal: a death past `viewDistance`**, which is the
+ *   fog wall, which is where the rig stops being drawn — so nothing the player
+ *   can see is ever refused a fall. The pool being full is not a refusal any
+ *   more either: `takeSlot` ends by evicting the OLDEST corpse, which was the
+ *   death cam's exception and is now everyone's. See it for why that is safe.
  * - The sim is a FIXED step with a CARRIED remainder, so a tumble is identical
  *   at 30, 60 and 144 fps and reproducible headless, where `dt` is clamped to
- *   0.05. Both halves of that are load-bearing and both have already been
- *   wrong — see `update` and `init`.
+ *   0.05. That clock is `PhysicsWorld`'s now; what stays here is the half that
+ *   depends on it — `afterFirstStep` is this file's share of the teleport
+ *   read-in, and it is per client precisely because each owns its own bodies.
  */
 import {
-  HavokPlugin,
-  Mesh,
   PhysicsBody,
   PhysicsConstraintAxis,
   PhysicsMotionType,
   PhysicsShape,
   PhysicsShapeBox,
-  PhysicsShapeContainer,
-  PhysicsShapeMesh,
   Physics6DoFConstraint,
   Quaternion,
   Scene,
@@ -62,11 +58,8 @@ import {
   type RagdollSubject,
   type SoldierRig,
 } from "../entities/SoldierModel";
-import type { GameMap } from "../world/MapBuilder";
 import { mulberry32 } from "../world/rng";
-
-/** Where the WASM has got to. `spawn` only accepts in `ready`. */
-type InitState = "idle" | "loading" | "ready" | "failed";
+import type { PhysicsClient, PhysicsWorld } from "./PhysicsWorld";
 
 /** One bone of one pooled corpse. */
 interface Bone {
@@ -115,26 +108,13 @@ const PARKED_Y = -1000;
  * subject's: `Bot.rand` also drives grenade chance, throw scatter and strafe
  * direction, so drawing the tumble's jitter from it made a bot's BEHAVIOUR
  * depend on whether a corpse near it was accepted — which turns on the camera
- * distance, the pool's occupancy, the settings toggle and whether the WASM
- * loaded. A seeded round has to play out the same way twice, and that is the
- * one thing the seed is for.
+ * distance and, back when there were three more ways to be refused, on the
+ * settings toggle and whether the WASM had loaded. A seeded round has to play
+ * out the same way twice, and that is the one thing the seed is for.
  */
 const SPIN_SEED = 0x5eed;
 
-export class RagdollSystem {
-  private state: InitState = "idle";
-  // `IPhysicsEngine` is not on the barrel export and this file keeps to barrel
-  // imports like every other, so the type comes from the getter that produces
-  // it. CONFIG is `as const`, hence the annotation on a field meant to change.
-  private engine: ReturnType<Scene["getPhysicsEngine"]> = null;
-  /**
-   * Held as the concrete plugin rather than reached through
-   * `engine.getPhysicsPlugin()`, whose type is the union of the v1 and v2
-   * interfaces and carries neither of the two things this file needs of it:
-   * the world's real step length, and an immediate transform write (`park`).
-   */
-  private plugin: HavokPlugin | null = null;
-  private enabled: boolean = CONFIG.bots.death.ragdoll;
+export class RagdollSystem implements PhysicsClient {
   /**
    * Past this a body is not worth tumbling, because it is not worth drawing —
    * the map's `fogEnd`, pushed by `Game.installMap` beside the same number
@@ -144,22 +124,12 @@ export class RagdollSystem {
    * paints; `CONFIG` holds what a map with no opinion gets.
    */
   private viewDistance = FOG_WALL;
-  /** Sim time owed but not yet stepped — see `update`. */
-  private accum = 0;
   /** The tumble's jitter. See `SPIN_SEED`. */
   private rand: () => number = mulberry32(SPIN_SEED);
 
   /** Every bone shape in the pool, held flat for disposal — see `buildShapes`. */
   private shapes: PhysicsShape[] = [];
   private slots: Slot[] = [];
-
-  /** The map as one static body: a container of every collider in the world. */
-  private worldNode: TransformNode | null = null;
-  private worldBody: PhysicsBody | null = null;
-  private worldShape: PhysicsShapeContainer | null = null;
-  private worldLeaves: PhysicsShape[] = [];
-  /** Held so a map installed before the WASM resolved is still registered. */
-  private pendingMap: GameMap | null = null;
 
   // Scratch — this runs every frame with up to `maxConcurrent` corpses live,
   // and FINDINGS.md #7 already measures 13.4 KB/frame of churn.
@@ -168,11 +138,24 @@ export class RagdollSystem {
   private readonly scratchScale = new Vector3();
   private readonly scratchQuat = new Quaternion();
 
-  constructor(private scene: Scene) {}
-
-  /** True once physics is up. Read before offering a corpse. */
-  get ready(): boolean {
-    return this.state === "ready";
+  /**
+   * The engine, INJECTED rather than owned. See `PhysicsWorld`'s header for why
+   * the split exists and why it is a constructor argument — briefly: the step
+   * used to run only while a corpse was falling, and the ragdoll setting used
+   * to tear the static world down, so neither could survive a second client.
+   *
+   * This is the `BattleSystem`←`CombatSystem` precedent: `Game` still owns the
+   * wiring, and a system may hold another it was handed.
+   */
+  constructor(
+    private scene: Scene,
+    private physics: PhysicsWorld,
+  ) {
+    physics.register(this);
+    // Built HERE, and it can be because the engine is up before `Game` is
+    // constructed. It used to wait for a `physicsStarted` callback that only
+    // existed because the WASM might still be in flight.
+    this.buildPool();
   }
 
   /** How many corpses are simulating. Test hook. */
@@ -180,129 +163,50 @@ export class RagdollSystem {
     return this.slots.reduce((n, s) => n + (s.subject ? 1 : 0), 0);
   }
 
-  /**
-   * The player's toggle. Off drops every body still falling — the honest
-   * response to "stop doing this" — and gives back the static world, which is
-   * the only part of this that costs anything per round.
-   *
-   * The WASM load is deliberately NOT gated with it. The binary is precached
-   * with the rest of the build whether or not it is ever used, so refusing to
-   * instantiate the engine would save a one-off rather than the download, and
-   * it would put a first-death-after-enabling on the tween while the module
-   * resolved.
-   */
-  setEnabled(on: boolean): void {
-    if (this.enabled === on) return;
-    this.enabled = on;
-    if (!on) {
-      this.reset();
-      this.clearWorld();
-      return;
-    }
-    if (this.state === "ready" && this.pendingMap) {
-      this.buildWorld(this.pendingMap);
-    }
+  // --- PhysicsClient --------------------------------------------------------
+
+  /** Whether any corpse still owes the solver time. */
+  physicsActive(): boolean {
+    return this.slots.some((s) => s.subject && !s.frozen);
   }
 
   /**
-   * Starts the WASM load. Never awaited, never throws — a failure leaves the
-   * game running on the collapse tween and says so once.
-   *
-   * The import is dynamic so Havok's glue stays out of the main chunk's parse.
-   * Unlike `src/editor/`, it is deliberately NOT `import.meta.env.DEV`-gated:
-   * this ships.
-   *
-   * Nothing here names the `.wasm`, and it must not. Havok's ESM glue resolves
-   * the binary against its own `import.meta.url`, which Vite follows at build
-   * time and emits as a CONTENT-HASHED asset — so the binary is versioned with
-   * the dependency and needs no `locateFile`. Putting a hand-placed copy in
-   * `public/` as well is not belt-and-braces, it is two megabytes shipped and
-   * precached twice; measured exactly that before it was taken out again.
+   * The teleport read-in, one step into the frame and no further. See
+   * `PhysicsClient.afterFirstStep` for why it is inside the substep loop.
    */
-  init(): void {
-    if (this.state !== "idle") return;
-    this.state = "loading";
-    import("@babylonjs/havok")
-      .then((m) => m.default())
-      .then((havok) => {
-        // `false` = do NOT use the frame delta for the world step. The plugin
-        // then ignores whatever it is handed and advances a fixed amount,
-        // which is what makes a tumble frame-rate independent.
-        const plugin = new HavokPlugin(false, havok);
-        // ...and THIS is the amount. The argument to `_step` is discarded in
-        // this mode (`executeStep`: `_useDeltaForWorldStep ? delta :
-        // _fixedTimeStep`), so without this line `death.substep` is not the
-        // step length at all — it only divides the frame, and the world
-        // advances by the plugin's own default of 1/60 however many times
-        // that comes to. The two agreed by coincidence, so the knob was inert:
-        // lowering it to 1/120 for a finer tumble would have run the sim at
-        // double speed instead. Verified before this line existed by stepping
-        // with 1/600 and 1/10 and measuring the same 2.5 m fall in 30 steps.
-        plugin.setTimeStep(CONFIG.bots.death.substep);
-        this.scene.enablePhysics(
-          new Vector3(0, CONFIG.bots.death.gravity, 0),
-          plugin,
-        );
-        // enablePhysics sets this true. It must not stay true — see the header.
-        this.scene.physicsEnabled = false;
-        this.engine = this.scene.getPhysicsEngine();
-        this.plugin = plugin;
-        this.buildPool();
-        this.state = "ready";
-        if (this.enabled && this.pendingMap) this.buildWorld(this.pendingMap);
-      })
-      .catch((err) => {
-        this.state = "failed";
-        console.warn(
-          "Havok unavailable — deaths fall back to the collapse tween.",
-          err,
-        );
-      });
+  afterFirstStep(): void {
+    for (const slot of this.slots) {
+      if (!slot.subject || slot.frozen) continue;
+      for (const bone of slot.bones) bone.body.disablePreStep = true;
+    }
   }
 
-  /**
-   * `installMap`'s hook: drop last build's static world and register this one.
-   *
-   * Called for every map build, and it must be, because the alternative is a
-   * physics world holding shapes built from a DISPOSED map's geometry — the
-   * silent failure `installMap`'s own note is about.
-   *
-   * Editor builds are skipped outright: there are no corpses in the editor and
-   * a tier-3 rebuild is already ~570 ms. So is a map installed while the
-   * setting is off — the build is 33–50 ms of shape work EVERY round, and
-   * nothing will ever fall on it; `setEnabled` puts it up if the player
-   * changes their mind, which is what `pendingMap` is held for.
-   */
+  /** The ground went away: hand every rig back before its bodies vanish. */
+  worldCleared(): void {
+    this.reset();
+  }
+
   /** See `viewDistance`. Pushed with the map, not read from CONFIG. */
   setViewDistance(metres: number): void {
     this.viewDistance = metres;
   }
 
-  setMap(map: GameMap | null, editor: boolean): void {
-    this.reset();
-    this.clearWorld();
-    this.pendingMap = editor ? null : map;
-    if (this.enabled && this.state === "ready" && this.pendingMap) {
-      this.buildWorld(this.pendingMap);
-    }
-  }
-
   /**
-   * Offer a dead body to the pool. Returns false if it was refused, and the
-   * caller must then run the collapse tween instead — `Bot`'s, or the death
-   * cam's copy of it for the player's corpse.
+   * Offer a dead body to the pool. Returns whether it was taken, which callers
+   * are free to ignore: there is nothing to do instead any more.
    *
-   * Distance is sampled ONCE, here: a corpse does not move, and re-testing per
-   * frame would switch a tumble off halfway through because the player backed
-   * away from it.
-   *
-   * `priority` is the death cam's, and nothing else may pass it — see
-   * `takeSlot`. It buys a slot when the pool is full and buys nothing else:
-   * the distance gate and the already-held test are ahead of it, because a
-   * body offered twice is broken however important it is.
+   * **The distance is the whole of the refusal**, and it is sampled ONCE, here:
+   * a corpse does not move, and re-testing per frame would switch a tumble off
+   * halfway through because the player backed away from it. Past
+   * `viewDistance` the rig is not drawn at all, so what is refused is a body
+   * nobody can see; `Bot.update` hides it on its own clock.
    */
-  spawn(subject: RagdollSubject, camPos: Vector3, priority = false): boolean {
-    if (!this.enabled || this.state !== "ready" || !this.worldBody) return false;
+  spawn(subject: RagdollSubject, camPos: Vector3): boolean {
+    // There is a map to land on. The only thing `PhysicsWorld` can still say
+    // no to, and it says it between a map being disposed and the next one
+    // being built — which is not a window anything dies in, but a body spawned
+    // in it would fall for ever.
+    if (!this.physics.hasWorld || this.slots.length === 0) return false;
     if (Vector3.Distance(subject.position, camPos) > this.viewDistance) {
       return false;
     }
@@ -323,7 +227,7 @@ export class RagdollSystem {
     // joints exist now (`RAGDOLL_BONES`), the proxies below take whatever pose
     // the rig is in, and the one stance a player is most likely to be shot in
     // falls over like every other.
-    const slot = this.takeSlot(priority);
+    const slot = this.takeSlot();
     if (!slot) return false;
 
     const rig = subject.rig;
@@ -378,56 +282,18 @@ export class RagdollSystem {
   }
 
   /**
-   * Steps the sim, ages every corpse, sinks the settled ones and retires them.
-   * Called ONLY from `Game.updateGameplay`, which is what holds the whole
-   * thing still under a pause and under the deploy screen.
+   * Ages every corpse, sinks the settled ones and retires them.
+   *
+   * **It does not step the engine.** `PhysicsWorld.update` does, and it must
+   * have run for this frame before this is called: a corpse tested for
+   * stillness before its own step would be tested on last frame's velocities.
+   * `Game` orders the two, which is the whole reason the step left this file.
+   *
+   * Called ONLY from a gameplay path, which is what holds the whole thing still
+   * under a pause and under the deploy screen.
    */
   update(dt: number): void {
-    if (this.state !== "ready" || !this.engine) return;
     const d = CONFIG.bots.death;
-
-    // Step only while something is still moving. Once every corpse has frozen
-    // the engine is not touched at all.
-    const simulating = this.slots.some((s) => s.subject && !s.frozen);
-    if (!simulating) {
-      // Nothing owes any time, and a remainder carried across a lull would
-      // give the next corpse a free part-step on the frame it died.
-      this.accum = 0;
-    } else {
-      // Fixed steps with the REMAINDER CARRIED, bounded so a long frame cannot
-      // spiral. Carrying it is what makes the step fixed at all: spending the
-      // frame instead — `left = dt`, step until it runs out — rounds every
-      // frame UP to a whole substep, so the sim advances `ceil(dt / substep)`
-      // steps, which is one at any rate above 60 fps and two at anything just
-      // under it. Measured over a second of wall clock before this: 60 steps
-      // at 30 fps and at a clean 60, but 118 at 59 and one per frame at 144 —
-      // a tumble at 2x and 2.4x speed, jittering between the two on a real
-      // 60 Hz display as `dt` crosses 1/60. `maxSteps` still bounds the
-      // catch-up, which is what makes a headless run at 2 fps play in slow
-      // motion rather than teleporting bodies across the map.
-      this.accum = Math.min(this.accum + dt, d.substep * d.maxSteps);
-      let first = true;
-      while (this.accum >= d.substep) {
-        this.engine._step(d.substep);
-        this.accum -= d.substep;
-        // The teleport is read in on the FIRST step and no other; from here
-        // the sim owns the bodies and must not be overwritten by their nodes.
-        // Inside the loop rather than after it: a frame running two steps
-        // would otherwise re-teleport a fresh corpse onto the transform step
-        // one had just synced back, which Havok does not come out of in the
-        // state it went in — 0.13 m of divergence between 30 and 60 fps over
-        // half a second, on an identical body with an identical impulse. It
-        // cannot be hoisted to "the first step ever" either: a corpse taken on
-        // a later frame has its own teleport to read in.
-        if (first) {
-          first = false;
-          for (const slot of this.slots) {
-            if (!slot.subject || slot.frozen) continue;
-            for (const bone of slot.bones) bone.body.disablePreStep = true;
-          }
-        }
-      }
-    }
 
     for (const slot of this.slots) {
       if (!slot.subject || !slot.rig) continue;
@@ -477,7 +343,7 @@ export class RagdollSystem {
   /**
    * Drops ONE body early, if this pool is holding it. Idempotent, and a no-op
    * for a body it never took — so a caller may offer and retire without ever
-   * checking which of the six refusals it hit.
+   * checking whether the offer landed.
    *
    * A bot never needs this: its corpse outlives the death cam's whole window
    * and retires on its own clock. The player's does, because the deploy screen
@@ -499,12 +365,10 @@ export class RagdollSystem {
   reset(): void {
     for (const slot of this.slots) if (slot.subject) this.release(slot);
     this.rand = mulberry32(SPIN_SEED);
-    this.accum = 0;
   }
 
   dispose(): void {
     this.reset();
-    this.clearWorld();
     for (const slot of this.slots) {
       for (const c of slot.constraints) c.dispose();
       for (const b of slot.bones) {
@@ -652,115 +516,48 @@ export class RagdollSystem {
     }
   }
 
-  /**
-   * Registers the whole map as ONE static body carrying a container of every
-   * collider — Hollowmere's ~733 boxes plus the floor's own 25 blocks.
-   *
-   * One body rather than 758: the plugin's per-step sync walks every body in
-   * the engine, and while a static one bails out immediately, a list of 25
-   * entries is cheaper to walk than one of 783. It is also one thing to tear
-   * down, which is what makes the leak on a map rebuild avoidable.
-   *
-   * A local set of statics around each corpse was the alternative and is worse
-   * on both counts that matter: a tumbling body leaves the set and falls
-   * through the wall at its edge, and building shapes at the moment of a kill
-   * is a hitch on the worst possible frame.
-   */
-  private buildWorld(map: GameMap): void {
-    const container = new PhysicsShapeContainer(this.scene);
-
-    for (const b of map.colliderBoxes) {
-      const shape = new PhysicsShapeBox(
-        Vector3.Zero(),
-        Quaternion.Identity(),
-        new Vector3(b.w, b.h, b.d),
-        this.scene,
-      );
-      // MapBuilder.collider writes `mesh.rotation.set(rotX, rotY, 0)` and
-      // Babylon's Euler order is yaw-pitch-roll, so this is the same
-      // orientation — which is what carries the ramps across for free.
-      container.addChild(
-        shape,
-        new Vector3(b.cx, b.cy, b.cz),
-        Quaternion.RotationYawPitchRoll(b.rotY, b.rotX, 0),
-      );
-      this.worldLeaves.push(shape);
-    }
-
-    // The floor is the documented collider exception: a heightfield has no box
-    // to stand in for it, so its blocks are mesh clones and come across as
-    // mesh shapes. Hollowmere is 25 blocks / ~3,110 triangles in total, and
-    // they are static, so the BVH is built once per map and never again.
-    for (const mesh of map.terrainColliders) {
-      const shape = new PhysicsShapeMesh(mesh as Mesh, this.scene);
-      container.addChild(shape);
-      this.worldLeaves.push(shape);
-    }
-
-    const node = new TransformNode("ragdoll-world", this.scene);
-    const body = new PhysicsBody(
-      node,
-      PhysicsMotionType.STATIC,
-      false,
-      this.scene,
-    );
-    body.shape = container;
-    this.worldNode = node;
-    this.worldBody = body;
-    this.worldShape = container;
-  }
-
-  private clearWorld(): void {
-    this.worldBody?.dispose();
-    this.worldShape?.dispose();
-    // Every leaf, or the WASM heap grows one map build at a time.
-    for (const s of this.worldLeaves) s.dispose();
-    this.worldNode?.dispose();
-    this.worldLeaves = [];
-    this.worldBody = null;
-    this.worldShape = null;
-    this.worldNode = null;
-  }
-
   // --- lifetime -----------------------------------------------------------
 
   /**
-   * A free slot, or a sinking one — never a live one.
+   * A free slot, then a sinking one, and failing both the OLDEST corpse — so a
+   * body inside the view distance is never refused a fall.
    *
-   * The pool REFUSES rather than stealing a body still tumbling, the same rule
-   * `GrenadeSystem`'s pool follows and for the same reason: a corpse yanked
-   * out of the air mid-fall is worse than one that never fell. A slot already
-   * sinking is committed to vanishing, so it is fair game.
+   * The three tiers are in that order because each is a worse thing to spend
+   * than the one before it, and only the last of them costs anything at all.
    *
-   * **`priority` is the one exception, and it belongs to the death cam alone.**
-   * A bot's corpse is one of sixteen bodies somewhere on screen; the player's
-   * is the sole subject of a four-second shot the camera is about to point at,
-   * and a body standing to attention through that is the exact failure
-   * `DeathCam`'s header says the state exists to remove. Being refused was not
-   * rare either: a slot is held for the whole `sinkStart` (5 s) and only then
-   * becomes reclaimable, so four nearby deaths inside five seconds lock the
-   * pool — and a player who has just fought hard enough to be killed is
-   * usually standing in exactly that. Measured before this: a corpse 0.65 m
-   * from the camera refused outright, and accepted on the same offer once the
-   * four bot corpses had aged past `sinkStart`.
+   * **The eviction used to be the death cam's private exception**, passed as a
+   * `priority` flag from one wiring site, because a bot's corpse is one of
+   * sixteen bodies somewhere on screen while the player's is the sole subject
+   * of a four-second shot. Being refused was not rare: a slot is held for the
+   * whole `sinkStart` (5 s) before it becomes reclaimable, so four nearby
+   * deaths inside five seconds lock the pool — and a player who has just fought
+   * hard enough to be killed is usually standing in exactly that. Measured at
+   * the time: a corpse 0.65 m from the camera refused outright, and accepted on
+   * the same offer once the four bot corpses had aged past `sinkStart`.
    *
-   * It takes the OLDEST corpse, which is the one nearest its own sink and so
-   * the one with least left to lose. Nothing else may pass it: every priority
-   * offer costs a body that was already falling, so a second caller would be
-   * two claims on one exception and the pool would be back to arbitrary.
+   * It is everyone's now, because the tween that a refused bot fell back to is
+   * gone and a refusal would leave a body standing to attention in plain sight.
+   * **Taking the oldest is what makes that safe rather than arbitrary**: it is
+   * the corpse nearest its own sink and so the one with least left to lose, and
+   * it protects the death cam's body for free — that body is the freshest in
+   * the pool for the whole four seconds the camera is on it, so it is the last
+   * one this can reach. The rule it gives up is `GrenadeSystem`'s "refuse
+   * rather than steal a live slot", and it gives it up knowingly: a corpse
+   * yanked mid-tumble is a pop, but so is a corpse that never fell, and only
+   * one of the two happens under a pool eight deep.
    */
-  private takeSlot(priority: boolean): Slot | null {
+  private takeSlot(): Slot | null {
     const free = this.slots.find((s) => !s.subject);
     if (free) return free;
-    // Only one already going, never one merely lying still: a corpse that has
-    // settled is a corpse the player can see, and yanking it is the pop this
-    // whole feature exists to remove.
+    // A corpse already going is committed to vanishing, so it is the cheapest
+    // thing to cut short — cheaper than one that has settled where the player
+    // can see it lying.
     const sinking = this.slots.find((s) => s.sinking);
     if (sinking) {
       this.release(sinking);
       return sinking;
     }
-    if (!priority || this.slots.length === 0) return null;
+    if (this.slots.length === 0) return null;
     let oldest = this.slots[0];
     for (const s of this.slots) if (s.t > oldest.t) oldest = s;
     this.release(oldest);
@@ -882,7 +679,7 @@ export class RagdollSystem {
     bone.proxy.rotationQuaternion!.copyFrom(Quaternion.Identity());
     // TELEPORT for the length of the write, then back to the pooled state.
     bone.body.disablePreStep = false;
-    this.plugin?.setPhysicsBodyTransformation(bone.body, bone.proxy);
+    this.physics.plugin.setPhysicsBodyTransformation(bone.body, bone.proxy);
     bone.body.disablePreStep = true;
     bone.body.setMotionType(PhysicsMotionType.STATIC);
   }
@@ -892,9 +689,9 @@ export class RagdollSystem {
    *
    * The ordering is deliberate: the rig is put back and hidden BEFORE
    * `ragdolling` is cleared, so `Bot.update` never sees a half-restored rig.
-   * The frame after this, its dead branch runs the tail of the tween against a
-   * hidden rig — harmless, and it means `Bot.spawn` has one case to handle
-   * rather than two.
+   * The frame after this, its dead branch takes over an already-hidden rig and
+   * has nothing left to do to it — harmless, and it means `Bot.spawn` has one
+   * case to handle rather than two.
    */
   private release(slot: Slot): void {
     const { subject, rig } = slot;

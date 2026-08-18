@@ -464,6 +464,17 @@ export class Match {
     };
     this.game.onExplosion = (at) =>
       this.queue({ e: "explode", at: [at.x, at.y, at.z] });
+    // Glass. One event for however many panes the round crossed, carrying the
+    // FIRST crossing and the round's direction — see the `glass` event for why
+    // the shards of the panes behind it are thrown from a point a few metres
+    // off rather than paying a message each.
+    this.game.onGlassBroken = (panes, at, dir) =>
+      this.queue({
+        e: "glass",
+        panes,
+        at: [at.x, at.y, at.z],
+        dir: [dir.x, dir.y, dir.z],
+      });
     this.game.onPlayerSpawned = (player, at, yaw) =>
       this.queue({
         e: "spawn",
@@ -612,6 +623,15 @@ export class Match {
       team: slot.team,
       mapId: this.mapId,
       now: Date.now(),
+      // The glass as it stands, to this peer alone, for the same reason the
+      // board below goes with it: a joiner has missed every `glass` event in
+      // the round, so without this they see a street of intact windows the
+      // rest of the match has shot out — and are held out of a shopfront
+      // everybody else walks through. Omitted when nothing is broken, which is
+      // most joins and is what an older server means by saying nothing.
+      ...(this.game.glass.brokenPanes.length > 0
+        ? { brokenPanes: this.game.glass.brokenPanes }
+        : {}),
     });
     this.broadcastRoster();
     // The board as it stands, to this peer alone. A joiner arrives mid-round

@@ -27,7 +27,14 @@
  * metadata.editorRef and indexes it — at the cost of the BlockMerge pass and
  * roughly 10x the draw calls. Authoring only; never measure frame cost there.
  */
-import { Material, Mesh, MeshBuilder, Scene, Vector3 } from "@babylonjs/core";
+import {
+  Material,
+  Mesh,
+  MeshBuilder,
+  Scene,
+  Vector3,
+  VertexBuffer,
+} from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
 import { bakeVertexAo } from "./ambientOcclusion";
@@ -143,6 +150,63 @@ export interface WorldBox {
    * bakes off these, and the server rebuilds its whole world from them.
    */
   porous?: true;
+  /**
+   * A barrier pane's collider — `porous` until `GlassSystem` breaks it, and
+   * nothing at all afterwards. See `BoxSpec.glass`.
+   *
+   * Carried here for the readers that must skip a pane rather than merely
+   * treat it as porous: `CoverMap` and the AO bake. The bake carries it to the
+   * server, which needs to break the same box this one names.
+   */
+  glass?: true;
+}
+
+/**
+ * A pane of glass in world space: the rect a round has to cross to break it,
+ * and the two places breaking it has to reach.
+ *
+ * **The index into `GameMap.panes` IS the pane's identity**, on the client and
+ * on the authority alike, exactly as an index into `colliderBoxes` is. Both
+ * sides build the list in the same order — placements in layout order, and each
+ * placement's panes in the order its builder declared them — which is what lets
+ * one number on the wire name one sheet of glass.
+ */
+export interface WorldPane {
+  /** Centre, extents and turn: the sheet as an oriented box. */
+  w: number;
+  h: number;
+  d: number;
+  cx: number;
+  cy: number;
+  cz: number;
+  rotY: number;
+  /**
+   * Where this pane's 24 positions live in `PaneGroup.mesh`'s vertex buffer.
+   * Collapsing them to the pane's own centre is what takes it off the screen.
+   */
+  vertexStart: number;
+  vertexCount: number;
+  /** Which `paneGroups` entry holds those vertices. */
+  group: number;
+  /**
+   * Position in `colliderBoxes` of the box that stops a body, or -1 for a
+   * cosmetic pane. See `PaneSpec.barrier` for why most panes are -1.
+   */
+  box: number;
+}
+
+/**
+ * One placement's glazing: the merged mesh, and the panes with vertices in it.
+ *
+ * Merged per placement and kept out of `BlockMerge`, so a building's glass is
+ * one draw call (two with the outline shell) and every pane in it is still
+ * individually reachable. That is the trade the whole feature rests on — see
+ * `MapBuilder.paneGroup`.
+ */
+export interface PaneGroup {
+  mesh: Mesh;
+  /** Indices into `GameMap.panes`. */
+  panes: number[];
 }
 
 /**
@@ -209,6 +273,17 @@ export interface GameMap {
    * cannot recover from a flat list which boxes were one fence.
    */
   rayGroups: WorldBox[][];
+  /**
+   * Every pane of glass on the map, in build order — and the index into this
+   * list is the pane's identity everywhere, including on the wire.
+   *
+   * Empty on a map whose builders declare none, which is every map but
+   * Coldharbour today. See `WorldPane`, and `systems/GlassSystem.ts` for the
+   * one thing that writes through it.
+   */
+  panes: WorldPane[];
+  /** The merged glazing meshes those panes have their vertices in. */
+  paneGroups: PaneGroup[];
   /**
    * The floor's collider blocks, a SUBSET of `colliders`.
    *
@@ -412,6 +487,14 @@ export class MapBuilder {
   private rayGroups: WorldBox[][] = [];
 
   /**
+   * Every pane, in build order, and the merged meshes their vertices live in.
+   * Fed by `paneGroup()` exactly as `boxes` is fed by `collider()`, which is
+   * what keeps the index that names a pane the same on both sides of the wire.
+   */
+  private panes: WorldPane[] = [];
+  private paneGroups: PaneGroup[] = [];
+
+  /**
    * Scratch for `insideCollider`'s box-frame transform. Reused because scatter
    * placement runs it a great many times per build.
    */
@@ -451,6 +534,8 @@ export class MapBuilder {
     const terrainColliders: Mesh[] = [];
     this.boxes = [];
     this.rayGroups = [];
+    this.panes = [];
+    this.paneGroups = [];
     // Sized to the widest burial test this layout will run. `findSpot` asks
     // about `(spec.clearance ?? 0.8) * scale`, and `scale` tops out at the
     // upper end of the spec's own range — so the layout knows the answer before
@@ -482,6 +567,7 @@ export class MapBuilder {
     // (the central cross, etc.) don't z-fight between separate meshes.
     const roadParts: Mesh[] = [];
     const blocks = new BlockMerge();
+    const paneBlocks = new PaneBlocks();
     for (const [i, p] of layout.placements.entries()) {
       const item = index ? newItem(index.placements) : null;
       this.item = item;
@@ -561,6 +647,17 @@ export class MapBuilder {
         }
         colliders.push(...meshes);
       }
+      // Glazing LAST of the three, and for the same reason the body boxes come
+      // first: `item`'s parallel arrays are written in this order on both
+      // sides, so a barrier pane's collider lands at a known place in them
+      // whichever kinds a structure declares.
+      if (s.panes.length > 0) {
+        const glazing = this.paneGroup(`${p.kind}-glass`, s, origin, rotY, i);
+        for (const group of glazing.visuals) {
+          paneBlocks.add(p.x, p.z, group, item, i);
+        }
+        colliders.push(...glazing.colliders);
+      }
       for (const l of s.lights) {
         const at = rotateY(l.x, l.y, l.z, rotY).addInPlace(origin);
         this.lighting.add(at, l.color, l.range, l.intensity, l.flicker);
@@ -587,6 +684,35 @@ export class MapBuilder {
     // One more merge across neighbouring structures — see BlockMerge.
     for (const merged of blocks.finish()) {
       if (!merged.metadata?.noOutline) addOutline(merged, 0.05);
+      visuals.push(merged);
+    }
+    // And the same pass over the glazing, which keeps its ranges — see
+    // `PaneBlocks`. Its meshes join `visuals` for the AO bake and to be
+    // disposed with the map, and they are the one entry in that list that is
+    // NEITHER outlined NOR a shadow caster.
+    //
+    // **A pane is transparent, and both of those are things only an opaque
+    // surface can afford.** A clear sheet laying a hard black shadow across
+    // the pavement is the more obvious of the two, and it is what
+    // `noShadowCaster` answers.
+    //
+    // The ink is the sharper one and it is mechanical rather than a matter of
+    // taste. Babylon draws an outline as an inverted hull BEFORE the mesh
+    // itself, and it keeps that hull out of a transparent mesh's own area with
+    // a STENCIL pass — which this engine has no buffer for (`Game` builds it
+    // with no stencil, deliberately). So the shell is not a ring around a pane
+    // here, it is a dark plate drawn behind the whole of it, and every window
+    // in the city goes back to being the opaque slate it was, correctly lit and
+    // reflecting the sky onto something you cannot see through. Glass is
+    // therefore the one visual in the world with no ink, and it loses nothing:
+    // what draws a window's frame is the mullion, the collar and the reveal,
+    // all of which are geometry with outlines of their own.
+    for (const merged of paneBlocks.finish(this.panes, this.paneGroups)) {
+      merged.metadata = {
+        ...(merged.metadata ?? {}),
+        noOutline: true,
+        noShadowCaster: true,
+      };
       visuals.push(merged);
     }
 
@@ -638,6 +764,8 @@ export class MapBuilder {
       colliders,
       colliderBoxes: this.boxes,
       rayGroups: this.rayGroups,
+      panes: this.panes,
+      paneGroups: this.paneGroups,
       terrainColliders,
       visuals,
       water: layout.water ?? [],
@@ -1036,6 +1164,20 @@ export class MapBuilder {
     // explicit `porous: false` on 820-odd boxes is a field in every baked
     // tuple to say nothing.
     if (box.porous) world.porous = true;
+    // **Glass IMPLIES porous, and on the box rather than only in the metadata.**
+    // A pane is `porous` exactly — a body walks into it, a round goes through —
+    // and `collider()` says so on the mesh, which is what the two pick
+    // predicates read. But four things read the BOX and not the mesh, and every
+    // one of them was wrong while this line was missing: `CoverMap` baked hard
+    // cover behind a window, the AO bake was the only reader that had its own
+    // term for glass, the collision bake carried neither flag, and the server
+    // therefore rebuilt an intact pane as a solid wall — eating rounds the
+    // shooter watched go through it, with `npm run parity` passing because both
+    // sides agreed on the same wrong answer.
+    if (box.glass) {
+      world.porous = true;
+      world.glass = true;
+    }
     return world;
   }
 
@@ -1076,9 +1218,162 @@ export class MapBuilder {
     // ground probe) and is not there at all to a round. `OPAQUE_ONLY` is the
     // reader; dropping `solid` instead would let the player fall through a
     // fence top their own capsule is still being held out of.
-    mesh.metadata = box.porous ? { solid: true, porous: true } : { solid: true };
+    //
+    // A barrier pane is `porous` and says so twice: once for the predicates,
+    // which need nothing new to get glass right, and once as `glass` for the
+    // three readers that must skip a pane rather than merely pass a round
+    // through it (`CoverMap`, the AO bake, and the bake that reaches the
+    // server). The caller stamps the pane INDEX on top — see `paneGroup`.
+    mesh.metadata = box.glass
+      ? { solid: true, porous: true, glass: true }
+      : box.porous
+        ? { solid: true, porous: true }
+        : { solid: true };
     mesh.freezeWorldMatrix();
     return mesh;
+  }
+
+  /**
+   * One placement's glazing: the merged sheet meshes, plus a collider for each
+   * pane that is a barrier.
+   *
+   * **The merge here is the whole feature, and it is the opposite trade from
+   * `struts`.** A pane has to stay individually addressable — that is what
+   * `GlassSystem` breaks — and the obvious way to get that is a mesh each,
+   * which on Coldharbour's six thousand panes would be six thousand meshes
+   * against ~150 for the whole map. Worse than the count says, too: glazing is
+   * the one ALPHA-BLENDED thing in the world, and a transparent mesh is sorted
+   * by distance and drawn on its own rather than batched. So the glazing merges
+   * per PLACEMENT, exactly as `mergeByMaterial` merges a cottage's walls, and
+   * the addressability is kept in the vertex buffer instead: each pane's
+   * positions are a known range, and breaking one collapses that range onto its
+   * own first vertex. Every triangle in it is then degenerate and rasterizes
+   * nothing, at a cost of one `updateVerticesData` on one small buffer.
+   *
+   * What makes that collapse the whole of a break rather than the first half of
+   * one is that a pane owns nothing else to take down with it. It casts no
+   * shadow and carries no outline (see the `paneBlocks.finish` loop in `build`
+   * for why glass has neither), so there is no second registration anywhere to
+   * revoke — and `bakeVertexAo` writes the COLOUR buffer, so the bake is
+   * untouched by a later position rewrite and may still run last.
+   *
+   * **A second merge per map block runs over these too**, and unlike the visual
+   * one it is this file's own (`PaneBlocks`) rather than `BlockMerge`. It has to
+   * be: a block merge is what makes a placement unrecoverable, and a pane's
+   * whole point is that it is not — so the ranges are carried through the second
+   * merge by the running vertex offset rather than being given up. Measured on
+   * Coldharbour: 910 panes are 73 meshes per placement and 27 per block, which
+   * is ~90 draws saved against a map that costs ~150.
+   *
+   * A barrier pane's collider is an ordinary `collider()` box, one mesh each,
+   * because `PaneSpec.barrier` is authored one at a time and there are a
+   * handful. Breaking one is then two property writes rather than vertex
+   * surgery — see `GlassSystem`.
+   */
+  private paneGroup(
+    name: string,
+    s: Structure,
+    origin: Vector3,
+    parentRotY: number,
+    placement: number,
+  ): { visuals: PaneGroup[]; colliders: Mesh[] } {
+    const visuals: PaneGroup[] = [];
+    const colliders: Mesh[] = [];
+
+    // Grouped by material and kept in declaration order within a group, because
+    // the vertex ranges below are read off that order and nothing else records
+    // it. Panes carry no exemptions, so unlike `mergeByMaterial` there is no
+    // second key — a pane that ever needs one owes this method the same nesting.
+    const groups = new Map<Material, number[]>();
+    for (const [j, mesh] of s.paneMeshes.entries()) {
+      const mat = mesh.material;
+      if (!mat) continue;
+      const group = groups.get(mat);
+      if (group) group.push(j);
+      else groups.set(mat, [j]);
+    }
+
+    for (const [mat, members] of groups) {
+      // Vertex counts are read BEFORE the merge and never assumed. A box is 24
+      // positions today and the arithmetic would be right, but `MergeMeshes`
+      // disposes its sources — so a wrong guess here is unrecoverable and
+      // silent, and it would break the wrong pane rather than throwing.
+      const parts: Mesh[] = [];
+      const ranges: { start: number; count: number }[] = [];
+      let cursor = 0;
+      for (const j of members) {
+        const mesh = s.paneMeshes[j];
+        const count = mesh.getTotalVertices();
+        ranges.push({ start: cursor, count });
+        cursor += count;
+        parts.push(mesh);
+      }
+      const merged =
+        parts.length === 1
+          ? // The group-of-one exception `MergeMeshes` will not handle, and the
+            // same hand-bake `mergeByMaterial` does: the caller composes a
+            // transform onto what it gets back, so an unbaked mesh would have
+            // its own position clobbered rather than added to.
+            parts[0].bakeCurrentTransformIntoVertices()
+          : Mesh.MergeMeshes(parts, true, true, undefined, false, false);
+      if (!merged) continue;
+      merged.name = `${name}-${mat.name}`;
+      merged.material = mat;
+      merged.rotation.y = parentRotY;
+      merged.position.addInPlace(origin);
+
+      const paneIndices: number[] = [];
+      for (const [k, j] of members.entries()) {
+        const spec = s.panes[j];
+        const at = rotateY(spec.x, spec.y, spec.z, parentRotY).addInPlace(
+          origin,
+        );
+        const pane: WorldPane = {
+          w: spec.w,
+          h: spec.h,
+          d: spec.d,
+          cx: at.x,
+          cy: at.y,
+          cz: at.z,
+          rotY: (spec.rotY ?? 0) + parentRotY,
+          // Relative to THIS merge for now. `PaneBlocks.finish` shifts both
+          // fields when it folds this mesh into its block's, which is the one
+          // place either is ever rewritten.
+          vertexStart: ranges[k].start,
+          vertexCount: ranges[k].count,
+          group: -1,
+          box: -1,
+        };
+        const index = this.panes.push(pane) - 1;
+        paneIndices.push(index);
+        if (!spec.barrier) continue;
+        // The collider records its own place in `colliderBoxes` on the pane,
+        // which is what the server and the fingerprint name it by; the mesh
+        // carries the pane index back the other way, which is what
+        // `GlassSystem` finds it with. Neither side can be derived from the
+        // other — `colliders` holds struts and terrain that `boxes` does not.
+        const spawned: BoxSpec = {
+          w: spec.w,
+          h: spec.h,
+          d: spec.d,
+          x: spec.x,
+          y: spec.y,
+          z: spec.z,
+          rotY: spec.rotY,
+          glass: true,
+        };
+        pane.box = this.boxes.length;
+        const mesh = this.collider(`${name}-col`, spawned, origin, parentRotY);
+        mesh.metadata.pane = index;
+        if (this.item) {
+          tag(mesh, { list: "placements", index: placement });
+          this.item.localBoxes.push(spawned);
+        }
+        colliders.push(mesh);
+      }
+      visuals.push({ mesh: merged as Mesh, panes: paneIndices });
+    }
+    return { visuals, colliders };
   }
 
   /**
@@ -1288,6 +1583,137 @@ class BlockMerge {
       out.push(...mergeByMaterial(group, `block${key}`));
     }
     return out;
+  }
+}
+
+/**
+ * The same second pass for glazing, and it is a class of its own rather than a
+ * caller of `BlockMerge` because the two want opposite things from a merge.
+ *
+ * `BlockMerge` exists to make a placement unrecoverable — that is the saving.
+ * A pane must survive it, so this one carries every pane's vertex range across
+ * by the running offset of the meshes ahead of it. Same key, same reason
+ * (`renderOutline` draws each mesh twice, so a mesh is two draws), and measured
+ * on Coldharbour: 910 panes go from 73 meshes to 27.
+ *
+ * **The editor keys per placement instead**, so nothing merges across
+ * placements there — the same exemption `BlockMerge` gets, for the same reason.
+ * Running the pass either way keeps one code path, and the pass is where the
+ * position buffer is made updatable.
+ */
+class PaneBlocks {
+  private blocks = new Map<string, PaneGroup[]>();
+  /** The layout item a block belongs to, on editor builds. See `add`. */
+  private owners = new Map<string, { item: EditorItem; placement: number }>();
+
+  /**
+   * Files one placement's merged glazing under its map block.
+   *
+   * **On an editor build the key is the PLACEMENT**, so nothing merges across
+   * placements and every block has exactly one owner — which is what lets the
+   * merged mesh be handed back to that item's `visuals`. Without it a dragged
+   * building leaves its own windows behind in the street, and nothing says so:
+   * the glass is still drawn, still in `visuals`, and still disposed with the
+   * map.
+   */
+  add(
+    x: number,
+    z: number,
+    group: PaneGroup,
+    item: EditorItem | null,
+    placement: number,
+  ): void {
+    const key = item
+      ? `item${placement}`
+      : `${Math.floor(x / BLOCK_SIZE)},${Math.floor(z / BLOCK_SIZE)}`;
+    if (item) this.owners.set(key, { item, placement });
+    const existing = this.blocks.get(key);
+    if (existing) existing.push(group);
+    else this.blocks.set(key, [group]);
+  }
+
+  /**
+   * Merges each block and rewrites the ranges it moved.
+   *
+   * `panes` is the map's list, written through: a pane's `vertexStart` shifts
+   * by the vertices of every mesh merged ahead of its own, and its `group`
+   * becomes the index of the mesh it ended up in. Nothing else may write either
+   * field.
+   */
+  finish(panes: WorldPane[], out: PaneGroup[]): Mesh[] {
+    const meshes: Mesh[] = [];
+    for (const [key, group] of this.blocks) {
+      // Split by material for the reason `mergeByMaterial` does: two materials
+      // in one mesh would draw one of them wrong. Glass is one colour today, so
+      // this is almost always a single group.
+      const byMaterial = new Map<Material, PaneGroup[]>();
+      for (const g of group) {
+        const mat = g.mesh.material;
+        if (!mat) continue;
+        const list = byMaterial.get(mat);
+        if (list) list.push(g);
+        else byMaterial.set(mat, [g]);
+      }
+
+      for (const [mat, list] of byMaterial) {
+        // Offsets are accumulated BEFORE the merge, because `MergeMeshes`
+        // disposes its sources and `getTotalVertices()` afterwards is a read
+        // off a dead mesh. It concatenates in array order, which is what makes
+        // a running sum the right answer at all.
+        let offset = 0;
+        const indices: number[] = [];
+        for (const g of list) {
+          for (const p of g.panes) {
+            panes[p].vertexStart += offset;
+            indices.push(p);
+          }
+          offset += g.mesh.getTotalVertices();
+        }
+        const parts = list.map((g) => g.mesh);
+        // **A group of one is taken AS IT STANDS, and must not be baked.** This
+        // is where this pass differs from `mergeByMaterial`, which bakes a lone
+        // mesh because its caller then composes a placement's transform onto
+        // what it gets back. Nothing composes anything onto these: `paneGroup`
+        // has already put each mesh where it belongs. Baking anyway flattens
+        // that transform into the vertices and leaves the mesh at identity,
+        // which the editor's `repositionItem` then reads as "no transform yet"
+        // and applies the placement a second time — a dragged building whose
+        // glass is at twice its own offset, drawn perfectly, with nothing in
+        // the numbers to point at.
+        const merged =
+          parts.length === 1
+            ? parts[0]
+            : Mesh.MergeMeshes(parts, true, true, undefined, false, false);
+        if (!merged) continue;
+        merged.name = `paneblock${key}-${mat.name}`;
+        merged.material = mat;
+        // Updatable, which no merge can ask for: `MergeMeshes` writes a static
+        // buffer and `bakeCurrentTransformIntoVertices` leaves whatever was
+        // there. Without this the first break is a silent no-op — the array is
+        // rewritten and never re-uploaded.
+        const positions = merged.getVerticesData(VertexBuffer.PositionKind);
+        if (positions) {
+          merged.setVerticesData(VertexBuffer.PositionKind, positions, true);
+        }
+        const groupIndex = out.length;
+        for (const p of indices) panes[p].group = groupIndex;
+        out.push({ mesh: merged as Mesh, panes: indices });
+        meshes.push(merged as Mesh);
+        // Editor builds only, and AFTER the merge rather than before it: a
+        // merge of two or more disposes its sources, and `Node.dispose` nulls
+        // their metadata — so a tag written on the way in survives only for a
+        // group of one. That is every group here in editor mode, which is
+        // exactly the kind of accident that holds until somebody gives a
+        // building two colours of glass. Hand the mesh to the item that owns it
+        // so a dragged building takes its glazing with it.
+        const owner = this.owners.get(key);
+        if (owner) {
+          tag(merged as Mesh, { list: "placements", index: owner.placement });
+          owner.item.visuals.push(merged as Mesh);
+        }
+      }
+    }
+    return meshes;
   }
 }
 

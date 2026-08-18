@@ -21,7 +21,7 @@ substitute: read the companion before changing that subsystem.
 | [`docs/world.md`](docs/world.md) | a map, a layout, a builder, the terrain or the rim |
 | [`docs/editor.md`](docs/editor.md) | anything under `src/editor/` or the dev write endpoint |
 | [`docs/bots.md`](docs/bots.md) | navigation, perception, cover, squads, bot cost |
-| [`docs/deaths.md`](docs/deaths.md) | ragdolls, Havok, the death cam |
+| [`docs/deaths.md`](docs/deaths.md) | ragdolls, glass shards, Havok, the death cam |
 | [`docs/pwa.md`](docs/pwa.md) | `public/`, `src/pwa/`, the service worker |
 | [`docs/multiplayer.md`](docs/multiplayer.md) | anything under `server/` or `src/net/`, the roster, the collision bake, the regions, the two images and the proxy in front of them |
 
@@ -68,10 +68,21 @@ authored by hand:
   would have to be rebuilt on every map install.
 
 **Havok's `.wasm` (~2 MB) is the one binary that ships**, pulled in by
-`@babylonjs/havok` for the ragdolls on an explicit request. It is never named by
+`@babylonjs/havok` for the ragdolls and the glass. It is never named by
 path: Havok's ESM glue resolves it against its own `import.meta.url`, which Vite
 follows and emits as a content-hashed asset versioned with the dependency. Do
 **not** also hand-place a copy in `public/` — that ships and precaches 2 MB twice.
+
+**It is REQUIRED, and the boot screen is where that is enforced.** `main.ts`
+awaits `loadHavok()` before it constructs `Game`, beside the WebGL2 probe and
+with a failure message of its own; nothing downstream asks whether physics has
+arrived, because there is no state in which it has not. It used to be optional —
+fetched from inside the constructor, never awaited, with a collapse tween for
+bodies and a scripted arc for shards standing in until it landed. That bought a
+second code path for every falling thing, exercised only on machines nobody was
+testing on, to cover a case that cannot happen on a machine that can run the
+rest of this game. Do not reintroduce a fallback; if the engine is a problem,
+the answer is that the game does not start.
 
 **`optimizeDeps.exclude` in `vite.config.ts` is load-bearing for DEV.** The dep
 optimizer copies the glue into `node_modules/.vite/deps/` and leaves the binary
@@ -377,12 +388,22 @@ nothing. The bake runs **after every merge**, and cannot be moved earlier:
 `VertexData.merge` throws outright when one mesh in a group has `colors` and
 another does not.
 
+**The world is OPAQUE with exactly one exception, and it is glazing.**
+`getGlass` (`#define CEL_GLASS`, `needAlphaBlending`) writes a Fresnel alpha per
+pixel: a reflection of the sky over the tint of whatever stands behind the pane.
+Everything else here is a flat opaque colour — the water fakes its depth rather
+than showing the bed through itself, and the capture zone's skirt is annotation
+rather than world. Blended draws write no depth, so a pane is sorted rather than
+z-buffered, and **a pane is neither outlined nor a shadow caster** (`MapBuilder`
+marks both, and the ink one is not a preference — see the contract).
+
 → **[`docs/rendering.md`](docs/rendering.md)** — the four light terms and the
 baked occlusion that modifies two of them (and the three further rules that
 buffer carries), the three light flavours and the muzzle-flash budget, the
 per-pixel/per-mesh fog split and `OutlineFog`'s three cache-invalidation rules,
 the shadow window, its four-tap lookup and the registry that lets grass and water
-share it, why the dither is in the surface shaders rather than the grade, the
+share it, the glazing's two layers and why its Fresnel is the one unbanded term,
+why the dither is in the surface shaders rather than the grade, the
 constraints that look like bugs if you undo them (image processing, rendering
 group 1, thick boxes under walked surfaces, coplanar faces), and the painted sky.
 
@@ -479,16 +500,33 @@ and a builder picks which by how it declares the box:
 | ordinary — `wall`, `block` | yes | yes | yes |
 | `porous` — a fence's coarse run | yes | **no** | yes |
 | `rayOnly` — a fence's posts and rails (`strut`) | **no** | yes | **no** |
+| `glass` — a barrier pane, intact | yes | **no** | nav only |
+| `glass` — the same pane, broken | **no** | **no** | **no** |
 
-**The last two exist as a pair and describe one object between them**, which is
-how open-frame geometry keeps both halves honest: the coarse box is the fence a
-body walks into and the nav graph severs across, and the struts are the timber a
-round stops on. One 1.4 m slab could only be a wall you see through or a fence
-you walk through; splitting the question makes it neither. A porous box is
+**`porous` and `rayOnly` exist as a pair and describe one object between them**,
+which is how open-frame geometry keeps both halves honest: the coarse box is the
+fence a body walks into and the nav graph severs across, and the struts are the
+timber a round stops on. One 1.4 m slab could only be a wall you see through or a
+fence you walk through; splitting the question makes it neither. A porous box is
 **not cover** (`CoverMap` skips it, or bots hide behind something that stops
 nothing), and a strut is invisible to navigation on purpose — a 0.1 m rail is a
 shape `NavGrid` can only get wrong, which is the same reason `guard()` stands a
 deck rail off the surface it guards.
+
+**`glass` is the one thing in the world that CHANGES, and it needs no new
+predicate to do it.** A barrier pane is `porous` exactly — a body walks into it,
+a round goes through — so both predicates already get intact glass right;
+breaking it clears `solid` itself and the box leaves both in one property write.
+That is deliberate rather than clever: these are the hottest predicates in the
+game and the rest of the map is static, so the one mutable thing pays for itself
+with a write rather than with a term every ray in the process evaluates.
+`WorldBox.glass` exists only for the readers that must SKIP a pane rather than
+merely pass a round through it — `CoverMap`, the AO bake, and the collision bake
+that carries it to the authority.
+
+→ **[`docs/world.md`](docs/world.md)** on panes: why `barrier` is not the
+default (the measured ray cost of a collider box per pane), how a pane stays
+addressable through both merges, and what breaking one owes the nav graph.
 
 **`MapBuilder.struts` merges a placement's struts into ONE collider mesh, and
 that is what makes the fidelity affordable.** A pick costs per MESH — predicate,
@@ -575,25 +613,80 @@ probed. Skill is one scalar per bot, drawn **per squad** from a seeded generator
 target hysteresis, the two cover heights and why they are what they are, squad
 planning and postures, and the yaw/bodyYaw split.
 
-### Deaths, and the one physics engine
+### Deaths, glass, and the one physics engine
 
-A killed bot falls under **Havok**, the only physics engine in the tree, and so
-does the stand-in body the death cam stands up. **Nothing there feeds navigation,
-cover or hit detection** — a corpse is not in `NavGrid`, not in `ObstacleField`,
-not in `hittablesAgainst`. `scene.physicsEnabled` is **false and must stay false**
+A killed bot falls under **Havok**, the only physics engine in the tree; so does
+the stand-in body the death cam stands up, and so do the shards a broken pane
+throws. **Nothing under it feeds navigation, cover or hit detection** — a corpse
+is not in `NavGrid`, not in `ObstacleField`, not in `hittablesAgainst`, and a
+shard is not either. `scene.physicsEnabled` is **false and must stay false**
 (the game renders in every state, so a scene-driven step would tumble corpses
-under the pause card), Havok never touches a rig node, and the collapse tween that
-runs on five separate refusals is the floor under all of it.
+under the pause card) and Havok never touches a rig node.
+
+**The engine is required and there is no fallback**, which is where all five of
+the pool's old refusals went. Three were about the WASM having arrived or the
+player having switched it off, and the boot gate and the deleted setting answer
+those; the fourth was a full pool, and that now **evicts the oldest corpse**
+rather than refusing — what used to be the death cam's `priority` exception,
+made everyone's, which protects the cam's body for free because it is the
+freshest in the pool for the whole shot. **One refusal is left: a death past the
+fog wall**, where the rig is not drawn, so nothing the player can see is ever
+denied a fall. `Bot`'s dead branch is what remains of the tween and does nothing
+but hide the rig on `death.hideTime`.
+
+**`PhysicsWorld` owns the engine and neither client owns any of it.** It holds
+the plugin, the map as one static body and the fixed-step clock, and is INJECTED
+into `RagdollSystem` and `DebrisSystem` by `Game` — the
+`BattleSystem`←`CombatSystem` precedent. It was `RagdollSystem`'s privately, and
+two things made a second consumer impossible rather than awkward: the step ran
+only while a corpse was unfrozen, and the plugin was a private field. `Game`
+steps the engine and then its two clients, in that order, and never the other
+way round. Each client builds its pool in its own constructor, because the
+engine is up before either exists.
 
 `dying` is a **step in the state machine, not a lid**: `updateWorld` runs in full
 underneath the death cam, so the tickets bleed and your killer walks past while
 you watch. It costs no time — `enterDeploy` is opened with `respawnDelay` minus
 what the shot already spent.
 
-→ **[`docs/deaths.md`](docs/deaths.md)** — the pool's one priority exception, the
+→ **[`docs/deaths.md`](docs/deaths.md)** — the boot gate and what the optional
+version cost, the pool's three tiers and why taking the oldest is safe, the
 quaternion leak that freezes a respawned bot, the map's single static body, the
-fog-wall gate shared with the LOD, and the death cam's camera hand-off and
-outward pull-in.
+fog-wall gate shared with the LOD, the shard pool and the distance gate that is
+deliberately not the fog wall, and the death cam's camera hand-off and outward
+pull-in.
+
+### Breakable glass
+
+A pane is the one piece of world geometry that is not static, and it moves in
+one direction only: it breaks and never mends inside a round. That monotonicity
+is what makes an incremental update to the nav graph safe rather than merely
+cheap — the graph only ever GAINS links, so a route that was valid still is, and
+a flow field computed before a window opened is stale rather than wrong.
+
+**A round has to pass THROUGH glass, so a pane can never be in `OPAQUE_ONLY` —
+which means the hitscan's wall pick can never report one.** `CombatSystem.fire`
+raises `onShotPath` with the segment the round actually flew and `GlassSystem`
+answers it analytically, bucketed by map block: nothing on `Player.probeGround`,
+nothing on the bots' line of sight, and ~15 µs on a shot. The same code runs on
+the authority, which gets its panes off the collision bake and draws none of
+them.
+
+**A pane's index in `GameMap.panes` is its identity**, on both sides and on the
+wire, exactly as an index into `colliderBoxes` is — both processes build the list
+in the same order and `npm run parity` is what proves they still do. Breaking is
+the authority's; a client predicts the VISUAL on its own shot and leaves the
+collider standing until told, because all but twelve of Coldharbour's 6,246 panes
+have no collider at all and the dozen that do would otherwise let a player walk
+through a shopfront the server still has closed.
+
+**A pane is also see-through, which is the one thing about glass that is a
+FAIRNESS rule and not a look.** `OPAQUE_ONLY` already lets a bot's sightline
+through a window, so a frontage the player cannot see through is one the AI can
+shoot them through. The glazing material is above, under the cel shader.
+
+→ **[`docs/world.md`](docs/world.md)** for the builder's side and
+**[`docs/multiplayer.md`](docs/multiplayer.md)** for the wire's.
 
 ### Conquest rules
 

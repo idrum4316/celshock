@@ -43,6 +43,34 @@
  *   merges a placement's struts into one collider mesh, which is what makes a
  *   glazed elevation affordable.
  *
+ * ## The glass, and where it is allowed to matter
+ *
+ * Every pane here is a `Build.pane`, which is what makes it breakable — but
+ * only twelve of the map's 1,762 are `barrier` panes, and the distinction is
+ * the design rather than an optimisation.
+ *
+ * **Glazing an opening something else already closes buys nothing.** A tower's
+ * curtain wall hangs 4 cm off a solid shaft, so a round has always stopped on
+ * the concrete behind it; an upper floor's window band sits over a 1 m spandrel
+ * that stops a body already. Both are worth glazing for the look and neither is
+ * worth a collider — see `PaneSpec.barrier` for what one costs every ray in the
+ * game.
+ *
+ * The one place glass is the ONLY thing in the way is `buildOffice`'s +Z
+ * elevation, which is a glazed shopfront rather than the blank wall it was: a
+ * third and fourth way into the two buildings a round is actually fought
+ * inside, opened by shooting rather than by walking. Piers between the bays are
+ * ordinary `wall`s so the corners are never glass and the elevation still reads
+ * as a building, and each bay is its own pane so one round takes out a bay
+ * rather than a frontage.
+ *
+ * The tower's glazing is split ONE STOREY AT A TIME for the same reason at a
+ * different scale. It was a sheet per elevation first, which is the same
+ * triangles either way — but a pane is the unit that breaks, and one round
+ * taking a 25 x 21 m face of glass out of a building is absurd from the street
+ * below it. A storey band is what sits between two collars, so a break reads as
+ * a floor's glazing going.
+ *
  * ## What is deliberately NOT here
  *
  * No fixture lights on the street. A daylit map has nothing for them to do and
@@ -65,7 +93,6 @@ import {
   CONCRETE,
   DARK_CONCRETE,
   ENAMEL,
-  GLASS,
   ROAD_PAINT,
   WINDOW_LIGHT,
 } from "./core";
@@ -200,34 +227,83 @@ export function buildTower(
    * read instead is the COLLARS below, which stand further out again: 0.04 m of
    * glass over the wall, 0.2 m of band over the glass, so the storeys are a
    * shadow line and the bands are the thing catching the sun.
+   *
+   * **It is glazed one PANEL at a time — a storey tall and a bay wide — and
+   * that is what a pane is for.** The elevation was a single sheet first, then a
+   * storey band, and both were the same mistake at two scales: a pane is the
+   * unit that BREAKS, and one round taking a 25 x 21 m face of glass — or a
+   * 25 x 3.7 m ribbon of it — out of a building is absurd from the street it is
+   * standing on. Both units are the building's own: a band is what sits between
+   * two collars, and a bay is what sits between two FINS, so a break reads as
+   * one panel going out of its frame with the mullions either side of it still
+   * standing. It is also what makes the shards affordable — a burst is twelve
+   * pieces cut from the pane's own face, so the face has to be a size twelve
+   * pieces can account for (see `systems/DebrisSystem.ts`).
+   *
+   * It is the shopfront's rule below, applied to the tower: per bay, because a
+   * pane is what breaks.
    */
   const glaze = (mw: number, md: number, y0: number, y1: number): void => {
-    const mid = (y0 + y1) / 2;
     const tall = y1 - y0 - 0.6;
     if (tall <= 0) return;
     const t = 0.14;
-    for (const sx of [-1, 1]) {
-      b.box(t, tall, md - 1.2, (sx * (mw + t)) / 2 - sx * 0.04, mid, 0, GLASS);
+    // Bands, aligned with the collars by construction: both are keyed to
+    // `STOREY`, so a band is what is between two of them however tall the mass.
+    const rows = Math.max(1, Math.round(tall / STOREY));
+    const band = tall / rows;
+    // The bays, and the fins that stand between them. ONE count, read twice —
+    // the glass below is cut on it and the fins further down are drawn on it,
+    // so a panel is bounded by mullions rather than merely near them.
+    const fin = 0.26;
+    const bays = (span: number) => Math.max(2, Math.round(span / 5.5));
+    const nx = bays(mw);
+    const nz = bays(md);
+    /**
+     * One elevation's glass for one band, cut into its bays.
+     *
+     * `span` is the mass's own width along that elevation and `n` its bay
+     * count; `place` turns a bay's centre and width into a pane, which is all
+     * the two elevations disagree about. The glass stops 0.6 m short of the
+     * mass's corners and half a fin short of an interior mullion, so no panel
+     * is ever drawn behind the thing that frames it.
+     */
+    const cut = (span: number, n: number, place: (c: number, w: number) => void): void => {
+      const pitch = span / n;
+      for (let i = 0; i < n; i++) {
+        const lo = i === 0 ? 0.6 : fin / 2 + 0.04;
+        const hi = i === n - 1 ? 0.6 : fin / 2 + 0.04;
+        const w = pitch - lo - hi;
+        if (w <= 0.2) continue;
+        place(-span / 2 + i * pitch + lo + w / 2, w);
+      }
+    };
+    for (let r = 0; r < rows; r++) {
+      // A hair short of the pitch, so the collar line still reads between two
+      // bands rather than the glass meeting itself.
+      const h = band - 0.08;
+      const cy = y0 + 0.3 + band * (r + 0.5);
+      for (const sx of [-1, 1]) {
+        const x = (sx * (mw + t)) / 2 - sx * 0.04;
+        cut(md, nz, (cz, w) => b.pane(t, h, w, x, cy, cz));
+      }
+      for (const sz of [-1, 1]) {
+        const z = (sz * (md + t)) / 2 - sz * 0.04;
+        cut(mw, nx, (cx, w) => b.pane(w, h, t, cx, cy, z));
+      }
     }
-    for (const sz of [-1, 1]) {
-      b.box(mw - 1.2, tall, t, 0, mid, (sz * (md + t)) / 2 - sz * 0.04, GLASS);
-    }
+    const mid = (y0 + y1) / 2;
     // Vertical fins between the bays. A curtain wall reads as vertical and the
     // collars are all horizontal, so without these a tower is a stack of
     // stripes; they also stand the one shadow line a flat elevation can have.
-    const fin = 0.26;
-    const bays = (span: number) => Math.max(2, Math.round(span / 5.5));
     for (const sz of [-1, 1]) {
-      const n = bays(mw);
-      for (let i = 1; i < n; i++) {
-        const x = -mw / 2 + (i / n) * mw;
+      for (let i = 1; i < nx; i++) {
+        const x = -mw / 2 + (i / nx) * mw;
         b.box(fin, tall, fin, x, mid, (sz * (md + fin)) / 2 - sz * 0.06, skin);
       }
     }
     for (const sx of [-1, 1]) {
-      const n = bays(md);
-      for (let i = 1; i < n; i++) {
-        const z = -md / 2 + (i / n) * md;
+      for (let i = 1; i < nz; i++) {
+        const z = -md / 2 + (i / nz) * md;
         b.box(fin, tall, fin, (sx * (mw + fin)) / 2 - sx * 0.06, mid, z, skin);
       }
     }
@@ -243,7 +319,7 @@ export function buildTower(
         const x = -w / 2 + ((c + 0.5) / cols) * w;
         const y = 1.5 + r * STOREY;
         for (const sz of [-1, 1]) {
-          b.box(1.3, 1.5, 0.14, x, y, (sz * d) / 2, GLASS);
+          b.pane(1.3, 1.5, 0.14, x, y, (sz * d) / 2);
         }
       }
     }
@@ -401,8 +477,39 @@ export function buildOffice(
   const g0 = GROUND;
   const gh = STOREY - SLAB - g0;
   b.doorWall(w, gh, WALL, 0, g0 + gh / 2, -d / 2, CONCRETE, 3.2, 2.6);
-  b.wall(w, gh, WALL, 0, g0 + gh / 2, d / 2, CONCRETE);
   b.wall(WALL, gh, d, -w / 2, g0 + gh / 2, 0, CONCRETE);
+
+  // The +Z elevation is a GLAZED SHOPFRONT, and it is the one place on the map
+  // where glass is the only thing in the way.
+  //
+  // Every other pane in this kit is decoration: a tower's curtain wall hangs
+  // 4 cm off a solid shaft, and the window bands upstairs sit over a 1 m
+  // spandrel that already stops a body. Glazing those changes nothing you can
+  // play with. A shopfront does — it is a wall until somebody shoots it, and
+  // then it is a way in, which is why it is the elevation that faces the street
+  // and why the two doorways are on the other three sides. A squad holding both
+  // doors now has a third opening they can hear go in behind them.
+  //
+  // Structurally it is piers and bays: the piers are ordinary `wall`s so the
+  // elevation still reads as a building and so the corners are never glass, and
+  // each bay between them is one BARRIER pane. Per bay rather than one sheet
+  // across the front, because a pane is what breaks — a single sheet would take
+  // the whole elevation out on one round.
+  {
+    const bays = Math.max(3, Math.round(w / 5));
+    const pier = 0.6;
+    const span = (w - pier * (bays + 1)) / bays;
+    for (let i = 0; i <= bays; i++) {
+      b.wall(pier, gh, WALL, -w / 2 + pier / 2 + i * (pier + span), g0 + gh / 2, d / 2, CONCRETE);
+    }
+    for (let i = 0; i < bays; i++) {
+      const x = -w / 2 + pier + span / 2 + i * (pier + span);
+      // Thinner than the piers and centred on the same plane, so a round that
+      // stops on a pier sparks where the concrete is drawn and one through a
+      // bay meets only the glass.
+      b.pane(span, gh, 0.12, x, g0 + gh / 2, d / 2, { barrier: true });
+    }
+  }
   // The +X doorway is cut by hand: `doorWall` runs along X, and this wall runs
   // along Z. Two jambs and a lintel, the same three boxes it would emit.
   {
@@ -751,7 +858,7 @@ export function buildCar(
   const len = 4.4;
   const wide = 1.86;
   b.box(len, 0.72, wide, 0, 0.74, 0, paint);
-  b.box(len * 0.52, 0.62, wide - 0.2, -0.1, 1.4, 0, GLASS);
+  b.pane(len * 0.52, 0.62, wide - 0.2, -0.1, 1.4, 0);
   b.box(len * 0.5, 0.1, wide - 0.16, -0.1, 1.72, 0, paint);
   b.box(len + 0.16, 0.22, wide * 0.7, 0, 0.62, 0, DARK_CONCRETE);
   for (const sx of [-1, 1]) {

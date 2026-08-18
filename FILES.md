@@ -36,9 +36,11 @@ server/               # The authoritative match server. Node, NullEngine, no
 index.html          # The head, and NO interface CSS beyond the two things shown
                     #   while there IS no interface: a black background (so a
                     #   dev reload does not flash white) and the boot screen.
-main.ts             # Bootstrap. Imports src/ui/base.css FIRST. Owns the boot
-                    #   screen: down on the first drawn frame, or the WebGL2
-                    #   failure message.
+main.ts             # Bootstrap. Imports src/ui/base.css FIRST. Awaits the two
+                    #   things the game cannot start without — WebGL2 and the
+                    #   Havok WASM — then builds the Game. Owns the boot
+                    #   screen: down on the first drawn frame, or one of the
+                    #   three failure messages.
 public/             # Copied to dist/ VERBATIM — unhashed URLs named by hand
                     #   (manifest.webmanifest, icons/ from `npm run icons`).
   regions.json      # Which match servers this deployment offers, by host. The
@@ -65,6 +67,9 @@ src/
                         #   string's two envelopes, recovery, stance
     sights.ts           # The optic table — its ORDER is the loadout row
     viewmodel.ts        # Where the weapon sits in front of the camera
+    glass.ts            # Breakable glazing: the sweep's cap, the shard pool,
+                        #   the size band a piece is cut to and how far one is
+                        #   worth simulating
     grenade.ts          # The throw, bounce, fuse and blast
     camera.ts           # Look, FOV, view punch, shake
     aimAssist.ts        # Controller aim assist and its three invariants
@@ -134,8 +139,7 @@ src/
     BotMemory.ts        # One bot's decaying picture of the fight
     BotSkill.ts         # skill scalar -> BotProfile; difficulty tiers
     SoldierModel.ts     # Merged bot rig + procedural animation (walk, aim,
-                        #   twist, crouch, collapse), and the RagdollSubject
-                        #   interface
+                        #   twist, crouch), and the RagdollSubject interface
     NetSoldier.ts       # Somebody else, drawn from the wire: one rig, the
                         #   interpolation buffer behind it, the gait its boots
                         #   are heard off, no behaviour at all
@@ -148,9 +152,19 @@ src/
     CaptureZoneSystem.ts# Flags drawn in the world: ring, skirt, beacon
     CombatSystem.ts     # Hitscan, fall-off, the head zone; pooled tracers, sparks, impacts
     GrenadeSystem.ts    # The one thing that isn't hitscan + BlastDust
-    RagdollSystem.ts    # The ONLY Havok in the game, entirely optional —
-                        #   every refusal falls back to a collapse tween.
-                        #   Cannot tell a dead bot from the player's stand-in
+    GlassSystem.ts      # Breakable panes: the segment sweep, the break, and
+                        #   the amortised flow-field rebuild it owes. The one
+                        #   mutable thing in the world, and monotonically so
+    PhysicsWorld.ts     # The ONLY Havok in the game: the plugin, the map as
+                        #   one static body, and the fixed-step clock. Owns no
+                        #   bodies — its two clients do. Exports loadHavok(),
+                        #   which main.ts awaits before there is a Game
+    RagdollSystem.ts    # Corpses under that engine. One refusal left (past the
+                        #   fog wall); a full pool evicts its oldest. Cannot
+                        #   tell a dead bot from the player's stand-in
+    DebrisSystem.ts     # Glass shards under it. A burst is CUT from the pane's
+                        #   own face; refuses past its own apparent-size gate,
+                        #   and evicts only a burst that has already landed
     DeathCam.ts         # The player's own death; the only occlusion pick
                         #   outside combat
     AimAssistSystem.ts  # Gamepad-only: outer bubble slows the stick, inner one

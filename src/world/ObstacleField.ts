@@ -48,7 +48,11 @@ import type { WorldBox } from "./MapBuilder";
  * evaluated from the top-face *plane* at the contact point, the same way
  * `NavGrid` does it, so a ramp reads as a floor at its foot rather than a wall.
  *
- * The map never changes, so the buckets are built once and then only read.
+ * The map changes in exactly one way and in one direction: a pane of glass
+ * breaks and never mends (`BoxSpec.glass`). So the buckets are built once, read
+ * from then on, and only ever have entries TAKEN OUT — by `remove`, which is
+ * the one writer and is called a handful of times in a round. Nothing here may
+ * grow at runtime, and nothing may be added back.
  */
 
 /** Bucket edge in metres. Comfortably larger than any query radius. */
@@ -77,22 +81,53 @@ export class ObstacleField {
       // ridge is pure boundary, which the grid's own extents already enforce.
       if (box.w > 200 || box.d > 200) continue;
       const index = this.boxes.push(box) - 1;
+      this.eachCell(box, (cell) => {
+        (this.buckets[cell] ??= []).push(index);
+      });
+    }
+  }
 
-      // Conservative footprint: the rotated half-diagonal, plus the query slack.
-      const reach =
-        Math.hypot(box.w, box.d) / 2 +
-        (box.h / 2) * Math.abs(Math.sin(box.rotX)) +
-        MAX_RADIUS;
-      const minX = this.clampCell(this.toCell(box.cx - reach));
-      const maxX = this.clampCell(this.toCell(box.cx + reach));
-      const minZ = this.clampCell(this.toCell(box.cz - reach));
-      const maxZ = this.clampCell(this.toCell(box.cz + reach));
-      for (let cx = minX; cx <= maxX; cx++) {
-        for (let cz = minZ; cz <= maxZ; cz++) {
-          const cell = cz * this.dim + cx;
-          (this.buckets[cell] ??= []).push(index);
-        }
-      }
+  /**
+   * Takes a box out of every bucket it was stamped into. True when it was
+   * there.
+   *
+   * **The box's slot in `this.boxes` is left behind**, holes and all, because
+   * every bucket entry is an index into that array and compacting it would
+   * silently renumber every box after the removed one. A retired slot costs one
+   * `WorldBox` of memory and is never reached again — `resolve` walks buckets,
+   * never `boxes`.
+   *
+   * Removal recomputes the same cell rectangle the constructor stamped with
+   * rather than remembering it: one arithmetic expression in one place cannot
+   * disagree with itself, and two copies of it can — by a cell, leaving an
+   * entry stranded in a bucket that goes on pushing bodies out of glass that
+   * is no longer there.
+   */
+  remove(box: WorldBox): boolean {
+    const index = this.boxes.indexOf(box);
+    if (index < 0) return false;
+    this.eachCell(box, (cell) => {
+      const bucket = this.buckets[cell];
+      if (!bucket) return;
+      const at = bucket.indexOf(index);
+      if (at >= 0) bucket.splice(at, 1);
+    });
+    return true;
+  }
+
+  /** The cells a box is stamped into: the conservative footprint, plus slack. */
+  private eachCell(box: WorldBox, fn: (cell: number) => void): void {
+    // Conservative footprint: the rotated half-diagonal, plus the query slack.
+    const reach =
+      Math.hypot(box.w, box.d) / 2 +
+      (box.h / 2) * Math.abs(Math.sin(box.rotX)) +
+      MAX_RADIUS;
+    const minX = this.clampCell(this.toCell(box.cx - reach));
+    const maxX = this.clampCell(this.toCell(box.cx + reach));
+    const minZ = this.clampCell(this.toCell(box.cz - reach));
+    const maxZ = this.clampCell(this.toCell(box.cz + reach));
+    for (let cx = minX; cx <= maxX; cx++) {
+      for (let cz = minZ; cz <= maxZ; cz++) fn(cz * this.dim + cx);
     }
   }
 

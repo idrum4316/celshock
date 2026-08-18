@@ -270,11 +270,12 @@ export class NetSoldier implements Combatant, RagdollSubject {
     if (!this.enabled) return;
 
     if (dead > 0) {
-      // The stance goes in with it: the authority stops accepting moves from a
-      // dead player, so `crouch` holds at whatever they were in when they were
-      // hit, and the collapse unfolds it rather than standing the body up on
-      // the frame it died.
-      animateSoldier(this.rig, 0, 0, 0, 0, Math.min(1, dead), crouch);
+      // A body the pool took is handled above and never reaches here, so this
+      // is a death the client refused — one past the view distance, which is
+      // where the rig has already stopped being drawn. There is nothing to
+      // pose: it keeps the stance it was hit in until `dead` reaches 1 and the
+      // branch above hides it. What ran here was the collapse tween, and it
+      // went with the rest of them.
       return;
     }
 
@@ -302,7 +303,6 @@ export class NetSoldier implements Combatant, RagdollSubject {
       moving,
       pitch,
       wrapAngle(yaw - bodyYaw),
-      0,
       crouch,
     );
   }

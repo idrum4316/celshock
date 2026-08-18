@@ -87,7 +87,10 @@ import { CombatSystem, type Hittable } from "../systems/CombatSystem";
 import { ConquestSystem } from "../systems/ConquestSystem";
 import { DeathCam } from "../systems/DeathCam";
 import { GrassSystem } from "../systems/GrassSystem";
+import { DebrisSystem } from "../systems/DebrisSystem";
+import { GlassSystem } from "../systems/GlassSystem";
 import { GrenadeSystem } from "../systems/GrenadeSystem";
+import { PhysicsWorld, type HavokInstance } from "../systems/PhysicsWorld";
 import { RagdollSystem } from "../systems/RagdollSystem";
 import { LightingSystem } from "../systems/LightingSystem";
 import { ShadowSystem } from "../systems/ShadowSystem";
@@ -164,8 +167,14 @@ export class Game {
   private combat: CombatSystem;
   /** Thrown grenades — the one thing on the map that is not hitscan. */
   private grenades: GrenadeSystem;
-  /** Corpses under physics. The only Havok in the game, and optional. */
+  /** The only physics engine in the game, and the two things that use it. */
+  private physics: PhysicsWorld;
+  /** Corpses under physics. */
   private ragdolls: RagdollSystem;
+  /** Glass shards. The second physics client. */
+  private debris: DebrisSystem;
+  /** Breakable glazing — the one part of the world that is not static. */
+  private glass: GlassSystem;
   /** The player's own death: a stand-in body, and the camera that watches it. */
   private deathCam: DeathCam;
   private aimAssist: AimAssistSystem;
@@ -402,7 +411,14 @@ export class Game {
   private playerKills = 0;
   private playerDeaths = 0;
 
-  constructor(canvas: HTMLCanvasElement) {
+  /**
+   * `havok` is the instantiated WASM module, awaited by `main.ts` before this
+   * constructor is reached — see `PhysicsWorld`. It is a constructor argument
+   * rather than something this file loads because the engine is REQUIRED: a
+   * failure is the boot screen's business, beside "no WebGL2", and nothing in
+   * here has to be written twice for a machine that never got it.
+   */
+  constructor(canvas: HTMLCanvasElement, havok: HavokInstance) {
     this.canvas = canvas;
     // **No MSAA, and that is a saving rather than a downgrade.** Asking for it
     // gave a 4x multisampled DEFAULT framebuffer — but the pipeline runs FXAA,
@@ -553,11 +569,16 @@ export class Game {
     this.mapBuilder = new MapBuilder(this.scene, this.mats, this.lighting);
     this.combat = new CombatSystem(this.scene, this.mats);
     this.grenades = new GrenadeSystem(this.scene, this.mats);
-    this.ragdolls = new RagdollSystem(this.scene);
-    // Fire and forget: the WASM lands whenever it lands, and until it does
-    // every death takes the collapse tween. Not awaited anywhere — a physics
-    // engine must never stand between the player and the first frame.
-    this.ragdolls.init();
+    // The one physics engine, and its two clients. `PhysicsWorld` is INJECTED
+    // into both rather than imported by either — see its header, and the
+    // `BattleSystem`←`CombatSystem` precedent in CLAUDE.md. It is stood up
+    // synchronously on the module `main.ts` already awaited, so both clients
+    // build their pools in their own constructors and nothing below ever has
+    // to ask whether physics has arrived yet.
+    this.physics = new PhysicsWorld(this.scene, havok);
+    this.ragdolls = new RagdollSystem(this.scene, this.physics);
+    this.debris = new DebrisSystem(this.scene, this.mats, this.physics);
+    this.glass = new GlassSystem();
     this.deathCam = new DeathCam(this.scene, this.mats);
     this.aimAssist = new AimAssistSystem(this.scene);
     this.battle = new BattleSystem(this.scene, this.mats, this.combat);
@@ -653,16 +674,16 @@ export class Game {
     };
     // The death cam offers and retires its body through the same pool every
     // bot goes through — a callback rather than an import, because a system
-    // may not reach into another one. Its default is the refusal, so the
-    // collapse tween is what an unwired cam falls back to.
+    // may not reach into another one.
     //
-    // The `true` is the priority offer, and this is the only place it may be
-    // passed: the cam is four seconds of one body, and a pool held by four
-    // bot corpses less than `sinkStart` old — which is what a firefight the
-    // player lost looks like — would otherwise spend that shot on a corpse
-    // standing to attention. See `RagdollSystem.takeSlot`.
+    // It used to pass a `priority` flag here, the one place it was allowed,
+    // so a pool held by four bot corpses could not spend the cam's four
+    // seconds on a body standing to attention. Every offer evicts the oldest
+    // corpse now, and the cam's body is the freshest in the pool for the whole
+    // shot — so it is protected by the ordering rather than by a flag. See
+    // `RagdollSystem.takeSlot`.
     this.deathCam.onSpawnRagdoll = (corpse) =>
-      this.ragdolls.spawn(corpse, this.cameraSys.camera.position, true);
+      this.ragdolls.spawn(corpse, this.cameraSys.camera.position);
     this.deathCam.onRetireRagdoll = (corpse) => this.ragdolls.retire(corpse);
   }
 
@@ -744,6 +765,29 @@ export class Game {
     // on this — distance, rate, the voice reserve — is on the far side, with
     // the budget it protects.
     this.combat.onImpact = (at, kind) => this.sfx.impact(at, kind);
+    // The segment a round flew, offered to the glass. Every round from every
+    // shooter comes through here, so the sweep is bounded on the far side and
+    // this is one call.
+    //
+    // **The client is authoritative over glass only when there is no server.**
+    // In a netplay round its own shot is a prediction: the pane goes and the
+    // shards fly at once, and the collider is left standing until the
+    // authority's `glass` event confirms it. Bots' rounds in a netplay round
+    // decide nothing at all here — a bot on this side is a body being drawn,
+    // and `BattleSystem` is not stepped in a match.
+    this.combat.onShotPath = (origin, dir, dist) => {
+      this.glass.shoot(origin, dir, dist, !this.net);
+    };
+    // A pane going in: the crack, and the shards. `at` is the crossing point
+    // and `dir` the round's own direction, which is what throws them — but the
+    // burst is cut from the PANE, so the sheet is what it is handed. The map is
+    // where that comes from rather than the event, because the pane's index is
+    // its identity on both sides of the wire and its geometry is the map's.
+    this.glass.onBreak = (pane, at, dir) => {
+      this.sfx.impact(at, "glass");
+      const geom = this.map?.panes[pane];
+      if (geom) this.debris.burst(geom, at, dir, this.cameraSys.camera.position);
+    };
     this.battle.spawnPointFor = (bot) => this.spawnPointFor(bot.team);
     // Squad orders are planned as a group, so squads can be spread across
     // objectives — or deliberately stacked on the one that decides the round.
@@ -1251,9 +1295,6 @@ export class Game {
     // blur's own toggle takes the grade off and puts it back to keep the
     // chain's tail, so the grade has the last word on whether it is attached.
     this.post.setEnabled(this.settings.horrorGrade);
-    // Turning it off drops any body still falling, which is the honest
-    // response to "stop doing this" — the tween takes over from the next death.
-    this.ragdolls.setEnabled(this.settings.ragdolls);
     // The look speeds go to the camera and stop there: the aim assist reads its
     // own bound off `stickYawRate`, which already carries the stick's.
     this.cameraSys.setLookScale(
@@ -2330,11 +2371,17 @@ export class Game {
     // the map's own mist and moon, which are what colour the blast dust.
     this.grenades.setTerrain(map.terrain);
     this.grenades.setEnvironment(environment);
-    // The corpses' static world. Same reason the grenades are cleared above:
-    // a physics world still holding shapes built from the map that was just
-    // disposed is geometry that no longer exists, and in the editor that means
-    // in the middle of a rebuild. Editor builds register nothing at all.
-    this.ragdolls.setMap(map, opts?.editor === true);
+    // The static world corpses and shards land on. Same reason the grenades are
+    // cleared above: a physics world still holding shapes built from the map
+    // that was just disposed is geometry that no longer exists, and in the
+    // editor that means in the middle of a rebuild. Editor builds register
+    // nothing at all.
+    this.physics.setMap(map, opts?.editor === true);
+    // The panes, and the collider meshes behind the few that are barriers. Same
+    // reason as every line above it: a system holding last build's geometry is
+    // holding meshes that are already disposed, and glass is the one that would
+    // then write vertices into them.
+    this.glass.setMap(map);
     return map;
   }
 
@@ -2454,6 +2501,7 @@ export class Game {
     // Every rig goes back to the pool restored; a corpse cannot outlive the
     // round it fell in.
     this.ragdolls.reset();
+    this.debris.reset();
     this.conquest.start(map);
     // The flags' markers read the same radius ConquestSystem tests against,
     // and follow the same terrain the ring is drawn across.
@@ -2464,6 +2512,11 @@ export class Game {
     // welcome beat this build; when it did not, the welcome applies it itself.
     // Either way it goes in through the one funnel — see `applyPlayerTeam`.
     this.applyPlayerTeam(this.net?.seated ? this.net.team : 0, map);
+    // …and the glass as the authority left it, for the same "either side of the
+    // build" reason: a joiner mid-round has missed every break in it, and the
+    // welcome may have landed before this map existed to apply them to. See
+    // `NetSession.brokenPanes`, and `onSeated` for the other half.
+    if (this.net?.brokenPanes.length) this.glass.catchUp(this.net.brokenPanes);
     // …and offline they take a SLOT on that side rather than standing beside
     // the roster: the bot in it is benched, so the fight is eight a side with
     // the player as one of the eight. In a match the authority does this on
@@ -2909,6 +2962,11 @@ export class Game {
           return;
       }
       if (team !== this.player.team) this.applyPlayerTeam(team, this.map);
+      // The welcome landed AFTER the build, so the glass it named has to be
+      // applied here. `buildRound` covers the other order and `catchUp` is
+      // idempotent, so exactly one of the two does the work and neither has to
+      // know which.
+      if (net.brokenPanes.length) this.glass.catchUp(net.brokenPanes);
       // A seat is a body the authority is holding until it is ASKED for, and
       // this callback is raised again on every reconnect — where the client is
       // usually in the middle of the round it thinks it is still playing. Its
@@ -2945,18 +3003,17 @@ export class Game {
 
     net.onEvent = (event) => this.onNetEvent(event);
 
-    // Somebody else's body went down. The same pool, the same offer and the
-    // same five refusals every bot's corpse goes through — the only difference
-    // is that offline `registerBotKill` reaches this line having just charged a
-    // ticket and written a killfeed line, and here the authority did both
-    // before the news arrived. A callback rather than a reach into the roster
-    // for the reason every other cross-system effect in this file is one.
+    // Somebody else's body went down. The same pool and the same offer every
+    // bot's corpse goes through — the only difference is that offline
+    // `registerBotKill` reaches this line having just charged a ticket and
+    // written a killfeed line, and here the authority did both before the news
+    // arrived. A callback rather than a reach into the roster for the reason
+    // every other cross-system effect in this file is one.
     //
-    // Not the priority offer: that is the death cam's alone, and a full pool
-    // refusing a body across the square is the pool working. The collapse tween
-    // the server is already driving through `EntityState.dead` is what a
-    // refusal falls back to, which is why that tween is load-bearing on this
-    // path exactly as it is on the bots'.
+    // The one refusal left is the view distance, and a body refused there is
+    // one the server's own `EntityState.dead` will hide on its clock — see
+    // `NetSoldier`'s dead branch, which is all that is left of the tween that
+    // used to cover the other four.
     net.roster.onDeath = (soldier) =>
       this.ragdolls.spawn(soldier, this.cameraSys.camera.position);
     net.roster.onRetire = (soldier) => this.ragdolls.retire(soldier);
@@ -3243,6 +3300,21 @@ export class Game {
         this.onExplosion(this.netDamageFrom);
         break;
 
+      // The authority's word on the glass. It arrives for our OWN shots too,
+      // and that is what completes them: `onShotPath` predicted the pane away
+      // and left the collider standing, and this is the half that takes it out
+      // of the world. `applyBreak` is idempotent for the visual and reports
+      // false for a pane already gone, so a predicted break plays its shards
+      // once and this call is silent.
+      case "glass": {
+        this.netDamageFrom.set(event.at[0], event.at[1], event.at[2]);
+        this.netGlassDir.set(event.dir[0], event.dir[1], event.dir[2]);
+        for (const pane of event.panes) {
+          this.glass.applyBreak(pane, this.netDamageFrom, this.netGlassDir, true);
+        }
+        break;
+      }
+
       case "spawn":
         break;
     }
@@ -3370,6 +3442,8 @@ export class Game {
 
   /** Scratch for a networked damage bearing; never allocated per hit. */
   private readonly netDamageFrom = new Vector3();
+  /** The same, for the direction a round crossed a pane it broke. */
+  private readonly netGlassDir = new Vector3();
   /**
    * The same, for where a round came closest on its way past.
    *
@@ -3452,7 +3526,19 @@ export class Game {
     this.updateNet(dt);
     this.combat.update(dt);
     this.grenades.update(dt);
+    // The engine BEFORE its two clients, always. A corpse tested for stillness
+    // or a shard aged before its own step would be reading last frame's
+    // velocities — and this is the only place the world is stepped:
+    // `scene.physicsEnabled` is false precisely so that a pause, the deploy map
+    // and the menu, all of which render, cannot advance it.
+    this.physics.update(dt);
     this.ragdolls.update(dt);
+    this.debris.update(dt);
+    // A pane can break while the local player is on the deploy screen — the
+    // authority is running the round without them — and the rebuild it owes has
+    // to drain here too, or a whole deployment's worth of breaks lands as one
+    // hitch on the frame they spawn.
+    this.glass.update();
   }
 
   /**
@@ -3582,10 +3668,22 @@ export class Game {
     this.grenades.update(dt);
     // After the grenades, because a blast kill resolves in there — so a body
     // taken this frame gets its first step this frame rather than hanging in
-    // the air for one. This is the ONLY place the physics world is stepped:
-    // `scene.physicsEnabled` is false precisely so that a pause, the deploy
-    // map and the menu — all of which render — cannot advance it.
+    // the air for one. Together with the one in `updateNetWorld` this is the
+    // ONLY place the physics world is stepped: `scene.physicsEnabled` is false
+    // precisely so that a pause, the deploy map and the menu — all of which
+    // render — cannot advance it.
+    //
+    // The ENGINE first and its two clients after, always: a corpse tested for
+    // stillness or a shard aged before its own step would be reading last
+    // frame's velocities.
+    this.physics.update(dt);
     this.ragdolls.update(dt);
+    this.debris.update(dt);
+    // Last, and it is not an effect: this drains the flow-field rebuild a
+    // broken pane owes, one field per frame. After the bots on purpose — a
+    // field swapped in mid-frame would be read by half this frame's think ticks
+    // and not the other half, and next frame's are the ones that should see it.
+    this.glass.update();
     return true;
   }
 

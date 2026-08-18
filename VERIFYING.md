@@ -15,6 +15,15 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   Coldharbour's 320) — force a
   skirmish by overriding `battle.spawnPointFor`, or drive rules directly with
   `conquest.update(1/60, fakeCombatants)` in a loop.
+- **`window.__celshock` now appears one WASM download later than it used to.**
+  `main.ts` awaits `loadHavok()` before constructing `Game`, so a script that
+  polls for the handle is waiting on the physics binary as well as on the bundle
+  — give `waitForFunction` a generous timeout and do not read the absence of the
+  handle as a construction failure. The upside is that `g.physics.plugin` and
+  both pools are non-null on the FIRST evaluate, so nothing has to wait for the
+  engine separately. To exercise the failure branch, `page.route("**/*.wasm", r
+  => r.abort())` before `goto` and assert on `#boot.failed`'s message; the game
+  is never constructed, so there is no handle at all on that path.
 - **`page.screenshot()` waits for the load event, so it cannot photograph the
   boot screen.** Hold the entry chunk back with `page.route` and the shot comes
   back showing the menu, taken seconds later once the hold expired — the DOM
@@ -182,11 +191,108 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   timing and give are not. The swap's transient will fool the sight check: taken
   just before a reading it leaves the weapon halfway up and measures as a sight
   ~0.22 m low, so watch `player.swapT` reach -1 AND the sway decay first.
+- **Glass is testable without firing a shot, and the sweep is a pure function.**
+  `g.glass.sweep(origin, dir, maxDist)` returns the panes a segment crosses,
+  nearest first, and `g.glass.shoot(origin, dir, maxDist, true)` breaks them and
+  returns which. Both take real `Vector3`s — there is no `BABYLON` global on the
+  page (ES modules), so build them from `g.player.position.constructor`. Four
+  things that have already cost time:
+  - **Aim from a pane's own normal, not from the camera.** A `WorldPane` is an
+    oriented box; step out along its thin axis rotated by `rotY` (local +z is
+    world `(sin, cos)`) and the segment crosses exactly that pane. Aiming
+    sideways along a tower's face legitimately crosses two, which reads like a
+    bug and is not.
+  - **A muzzle INSIDE a pane is not a crossing and is reachable.** A cosmetic
+    pane carries no collider, so a body can stand in one — a tower's curtain wall
+    is a 0.14 m sheet hanging off the shaft. `segmentHitsPane` requires `t0 > 0`
+    for that reason. A test that places its origin near a tower will otherwise
+    "break" a 32 m elevation it never aimed at, which was the only case a
+    brute-force control over 600 shots ever disagreed about.
+  - **The break is idempotent and a second shot down the same line returns an
+    empty array** — assert on that rather than on a count, or a re-run of the
+    same script reads as a broken sweep.
+  - **A pane's normal has no preferred SIGN, and half the panes on a map point
+    into the building.** `+z` local is one face and the shooter is as likely to
+    belong on the other, so a script that stands off `+n` unconditionally puts
+    its muzzle inside a tower shaft — which reads as the shard throw going the
+    wrong way (`DebrisSystem` drops a cosmetic pane's glass toward the SHOOTER,
+    and it did exactly that: into the shaft the shooter was standing in). Pick
+    the side that is open air first: a point-in-box test over
+    `map.colliderBoxes` is four lines and settles it.
+  - **A barrier pane is what to test the BODY half on**, and there are twelve on
+    Coldharbour against 6,234 cosmetic ones (`map.panes.filter(p => p.box >= 0)`).
+    `map.obstacles.resolve(x, y, z, CONFIG.nav.bodyRadius, out)` reports a
+    push-out of ~0.4 m at an intact one and nothing at a broken one; that pair is
+    the assertion, not a screenshot.
+- **How the glazing LOOKS cannot be judged from one screenshot, and that is the
+  feature rather than a testing problem.** It is a Fresnel between the tint of
+  what is behind the pane and a reflection of the sky, so square-on and down the
+  street are two different materials to the eye: shoot both, or a value tuned on
+  one will be wrong on the other. Two standing checks are cheap and are worth
+  asserting instead of eyeballing — `map.paneGroups.every(g =>
+  !g.mesh.renderOutline)` and no pane mesh in
+  `g.shadows.generator.getShadowMap().renderList` (37 pane meshes against 257
+  casters on Coldharbour). A pane that gains either is drawn as a dark plate or
+  lays a hard shadow through clear glass.
+- **Whether the glazing is DRAWN at all is a separate question from how it
+  looks, it is a number, and it has to be asked at RANGE** — that is where
+  glass past ~100 m was found not to be drawn at all
+  (`CelMaterialFactory.GLASS_DEPTH_UNITS`). The reading is the pane's own
+  contribution: grab a patch, `paneGroups[i].mesh.setEnabled(false)`, grab
+  again, and difference the two. Zero means the pane lost the depth test, not
+  that it is subtle. Three things make the sweep say something:
+  - **Hold the incidence angle and the on-screen size still, or the answer is
+    about the Fresnel instead.** Stand on the pane's own normal at its own
+    height (a `WorldPane`'s local +z is world `(sin rotY, cos rotY)`) and set
+    `cam.fov = 2 * atan(k / dist)`, so the only thing changing down the sweep
+    is the distance.
+  - **Hide the rest of the map rather than hunting for a clear sightline** —
+    `map.visuals`, `setEnabled` on a radius around the target. Above ~100 m
+    every line across Coldharbour crosses something, and a blocked shot reads
+    exactly like a pane that is not drawn.
+  - **`markVisual` freezes the world matrices**, so moving a pane group to test
+    a standoff silently does nothing: `unfreezeWorldMatrix()` and
+    `computeWorldMatrix(true)` first. Measured that way, a pane at 220 m needs
+    ~0.2 m of clear air in front of the wall before the depth buffer can
+    separate the two, against the 0.04 m the builder gives it.
+- **Placing a camera on Coldharbour by hand lands it inside a building far more
+  often than it looks like it should.** The towers sit on a 30 m grid and are 26 m
+  across, so the gaps are metres; the four avenues (`x` and `z` at ±40 and ±120)
+  and the central square are the reliably open ground. Standing in a tower reads
+  as a black frame with a sliver of city in it and looks like a render bug.
+- **The flow-field rebuild is what a break costs, and it is measurable in one
+  line**: `map.nav.rebuildField(name)` for each of `map.nav.fieldNames`.
+  Measured headless on Coldharbour — 4.7 ms for one and 15.9 ms for all seven,
+  over 183k surfaces — which is why `GlassSystem.update` drains one per frame
+  rather than all of them on the frame a window goes in.
+- **Shards step like a ragdoll, and the ENGINE steps separately from its
+  clients**: `g.physics.update(1/60)` then `g.debris.update(1/60)` in a loop,
+  in that order. `g.debris.burst(pane, at, dir, camPos)` takes the `WorldPane`
+  itself — the burst is CUT from that face — and returns whether it was
+  accepted: false past the distance gate, and false while every slot holds a
+  burst younger than `CONFIG.glass.shardSteal`. Both still leave the pane
+  broken, because the break is the world changing and the shards are only what
+  it looked like. There is no fallback to reach: Havok is required, so every
+  burst is under the solver or is not drawn. Three things worth asserting rather
+  than eyeballing, all of them off `g.debris.bursts[i].shards[j].mesh`:
+  - **The pieces start ON the pane.** Project each shard onto the face (across
+    is local +x or +z, whichever is the sheet's long axis) and both coordinates
+    are inside the pane's own half-extents, with the out-of-plane offset a few
+    centimetres of standoff and nothing more.
+  - **The pieces are cut to the pane**: `mesh.scaling` is the cell size, so it
+    is ~0.38 m for a 1.3 x 1.5 m window and ~1 m for a shopfront bay, and the
+    twelve of them come to ~77% of the pane's area either way.
+  - **The gate is an apparent size, not a distance**: `shardDistance` is quoted
+    for a piece of `shardMax`, so a burst of small pieces is refused at a range
+    a burst of panels is accepted at. Test it with the pane, not with a number.
 - **A ragdoll is steppable synchronously, like a grenade, and must be**:
   `g.ragdolls.update(1/60)` in a loop runs a whole tumble, settle, sink and retire
   in a fraction of a second. Move a bot, `bot.takeDamage(999, shooterOrigin)`, then
-  `g.ragdolls.spawn(bot, camPos)`, which returns whether it was accepted. Four
-  traps. **Reading a rig joint's world position needs `computeWorldMatrix(true)`
+  `g.ragdolls.spawn(bot, camPos)`, which returns whether it was accepted — and
+  the only thing that makes it false is the view distance, since a full pool
+  evicts its oldest corpse rather than refusing. (A useful shape for that: offer
+  a dozen staged bodies in a row, stepping once between each so none is merely
+  sinking, and assert every one comes back true.) Four traps. **Reading a rig joint's world position needs `computeWorldMatrix(true)`
   first** — outside the render loop `getAbsolutePosition()` is a stale cache, and a
   joint that looks pinned while its proxy falls is that, not a broken hand-off. **A
   bot reused between takes needs `alive = true` and `hp` restored.** **The camera's
@@ -218,10 +324,14 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   `g.deathCam.stop()` + `g.state = "playing"` + `g.player.fullReset()` gets back
   out. The corpse rig is built ONCE per process and never rebuilt, so a leak is
   permanent: assert `rotationQuaternion === null` on all nine posed joints
-  afterwards, plus each one's parent and local position against `rig.rest`. The
-  fallback path is reached with `g.ragdolls.setEnabled(false)` before the kill;
-  check the rig is STILL ENABLED past `bots.death.hideTime`, the one way it differs
-  from `Bot`'s copy of the tween.
+  afterwards, plus each one's parent and local position against `rig.rest`. There
+  is no fallback path left to reach — the body is at the camera, so the distance
+  gate cannot refuse it, and a full pool evicts its oldest corpse instead of
+  saying no. **`deathCam.start(feet, yaw, eye, forward, from, damage, crouch)` is
+  callable directly**, which gets the whole ragdoll-and-restore check (including a
+  crouched death: pass `crouch: 1`) without spending 80 s of wall clock on the
+  cam's own clock. Step `g.physics.update(1/60)` + `g.ragdolls.update(1/60)` in a
+  loop, then `g.deathCam.stop()` and assert on `rig.rest`.
 - **A pixel diff needs the frame FROZEN, and three separate things move it.**
   Measured noise floor between two consecutive grabs with nothing changed at all:
   **42-47% of pixels**, which swamps anything being looked for. The grade's grain
@@ -232,16 +342,18 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   OUTSIDE `updateGameplay`. Check the floor by grabbing twice and diffing before
   trusting any measurement; a method that cannot reach zero is not measuring what
   you think.
-- **The pause lid is a free camera.** `g.state = "paused"` stops `updateGameplay`
-  while the scene still renders, so nothing overwrites `cameraSys.camera` and it
-  can be placed by hand — `cam.position.set(...)` plus `cam.setTarget(...)` frames
-  a roofline or a shadow edge from anywhere, which beats hunting for a vantage by
-  walking the player. Two caveats: `camPos` is a uniform pushed in
-  `updateGameplay`, so it stays at the player's last value and the fog, mist and
-  rim in that frame are computed from the wrong eye — fine for geometry and
-  shadows, wrong for anything about distance. And the HUD does not appear in a
-  canvas grab, so the pause card is invisible to `readPixels` even though a
-  Playwright `screenshot()` shows it.
+- **The pause lid is a free camera**, and it is raised with `g.raiseLid("paused")`
+  — **`g.state` is a getter and assigning it throws**, since nothing in the
+  codebase assigns a state (see `Game`'s three moves). The lid stops
+  `updateGameplay` while the scene still renders, so nothing overwrites
+  `cameraSys.camera` and it can be placed by hand — `cam.position.set(...)` plus
+  `cam.setTarget(...)` frames a roofline or a shadow edge from anywhere, which
+  beats hunting for a vantage by walking the player. The shader's eye follows:
+  `mats.updateCamera` is pushed from `tick` in every state, so the fog, mist,
+  rim and the glazing's reflection are all computed from where the camera
+  actually is. One caveat left: the HUD does not appear in a canvas grab, so the
+  pause card is invisible to `readPixels` even though a Playwright
+  `screenshot()` shows it.
 - **One vantage per process run when the numbers matter.** Cycling
   `paused → playing → paused` between vantages lets a frame of gameplay run, and
   the player moves, falls or gets shoved in it. The same measurement taken as the

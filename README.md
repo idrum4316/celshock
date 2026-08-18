@@ -229,7 +229,8 @@ Babylon primitives and merged per colour, all audio is synthesized WebAudio,
 the cel look is a custom `ShaderMaterial` with 16 dynamic point-light slots,
 and the 16 bots steer on a precomputed nav grid with one flow field per
 objective — no pathfinding at all. The one engine in the tree is Havok, which
-does nothing but drop the dead.
+does nothing but drop the dead and scatter broken glass. It is required — the
+boot screen waits for it, like WebGL2 — and nothing falls any other way.
 
 **Contributor/agent documentation lives in [`CLAUDE.md`](CLAUDE.md)** —
 architecture, load-bearing invariants, and conventions, with one contract per

@@ -1,35 +1,111 @@
 # Deaths: the one physics engine, and the death cam
 
-Havok's only appearance in the tree — what a ragdoll may and may not touch, why
-the collapse tween stays — and the four seconds after the player is killed. Split
-out of [`CLAUDE.md`](../CLAUDE.md), which keeps the summary; this file is the
-contract for `RagdollSystem` and `DeathCam`.
+Havok's only appearance in the tree — what a ragdoll may and may not touch, and
+why there is nothing standing behind it — and the four seconds after the player
+is killed. Split out of [`CLAUDE.md`](../CLAUDE.md), which keeps the summary;
+this file is the contract for `PhysicsWorld`, `RagdollSystem`, `DebrisSystem`
+and `DeathCam`.
 
-## Deaths, and the one physics engine
+## Havok is required, and the boot screen is where that is enforced
 
-A killed bot falls under **Havok** (`src/systems/RagdollSystem.ts`), and so does the
-stand-in body the death cam stands up. This is the only physics engine in the tree
-and the only place `@babylonjs/havok` is imported. It buys nothing but the fall:
+`main.ts` awaits `loadHavok()` and hands the instantiated module to `Game`,
+which hands it to `PhysicsWorld`'s constructor. A rejection is a boot-screen
+failure message of its own, beside the WebGL2 probe's — the game does not start.
+So there is no state anywhere below in which physics has not arrived, and
+nothing has to ask.
+
+**It was optional and the optional version is what this replaced.** The WASM was
+fetched from inside the `Game` constructor and never awaited, so every falling
+thing needed a second way to fall: `Bot`'s collapse tween for a body, a scripted
+ballistic arc for a burst of shards, `animateSoldier`'s `dead` arm to pose the
+first, `death.collapseTime` to time it, a `ragdolls` setting to choose between
+them, and a `PhysicsWorld` that could stand up, tear down and stand back up
+mid-round. What it bought was a case that does not happen: the binary is
+precached with the rest of the build, and a machine that cannot get 2 MB of
+WASM is not going to run a WebGL2 shooter either. What it cost was two code
+paths for every death, one of them exercised only where nobody was looking.
+
+**Do not reintroduce a fallback.** If the engine is a problem the answer is that
+the game does not start, which is a sentence on the boot screen rather than a
+second renderer for corpses.
+
+## The engine is a system of its own, and owns no bodies
+
+`src/systems/PhysicsWorld.ts` holds the `HavokPlugin`, the map as one static
+body and the fixed-substep clock. It is the only place `@babylonjs/havok` is
+reached and the only place `_step` is called. It has two clients —
+`RagdollSystem` for corpses and `DebrisSystem` for the shards a broken pane
+throws — and both are handed it by `Game` in their constructor, which is the
+`BattleSystem`←`CombatSystem` precedent in `CLAUDE.md`: injected, never imported
+system-to-system.
+
+**It was `RagdollSystem`'s privately, and the split is not tidiness.** Two things
+made a second consumer impossible rather than merely awkward, and both would
+have failed silently:
+
+- **The step ran only while a corpse slot was unfrozen.** A shard would have sat
+  motionless whenever nobody was dying. That test is now a register: each client
+  answers `physicsActive()` and the engine advances if anybody says yes, so a
+  quiet round still costs nothing at all.
+- **The plugin was a private field**, so the alternative was a second
+  `enablePhysics` on the same scene, which is not a second world but the same
+  one with two owners.
+
+There was a third and it is now moot: the ragdoll SETTING called `clearWorld()`,
+so glass would have fallen through the floor for anyone who turned corpses off.
+That setting is gone with the fallbacks it chose between, and the teardown it
+abused belongs to the map alone — `setMap` is its only caller, which is why the
+client hook is named `worldCleared` rather than `physicsStopped`.
+
+Two things stayed with the clients rather than moving. `afterFirstStep` — the
+teleport read-in, one substep into a frame and no further — is per client
+because each owns its own freshly-spawned bodies. And the pool each builds is
+its own, built in its own constructor now that the engine is up before either
+system exists, for the reason both are built up front at all: a shape or a
+constraint made at the moment it is wanted is a hitch on the worst frame
+available.
+
+**Collision groups are allocated in one place.** Bit 0 is the world's; slot `i`
+of the ragdoll pool takes `1 << (1 + i % 30)`, so bits 1 through 30; and
+`DEBRIS_GROUP` is bit 31, shared by every shard and masked to the world alone —
+shards must not shove corpses (a body knocked over by falling glass is a corpse
+DECIDING something) and shard-on-shard buys a pile nobody looks at for a solver
+cost quadratic in the burst.
+
+## Deaths
+
+A killed bot falls under that engine (`src/systems/RagdollSystem.ts`), and so does
+the stand-in body the death cam stands up. It buys nothing but the fall:
 **nothing here feeds navigation, cover or hit detection.** A corpse is not in
 `NavGrid`, not in `ObstacleField`, not in `hittablesAgainst`; bots walk through
 bodies and rounds pass through them. Do not "fix" that by feeding corpses into
-`ObstacleField`, whose buckets are baked at map load.
+`ObstacleField`, whose buckets are baked at map load and change for exactly one
+reason that is not this one (see `BoxSpec.glass`).
 
-**The collapse tween in `Bot.update`'s dead branch is not legacy — it is the floor
-under all of this**, and it runs on five separate refusals: the WASM has not loaded,
-the WASM failed, the setting is off, the pool is full, or the death was past
-`death.maxDistance`. Deleting it is the single worst change available here. The tween
-is exempt from the pose-freeze LOD *because it is five property writes*; **a ragdoll
-needs no such exemption**, because it poses through the proxy nodes its joints are
-parented to and the solver writes those whatever the LOD says. Reading those two as
-one fact is what pinned `maxDistance` to `lodFreezeDistance` (35) and stopped anything
-dying across the square from falling over at all — a marksman rifle's whole range.
+**There were five refusals and there is ONE.** The WASM not having loaded, the
+WASM having failed and the setting being off are all answered by the boot gate
+above; a full pool no longer refuses but evicts (see below). What is left is a
+death past `death.maxDistance`, and that number has to be exactly where a rig
+stops being drawn rather than merely near it — because a body refused inside the
+fog would stand where it died until `death.hideTime`, with the tween that used to
+lay it down gone. `Bot.update`'s dead branch is what remains: while a ragdoll owns
+the joints it stands aside, and otherwise it hides the rig on the clock and poses
+nothing.
+
+That tween was exempt from the pose-freeze LOD *because it was five property
+writes*; **a ragdoll needs no such exemption**, because it poses through the proxy
+nodes its joints are parented to and the solver writes those whatever the LOD says.
+Reading those two as one fact is what pinned `maxDistance` to `lodFreezeDistance`
+(35) and stopped anything dying across the square from falling over at all — a
+marksman rifle's whole range. The two are still not the same question, and the
+distinction is why `maxDistance` may only ever be `lodDisableDistance`.
 
 **A crouch was a sixth refusal and is not one any more, and what bought it back is
 the bone table.** A leg was ONE rigid 0.72 m bone oriented by the hip joint, which a
 folded leg is nowhere near, so a body caught mid-crouch had to be refused and take
-the tween — which meant the one stance a player holds while being shot at was also
-the one stance that could not fall over. There was no pose that fixed it either:
+the tween that then existed — which meant the one stance a player holds while being
+shot at was also the one stance that could not fall over. There was no pose that
+fixed it either:
 straight legs under lowered hips reach through the floor, and lifting the hips to
 meet them is half a metre of pop on the frame of death. So the leg became three
 bones — thigh, shin and boot, hung off the same hip, knee and ankle the crouch bends
@@ -82,15 +158,27 @@ would vanish in plain sight. `config/fogWall.ts` is still its own module for the
 original reason (`config/bots.ts` reads it, and taking it from `index.ts` would
 be an import cycle).
 
-**The pool refuses rather than stealing a live slot, with exactly one exception: the
-death cam's body.** A bot's corpse is one of sixteen; the player's is the sole subject
-of a four-second shot, and a slot is held for the whole `sinkStart` (5 s), so a handful
-of nearby deaths inside five seconds — which is what a firefight the player lost looks
-like — locked the pool and spent that shot on a body standing to attention.
-`RagdollSystem.spawn` takes a `priority` flag for it, `takeSlot` takes the OLDEST
-corpse to honour it, and `Game`'s `onSpawnRagdoll` wiring is the only place that may
-pass it: every priority offer costs a body that was already falling, so a second
-caller would be two claims on one exception.
+**A full pool EVICTS rather than refusing, and `takeSlot` is three tiers deep**: a
+free slot, then a sinking one, then the OLDEST corpse. Only the last costs anything,
+and it is the corpse nearest its own sink and so the one with least left to lose.
+
+This was the death cam's private exception, passed as a `priority` flag from the one
+wiring site allowed to pass it. A bot's corpse is one of sixteen; the player's is the
+sole subject of a four-second shot, and a slot is held for the whole `sinkStart`
+(5 s), so a handful of nearby deaths inside five seconds — which is what a firefight
+the player lost looks like — locked the pool and spent that shot on a body standing
+to attention. Measured at the time: a corpse 0.65 m from the camera refused outright,
+and accepted on the same offer once the four bot corpses had aged past `sinkStart`.
+
+**It is everyone's now because a refusal has nothing to fall back to**, and taking
+the OLDEST is what keeps that safe rather than arbitrary — it protects the death
+cam's body for free, since that body is the freshest in the pool for the whole four
+seconds the camera is on it and is therefore the last one an eviction can reach. What
+this gives up is `GrenadeSystem`'s "refuse rather than steal a live slot", and it
+gives it up knowingly: a corpse yanked mid-tumble is a pop, but so is a corpse that
+never fell, and under a pool eight deep only the second one actually happened.
+`DebrisSystem` still keeps the old rule, because a burst that never played is a
+window that broke without a flourish and nobody can point at it afterwards.
 
 **`maxConcurrent` is what bounds the cost, and it is measured, not reasoned.** Eight
 falling corpses are 0.121 ms/frame against the whole roster's AI at 0.39–0.42 ms in
@@ -103,9 +191,10 @@ FINDINGS #8's older 1.37 ms for four does not reproduce; see the note there.
 - **`scene.physicsEnabled` is FALSE and must stay false.** Babylon steps physics
   from `scene.animate()` on every RENDERED frame, and this game renders in every state
   — so a scene-driven step would leave corpses tumbling under the pause card, under the
-  deploy map and behind the menu. `RagdollSystem.update` steps the world by hand and
-  is called only from `Game.updateGameplay`, which is what a pause already stops.
-  Measured: bit-identical body position across 12 rendered frames while paused.
+  deploy map and behind the menu. `PhysicsWorld.update` steps the world by hand and
+  is called only from `Game.updateGameplay` and `updateNetWorld`, which is what a
+  pause already stops. Measured: bit-identical body position across 12 rendered
+  frames while paused, corpses and shards alike.
 - **Havok never touches a rig node.** It writes pool-owned PROXY `TransformNode`s
   and the rig's joints are parented to those. Havok's sync calls
   `decomposeToTransformNode` on any node with a parent, which force-creates a
@@ -123,7 +212,12 @@ FINDINGS #8's older 1.37 ms for four does not reproduce; see the note there.
   ~733 collider boxes plus the 25 terrain blocks as mesh shapes (the floor has no
   `WorldBox`, hence `GameMap.terrainColliders`). Built in `installMap`, skipped on
   editor builds, and torn down leaf by leaf or the WASM heap grows one map build at a
-  time. Measured 33–50 ms headless, and 25 bodies flat across three rounds.
+  time. Measured 33–50 ms headless, and 25 bodies flat across three rounds. **A
+  pane of glass is in it like any other collider and stays in it after it
+  breaks**: this body is what a corpse and a shard land on, and neither decides
+  anything, so a shard resting against glass a round took out is a cosmetic
+  wrongness lasting a second — against rebuilding a 33–50 ms compound on the
+  frame somebody shot a window.
 - **The knee and the ankle are bones and the rifle is not**, which is the same
   question answered twice: a bone is worth having where the RIG can already put the
   joint somewhere the one box could not follow. The crouch bends knees and ankles, so
@@ -150,6 +244,90 @@ import another one. `Bot` satisfies it structurally and imports nothing, which k
 the one thing the player's corpse needs that a bot's does not: a bot's body outlives
 the death cam's window and goes on its own clock, while the player's has to be gone
 before the deploy screen comes up over it.
+
+## Glass shards
+
+`DebrisSystem` is the engine's second client and follows every rule above, with
+four differences worth stating because each one is the corpse rule NOT applying.
+
+**A shard is a fraction of its PANE, and that is the whole feature.** It threw
+twelve 16 cm chips into an 0.8 m cube at the crossing point, whatever it had
+just broken — which reads against a cottage window and is absurd against a
+shopfront: several square metres of glass vanish in one frame and a handful of
+gravel appears where the round went in, so the eye reads the pane as deleted
+rather than broken. So `burst` takes the `WorldPane` and cuts the burst from it:
+the face is divided into cells of `sqrt(area / shards)` clamped to
+`[shardMin, shardMax]`, a piece fills `shardPack` of its cell, and the pieces are
+laid out ON the face, in its plane, before they are thrown. Measured on
+Coldharbour: 0.38 m pieces from a 1.3 x 1.5 m cottage window and ~1 m ones from a
+shopfront bay, 77% of the pane's own area in both cases, so at t=0 the burst is
+very nearly the sheet that was standing there and the next quarter second is it
+coming apart. Where a pane is bigger than twelve cells the patch is centred on
+the hole and clipped to the face rather than spread thin across it — twelve
+pieces over ninety square metres is confetti — and **the right fix for a pane
+that big is a smaller pane**: see `kit/city.ts`, whose glazing unit is the bay
+its own mullions divide the elevation into.
+
+**A sheet leaves its frame along its own NORMAL**, and the round drags glass
+along its own path only WITHIN the plane. That is not only how a pane fails, it
+is what keeps the pieces out of the wall behind them: all but twelve of
+Coldharbour's panes hang 4 cm off a solid mass, so a burst thrown along the
+bullet spawns bodies inside the shaft and Havok spends the first frames shoving
+them back out. Which side it leaves by is the pane's own answer — a cosmetic
+pane drops its glass toward the shooter, the one side provably open because a
+round crossed it to get here; a barrier pane is a way THROUGH, so its glass goes
+the way the round went, into the room the shot has just opened.
+
+**The collision box is thicker than the piece it stands for**
+(`glass.shardCollide`, 0.09 against a 0.02 m sheet). The floor is a mesh shape
+per terrain block and a 2 cm body slips through the seams between them: measured,
+one or two pieces of every twelve landed, slid, and then sank through the road
+for the rest of the burst. The cost is a piece lying ~3 cm proud of what it
+landed on, which nothing about a dark plate on a dark road shows.
+
+**A shard's body is on the MESH, with no proxy node.** A ragdoll needs proxies
+because Havok's sync force-creates a `rotationQuaternion` on any node with a
+parent and the rig is posed through Euler channels; a shard is parented to
+nothing, posed by nobody and handed back to nothing, so the quaternion Havok
+writes is the only thing that ever orients it. The mesh is a UNIT box scaled per
+burst, which the same sync makes safe: it writes position and orientation onto an
+unparented node and leaves scaling alone. The body is sized by its shape instead,
+and the shapes are cached by rounded size — both dimensions live in
+`[shardMin, shardMax]`, so the cache is a fixed handful and the first burst of a
+given size is the only one that ever builds one.
+
+**The distance gate is its own number, not the fog wall — and it is an apparent
+size.** The three systems that share `EnvironmentSpec.fogEnd` are asking "can
+anything be seen at all", and on Coldharbour that is 480 m. A 16 cm chip is a
+pixel at sixty metres and a 1 m panel is not, so `CONFIG.glass.shardDistance`
+(150) is quoted for a piece of `shardMax` and everything smaller gates nearer in
+proportion — a cottage window's pieces stop at ~44 m. **The BREAK is not gated
+by it**: the pane goes at any range, because that is the world changing rather
+than an effect playing.
+
+**The pool EVICTS, but only what has already landed.** It refused outright
+first, on `GrenadeSystem`'s rule — but a refused burst is a window that came out
+of a building with no glass in it, which is the mismatch this system exists to
+stop. `glass.shardSteal` (1.6 s) is the compromise: a burst still in the air is
+never stolen, because glass that vanishes mid-fall is worse than glass that never
+flew, while one lying on the pavement is fair game.
+
+The budget is one budget with the corpses'. `glass.shards` (12) times
+`glass.maxConcurrent` (4) is 48 bodies, about five corpses — against eight
+corpses (80 bodies) measured at 0.121 ms/frame with the whole roster's AI at
+0.39–0.42 ms in the same run. Raise either and raise the other knowingly.
+
+**The pool is one phase, and it used to be two.** The meshes were built in the
+constructor and `attachBodies` hung rigid bodies on them from a `physicsStarted`
+callback, so a window broken before the WASM landed still threw shards on a
+scripted ballistic arc with the terrain as a floor. The engine is up before this
+system is constructed now, so `buildPool` makes the mesh and its body together
+and a shard has never existed without one. It is still not built on the frame a
+window breaks: 48 boxes, their GL buffers and their shapes are not a cost to pay
+on the frame somebody pulled a trigger, which is `DeathCam`'s reason for
+building its stand-in rig at `startRound`. What a burst DOES pay for on that
+frame is a `reshape` — twelve scalings and twelve shape assignments, and never an
+allocation once that size has been seen.
 
 ## The death cam
 
@@ -187,7 +365,7 @@ without that subtract turns feedback into a punishment.
   because that is where the round landed and what the throw is aimed away from. The
   ROOT does not move — the crouch lives inside the rig, so a root pulled down with it
   puts the feet through the floor. It is the same split `NetPlayer` draws for a remote
-  body. The fallback tween is handed the stance too, and unfolds it on the way down.
+  body.
 - **The camera leaves the head through `CameraSystem.place`, the one exception to
   that system's own invariant**, and `update` is simply not called in that window — so
   no look input, ADS blend, recoil, bob or landing spring advances, and the aim is
@@ -207,11 +385,13 @@ without that subtract turns feedback into a punishment.
   standing body puts the chest at ~1.1 m and a fallen one at ~0.3 m. The joint is read
   with `computeWorldMatrix(true)` first — while the ragdoll owns it, its parent is a
   proxy node the solver moved this frame.
-- **Physics is optional here exactly as for a bot**, and the fallback is `Bot`'s
-  collapse tween with one difference: it is NOT followed by the hide at `hideTime`. A
-  body that vanishes two thirds of a second into a four-second shot of it is the thing
-  this state exists to remove. **A full pool is the one refusal it does not take** —
-  it offers with `priority`, which evicts the oldest corpse; see the ragdoll section.
+- **This body is never refused, and it needs no exception to say so.** It is at the
+  camera, so the distance gate — the pool's one remaining refusal — cannot reach it,
+  and a full pool evicts its oldest corpse, which for the whole four seconds is never
+  this one. The cam used to carry a `priority` flag for that half and a copy of `Bot`'s
+  collapse tween for the other; both are gone, and with them the difference the tween
+  had here (no hide at `hideTime`, because a body that vanishes two thirds of a second
+  into a four-second shot of it is what this state exists to remove).
 - **The pointer lock is deliberately KEPT.** There is nothing to click, and dropping
   it would trip the lock-loss pause on the very frame the shot begins. `enterDeploy`
   releases it one state later — and it is also the single funnel for retiring the body,

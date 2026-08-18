@@ -127,10 +127,11 @@ Two consequences to preserve:
   about.
 - **A person's body falls over on the same field a bot's does.**
   `NetPlayer.deathProgress` is `Bot.deathProgress` derived from the respawn
-  clock, and it rides `EntityState.dead`. Sending a bare `1` instead — which is
-  what it did — makes a killed player VANISH on the tick they die instead of
-  collapsing, and it takes the ragdoll's fallback with it, since a corpse the
-  pool declines has nothing else left to play.
+  clock, and it rides `EntityState.dead`. Both are keyed to `death.hideTime`, and
+  what a client does with the field is hide a body when it reaches 1 — so sending
+  a bare `1` instead, which is what it did, makes a killed player VANISH on the
+  tick they die, and takes the ragdoll with them because the rig is gone before
+  the pool is offered it.
 - **The one thing only a person does is crouch**, and the rig they share can
   pose it: `animateSoldier` takes a stance blend and nothing in the AI ever
   passes one, so a bot's legs stay straight without a second rig or a second
@@ -300,9 +301,9 @@ menu is up.
 The authority decides who died and has already charged the ticket, written the
 killfeed line and started the respawn clock before a client hears about it. What
 is left is a body falling over, and that is the client's alone — the same
-`RagdollSystem` pool, the same five refusals, the same collapse tween underneath
-them as offline. Three things make that work and each has a way of failing
-quietly.
+`RagdollSystem` pool and the same single refusal (past the fog wall) as offline,
+with the same eviction of the oldest corpse when the pool is full. Three things
+make that work and each has a way of failing quietly.
 
 **The trigger is the interpolated death, not the `kill` event.** `NetRoster`
 reads the `alive` edge either side of the one call that can move it and raises
@@ -599,6 +600,12 @@ geometry. A client names a *weapon id* at join; the server validates it against
 the real table and looks up everything it means. The map is built locally on
 both sides from the same layout module.
 
+**A broken pane is the one exception to that last clause, and it is an INDEX
+rather than geometry.** `glass` carries positions in a list both sides already
+hold; nothing about where a pane is, how big it is or what it is made of ever
+crosses. That is the same trade the weapon id makes: a name into a table the
+authority owns, never the table.
+
 **An event with one audience is ADDRESSED, not broadcast and filtered.** Most of
 what `Match` queues is public by nature — a flag changed hands, a body went
 down, a grenade went off, a weapon fired — and every client needs it to draw the
@@ -839,14 +846,32 @@ would wrap a single bounding box around every fence in the village and charge
 every ray for all of them; not merged at all it costs ~17% on every ray in the
 process.
 
-`worldFingerprint` carries `porousBoxes`, `rayGroups`, `rayBoxes` and a hash
-over the ray geometry, because **the nav graph is blind to all of it** — every
-other field in that comparison would match while the two sides resolved
-different shots. Note also that the bake's `sourceHash` covers a map's
-`layout.ts` and `heights.ts` — **a `porous` flag and a `strut` live in a
-BUILDER, so changing one is a bake the staleness guard will not notice. Re-run
-`npm run collision` by hand after touching a collider's flags or a builder's
-collider set.**
+**The bake carries a third list, and it is the one with an ORDER that matters.**
+`panes` is the map's glazing — seven numbers and an index each, the index being
+the pane's own position in `boxes` or -1 for the cosmetic majority that carry no
+collider at all. The authority needs them for two reasons, and the second is the
+one with teeth: it resolves every shot, so it has to know which windows a round
+crossed; and `validateMove` rejects a client standing inside `map.obstacles`, so
+a player who shot out a shopfront and walked through it is snapped back into the
+street unless this side broke the same pane.
+
+**A pane's index in that array is its NAME on the wire**, so the array's order is
+load-bearing in a way `boxes`' is not merely by convention: both processes build
+the list in the same order — placements in layout order, each placement's panes
+in the order its builder declared them — and a disagreement means two sides
+breaking different windows while every other check passes.
+
+`worldFingerprint` carries `porousBoxes`, `rayGroups`, `rayBoxes`, a hash over
+the ray geometry, and `panes`/`paneBarriers`/`paneHash`, because **the nav graph
+is blind to all of it** — every other field in that comparison would match while
+the two sides resolved different shots. `paneBarriers` is counted apart from
+`panes` because it is the half with teeth: a cosmetic pane going missing is a
+window that never breaks, while a barrier pane going missing is geometry one
+side is standing in. Note also that the bake's `sourceHash` covers a map's
+`layout.ts` and `heights.ts` — **a `porous` flag, a `strut` and a `pane` all live
+in a BUILDER, so changing one is a bake the staleness guard will not notice.
+Re-run `npm run collision` by hand after touching a collider's flags, a
+builder's collider set, or its glazing.**
 
 **`npm run parity` is the guard on that claim** and should be run after anything
 that touches the world layer. It compares the nav GRAPH, not the boxes: a box
@@ -861,6 +886,52 @@ do not "tidy" it.
 `npm run build` refuses to proceed when a bake is older than the layout it came
 from. A stale bake is a server whose walls stand somewhere else from its
 clients', and it is invisible until somebody is shot through a house.
+
+## Glass
+
+**A pane going in is the only thing a client may DECIDE about the world, and it
+may only decide half of it.** The split is the point:
+
+- The **visual** is predicted. `CombatSystem.onShotPath` runs on the client's own
+  shot and `GlassSystem.shoot(..., authoritative = false)` collapses the pane and
+  throws the shards on the spot. There is nothing to be wrong about — 6,234 of
+  Coldharbour's 6,246 panes have no collider at all, so a predicted break of one
+  changes nothing but pixels, and a window that shatters a round trip after the
+  round went through it is a window that reads as broken by somebody else.
+- The **collider** is not. A barrier pane keeps blocking a body until the
+  authority's `glass` event says otherwise, which is the one round trip that
+  matters: it is not long enough to walk through a shopfront, and it is the
+  difference between an early break and a client standing where the server still
+  has a wall. `validateMove` is the thing that would report it, by snapping the
+  player back into the street.
+
+**The event carries the panes, the crossing point and the direction**, because
+the shards are thrown from the last two and the authority is the only side that
+knows where the round actually was. It is an ARRAY: a round crosses everything in
+its path, so a shot down a glazed street breaks several at once and they share a
+direction by construction. `at` is the FIRST crossing, so the panes behind it
+throw their glass from a point a few metres off — a wrongness measured in metres,
+on an effect lasting a second and a half, against a message per pane.
+
+**A joiner is caught up by STATE, and it is the `scores` argument again.**
+Broken glass is cumulative and permanent within a round, so a client five
+minutes late has missed every event and would see a street of intact windows the
+rest of the match shot out. `Welcome.brokenPanes` is the list, omitted when
+empty, and deliberately NOT on `RoundStart` — a rotation rebuilds the map and
+puts every pane back, so the empty list is the only correct answer there and
+saying nothing is how it is said.
+
+**`NetSession.brokenPanes` is the running list for the whole round, not a
+snapshot of the welcome**, and that closes a real race. `?mp` books the round
+before the socket is open, so the welcome and `buildRound` arrive in either
+order — and every `installMap` resets `GlassSystem`, because a fresh build puts
+every pane back. An event landing in the gap was applied to a map about to be
+replaced and then lost, which is a client showing intact windows with nothing
+wrong anywhere. Every `glass` event appends to that list as well as being shown,
+`Game.buildRound` and `onSeated` both call `GlassSystem.catchUp`, and `catchUp`
+is idempotent — so exactly one of the two does the work and neither has to know
+which. Measured before the fix: two clients in one match disagreeing by fourteen
+panes.
 
 ## Grenades
 

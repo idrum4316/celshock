@@ -35,6 +35,7 @@ import type { WeaponSetup } from "../src/entities/weapons";
 import { BattleSystem } from "../src/systems/BattleSystem";
 import { CombatSystem, type ShotResult } from "../src/systems/CombatSystem";
 import { ConquestSystem } from "../src/systems/ConquestSystem";
+import { GlassSystem } from "../src/systems/GlassSystem";
 import { GrenadeSystem } from "../src/systems/GrenadeSystem";
 import { CelMaterialFactory } from "../src/shaders/CelShader";
 import type { GameMap } from "../src/world/MapBuilder";
@@ -50,6 +51,13 @@ export class HeadlessGame {
   readonly battle: BattleSystem;
   readonly conquest = new ConquestSystem();
   readonly grenades: GrenadeSystem;
+  /**
+   * Breakable glazing. The same system the client runs, on the same panes —
+   * this side gets them off the collision bake instead of off a build, and
+   * draws none of them (`paneGroups` is empty here, so the vertex collapse is a
+   * no-op and the sweep and the collider are all that happen).
+   */
+  readonly glass = new GlassSystem();
 
   map: GameMap | null = null;
 
@@ -99,6 +107,10 @@ export class HeadlessGame {
     // grenade that misses every box falls forever.
     this.grenades.setTerrain(this.map.terrain);
     this.grenades.reset();
+    // Every pane back, on this side too. A round is a fresh build on the
+    // client, so anything else here would be an authority holding glass its
+    // clients have just put back up.
+    this.glass.setMap(this.map);
     for (const bot of this.battle.bots) this.lag.track(bot);
     this.tick = 0;
     // A new round is a new board. Sized here rather than at construction
@@ -263,6 +275,27 @@ export class HeadlessGame {
     this.combat.onNearMiss = (near, from, at) => {
       this.battle.suppress(near, from);
       if (near instanceof NetPlayer) this.onNearMiss(near, at);
+    };
+    // Glass, and it is the authority's for one reason with teeth: the movement
+    // validator rejects a client standing inside `map.obstacles`, so a player
+    // who shot out a shopfront and walked through it would be snapped back
+    // unless this side broke the same pane. Every round from every shooter
+    // comes through here, the bots' included.
+    //
+    // Broken here and REPORTED by `Match`, which is what puts it on the wire —
+    // this file owns the rules and knows nothing about a socket.
+    //
+    // The first crossing is caught off `onBreak` rather than recomputed,
+    // because `shoot` has already worked out where every pane on the segment
+    // was met and the nearest is the one it reports first.
+    let firstAt: Vector3 | null = null;
+    this.glass.onBreak = (_pane, at) => {
+      firstAt ??= at;
+    };
+    this.combat.onShotPath = (origin, dir, dist) => {
+      firstAt = null;
+      const broke = this.glass.shoot(origin, dir, dist, true);
+      if (broke.length > 0 && firstAt) this.onGlassBroken(broke, firstAt, dir);
     };
     this.battle.spawnPointFor = (bot) => this.spawnPointFor(bot.team);
     this.battle.planSquads = (team, centroids, previous) =>
@@ -531,6 +564,16 @@ export class HeadlessGame {
 
   /** Wired by `Match`: a grenade went off here. */
   onExplosion: (at: Vector3) => void = () => {};
+
+  /**
+   * Wired by `Match`: one or more panes just went in.
+   *
+   * `origin`/`dir`/`dist` describe the round that crossed them rather than the
+   * panes themselves, because `Match` puts the FIRST crossing on the wire and
+   * the direction with it — see the `glass` event. Both vectors are the
+   * caller's and are read inside the call.
+   */
+  onGlassBroken: (panes: number[], at: Vector3, dir: Vector3) => void = () => {};
 
   /**
    * Wired by `Match`: a round passed close to this person without hitting them.

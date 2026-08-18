@@ -48,8 +48,8 @@ import type { Combatant, Team } from "./Combatant";
 /**
  * `advance` walks the flow field to the squad's objective; `engage` fights a
  * visible enemy; `retreat` breaks contact toward the team's own spawn after
- * taking hits; `capture` holds still inside a zone; `dead` runs the collapse
- * tween before the rig is hidden.
+ * taking hits; `capture` holds still inside a zone; `dead` stands aside for the
+ * ragdoll pool and hides the rig when the pool did not want it.
  */
 export type BotState =
   | "advance"
@@ -242,10 +242,17 @@ export class Bot implements Combatant {
     return this.aimPitch();
   }
 
-  /** Collapse tween progress, 0 while alive and 1 once fully down. */
+  /**
+   * How far through a death this body is: 0 while alive, 1 once it is done.
+   *
+   * Only netplay reads it — the authority puts it on the wire as
+   * `EntityState.dead`, and a client hides a body it did not ragdoll when it
+   * reaches 1. It used to be the collapse tween's own progress, and is keyed
+   * to `hideTime` now that there is no tween for it to drive.
+   */
   get deathProgress(): number {
     return this.state === "dead"
-      ? Math.min(1, this.deadT / CONFIG.bots.death.collapseTime)
+      ? Math.min(1, this.deadT / CONFIG.bots.death.hideTime)
       : 0;
   }
 
@@ -404,14 +411,15 @@ export class Bot implements Combatant {
     this.stuckStreak = 0;
     this.squeezeT = 0;
     this.syncTransform();
-    // Re-pose to idle. The pooled rig may still hold the death collapse
-    // (pitched forward, sunk 0.7 m), and animateSoldier only runs inside
-    // CONFIG.bots.lodFreezeDistance — without this a bot respawning beyond
-    // it walks around buried to the helmet until the player closes in and
-    // the pose unfreezes (the "submarine" pop-up).
+    // Re-pose to idle. The pooled rig may still hold whatever the last life
+    // ended in — the pose a corpse settled in, or the stride it was refused a
+    // fall mid-way through — and animateSoldier only runs inside
+    // CONFIG.bots.lodFreezeDistance, so without this a bot respawning beyond
+    // it walks around in a dead man's shape until the player closes in and the
+    // pose unfreezes.
     //
     // `resetSoldierPose` rather than a bare `animateSoldier(..., 0)`, and the
-    // difference matters now that a corpse can have been a ragdoll: that call
+    // difference matters because a corpse has been a ragdoll: that call
     // writes ten Euler channels and a ragdoll leaves residue in the parent,
     // the quaternion, the scaling and every channel it does not touch. See its
     // own note — a quaternion left behind freezes this bot for the round.
@@ -490,22 +498,17 @@ export class Bot implements Combatant {
       // documents from the other side. RagdollSystem hides the rig and hands
       // it back itself.
       //
-      // The collapse tween ignores the pose-freeze LOD: it is five property
-      // writes, and a corpse that holds its mid-stride pose past
-      // lodFreezeDistance and then vanishes reads as a pop, not a death.
-      //
-      // A ragdoll needs no such exemption and never did — it poses through the
-      // proxy nodes its joints are parented to, which the solver writes
-      // whatever `animate` says, and this branch stands aside for it anyway.
-      // `death.maxDistance` is a separate gate about what is worth simulating,
-      // NOT about this LOD; reading the two as one is what pinned it to
-      // `lodFreezeDistance` and stopped anything dying across the square from
-      // falling over. The tween still runs, still exempt, wherever the pool
-      // declines.
-      if (!this.ragdolling) {
-        const d = CONFIG.bots.death;
-        animateSoldier(this.rig, 0, 0, 0, 0, Math.min(1, this.deadT / d.collapseTime));
-        if (this.deadT > d.hideTime) this.setEnabled(false);
+      // What is left here is the OTHER case, and it is now the only one: a
+      // body killed past `death.maxDistance`, which is the fog wall, which is
+      // where the rig has already stopped being drawn. There is nothing to
+      // pose — the pool takes every death the player could see — so the rig
+      // simply holds whatever it died in until the clock hides it. This used
+      // to run a collapse tween, exempt from the pose-freeze LOD because a
+      // corpse that held its mid-stride pose and then vanished read as a pop;
+      // nothing that could be seen reaches this branch any more, so there is
+      // no pop to hide.
+      if (!this.ragdolling && this.deadT > CONFIG.bots.death.hideTime) {
+        this.setEnabled(false);
       }
       this.respawnT -= dt;
       return;
@@ -809,7 +812,6 @@ export class Bot implements Combatant {
         this.moveBlend,
         this.aimPitch(),
         this.torsoTwist,
-        0,
       );
     }
   }

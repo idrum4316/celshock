@@ -63,6 +63,18 @@ export const audio = {
   impactReserve: 6,
 
   /**
+   * How far a window going in carries.
+   *
+   * Its own number, and larger than `impactRange`, because a break is not an
+   * impact at an impact's rate: a pane can only break once, so there is no
+   * stream of them to bound, and it is the only world sound that says somebody
+   * has just come through somewhere. Sixty metres is inside `audio.maxDistance`
+   * (70) and comfortably past `bots.perception.engageRange` (55), so a break
+   * you hear is a fight you could already be in.
+   */
+  glassRange: 60,
+
+  /**
    * Footsteps. The player's are triggered by the camera's bob phase rather
    * than by a timer of their own — a step you hear off the beat of the dip
    * you see is worse than no step at all — so there is no interval here.

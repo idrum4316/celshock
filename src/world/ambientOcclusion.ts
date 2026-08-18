@@ -235,7 +235,15 @@ export function bakeVertexAo(
 ): number {
   const cfg = CONFIG.ao;
   if (cfg.strength <= 0) return 0;
-  const index = bucket(boxes, size, cfg.radius);
+  // Glass occludes nothing: it is transparent while it stands and gone after,
+  // and a pane that darkened the reveal it sits in would leave that shadow
+  // painted on the wall once the round took the glass away. A `porous` fence is
+  // NOT excluded here for the mirror reason — a rail casts a real ambient
+  // shadow even though a round goes through it.
+  const occluders = boxes.some((b) => b.glass)
+    ? boxes.filter((b) => !b.glass)
+    : boxes;
+  const index = bucket(occluders, size, cfg.radius);
   let total = 0;
 
   const walk = (mesh: Mesh): void => {

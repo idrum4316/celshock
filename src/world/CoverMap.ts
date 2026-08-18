@@ -132,6 +132,11 @@ export class CoverMap {
       // at all, and this one does not even hide it. Not `soft` either: soft
       // exists to bias movement toward walls and away from open ground, and a
       // fence line IS open ground with a rail across it.
+      //
+      // A barrier pane is `porous` too and is caught by the same line, which is
+      // what makes glass need no term of its own here — and it wants the
+      // exclusion twice over: it hides a bot from nothing because it is
+      // transparent, and the round that finds them takes it away.
       if (box.porous) continue;
       // Pitched boxes are skipped here for a reason of this file's own, not
       // `segmentHitsBox`'s (which handles them): the `top`/`bottom` below are
