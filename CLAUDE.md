@@ -413,10 +413,10 @@ buffer carries), the three light flavours and the muzzle-flash budget, the
 per-pixel/per-mesh fog split and `OutlineFog`'s three cache-invalidation rules,
 the shadow window, its four-tap lookup and the registry that lets grass and water
 share it, the glazing's two layers and why its Fresnel is the one unbanded term,
-the reflection bake's six load-bearing details (the enclosure rule and why a
+the reflection bake's seven load-bearing details (the enclosure rule and why a
 floor is not one, the alpha that separates city from sky, the box the ray is
-corrected against, the cube's Y flip, the eye it borrows and the pooled
-probes),
+corrected against, the cube's Y flip, the eye it borrows, the pooled probes and
+the editor build that parks every one of them),
 why the dither is in the surface shaders rather than the grade, the
 constraints that look like bugs if you undo them (image processing, rendering
 group 1, thick boxes under walked surfaces, coplanar faces), and the painted sky.

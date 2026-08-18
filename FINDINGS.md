@@ -539,3 +539,73 @@ mode at any radius. If it lands over ~500 ms, the shape to reach for is not a
 hard radius but fewer PROBES — merging the probes of adjacent blocks whose
 glazing is within a few metres of a shared centre, which drops the count
 without putting a hole in anything.
+
+---
+
+## 11. The editor's tier-3 rebuild is ~2.3 s on Coldharbour, and it is `MapBuilder`
+
+**Status:** measured (CPU), cause located, not acted on.
+
+This is the other half of the editor's Coldharbour problem. The first half —
+one frame of ~300,000 draw calls from the reflection bake after every rebuild —
+is fixed: `ReflectionSystem.build` now parks its probes on an editor build (see
+[`docs/rendering.md`](docs/rendering.md)). What is left is the JS.
+
+### What was measured
+
+Headless, `buildEditorMap()` timed around each of `installMap`'s calls, and
+then a CDP CPU profile of the same call. The wall-clock figures below are from
+this machine under SwiftShader, but they are **JS and driver time, not
+rasterisation** — the profile is of the build, which renders nothing.
+
+| | Coldharbour | Hollowmere |
+| --- | --- | --- |
+| placements in the layout | 133 | 195 |
+| `installMap` total | **2300 ms** | 784 ms |
+| of which `MapBuilder.build` | **2131 ms** | 707 ms |
+| `editor.rebuildProxies` after it | 79 ms | 230 ms |
+| everything else in `installMap` | ≤4 ms each | ≤28 ms each |
+
+`reflections.build` is 4 ms of that on Coldharbour and 0 on Hollowmere: the
+bake's cost was never in the queueing, it was the frame afterwards.
+
+Rolled up by function inside the build (total, so these nest):
+
+| ms | what |
+| --- | --- |
+| 525 | `kit/city.ts` `buildTower` — 44 of them |
+| 450 / 401 / 362 | `glaze` / `pane` / `cut` — the 6,139 sheets |
+| 389 | `mergeByMaterial` |
+| 383 | `MapBuilder.paneGroup` |
+| 265 + 236 + 160 | `NavGrid`, `link`, `severLinks` |
+| 199 | `bakeVertexAo` |
+| 184 | disposing the standing map |
+
+### What it means, and what is still a hypothesis
+
+**Coldharbour is expensive to BUILD, not expensive to edit** — the same
+`installMap` costs ~1.8–2.3 s starting a round, where it is paid once behind
+the building card. The editor's problem is the frequency: tier 3 fires on every
+param edit, add, delete, brush stroke release and road drag release, and
+[`docs/editor.md`](docs/editor.md)'s ~570 ms is a Hollowmere number.
+
+The glazing is over half of it and it is drawn twice over — `glaze`/`pane`/`cut`
+build 6,139 sheets, then `paneGroup` and `mergeByMaterial` merge them, and on an
+editor build the merge is keyed per PLACEMENT so it is 82 merges rather than 40.
+**Derived, not measured:** the tier-3 rebuild exists because a param change
+shifts every later index in `colliderBoxes`, and that argument is about the
+edited placement's own geometry — nothing says the other 132 have to be built
+again. An incremental rebuild that re-ran one builder and re-indexed from there
+is the shape, and the reason it has not been tried is that the index is what
+every editor structure hangs off.
+
+Part of this is not JS at all: `_createVertexBuffer` is 133 ms of SELF time in
+the profile, which is buffer upload and will be faster on a real driver.
+
+### How to settle it
+
+Time `buildEditorMap()` on real hardware on both maps first — if Coldharbour
+lands under ~600 ms there, this is a headless artefact and the entry should be
+deleted. If it stays several times Hollowmere's, the cheap probe before any
+incremental work is to skip the AO bake and the cover bake on editor builds the
+way the reflections and the physics world already are, and measure what is left.

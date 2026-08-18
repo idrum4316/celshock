@@ -2369,7 +2369,10 @@ export class Game {
     // And the other thing baked off the fresh map's visuals: what its glass
     // reflects. Same reason as the line above it — last build's meshes are
     // disposed, and this one holds a render list of them until it is told.
-    this.reflections.build(map);
+    // Editor builds park the probes and bake nothing, exactly as the physics
+    // world below refuses one: a bake is a build step, and the editor is where
+    // a build stops being rare.
+    this.reflections.build(map, opts?.editor === true);
     this.atmosphere.apply(environment.particles, map.size, map.size);
     this.water.build(map.water, environment, map.terrain);
     this.grass.build(

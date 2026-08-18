@@ -22,6 +22,12 @@ Things it deliberately does not do:
 - **It does not re-run builders to move things.** A builder assembles at the origin
   and `MapBuilder` transforms the result, so `repositionItem()` moves the visuals, the
   collider proxies and the `WorldBox`es directly.
+- **It does not bake reflections, and it registers no physics world.** Both are
+  build steps that are affordable because the world is static, and this is the
+  view where it is not: they are refused on the `editor` flag `installMap`
+  already carries. The bake was one frame of ~300,000 draw calls after every
+  tier-3 rebuild on Coldharbour — see [`rendering.md`](rendering.md). The glass
+  still draws; it shows the analytic sky and no city.
 
 **There are two pointer modes.** `T` toggles terrain mode and the panel turns
 violet, because a mode you forget you are in makes every click feel broken. The
@@ -79,6 +85,13 @@ reads as the ground having disappeared. `waterY()` lives in `TerrainField.ts` so
 | dragging a gizmo | move that item's meshes and `WorldBox`es | sub-ms, every frame |
 | drag released, flag/spawn edited | `NavGrid` + 7 flow fields + `ObstacleField` | ~45 ms |
 | param, kind, add, delete, brush stroke released, **road drag released** | `Game.buildEditorMap()` — the whole map | ~570 ms |
+
+**That ~570 ms is Hollowmere's, and a map is allowed to cost much more.**
+Coldharbour measures ~2.3 s for the same tier — nearly all of it
+`MapBuilder.build`, and over half of that the 6,139 glazed sheets it draws and
+then merges — off *fewer* placements than Hollowmere has. It is what starting a
+round there costs too; the editor's difficulty is that it pays it per edit. See
+[`FINDINGS.md`](../FINDINGS.md) 11 before reaching for it.
 
 The third tier is not laziness. Changing a param changes how many colliders an item
 emits, which shifts every later index in `colliderBoxes` and invalidates the

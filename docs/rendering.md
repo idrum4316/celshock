@@ -295,7 +295,7 @@ sees out in every direction its own panes face. For the shopfront that is free
 — the office behind it is behind the probe too. For the tower it is what the
 enclosure rule below is for.
 
-Six things about it are load-bearing:
+Seven things about it are load-bearing:
 
 - **A probe's bake leaves out whatever ENCLOSES it, and the floor is not an
   enclosure.** A mesh is dropped from a probe's render list if the probe is
@@ -344,6 +344,22 @@ Six things about it are load-bearing:
 - **Probes are pooled and never disposed**, like the bot rigs: one is six scene
   uniform buffers and a cube. A map with fewer glazed blocks than the last
   leaves the spare probes parked with an empty render list.
+- **An EDITOR build parks every probe and bakes nothing**, which is not a
+  saving so much as the feature's own premise being withdrawn. A bake is
+  affordable because it is a BUILD STEP over a static world, and the editor is
+  the one place in the game where a build is not rare — every tier-3 rebuild
+  would buy another. It is also worse there from both ends: `PaneBlocks` keys
+  per PLACEMENT on an editor build, so Coldharbour's 40 glazed blocks become
+  82, and the render list is the unmerged visuals. Measured: 40 probes over 405
+  meshes in a round against 82 over 610 in the editor, which came to one frame
+  of ~300,000 draw calls after every param edit, add, delete or brush stroke,
+  against ~500 with the skip and a steady editor frame of ~420 either way — a
+  parked probe renders nothing, so the steady frame never had a reflection in
+  it to lose. What the editor gives up is the city in its glass: a pane keeps
+  the material `MapBuilder` gave it, which holds the default cube at strength
+  ZERO, so it shows the analytic sky half and no more. That is the state a pane
+  is in before any probe claims it rather than a new one, and it is the right
+  trade in a view that already strips the map's night back to a work light.
 
 The remaining approximation is that a probe serves a whole block: a pane
 returns the right city seen from the middle of its own block rather than from

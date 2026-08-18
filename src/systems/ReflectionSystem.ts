@@ -28,6 +28,9 @@
  *   build one.
  * - A map with no glazing bakes nothing. The default cube stays bound to the
  *   glazing material regardless; see `CelMaterialFactory.setDefaultReflection`.
+ * - **An EDITOR build bakes nothing either**, for the reason the whole file is
+ *   affordable: a bake is a build step because the world is static, and the
+ *   editor is the one place it is not. See `build`.
  */
 import {
   Color4,
@@ -112,14 +115,39 @@ export class ReflectionSystem {
    *
    * Called from `Game.installMap` for the reason every line around it is: the
    * meshes this holds are the ones the next build disposes.
+   *
+   * **Editor builds park the probes and bake nothing**, which is the same
+   * refusal `PhysicsWorld.setMap` makes one line below it in `installMap` and
+   * for a sharper version of the same reason. A bake is affordable because the
+   * world is static, so it is a BUILD STEP rather than a pass — and the editor
+   * is the one place in the game where the world is not static and a build is
+   * not rare. Every tier-3 rebuild pays for one, and an editor build makes it
+   * worse from both ends: `PaneBlocks` keys per PLACEMENT there, so
+   * Coldharbour's 40 glazed blocks become 82, and the render list is the
+   * unmerged visuals. Measured on Coldharbour: 40 probes over 405 meshes in a
+   * round against 82 over 610 in the editor, which is one frame of ~300,000
+   * draw calls after every param edit, add, delete or brush stroke. With this
+   * skip the same frame issues ~500, and the steady editor frame — ~420 draws,
+   * all of them the shadow map and the main pass — is unchanged either way,
+   * because a parked probe renders nothing.
+   *
+   * What the editor gives up is the city in its glass: a pane keeps the
+   * glazing material `MapBuilder` gave it, which is born holding the default
+   * cube at a strength of ZERO (`CelMaterialFactory.applyReflection`), so it
+   * shows the analytic sky half of the reflection and no more. That is the
+   * state a pane is in before any probe has claimed it rather than a new one,
+   * and it is the right trade in a view that already strips the map's own
+   * night back to a work light to author under.
    */
-  build(map: GameMap): void {
+  build(map: GameMap, editor: boolean): void {
     const cfg = CONFIG.graphics.reflection;
     // Park everything first. A render list surviving into the next install is
     // a list of disposed meshes, and the probes this map does not reach never
-    // get another one.
+    // get another one. This is what the editor's skip below leans on: it is
+    // above the return, so a probe left over from the round the editor was
+    // opened from is emptied rather than left holding a disposed map.
     for (const probe of this.probes) probe.cubeTexture.renderList = [];
-    if (map.paneGroups.length === 0) return;
+    if (editor || map.paneGroups.length === 0) return;
 
     // The opaque world: `visuals` minus the glazing merged into it. A pane in
     // a bake is a blended draw over a transparent clear, and what comes back
