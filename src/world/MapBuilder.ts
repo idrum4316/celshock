@@ -684,6 +684,10 @@ export class MapBuilder {
     for (const merged of mergeByMaterial(roadParts, "roads")) {
       // Flat ground sheets receive shadows, never cast them.
       merged.metadata = { ...(merged.metadata ?? {}), noShadowCaster: true };
+      // A road that carries lane markings arrives with `noOutline` already on
+      // it and keeps it through the merge key, because an ink shell over a flat
+      // sheet stamps its own depth 5 cm above that sheet and the paint laid on
+      // it is then behind a surface nobody can see. See `buildRoad`.
       if (!merged.metadata?.noOutline) addOutline(merged, 0.05);
       visuals.push(merged);
     }

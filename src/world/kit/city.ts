@@ -1302,11 +1302,26 @@ export function buildParkade(
     const y = deckY(s);
     const sw = w - lane;
     const cx = (-laneSide(s - 1) * lane) / 2;
-    b.box(sw, SLAB, d, cx, y - SLAB / 2, 0, CONCRETE);
+    const slab = b.box(sw, SLAB, d, cx, y - SLAB / 2, 0, CONCRETE);
     b.block({ w: sw, h: SLAB, d, x: cx, y: y - SLAB / 2, z: 0 });
     // A painted edge line along the void, so the drop reads before you take it.
     // It stops where the void does — the apron at the ramp's head is floor, and
     // a line drawn past it would be marking a drop that is not there.
+    //
+    // **Both boxes are `noOutline`, and between them that is what makes the
+    // line exist at all.** A deck carrying paint is `buildRoad`'s case exactly
+    // — read the long note there for the mechanism — so the same two rules
+    // apply: the surface underneath gives up its ink, because an outline's
+    // second pass stamps the hull's DEPTH 5 cm above the deck across the whole
+    // of it and the line is drawn 6 cm up into that; and the line gives up its
+    // own, because a 5 cm shell around a 6 cm box is most of the box and comes
+    // out as a dark scratch where a pale mark was wanted. What the deck loses
+    // is the ink along its edge over the void — which is the same edge the
+    // line is here to call out, drawn dark instead of pale. The other three
+    // sides keep theirs from the upstand and the columns standing on them, and
+    // the deck below keeps its own ink for the ceiling this slab's underside
+    // makes.
+    slab.metadata = { ...(slab.metadata ?? {}), noOutline: true };
     const open = (deckY(s) - deckY(s - 1)) / GRADE / 2;
     const lineD = d / 2 + open;
     b.box(
@@ -1317,7 +1332,7 @@ export function buildParkade(
       y + 0.03,
       (open - d / 2) / 2,
       ROAD_PAINT,
-    );
+    ).metadata = { noOutline: true };
   }
 
   // The ramps. A plain pitched slab rather than `Build.flight`: treads on a car

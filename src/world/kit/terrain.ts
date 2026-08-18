@@ -8,6 +8,7 @@
  * rotX on the COLLIDER, not just the visual.
  */
 import { Scene } from "@babylonjs/core";
+import type { Mesh } from "@babylonjs/core";
 import type { CelMaterialFactory } from "../../shaders/CelShader";
 import { terrainSlab } from "../TerrainField";
 import {
@@ -133,8 +134,11 @@ export function buildRoad(
       top,
       thickness: h,
     });
+  // Kept only on the one path that can carry markings — the flat box. What the
+  // paint below needs from it is its ink, and only that.
+  let slab: Mesh | null = null;
   if (contoured) b.surface(contoured, flat ?? undefined);
-  else if (flat) b.box(w, h, len, 0, top - h / 2, 0, flat);
+  else if (flat) slab = b.box(w, h, len, 0, top - h / 2, 0, flat);
   else b.groundBox(w, h, len, 0, top - h / 2, 0);
 
   // Blacktop gets a broken centre line, and it is not decoration: an asphalt
@@ -147,7 +151,33 @@ export function buildRoad(
   // path is not one — over sculpted ground each would float or bury itself,
   // which is the whole problem `terrainSlab` exists to solve for the slab
   // itself and cannot solve for something laid on top of it.
-  if (p.surface === "asphalt" && !contoured) {
+  if (p.surface === "asphalt" && !contoured && slab) {
+    // **A marked road is not inked, and this is the whole reason the slab is
+    // held onto above.** `addOutline` draws Babylon's inverted-hull outline,
+    // and the half of that which matters here is invisible: after the mesh is
+    // drawn, the shell is drawn AGAIN with colour write off and depth write
+    // ON, so the hull's own depth — the slab's top face pushed 5 cm up its
+    // normals, and pushed further toward the eye by the renderer's
+    // slope-scaled offset — is what stands in the depth buffer over the whole
+    // carriageway. Anything laid on the road then fails the depth test against
+    // a surface 5 cm above the road that nobody can see. Paint 4 cm proud
+    // simply was not there in play, and no clearance fixes it: the slope-scaled
+    // half of the offset grows with the grazing angle, so measured down an
+    // avenue at eye height, ink thinned to 1 cm still swallowed every dash
+    // past ~35 m. What made this expensive to find is that it did not happen
+    // in the EDITOR, where roads are already left uninked for a different
+    // reason (see MapBuilder) — the markings were on screen the whole time
+    // they were being authored.
+    //
+    // A flat sheet lying on the ground has no silhouette to ink in the first
+    // place, which is the same thing `noShadowCaster` says about it one line
+    // later in MapBuilder. What is given up is a 5 cm ink line where the
+    // carriageway meets the pavement, against markings that are load-bearing
+    // for this surface — see the note above. Roads that carry no paint are
+    // untouched and keep their ink: cobble and dirt read against grass by that
+    // line, and it is the merge key (`EXEMPTIONS`) that keeps the two kinds in
+    // separate merged meshes rather than making one of them wrong.
+    slab.metadata = { ...(slab.metadata ?? {}), noOutline: true };
     // Clear of the slab's own top by more than the centimetre it stands proud
     // of the floor: coplanar faces in two meshes are a depth-test tie broken
     // per pixel, which strobes into a line as you walk (see buildTavern).

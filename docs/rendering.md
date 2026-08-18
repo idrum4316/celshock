@@ -493,6 +493,35 @@ wastes slots and flattens the darkness.
   correctly, which is why the podium under it never showed the fault. Depth is what
   buys the margin, so a walked surface gets a box as deep as whatever it stands on
   and is placed by its TOP face.
+- **Nothing may be laid ON an inked surface, and no clearance buys its way
+  out.** The third face of that same shell, and the one that costs a mesh of its
+  own: `OutlineRenderer` draws the hull twice, and the second pass
+  (`_afterRenderingMesh`) writes **depth with colour write off** — so once an
+  inked mesh has been drawn, the depth buffer holds a surface `outlineWidth`
+  in front of it across the whole of it, not merely around its silhouette.
+  Anything drawn into that gap afterwards fails the depth test against
+  something invisible. Coldharbour's lane markings are the worked case: 4 cm of
+  paint under a 5 cm shell, present in every list, active, lit, and not on
+  screen at all. Thinning the road's ink does not fix it, because the offset
+  that pulls the shell toward the eye is slope-scaled and a road is seen at a
+  grazing angle — measured down an avenue at eye height, ink at 3 cm left one
+  dash standing and ink at 1 cm still swallowed everything past ~35 m. So the
+  surface underneath gives up its ink (`buildRoad` sets `noOutline` on a slab
+  that carries paint), which a flat ground sheet can afford: it has no
+  silhouette, which is the same thing its `noShadowCaster` says.
+  **This is also why a fault of this shape does not reproduce in the editor** —
+  roads are left uninked there for an unrelated reason, so the markings were
+  visible for the whole of the time they were being authored.
+  There are two markings in the tree and both pay this: the second is the
+  parkade's painted deck edge (`buildParkade`), where the exemption is worth
+  stating because the deck is NOT a ground sheet — it gives up the ink along
+  its own edge over the void, which is the very edge the paint is there to
+  call out, and gets it back in pale instead of dark. The merge key is what
+  keeps the price that small: only the slabs that carry a line leave the
+  block's concrete group, and the rest of it is inked exactly as before.
+  **The paint needs `noOutline` of its own as well** — a 5 cm shell around a
+  4–6 cm box is most of the box, so a mark that survives the depth test still
+  arrives dark unless it is exempt too.
 - **The rim highlight is gated off near-level surfaces, and the gate is not
   optional.** On a plane the grazing angle it keys on is nothing but distance from the
   eye — for a floor, `1 - dot(viewDir, n)` is `1 - eyeHeight/dist` — so an ungated rim
