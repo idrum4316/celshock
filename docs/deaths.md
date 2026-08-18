@@ -256,17 +256,43 @@ just broken — which reads against a small punched window and is absurd against
 shopfront: several square metres of glass vanish in one frame and a handful of
 gravel appears where the round went in, so the eye reads the pane as deleted
 rather than broken. So `burst` takes the `WorldPane` and cuts the burst from it:
-the face is divided into cells of `sqrt(area / shards)` clamped to
-`[shardMin, shardMax]`, a piece fills `shardPack` of its cell, and the pieces are
-laid out ON the face, in its plane, before they are thrown. Measured on
-Coldharbour: 0.38 m pieces from a 1.3 x 1.5 m window and ~1 m ones from a
-shopfront bay, 77% of the pane's own area in both cases, so at t=0 the burst is
-very nearly the sheet that was standing there and the next quarter second is it
-coming apart. Where a pane is bigger than twelve cells the patch is centred on
-the hole and clipped to the face rather than spread thin across it — twelve
-pieces over ninety square metres is confetti — and **the right fix for a pane
-that big is a smaller pane**: see `kit/city.ts`, whose shopfront breaks a bay at
-a time, the unit its own piers divide the elevation into.
+`glass.shards` pieces out of the sheet's own face, laid out ON it, in its plane,
+before they are thrown, so at t=0 the burst is very nearly the sheet that was
+standing there and the next quarter second is it coming apart. Where a pane is
+bigger than a burst the pattern is centred on the hole and clipped to the face
+rather than spread thin across it — twelve pieces over ninety square metres is
+confetti — and **the right fix for a pane that big is a smaller pane**: see
+`kit/city.ts`, whose shopfront breaks a bay at a time, the unit its own piers
+divide the elevation into.
+
+**The pieces are CUT, and a cut is not a grid.** They were rectangles first: the
+face divided into cells of `sqrt(area / shards)`, a piece filling `shardPack` of
+each, twelve of one size square to the frame in rows. Every rule around it was
+already the right one and a shatter still read as a mosaic sliding out of a
+wall, because a sheet does not fail on a grid — it fails from the point the load
+went into it, along RADIALS out of the hole crossed by CONCENTRIC rings, and
+what falls out is wedges. `src/systems/glassFracture.ts` is that pattern and
+nothing else: `sectors` radials, `rings` concentrics, both jittered, and the
+piece between each crossing. Four details carry it — the corners are SHARED so
+the pieces tile (draw each its own and the jitter that makes them irregular
+opens gaps between them, which at t=0 is a heap rather than a cracked pane);
+there is an unbroken HOLE at the impact, which is the part of a real sheet that
+leaves as dust; the pattern is CLIPPED to the frame rather than fitted to it, so
+a piece may have five corners or eight and a burst near a mullion has a straight
+edge down its side; and `shardPack` shrinks each piece about its own centroid,
+which is what opens the cracks themselves. Measured on Coldharbour's 4.3 x 2.9 m
+bay: twelve pieces of 0.10–1.46 m², four to six corners each, 63% of the pane's
+own area, and the pitch they are cut at is still `sqrt(area / shards)` clamped
+to `[shardMin, shardMax]`.
+
+**A pattern that hangs off the frame reaches further rather than losing its
+budget.** A round through the corner of a bay puts most of a centred disc
+outside the glass and the clipped pieces are gone from the burst — eight over a
+quarter of the sheet, where a round through the middle throws twelve over two
+thirds of it. Cracks do not stop because the sheet is not centred on them, so a
+short burst is re-cut with the reach it needed, twice at most. It is also why
+`fracture` may hand back fewer pieces than the budget and the caller must ask
+how many rather than assume.
 
 **A sheet leaves its frame along its own NORMAL**, and the round drags glass
 along its own path only WITHIN the plane. That is not only how a pane fails, it
@@ -290,12 +316,23 @@ landed on, which nothing about a dark plate on a dark road shows.
 because Havok's sync force-creates a `rotationQuaternion` on any node with a
 parent and the rig is posed through Euler channels; a shard is parented to
 nothing, posed by nobody and handed back to nothing, so the quaternion Havok
-writes is the only thing that ever orients it. The mesh is a UNIT box scaled per
-burst, which the same sync makes safe: it writes position and orientation onto an
-unparented node and leaves scaling alone. The body is sized by its shape instead,
-and the shapes are cached by rounded size — both dimensions live in
-`[shardMin, shardMax]`, so the cache is a fixed handful and the first burst of a
-given size is the only one that ever builds one.
+writes is the only thing that ever orients it.
+
+**The outline is in the VERTICES, and the topology is fixed even though the
+outline is not.** The mesh was a unit box with `mesh.scaling` for a size, which
+that same sync makes safe — it writes position and orientation onto an
+unparented node and leaves scaling alone — but a scaling cannot express a
+polygon. So every shard mesh is an eight-cornered prism built once (the bound is
+exact: a convex quad clipped against four half-planes gains at most one corner
+per plane), and a burst rewrites its 48 vertices in a buffer the mesh already
+owns. A piece with fewer corners repeats its last one, which leaves the spare
+triangles degenerate — the same trick `GlassSystem.collapse` takes a broken pane
+off the screen with. Each shard owns its own position and normal arrays rather
+than sharing a scratch pair, because Babylon keeps the array it was handed as
+the mesh's CPU-side copy. The body is still sized by its SHAPE, cached by
+rounded extents, and the step is 0.1 m: a cut makes every piece a different size
+where the grid made twelve of one, so the rounding is coarse on purpose against
+a cache that would otherwise grow all round.
 
 **The distance gate is its own number, not the fog wall — and it is an apparent
 size.** The three systems that share `EnvironmentSpec.fogEnd` are asking "can
@@ -324,11 +361,11 @@ callback, so a window broken before the WASM landed still threw shards on a
 scripted ballistic arc with the terrain as a floor. The engine is up before this
 system is constructed now, so `buildPool` makes the mesh and its body together
 and a shard has never existed without one. It is still not built on the frame a
-window breaks: 48 boxes, their GL buffers and their shapes are not a cost to pay
+window breaks: 48 meshes, their GL buffers and their shapes are not a cost to pay
 on the frame somebody pulled a trigger, which is `DeathCam`'s reason for
 building its stand-in rig at `startRound`. What a burst DOES pay for on that
-frame is a `reshape` — twelve scalings and twelve shape assignments, and never an
-allocation once that size has been seen.
+frame is a `cut` per piece — a rewrite of vertices the mesh already has, and
+never a geometry, an index buffer or, once a size has been seen, a shape.
 
 ## The death cam
 

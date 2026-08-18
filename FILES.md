@@ -163,8 +163,12 @@ src/
                         #   fog wall); a full pool evicts its oldest. Cannot
                         #   tell a dead bot from the player's stand-in
     DebrisSystem.ts     # Glass shards under it. A burst is CUT from the pane's
-                        #   own face; refuses past its own apparent-size gate,
-                        #   and evicts only a burst that has already landed
+                        #   own face along the cracks a round put in it; refuses
+                        #   past its own apparent-size gate, and evicts only a
+                        #   burst that has already landed
+    glassFracture.ts    # The crack pattern itself: radials out of the hole,
+                        #   concentrics across them, clipped to the frame. Pure
+                        #   arithmetic — no Babylon, no state
     DeathCam.ts         # The player's own death; the only occlusion pick
                         #   outside combat
     AimAssistSystem.ts  # Gamepad-only: outer bubble slows the stick, inner one

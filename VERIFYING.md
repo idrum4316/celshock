@@ -302,18 +302,52 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   burst younger than `CONFIG.glass.shardSteal`. Both still leave the pane
   broken, because the break is the world changing and the shards are only what
   it looked like. There is no fallback to reach: Havok is required, so every
-  burst is under the solver or is not drawn. Three things worth asserting rather
+  burst is under the solver or is not drawn. Four things worth asserting rather
   than eyeballing, all of them off `g.debris.bursts[i].shards[j].mesh`:
-  - **The pieces start ON the pane.** Project each shard onto the face (across
-    is local +x or +z, whichever is the sheet's long axis) and both coordinates
-    are inside the pane's own half-extents, with the out-of-plane offset a few
-    centimetres of standoff and nothing more.
-  - **The pieces are cut to the pane**: `mesh.scaling` is the cell size, so it
-    is ~0.38 m for a 1.3 x 1.5 m window and ~1 m for a shopfront bay, and the
-    twelve of them come to ~77% of the pane's area either way.
+  - **The pieces start ON the pane.** Project each shard onto the face and both
+    coordinates are inside the pane's own half-extents, with the out-of-plane
+    offset a standoff and nothing more. The across-axis to project onto is
+    `(nz, -nx)` from the pane's own normal and NOT its long axis: the two agree
+    for a sheet whose width is its `w` and differ by a sign for one whose width
+    is its `d`, which reads as a burst mirrored about the pane's centre. **The
+    convention-free version of that check is the one to write**, because a test
+    that projects with the same axis the code did cannot fail: aim at a point
+    well off the pane's centre and assert the burst's centre of MASS lands near
+    the crossing point in world space. Over all 24 of Coldharbour's panes (yaws
+    of 0, π/2 and π, so both the `w`-wide and `d`-wide cases) that drift is
+    ≤ 0.26 m, where a mirrored axis puts it at twice the hit's own offset —
+    around 2 m on a shopfront bay.
+  - **The pieces are cut to the pane, and `mesh.scaling` is not where to look —
+    it is 1 on every shard.** A piece is a polygon and its outline is in the
+    VERTICES: read `mesh.getVerticesData("position")` (48 of them, 84 indices,
+    on every shard forever) or `getBoundingInfo().boundingBox.extendSize`. The
+    first eight vertices are the front face, so distinct `(x, y)` pairs among
+    them is the corner count and a shoelace over them is the piece's own area.
+    Measured on Coldharbour's 4.3 x 2.9 m bay: twelve pieces of 0.10–1.46 m²,
+    four to six corners each, 63% of the pane's area. **A burst is not always
+    twelve pieces** — a pattern clipped hard by the frame hands back fewer, so
+    assert on `burst.live` or on enabled meshes rather than on `glass.shards`.
+  - **The standoff is one number for every piece in the burst** (~0.175 m along
+    the pane's own normal, most of it the two colliders' thickness), because the
+    tilt is bounded by what it may REACH rather than by an angle. A shard
+    standing further off than its neighbours means `LEAN` is being spent as an
+    angle again, which is what put a 2 m panel a quarter of a metre inside the
+    shop.
   - **The gate is an apparent size, not a distance**: `shardDistance` is quoted
-    for a piece of `shardMax`, so a burst of small pieces is refused at a range
-    a burst of panels is accepted at. Test it with the pane, not with a number.
+    for a piece of `shardMax`, so a pane cracked at a smaller pitch is refused
+    at a range a shopfront's is accepted at. Test it with the pane, not with a
+    number.
+- **The crack pattern needs no browser at all, and that is where to test it.**
+  `src/systems/glassFracture.ts` imports nothing — `npx esbuild
+  src/systems/glassFracture.ts --format=esm --outfile=/tmp/f.mjs` and call
+  `fracture(makePieces(12), faceW, faceH, hitU, hitV, reach, pack, rand)` from
+  node. Four things it settles in one run, none of which a screenshot can:
+  every piece convex and wound counter-clockwise (a negative shoelace is the
+  winding bug, and it hands back zero pieces rather than mirrored ones), every
+  piece inside the pane's own half-extents, the corner-count spread, and the
+  covered fraction. Feed it a hit at the centre AND one a handful of
+  centimetres from a corner: the second is the case the reach retry exists
+  for.
 - **A ragdoll is steppable synchronously, like a grenade, and must be**:
   `g.ragdolls.update(1/60)` in a loop runs a whole tumble, settle, sink and retire
   in a fraction of a second. Move a bot, `bot.takeDamage(999, shooterOrigin)`, then

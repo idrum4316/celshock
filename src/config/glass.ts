@@ -48,9 +48,11 @@ export const glass = {
    * that in proportion; they are two halves of one budget and want reading
    * together.
    *
-   * Twelve is also what decides the SHAPE of a burst: the pieces are cut to a
-   * grid over the pane's own face, so twelve of them is a patch of about
-   * 3 x 4 cells centred on the hole. See `DebrisSystem.burst`.
+   * Twelve is also what decides the SHAPE of a burst, because the crack
+   * pattern is cut to fit it: `glassFracture` spends it on radials crossed by
+   * rings, and twelve is six spokes crossed twice — the spider a sheet
+   * actually makes. Six would be a rosette and twenty-four a mosaic. See
+   * `DebrisSystem.burst`.
    */
   shards: 12,
   maxConcurrent: 4,
@@ -72,29 +74,38 @@ export const glass = {
   shardSteal: 1.6,
 
   /**
-   * The size band a piece is cut to, in metres.
+   * The size band a burst is cut at, in metres.
    *
    * A shard is NOT a fixed chip: it is a fraction of the pane it came out of,
    * because a hand of gravel under a shopfront that has just vanished is the
-   * mismatch the player actually sees. `DebrisSystem` divides the pane's face
-   * into cells of `sqrt(area / shards)` and clamps that pitch here, so a 1.3 m
-   * window would throw 0.35 m pieces where a shopfront bay throws 0.95 m ones.
+   * mismatch the player actually sees. `DebrisSystem` takes the pane's own
+   * area over the budget — `sqrt(area / shards)` — and clamps that PITCH here,
+   * so a 1.3 m window is cracked at 0.35 m where a shopfront bay is cracked at
+   * 0.95 m.
+   *
+   * **It is the pattern's pitch and no longer any one piece's size**, which is
+   * what a cut costs over a grid: the pieces between two radials and two rings
+   * are a spread about it, roughly a third of it at the hole and twice it at
+   * the rim. The band still decides how coarse a sheet fails, and the distance
+   * gate and the mass are still quoted against it.
    *
    * The floor keeps Havok from being asked about a speck, and it is the end of
    * the band nothing on the shipped maps reaches: every pane that breaks today
    * is a shopfront bay, because that is where the glass has a room behind it
    * (see `PaneSpec.breakable`). **The ceiling is the number to move if a burst
-   * stops covering its pane**: those bays run 7.8–12.5 m², which is twelve cells
-   * of about a metre, and a ceiling under that turns the burst into a patch around
-   * the hole instead of the whole sheet. That is the graceful failure rather
+   * stops covering its pane**: those bays run 7.8–12.5 m², which is a pattern
+   * cut at about a metre, and a ceiling under that turns the burst into a patch
+   * around the hole instead of most of the sheet. That is the graceful failure rather
    * than the intent — the glass that IS drawn stays where the player is looking
    * — and it is what any pane much larger than these gets.
    */
   shardMin: 0.12,
   shardMax: 1.2,
   /**
-   * How much of its cell a piece fills. Under 1 so the burst reads as glass
-   * coming apart rather than a tiling of the pane it replaced.
+   * How much of its own outline a piece keeps, shrunk about its centroid.
+   * Under 1 because that is what OPENS the cracks: the pattern tiles the sheet
+   * exactly, and a burst drawn at 1 is a pane with lines on it rather than one
+   * that has just failed.
    */
   shardPack: 0.88,
   /** Metres. A sheet, not a slab — and thin enough that its edge never reads. */
@@ -111,7 +122,7 @@ export const glass = {
    */
   shardCollide: 0.09,
 
-  /** Kilograms for a piece of `shardMax`; smaller ones scale with their area. */
+  /** Kilograms for a piece of `shardMax` square; every piece scales by area. */
   shardMass: 1.4,
 
   /**

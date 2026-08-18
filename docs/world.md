@@ -506,11 +506,11 @@ shopfront into the bays its piers already divide it into: a break then reads as
 one panel out of its frame with the piers either side still standing, where a
 single sheet would take the whole frontage on one round. The second reason is
 the shards: `DebrisSystem` cuts a burst of twelve pieces from the pane's own
-face, so a pane much past ~20 m² is one the burst can only cover a patch of.
-Measured over Coldharbour's twenty-four, the bays run **7.8–12.5 m²** — the
-offices' 11.5 and 12.5, the shophouses' 7.8 and 11.6, the latter cut into one
-bay or two by the unit's own width — which twelve pieces of about a metre
-account for. The tower's bays are cut to the same rhythm for the look alone — nothing
+face, along the cracks a round would put in it, so a pane much past ~20 m² is
+one the pattern can only cover a patch of. Measured over Coldharbour's
+twenty-four, the bays run **7.8–12.5 m²** — the offices' 11.5 and 12.5, the
+shophouses' 7.8 and 11.6, the latter cut into one bay or two by the unit's own
+width — which a pattern cut at about a metre accounts for. The tower's bays are cut to the same rhythm for the look alone — nothing
 holds a range into them and nothing ever will.
 
 **Breaking a pane is five writes and one deferred rebuild.** The visual
