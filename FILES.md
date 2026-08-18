@@ -171,10 +171,12 @@ src/
                         #   rotates. Bounded by the player's own turn rate
     LightingSystem.ts   # Dynamic point lights: fixtures, flashes, lamps
     ShadowSystem.ts     # Moon shadow map (stepped) + blob shadows
-    ReflectionSystem.ts # The world as glass sees it: ONE cube, baked from the
-                        #   map's own geometry per install, and the box the
-                        #   shader parallax-corrects the mirrored ray against.
-                        #   The only render target here besides the shadow map
+    ReflectionSystem.ts # The world as glass sees it: one cube per GLAZED
+                        #   BLOCK, baked from the map's own geometry per
+                        #   install with whatever encloses the probe left out,
+                        #   and the box the shader parallax-corrects the
+                        #   mirrored ray against. The only render target here
+                        #   besides the shadow map
     Atmosphere.ts       # Ash field on the GPU. No CPU fallback — WebGL2 is a
                         #   hard requirement and guarantees it
     Sky.ts              # Generated dome, textured moon, fBm cloud decks

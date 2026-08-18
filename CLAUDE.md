@@ -394,9 +394,13 @@ pixel: a reflection over the tint of whatever stands behind the pane. That
 reflection is an analytic sky with the CITY composited into it out of a cube
 `ReflectionSystem` bakes from the map's own geometry, once per `installMap` —
 the only render target here besides the shadow map, and the only thing that
-draws the world twice. It is affordable for the reason the world layer is
+draws the world again. It is affordable for the reason the world layer is
 merged and frozen at all: the world is static, so a bake is a build step rather
-than a pass.
+than a pass. **There is one probe per GLAZED BLOCK, not one for the map**,
+because a cube baked 150 m away has the right city in it seen from the wrong
+place and cannot show the building opposite; the glazing is already merged one
+mesh per block, so a probe each costs 37 cubes and no extra draw call, and each
+bake leaves out whatever ENCLOSES its probe.
 Everything else here is a flat opaque colour — the water fakes its depth rather
 than showing the bed through itself, and the capture zone's skirt is annotation
 rather than world. Blended draws write no depth, so a pane is sorted rather than
@@ -409,9 +413,10 @@ buffer carries), the three light flavours and the muzzle-flash budget, the
 per-pixel/per-mesh fog split and `OutlineFog`'s three cache-invalidation rules,
 the shadow window, its four-tap lookup and the registry that lets grass and water
 share it, the glazing's two layers and why its Fresnel is the one unbanded term,
-the reflection bake's four load-bearing details (the alpha that separates city
-from sky, the box the ray is corrected against, the cube's Y flip, and the eye
-it borrows),
+the reflection bake's six load-bearing details (the enclosure rule and why a
+floor is not one, the alpha that separates city from sky, the box the ray is
+corrected against, the cube's Y flip, the eye it borrows and the pooled
+probes),
 why the dither is in the surface shaders rather than the grade, the
 constraints that look like bugs if you undo them (image processing, rendering
 group 1, thick boxes under walked surfaces, coplanar faces), and the painted sky.

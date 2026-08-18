@@ -237,21 +237,29 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   `g.shadows.generator.getShadowMap().renderList` (37 pane meshes against 257
   casters on Coldharbour). A pane that gains either is drawn as a dark plate or
   lays a hard shadow through clear glass.
-- **What a pane REFLECTS is checkable without a screenshot, and the cube is the
-  place to check it.** `g.reflections.probe.cubeTexture.readPixels(face)` gives
-  one baked face: alpha over 128 is world and everything else is the sky the
-  shader fills in, so a coverage-per-face sweep says whether the bake ran and
-  what it saw. On Coldharbour from the default probe (0, 18, 0) the four side
-  faces come back 58-63% covered, **face 2 is 100% and face 3 is 0** — and that
-  pair is the Y-flip contract rather than a curiosity: face 2 is
-  `POSITIVE_Y` and it holds the DOWNWARD view, which is why the shader samples
-  the cube with `-y`. A bake that lost the flip reads as glass that is simply
-  too dark. The strength is `g.mats.reflectProbe.w` — 0.9 on a map with
-  glazing, exactly 0 on one without, where `renderList` is empty too.
+- **What a pane REFLECTS is checkable without a screenshot, and the CUBE is the
+  place to check it.** There is one probe per glazed map block —
+  `g.reflections.probes[slot]` against `g.map.paneGroups[slot]`, 37 of each on
+  Coldharbour — and `probe.cubeTexture.readPixels(face)` gives one baked face:
+  alpha over 128 is world, everything else is the sky the shader fills in. Three
+  standing checks:
+  - **Coverage says the enclosure rule fired.** Mean coverage over all six faces
+    is 0.69 across the 37 probes as shipped. Put the enclosing meshes back
+    (`probe.cubeTexture.renderList = allOpaque; probe.cubeTexture.render()`) and
+    a tower's goes 0.57 → 0.84 and **a parked car's 0.68 → 0.99** — a probe
+    inside its own bodywork, which is the failure the rule exists for.
+  - **Face 2 is 100% and face 3 is 0**, and that pair is the Y-flip contract
+    rather than a curiosity: face 2 is `POSITIVE_Y` and it holds the DOWNWARD
+    view, which is why the shader samples the cube with `-y`. A bake that lost
+    the flip reads as glass that is simply too dark.
+  - **A material per probe, and no extra draw.** `new
+    Set(g.map.paneGroups.map(p => p.mesh.material.name)).size` is the probe
+    count, while the mesh count is unchanged — that is the whole affordability
+    argument, and a regression here shows up as one name for all 37.
 - **The eye is the thing a bake can leak.** `g.mats.camPos` must equal
-  `g.cameraSys.camera.position` on any frame after an install; if it equals
-  `g.reflections.probe.position` instead, the six faces put the eye back wrong
-  and the install frame fogged the whole map from the middle of it. It
+  `g.cameraSys.camera.position` on any frame after an install; if it equals one
+  of `g.reflections.probes[i].position` instead, the bake put the eye back
+  wrong and the install frame fogged the whole map from a point inside it. It
   self-corrects on the next frame, so this is only ever visible as an
   assertion — read it in the same `evaluate` that starts the round.
 - **Whether the glazing is DRAWN at all is a separate question from how it

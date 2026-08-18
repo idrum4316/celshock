@@ -500,3 +500,39 @@ Repeat the re-measure with the page's own frame loop rather than a synchronous
 original stands, the lever is fewer substeps while several corpses are live —
 `hasSettled`'s velocity poll is now known not to be it.
 
+---
+
+## 10. The reflection bake is draw-call bound, and a distance cull halves the list
+
+**Measured, headless (SwiftShader, Coldharbour).** `ReflectionSystem` bakes 37
+probes at install — one per glazed map block — which is 222 cube faces over
+~328 merged meshes each. Forced synchronously in one `evaluate`:
+
+| bake | mean render list | all 37 probes |
+| --- | --- | --- |
+| as shipped (enclosure removed only) | 328 | **2311 ms** |
+| plus a 140 m distance cull | 160 | **1606 ms** |
+
+A 100 m cull leaves 105 meshes and a 180 m cull 219, so the list is roughly
+linear in the radius over the range that matters on a 320 m map. The saving is
+**30% for half the draw calls**, which says the bake is not purely draw-call
+bound under SwiftShader — fill is the rest of it, and dropping the face size
+from 256 to 128 already took ~15 ms/face to ~10.
+
+**Not taken, and the reason is a visible failure mode rather than the size of
+the win.** A culled mesh does not fade, it vanishes: the cube's alpha goes to
+0 where a dropped tower stood and the shader fills that with sky. On a map
+whose whole point is that there is no fog wall, that is a reflection with a
+hole in it, and the hole is at a fixed radius from a probe the player cannot
+see. The rim survives any of these radii — a landform's bounding sphere is
+enormous, so `distance - radius` keeps it — which means what gets dropped is
+exactly the middle-distance city, the part with contrast in it.
+
+**What would settle it.** The number that decides this is the bake on real
+hardware, which nobody has: 2.3 s of SwiftShader against a map build already
+costing ~570 ms says nothing about a GPU that draws the same 325 meshes in a
+frame at 60 fps. If it lands under ~150 ms, the cull is not worth its failure
+mode at any radius. If it lands over ~500 ms, the shape to reach for is not a
+hard radius but fewer PROBES — merging the probes of adjacent blocks whose
+glazing is within a few metres of a shared centre, which drops the count
+without putting a hole in anything.

@@ -249,40 +249,36 @@ export const graphics = {
     tint: 0.4,
   },
   /**
-   * The one cube behind the glazing: what `ReflectionSystem` bakes per map
+   * The cubes behind the glazing: what `ReflectionSystem` bakes per map
    * install, and what the shader mixes over the sky gradient inside it.
    *
-   * There is exactly one of these for the whole map, which is the entire
-   * reason the feature is affordable — see the system for the argument. What
-   * follows from it is that all three numbers are about a compromise rather
-   * than about a look, and are judged from a street with a tower on both sides
-   * of it, never square-on to one pane.
+   * There is one per GLAZED BLOCK rather than one for the map, and that count
+   * is the whole design — see the system for the argument. Both numbers here
+   * are judged from a street with a tower on either side of it, never square
+   * on to one pane.
    */
   reflection: {
     /**
-     * Face resolution. 256 is 6 x 256 x 256 of RGBA8 plus its mip chain, about
-     * 2 MB, held for the process — the bake is the same geometry the frame
-     * already draws, so the cost that matters is the six renders at install
-     * and not the memory. Higher buys detail a Fresnel-weighted, tinted,
-     * fogged reflection cannot show; lower starts losing the street between
-     * the towers, which is the part with the contrast in it.
+     * Face resolution, and it is a PER-PROBE cost now that there is a probe
+     * per glazed block: 6 x 128 x 128 of RGBA8 plus its mip chain is ~520 KB,
+     * so Coldharbour's 37 come to ~19 MB held for the process.
+     *
+     * 128 rather than the 256 the single map-wide cube could afford, and the
+     * trade is the right way round: a reflection that is Fresnel-weighted,
+     * tinted and hazed cannot show the detail 256 buys, while WHERE it is
+     * baked from decides whether the building opposite is in it at all.
+     * Resolution is also not what the bake costs — 37 probes are 222 face
+     * renders of ~325 merged meshes, and that is draw calls rather than
+     * pixels.
      */
-    size: 256,
-    /**
-     * How far above the ground at the map's centre the bake is taken from.
-     * Halfway up the skyline rather than at eye level: a cube baked from the
-     * pavement has the underside of every awning in it and nothing above the
-     * second floor, and one baked from over the roofs is a reflection of roofs.
-     * 18 m is mid-height for Coldharbour's 12-50 m blocks.
-     */
-    height: 18,
+    size: 128,
     /**
      * How much of the bake a pane returns, against the analytic sky it would
-     * otherwise show there. Deliberately short of 1: the bake is the right
-     * city from slightly the wrong place, and the last tenth of it is what
-     * turns a plausible reflection into one the player can catch out by
-     * walking along it. It also keeps the sky's own haze in the mix, which is
-     * what the reflection would have anyway at these distances.
+     * otherwise show there. Deliberately short of 1: a probe stands at the
+     * centre of the glass it serves rather than at the pane, so the last tenth
+     * is what turns a plausible reflection into one a player can catch out by
+     * walking along a frontage. It also keeps the sky's own haze in the mix,
+     * which is what a reflection at these distances would have anyway.
      */
     strength: 0.9,
   },

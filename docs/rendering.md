@@ -259,16 +259,56 @@ throws, which is what `skyLightColor` beside it already is. The horizon end is
 is the one place that requirement is load-bearing rather than cosmetic.
 
 **The city half is `systems/ReflectionSystem.ts`, and it is the only render
-target in the game besides the shadow map.** One `ReflectionProbe` stands at the
-map's centre, `graphics.reflection.height` (18 m) over the ground, and bakes the
-map's opaque visuals into a 256-per-face cube once per `installMap`. It is
-affordable for one reason and it is the same reason the whole world layer is
-merged and frozen: the world is static, so this is not a pass, it is a build
-step that happens to run on the GPU. Measured under SwiftShader, where an
-ordinary frame costs 230-2500 ms, all six faces come to **70-110 ms** — a
-fraction of one headless frame, once, under the building card.
+target in the game besides the shadow map.** It is affordable for one reason
+and it is the same reason the whole world layer is merged and frozen: the world
+is static, so this is not a pass, it is a build step that happens to run on the
+GPU.
 
-Four things about it are load-bearing:
+**There is one probe per GLAZED BLOCK, and that count is the whole design.**
+One cube for the map cannot show the building opposite — which is the only
+thing a reflection in a city is really made of. A pane returns what lies in the
+mirrored direction, and a bake taken 150 m away has the right city in it seen
+from the wrong place: the tower across the street lands in the pane at the
+angle it subtends from the middle of the map. A cube per PANE is the other end
+and is not on offer, because Coldharbour draws 6,246 sheets. What makes a
+middle affordable is that the glazing is **already merged into one mesh per map
+block** (`MapBuilder.paneGroup`) — 37 of them — so one probe per merged mesh
+costs 37 cubes and **not one extra draw call**. Each block's mesh gets a
+material of its own, which is the one place `CelMaterialFactory`'s per-colour
+cache is deliberately widened: a cube is not shared state, it is one probe's
+picture of one place. The probe stands within ~25 m of every pane it serves
+rather than ~150.
+
+Faces are 128 rather than 256, because the resolution is now a per-probe cost
+(~520 KB each, ~19 MB for Coldharbour) and it buys detail a Fresnel-weighted,
+tinted, hazed reflection cannot show — while WHERE a bake is taken from decides
+whether the building opposite is in it at all. Measured headless: all 37 probes
+(222 faces) come to **2.3 s under SwiftShader**, against a map build already
+costing ~570 ms there. See `FINDINGS.md` §10 for the distance cull that halves
+the render list, why it was not taken, and what would settle it.
+
+**The probe stands at the centre of the glass it serves.** That puts it inside
+the shaft of a tower's wrap-around curtain wall and exactly ON the plane of a
+flat shopfront, and both are right for the same reason: a pane only ever
+reflects the hemisphere in FRONT of it, so all that matters is that the probe
+sees out in every direction its own panes face. For the shopfront that is free
+— the office behind it is behind the probe too. For the tower it is what the
+enclosure rule below is for.
+
+Six things about it are load-bearing:
+
+- **A probe's bake leaves out whatever ENCLOSES it, and the floor is not an
+  enclosure.** A mesh is dropped from a probe's render list if the probe is
+  inside its world bounding box *and* it is not a flat receiver
+  (`noShadowCaster`). The first half is coarse on purpose — the opaque world is
+  merged per block per colour, so the mesh a tower's probe is inside is that
+  block's own merged mesh and taking it out takes the tower with it. Measured
+  across the 37 probes: 2.1 meshes dropped each, and cube coverage falls from
+  0.84 to 0.57 for a tower and from **0.99 to 0.68 for a parked car**, whose
+  probe sits inside its own bodywork. The second half is what saves the two
+  corner towers that stand inside `ridge-rock`'s bounding box 44 m from any
+  rock, and would otherwise be the only buildings on the map whose glass has no
+  hills in it.
 
 - **The bake draws no sky and no glazing, and the cube's ALPHA is what says
   so.** It clears to a transparent black and every cel variant but the glazing
@@ -291,24 +331,30 @@ Four things about it are load-bearing:
   much by giving a cube render target `INVCUBIC_MODE`, and its own reflection
   path spends `INVERTCUBICMAP` on the same line. Getting it wrong puts the
   pavement where the sky belongs, which reads as glass that is merely too dark.
-- **The bake borrows the shader's eye and must give it back.** Every cel
-  material fogs and rims against `camPos`, so the six faces are rendered with
-  it moved to the probe — read on face 0 and *only* face 0, because by face 1
-  the eye already is the probe. Before that guard the whole cache came out of
-  the bake holding the probe's position and the main pass of the install frame
-  fogged the map against a point in the middle of it.
+- **The bake borrows the shader's eye and gives it back once, around the whole
+  render-target block.** Every cel material fogs and rims against `camPos`, so
+  each probe renders with it moved to that probe — and the restore hangs off
+  `scene.onAfterRenderTargetsRenderObservable` rather than off each probe,
+  because 37 bakes would otherwise be 37 chances to put it back wrong. The
+  first version of this hooked each face and re-read the eye on every one of
+  them: by face 1 the eye already IS the probe, so the whole cache came out of
+  the bake holding it and the main pass of the install frame fogged the map
+  against a point in the middle of it. Both hooks are guarded walks, so on the
+  thousands of frames that bake nothing they are a vector copy and a compare.
+- **Probes are pooled and never disposed**, like the bot rigs: one is six scene
+  uniform buffers and a cube. A map with fewer glazed blocks than the last
+  leaves the spare probes parked with an empty render list.
 
-What one cube gets wrong is position: a pane returns the right city, the right
-colour, moving the right way, seen from the middle of the map rather than from
-the pane. The honest alternatives are a probe per building (six renders each,
-out of a budget whose whole argument is that the world is drawn once) and a
-screen-space pass, which cannot answer the question the feature exists for — a
-pane you are looking at reflects what is behind YOU. `graphics.reflection.
-strength` (0.9) is deliberately short of 1 for the same reason: the last tenth
-is what lets a player catch the approximation out by walking along a frontage.
-A map with no glazing bakes nothing and publishes strength 0; the cube stays
-bound regardless, because a `samplerCube` with nothing on its unit is undefined
-behaviour rather than a black fetch.
+The remaining approximation is that a probe serves a whole block: a pane
+returns the right city seen from the middle of its own block rather than from
+the pane itself. `graphics.reflection.strength` (0.9) is deliberately short of
+1 for that reason — the last tenth is what lets a player catch it out by
+walking along a frontage. The alternatives were a probe per pane (6,246 of
+them) and a screen-space pass, which cannot answer the question the feature
+exists for at all: a pane you are looking at reflects what is behind YOU. A map
+with no glazing bakes nothing; the default cube stays bound to the glazing
+material regardless, because a `samplerCube` with nothing on its unit is
+undefined behaviour rather than a black fetch.
 
 **The Fresnel is deliberately NOT banded**, alone among the terms in this shader.
 A band edge on a flat sheet is a contour drawn where the view angle crosses a

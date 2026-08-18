@@ -862,6 +862,27 @@ export interface GlassSpec {
 }
 
 /**
+ * One reflection probe, as the glazing material that samples it needs it.
+ *
+ * `ReflectionSystem` owns all five and hands them over together, because they
+ * are one fact: a cube is only meaningful with the point it was baked from and
+ * the box its rays are re-aimed against. Splitting them into setters would let
+ * a pane sample one probe's picture through another probe's parallax, which
+ * looks like the reflection sliding off the building it belongs to.
+ */
+export interface ProbeReflection {
+  /** The baked cube. Alpha 1 where the bake drew world, 0 where it saw sky. */
+  cube: BaseTexture;
+  /** The box the mirrored ray leaves the world through. */
+  boxMin: Vector3;
+  boxMax: Vector3;
+  /** Where the bake was taken from. */
+  at: Vector3;
+  /** How much of it a pane returns, against the sky it would otherwise show. */
+  strength: number;
+}
+
+/**
  * Creates and caches one cel ShaderMaterial per color, and keeps the shared
  * environment uniforms (light, fog, mist, camera, dynamic lights) in sync on
  * all of them.
@@ -1004,27 +1025,31 @@ export class CelMaterialFactory {
   private shadowParams = new Vector4(0.0025, 0.15, 0.06, 0);
 
   /**
-   * The glazing materials, which are the only ones any of the reflection state
-   * below means anything to.
+   * What each glazing material was built FROM, so a per-probe twin of it can be
+   * built from the same thing.
    *
-   * A list of its own rather than a walk over `this.cache`, for the reason the
-   * per-frame guards elsewhere in here exist: a `setVector4` for a uniform a
-   * material's effect does not declare is not an error, it is a lookup that
-   * returns null and a bind that returns early — on every material, on every
-   * draw, forever. `applyShadow` may push onto the whole cache because every
-   * cel material declares `shadowMap`; nothing but `CEL_GLASS` declares these.
+   * The reflection is the one piece of shared state that is not shared: every
+   * other uniform in here is the same on every material in the cache, and a
+   * cube is one probe's picture of one place. So a pane group's material is
+   * keyed by (colour, slot) rather than by colour alone, and this is what lets
+   * `glassProbe` mint slot 7 of a colour it was never told the name of.
    */
-  private glassMats: ShaderMaterial[] = [];
-  /** The bake, and where it was taken from. Null until a map has been installed. */
-  private reflectionCube: BaseTexture | null = null;
-  private reflectBoxMin = Vector3.Zero();
-  private reflectBoxMax = Vector3.Zero();
+  private glassRecipes = new Map<
+    ShaderMaterial,
+    { hex: string; glass: GlassSpec }
+  >();
   /**
-   * xyz the bake point, w how much of the bake a pane returns. Zero strength
-   * is the state before any bake and on any map with no glazing on it, and it
-   * is what makes the cube's contents not matter there — see `setReflection`.
+   * The cube a glazing material is BORN holding, before any probe has claimed
+   * it — `ReflectionSystem`'s first probe, published once at construction.
+   *
+   * It is bound with a strength of 0, so what is in it never reaches a pixel.
+   * The binding is not optional even so: a `samplerCube` with nothing on its
+   * unit reads whatever 2D texture is there, which is undefined behaviour
+   * rather than a black fetch. This is what makes "a glazing material always
+   * has a cube" true from the moment `MapBuilder` asks for one, which is
+   * before any probe has been placed.
    */
-  private reflectProbe = new Vector4(0, 0, 0, 0);
+  private defaultCube: BaseTexture | null = null;
 
   constructor(private scene: Scene) {}
 
@@ -1149,12 +1174,12 @@ export class CelMaterialFactory {
    * translucent variants — though unlike them nothing recovers ink from it,
    * because glass is not outlined.
    */
-  getGlass(hex: string, glass: GlassSpec): ShaderMaterial {
-    const cacheKey = `\0glass-${hex}`;
+  getGlass(hex: string, glass: GlassSpec, slot = 0): ShaderMaterial {
+    const cacheKey = slot === 0 ? `\0glass-${hex}` : `\0glass-${hex}#${slot}`;
     let mat = this.cache.get(cacheKey);
     if (!mat) {
       mat = new ShaderMaterial(
-        `cel-glass-${hex}`,
+        slot === 0 ? `cel-glass-${hex}` : `cel-glass-${hex}#${slot}`,
         this.scene,
         { vertex: "cel", fragment: "cel" },
         {
@@ -1188,7 +1213,7 @@ export class CelMaterialFactory {
       this.applyTranslucency(mat, null);
       this.applyGlass(mat, glass);
       this.applyReflection(mat);
-      this.glassMats.push(mat);
+      this.glassRecipes.set(mat, { hex, glass });
       this.cache.set(cacheKey, mat);
     }
     return mat;
@@ -1527,33 +1552,64 @@ export class CelMaterialFactory {
   }
 
   /**
-   * The world as glass reflects it: the baked cube, the box the mirrored ray
-   * is corrected against, the point the bake was taken from, and how much of
-   * it a pane returns.
-   *
-   * Pushed once per map install by `ReflectionSystem`, which owns all four —
-   * this is the same publish-once shape as `setShadowMap` and for the same
-   * reason: the glazing material is shared and permanent while what it
-   * reflects is rebuilt with the map.
-   *
-   * **`strength` 0 is what a map with no glazing on it passes**, and it is the
-   * whole of the "off" state. The cube stays bound either way, because a
-   * `samplerCube` with nothing on its unit is a 2D texture as far as the
-   * driver is concerned and that is undefined behaviour rather than a black
-   * fetch; multiplying an undefined RGBA8 read by zero is defined and free.
+   * The cube every glazing material is bound to until a probe claims it.
+   * Called once, by `ReflectionSystem`'s constructor, before `MapBuilder` has
+   * asked for a pane material at all. See `defaultCube`.
    */
-  setReflection(
-    cube: BaseTexture,
-    boxMin: Vector3,
-    boxMax: Vector3,
-    probe: Vector3,
-    strength: number,
-  ): void {
-    this.reflectionCube = cube;
-    this.reflectBoxMin.copyFrom(boxMin);
-    this.reflectBoxMax.copyFrom(boxMax);
-    this.reflectProbe.copyFromFloats(probe.x, probe.y, probe.z, strength);
-    for (const mat of this.glassMats) this.applyReflection(mat);
+  setDefaultReflection(cube: BaseTexture): void {
+    this.defaultCube = cube;
+    for (const mat of this.glassRecipes.keys()) this.applyReflection(mat);
+  }
+
+  /**
+   * The glazing material for ONE reflection probe: the same colour and the
+   * same four glass numbers as `base`, carrying that probe's cube, the box its
+   * ray is corrected against, and where it was baked from.
+   *
+   * This is the one place the per-colour cache is deliberately widened, and
+   * the reason is that a cube is not shared state: it is one probe's picture
+   * of one place, and two buildings that reflect the same thing are two
+   * buildings in the same street. `slot` is the probe's index and the second
+   * half of the cache key, so a map installed twice reuses the same materials
+   * rather than growing the cache by a mapful every round.
+   *
+   * Costs no draw call: the glazing is already one merged mesh per map block
+   * (`MapBuilder.paneGroup`), so this hands each of those meshes a material of
+   * its own rather than splitting anything. What it does cost is a seat in the
+   * cache for every one of them — the per-frame walks are guarded, so that is
+   * paid on the frames that move the camera or the lights.
+   */
+  glassProbe(
+    base: ShaderMaterial,
+    slot: number,
+    refl: ProbeReflection,
+  ): ShaderMaterial {
+    const recipe = this.glassRecipes.get(base);
+    if (!recipe) {
+      // Not a glazing material, which is a caller error rather than a state
+      // this can be in. Handing the base back leaves the pane drawn and
+      // reflecting nothing, which is the old behaviour and not a crash.
+      if (import.meta.env.DEV) {
+        console.warn(`[cel] glassProbe on a non-glass material: ${base.name}`);
+      }
+      return base;
+    }
+    const mat = this.getGlass(recipe.hex, recipe.glass, slot);
+    mat.setTexture("reflectionCube", refl.cube);
+    // **Cloned, and that is not defensive tidiness.** `ShaderMaterial` keeps
+    // the Vector3 it is handed BY REFERENCE and reads it again on every bind —
+    // which is exactly what `applyCamera` leans on to push one eye onto the
+    // whole cache with a single copy. Here it inverts: the caller hands over
+    // one scratch pair reused down a loop over 37 probes, so storing the
+    // reference would leave every glazing material in the map sharing the last
+    // probe's box.
+    mat.setVector3("reflectBoxMin", refl.boxMin.clone());
+    mat.setVector3("reflectBoxMax", refl.boxMax.clone());
+    mat.setVector4(
+      "reflectProbe",
+      new Vector4(refl.at.x, refl.at.y, refl.at.z, refl.strength),
+    );
+    return mat;
   }
 
   /** The light's view*projection; re-uploaded when the shadow camera moves. */
@@ -1706,15 +1762,18 @@ export class CelMaterialFactory {
   }
 
   /**
-   * The reflection state, onto one glazing material. Called on create as well
-   * as from `setReflection`, for the reason every other `apply*` is: a pane
-   * material minted after the bake has to be born holding it.
+   * What a glazing material is BORN with: a bound cube and a strength of zero,
+   * which is a pane that reflects the sky and nothing else.
+   *
+   * Unlike every other `apply*` here this is not a copy of shared state, and
+   * that is the whole shape of the reflection: `glassProbe` is what gives a
+   * material a real one, and it does it on the spot rather than from a walk.
    */
   private applyReflection(mat: ShaderMaterial): void {
-    if (this.reflectionCube) mat.setTexture("reflectionCube", this.reflectionCube);
-    mat.setVector3("reflectBoxMin", this.reflectBoxMin);
-    mat.setVector3("reflectBoxMax", this.reflectBoxMax);
-    mat.setVector4("reflectProbe", this.reflectProbe);
+    if (this.defaultCube) mat.setTexture("reflectionCube", this.defaultCube);
+    mat.setVector3("reflectBoxMin", Vector3.Zero());
+    mat.setVector3("reflectBoxMax", Vector3.Zero());
+    mat.setVector4("reflectProbe", new Vector4(0, 0, 0, 0));
   }
 }
 
