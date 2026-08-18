@@ -283,6 +283,37 @@ function arrayFor(layout: MapLayout, list: SelectionList): EntryRecord[] | undef
   return Array.isArray(v) ? (v as EntryRecord[]) : undefined;
 }
 
+/**
+ * The two lists that are OPTIONAL on `MapLayout`: a map with no pools and no
+ * lawns omits them, and Coldharbour omits both.
+ *
+ * They are the reason `addItem` creates rather than refuses. "This map has
+ * never had grass" is not a state the author can do anything about from inside
+ * the editor — the add is the request to give it some — and refusing made the
+ * feature look broken on exactly the maps that most needed it. The other four
+ * lists are required, so a missing one there means the layout is not a layout
+ * and inventing an array would paper over it.
+ *
+ * Creating the array is only half of it: `serializeLayout` writes the matching
+ * `const` into the source, so the declaration and the entries appear together
+ * on the next save. Neither half is any use alone — an array with no
+ * declaration is entries that vanish on Ctrl+S.
+ */
+const OPTIONAL_LISTS = new Set<SelectionList>(["water", "grass"]);
+
+/** The array behind a list, created empty when the map has never had one. */
+function arrayForOrCreate(
+  layout: MapLayout,
+  list: SelectionList,
+): EntryRecord[] | undefined {
+  const existing = arrayFor(layout, list);
+  if (existing) return existing;
+  if (!OPTIONAL_LISTS.has(list)) return undefined;
+  const fresh: EntryRecord[] = [];
+  (layout as unknown as Record<string, unknown>)[list] = fresh;
+  return fresh;
+}
+
 function entryFor(layout: MapLayout, ref: SelectionRef): EntryRecord | undefined {
   return arrayFor(layout, ref.list)?.[ref.index];
 }
@@ -517,7 +548,7 @@ export function addItem(
   at: Vector3,
   terrain: TerrainField,
 ): SelectionRef | null {
-  const array = arrayFor(layout, list);
+  const array = arrayForOrCreate(layout, list);
   if (!array) return null;
   const x = q(at.x);
   const z = q(at.z);

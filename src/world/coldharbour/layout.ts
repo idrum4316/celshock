@@ -1,7 +1,8 @@
 /**
  * coldharbour/layout.ts — THE MAP, as data: structure placements, scatter
- * regions, control points, spawns. No water and no grass — a downtown has
- * neither. The floor's shape is generated data and lives in heights.ts.
+ * regions, control points, spawns, and the civic square's lawn. No water — a
+ * downtown has none. The floor's shape is generated data and lives in
+ * heights.ts.
  * Consumed by MapBuilder; nothing here is code to special-case.
  * Gotchas that have already cost time: collider top faces within
  * CONFIG.nav.stepHeight of adjacent ground or bots treat decks as walls;
@@ -12,6 +13,7 @@
 import { Vector3 } from "@babylonjs/core";
 import type {
   ControlPointDef,
+  GrassRect,
   MapLayout,
   Placement,
   ScatterSpec,
@@ -150,13 +152,28 @@ const placements: Placement[] = [
   { kind: "road", x: 0, z: 40, rotY: Math.PI / 2, params: { surface: "asphalt", width: 16, length: 300 } },
   { kind: "road", x: 0, z: 120, rotY: Math.PI / 2, params: { surface: "asphalt", width: 16, length: 300 } },
 
-  // **The square is deliberately NOT paved with anything.** It was laid as one
-  // 64 m cobble slab first, and cobblestone is the kit's one warm texture: a
-  // tan floor in the middle of a grey city read as a sandpit and nothing else
-  // on the map agreed with it. The valley floor's own `gravel` surface already
-  // reads as aggregate paving (see the environment's `floorSurface`), so what
-  // makes the square a square is the block it stands in and the monument on it.
-  { kind: "monument", x: -3, z: -1.368, params: { width: 11 } }, // the square's landmark
+  // **The square is a LAWN with four paths across it, and the paving experiment
+  // it replaced is worth stating.** The block was laid as one 64 m cobble slab
+  // first, and cobblestone is the kit's one warm texture: a tan floor in the
+  // middle of a grey city read as a sandpit and nothing else on the map agreed
+  // with it. The lesson there was about AREA, not about the material — 4,096
+  // square metres of the one warm thing on the map. So the cobble is back, at
+  // a tenth of the coverage and against green instead of grey, as the four
+  // paths that lead to the monument. Swapping them to `surface: "asphalt"` is
+  // a one-word change per line if that reads better in the end.
+  //
+  // The grass is the `grass` rects at the bottom of this file, and it grows
+  // only where they say: `GrassSystem` is told the rectangles, so the paths
+  // and the kerbs stay bare because no rect covers them. It is not a collider
+  // and not navigation — a lawn is paint.
+  { kind: "monument", x: 0, z: 0, params: { width: 11 } }, // the square's landmark
+  // Out of the monument's bottom step (it reaches 5.5 m) to the avenue kerb at
+  // 32, so each path is 27 m long and the four of them quarter the block. The
+  // lawns are laid to the same lines with 2 m to spare either side.
+  { kind: "road", x: 0, z: 18.5, params: { width: 4, length: 27 } },
+  { kind: "road", x: 0, z: -18.5, params: { width: 4, length: 27 } },
+  { kind: "road", x: 18.5, z: 0, rotY: Math.PI / 2, params: { width: 4, length: 27 } },
+  { kind: "road", x: -18.5, z: 0, rotY: Math.PI / 2, params: { width: 4, length: 27 } },
 
   // --- the built blocks -----------------------------------------------------
   // Towers are solid and carry three colliders each; the two offices and the
@@ -304,8 +321,6 @@ const placements: Placement[] = [
   { kind: "planter", x: -62, z: 50, params: { width: 2.6, depth: 1.4 } },
   { kind: "planter", x: 60, z: -50, params: { width: 2.6, depth: 1.4 } },
   { kind: "planter", x: 92, z: -50, params: { width: 2.6, depth: 1.4 } },
-  { kind: "road", x: -2.912, z: 0.059, params: { length: 64 } },
-  { kind: "road", x: -0.063, z: -1.438, rotY: Math.PI / 2, params: { length: 64 } },
 ];
 
 /**
@@ -334,12 +349,25 @@ const scatter: ScatterSpec[] = [
   { prop: "rubble", x: 10, z: -120, radius: 7, count: 4, scale: [0.8, 1.2], blocking: true, clearance: 1.1 },
   { prop: "barrel", x: -46, z: -100, radius: 5, count: 4, blocking: true, clearance: 0.55 },
   { prop: "barrel", x: 46, z: 96, radius: 5, count: 4, blocking: true, clearance: 0.55 },
-  // The square's planting, what is left of it. Well outside C's 16 m ring: the
-  // nearest is 36.8 m from the flag against a radius plus clearance of 21.
-  { prop: "pine", x: 16, z: 18.5, width: 24, depth: 24, count: 15, scale: [0.8, 1.2], blocking: true, clearance: 0.55 },
-  { prop: "pine", x: -18.5, z: -17.5, width: 24, depth: 24, count: 15, scale: [0.8, 1.2], blocking: true, clearance: 0.55 },
-  { prop: "pine", x: -18.847, z: 18.43, width: 24, depth: 24, count: 15, scale: [0.9, 1.3], blocking: true, clearance: 1.2 },
-  { prop: "pine", x: 18.586, z: -17.039, width: 24, depth: 24, count: 15, scale: [0.9, 1.3], blocking: true, clearance: 1.2 },
+  // The square's planting: one stand per quarter, inside the lawn and clear of
+  // the four paths. **These are the one scatter regions on the map that sit
+  // inside a flag's ring, and that is the point of them** — C was the only
+  // objective here that was pure open ground, which made it the only one with
+  // nothing to fight from. The rule the rest of this list keeps (a region
+  // stays clear of a flag by its own radius plus the prop's half-length) is
+  // about dressing that would clutter an objective; a planted square is the
+  // objective. Each stand still stops 9 m short of the centre on either axis —
+  // 12.7 m from the flag on the diagonal, against C's 16 m radius — so the
+  // monument and the ground round it stay open and the paths stay walkable end
+  // to end.
+  //
+  // `clearance` is 4 against a 0.62 m trunk — a spacing rule, not a collider
+  // (see `ScatterSpec.clearance`). Ten trees over a 20 m square at 4 m apart
+  // is an avenue of them rather than a thicket.
+  { prop: "pine", x: 19, z: 19, width: 20, depth: 20, count: 10, scale: [0.8, 1.2], blocking: true, clearance: 4 },
+  { prop: "pine", x: -19, z: 19, width: 20, depth: 20, count: 10, scale: [0.9, 1.3], blocking: true, clearance: 4 },
+  { prop: "pine", x: -19, z: -19, width: 20, depth: 20, count: 10, scale: [0.8, 1.2], blocking: true, clearance: 4 },
+  { prop: "pine", x: 19, z: -19, width: 20, depth: 20, count: 10, scale: [0.9, 1.3], blocking: true, clearance: 4 },
 ];
 
 /**
@@ -356,11 +384,37 @@ const scatter: ScatterSpec[] = [
  * in a service core, a stair lane or a car-park column, because a control point
  * inside a collider makes `surfaceAt` return -1 there and the flag becomes
  * uncapturable with nothing to see.
+ *
+ * **C is the fourth case, and it is that same rule with the monument standing
+ * on the origin.** The statue is the square's focal point and the four paths
+ * lead to it, so it wants the exact centre — and a flag at the exact centre is
+ * then inside the shaft, which is precisely what `buildMonument` warns about
+ * and what the editor's validator reports as "flag C centre is not standable".
+ * Measured, not assumed: the monument at (0, 0) with C at the origin fails
+ * that check and takes C's reachability from both homes down with it.
+ *
+ * So C stands ON the monument, at the top of its three steps — 3.5 m out from
+ * the shaft, clear of the 2.4 m plinth, on a tier top that `buildMonument`
+ * keeps at 0.34 m a step precisely so a body can walk up it from any bearing.
+ * `pos.y` is that tier's height for the same reason A, B and E carry a storey
+ * height.
+ *
+ * **The offset costs nothing, because it is along x = z.** The two homes are
+ * at (-144, 144) and (144, -144), so every point with x = z is equidistant
+ * from both — the same arithmetic the spawn list below spends a paragraph on.
+ * Moving C 3.5 m along that line leaves both walks identical, which no other
+ * bearing off the origin would have done.
+ *
+ * Capture is unaffected by the height: occupancy is a horizontal distance test
+ * (`ConquestSystem.pointAt`), so the cylinder still covers the whole square
+ * from the ground, and the ring is sampled per segment around its own
+ * circumference rather than from the flag, so it lies on the lawn rather than
+ * floating at plinth height.
  */
 const controlPoints: ControlPointDef[] = [
   { id: "A", name: "Alpha", pos: new Vector3(-80, 0.2, 66), radius: 15 },
   { id: "B", name: "Bravo", pos: new Vector3(-80, 0.2, -78), radius: 14 },
-  { id: "C", name: "Charlie", pos: new Vector3(0, 0, 0), radius: 16 },
+  { id: "C", name: "Charlie", pos: new Vector3(2.5, 1.02, 2.5), radius: 16 },
   { id: "D", name: "Delta", pos: new Vector3(64, 0, 64), radius: 14 },
   { id: "E", name: "Echo", pos: new Vector3(78, 0.2, -66), radius: 15 },
 ];
@@ -392,11 +446,42 @@ const spawns: SpawnPointDef[] = [
   { team: null, controlPoint: "E", pos: new Vector3(78, 0, -44), yaw: Math.PI },
 ];
 
+/**
+ * The civic square's lawn: one rect per quarter of the block, laid to the same
+ * lines as the four paths and stopping 2 m short of them on each side.
+ *
+ * The only grass on the map, and the only reason `coldharbour/environment.ts`
+ * carries a `GrassEnvSpec` at all — a rect with no palette grows nothing, and
+ * `GrassSystem.build` returns early rather than complaining about it.
+ *
+ * Purely visual. No collider, no nav cost, no `WorldBox`: a tuft that lands
+ * inside a collider is dropped at build time, so the four stands of pines
+ * above cut their own holes in this without either list knowing about the
+ * other. The bare 2 m at the kerb and along each path is what makes the paths
+ * read as paths.
+ *
+ * **`density` is 5 against the 1.1 default, and the default is what a FIELD
+ * wants rather than what a lawn does.** At 1.1 tufts per square metre the
+ * square came out as weeds standing in gravel — right for Hollowmere's dead
+ * pasture, wrong for the one tended place in a city, and from above it did not
+ * read as green at all. Five is where the tufts close up into a surface from
+ * standing height without going solid enough to hide a prone body. It costs
+ * ~13,500 tufts over the four rects, which is one thin-instanced draw call and
+ * a build-time scatter, not a per-frame cost.
+ */
+const grass: GrassRect[] = [
+  { x: 17, z: 17, width: 26, depth: 26, density: 5 },
+  { x: -17, z: 17, width: 26, depth: 26, density: 5 },
+  { x: -17, z: -17, width: 26, depth: 26, density: 5 },
+  { x: 17, z: -17, width: 26, depth: 26, density: 5 },
+];
+
 export const ColdharbourLayout: MapLayout = {
   placements,
   scatter,
   controlPoints,
   spawns,
+  grass,
   terrain: ColdharbourHeights,
   /**
    * The first map that is not `CONFIG.map.size`. Everything downstream takes

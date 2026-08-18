@@ -382,9 +382,140 @@ export function serializeLayout(
   }
 
   for (; cursor < scan.lines.length; cursor++) out.push(scan.lines[cursor]);
+  declareMissingRegions(out, scan, current);
   // The scan's own terminator, not "\n": a CRLF checkout must come back CRLF or
   // a no-op save rewrites every line in the file.
   return { source: out.join(scan.eol), skipped };
+}
+
+/**
+ * The element type each creatable list is declared with. These are the two
+ * arrays `MapLayout` marks optional, so they are the two a map can be missing
+ * entirely — and both are exported from `world/layout`, which every layout
+ * file already imports its vocabulary from.
+ */
+const REGION_TYPES: Record<string, string> = {
+  water: "WaterRect",
+  grass: "GrassRect",
+};
+
+/**
+ * Declares any list that has entries but has never existed in the source.
+ *
+ * A map with no lawns has no `grass` array at all, so the first rect added to
+ * one has nowhere in the file to live. Without this, `serializeLayout` walks
+ * REGIONS and a list with no region is skipped in silence: the entries are
+ * dropped on save and the author is told it went fine. That is the worst of
+ * the three available behaviours — worse than refusing the add, which is what
+ * the editor used to do — and it is why the fix lives here and not only in
+ * `addItem`. The two halves are a pair: an array the editor creates at runtime
+ * and a declaration written for it here, and either one alone loses data.
+ */
+function declareMissingRegions(
+  out: string[],
+  scan: Scan,
+  current: MapLayout,
+): void {
+  for (const [name, type] of Object.entries(REGION_TYPES)) {
+    if (scan.regions.some((r) => r.name === name)) continue;
+    const entries = entriesOf(current, name);
+    if (entries.length > 0) declareRegion(out, name, type, entries);
+  }
+}
+
+/**
+ * Writes one array declaration into the source, in the three places this
+ * file's house style spells one.
+ *
+ * Every anchor is checked and a missing one throws, because the alternative is
+ * emitting a layout.ts that does not compile — and the editor's whole contract
+ * is that it patches an authored file rather than regenerating it. The `const`
+ * goes after the last array already declared rather than immediately before
+ * the export, so it lands among its siblings instead of between the export's
+ * doc comment and the export.
+ */
+function declareRegion(
+  out: string[],
+  name: string,
+  type: string,
+  entries: Record<string, unknown>[],
+): void {
+  const exportAt = out.findIndex((l) => /^export const \w+: MapLayout = \{$/.test(l));
+  if (exportAt < 0) {
+    throw new SerializeError(
+      `layout.ts: no "export const …: MapLayout = {" to declare ${name} in`,
+    );
+  }
+
+  // The shorthand member first: it goes BELOW the export line, so inserting
+  // the const above it afterwards leaves this index alone.
+  let member = exportAt + 1;
+  while (member < out.length && /^ {2}\w+,$/.test(out[member])) member++;
+  if (member === exportAt + 1) {
+    throw new SerializeError(
+      `layout.ts: ${name} has nowhere to go — the exported object lists no arrays`,
+    );
+  }
+  out.splice(member, 0, `  ${name},`);
+
+  let end = exportAt - 1;
+  while (end >= 0 && out[end] !== "];") end--;
+  if (end < 0) {
+    throw new SerializeError(
+      `layout.ts: no array declaration to put ${name} after`,
+    );
+  }
+  out.splice(
+    end + 1,
+    0,
+    "",
+    `const ${name}: ${type}[] = [`,
+    ...entries.map((e) => emitFresh(e, name, "  ")),
+    "];",
+  );
+
+  addTypeImport(out, type);
+}
+
+/**
+ * Adds one name to the `import type { … } from "../layout"` block, keeping it
+ * alphabetical — which is how all three shipped maps hold that list.
+ *
+ * Both forms are handled because both are things a hand-authored layout may
+ * reasonably be written as, and the file this runs against is authored.
+ */
+function addTypeImport(out: string[], type: string): void {
+  const close = out.indexOf('} from "../layout";');
+  if (close >= 0) {
+    const open = out.lastIndexOf("import type {", close);
+    if (open < 0) {
+      throw new SerializeError(`layout.ts: unclosed import type block`);
+    }
+    const line = `  ${type},`;
+    if (out.slice(open + 1, close).includes(line)) return;
+    let at = open + 1;
+    while (at < close && out[at].trim().replace(/,$/, "") < type) at++;
+    out.splice(at, 0, line);
+    return;
+  }
+
+  const oneLine = out.findIndex((l) =>
+    /^import type \{ .* \} from "\.\.\/layout";$/.test(l),
+  );
+  if (oneLine < 0) {
+    throw new SerializeError(
+      `layout.ts: no \`import type { … } from "../layout"\` to add ${type} to`,
+    );
+  }
+  const names = out[oneLine]
+    .replace(/^import type \{ | \} from "\.\.\/layout";$/g, "")
+    .split(",")
+    .map((n) => n.trim())
+    .filter(Boolean);
+  if (names.includes(type)) return;
+  names.push(type);
+  names.sort();
+  out[oneLine] = `import type { ${names.join(", ")} } from "../layout";`;
 }
 
 /** Regions the scanner must have found for a save to be considered safe. */

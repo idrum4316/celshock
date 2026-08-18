@@ -199,7 +199,27 @@ export const ColdharbourEnvironment: EnvironmentSpec = {
    * `CONFIG.graphics.spec.cobble`, which is Hollowmere's 38-deg moon.
    */
   groundSpec: { color: "#8d9298", intensity: 0.05, shininess: 20 },
-  // No water and no grass: neither rect list has an entry, so both palettes
-  // would be dead weight. See `WaterEnvSpec` / `GrassEnvSpec` — omitting them
-  // is what leaves the map dry and bald, which is what a downtown is.
+  // No water: the rect list has no entry, so a palette here would be dead
+  // weight. See `WaterEnvSpec` — omitting it is what leaves the map dry.
+  /**
+   * The civic square's lawn, and the one green thing on the map.
+   *
+   * This file used to say "no water and no grass ... which is what a downtown
+   * is", and the second half of that was wrong about downtowns rather than
+   * about this one: a business district has exactly one planted place in it,
+   * and it is the square everybody walks through. The rest of the city is
+   * still bald, because `GrassSystem` grows only what the rects ask for.
+   *
+   * Tuned brighter and greener than either valley — Hollowmere's field is dead
+   * and Greyfen's is jungle understorey, and both are lit by something far
+   * dimmer than a 62-degree afternoon sun. The root still sits close to
+   * `floorColor` (#4c4a45) in VALUE if not in hue, which is what `GrassEnvSpec`
+   * asks for: the lawn has to read as growing out of the ground rather than as
+   * a green mat laid on it, and the tufts are thin enough that the floor shows
+   * between them from any distance at all.
+   */
+  grass: {
+    rootColor: "#3d4a2e",
+    tipColor: "#7d9c4a",
+  },
 };

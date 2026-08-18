@@ -198,10 +198,27 @@ zero" as zero, so a drag returning something to where it started leaves no trace
 without that, an un-rotated building picked up a redundant `rotY: 0`, because
 `1e-17 !== 0` survives the drop-optional-field test and prints as `0`.
 
+**The two OPTIONAL lists are the case where there is no line to patch, and both
+halves of the answer have to be present or it loses data.** `water` and `grass` are
+optional on `MapLayout`, so a map may never have declared either — Coldharbour
+declared neither. Adding to one used to fail outright (`addItem` returned null and
+the panel said "cannot add to grass"), which read as the editor being broken on
+exactly the maps that had none. It now creates the array (`arrayForOrCreate` in
+`mutate.ts`) **and** `serializeLayout` writes the declaration the array needs:
+the `const` after the last array already declared, the shorthand member in the
+exported object, and the element type into the `import type` block, all three
+anchored and each throwing a `SerializeError` rather than emitting a file that
+will not compile. Fixing only the runtime half would be worse than the refusal it
+replaced — `serializeLayout` walks REGIONS, so a list with no region is skipped in
+silence and the rects vanish on `Ctrl+S` under a "saved" message.
+
 This rests on two properties of `layout.ts` that `sourceScan.ts` re-checks every
 session: **every array entry is exactly one line**, and each array is delimited by
 its own `const name: Type = [` … `];`. Those declarations are the region anchors, so
-the file needs no marker comments. A line that fails to tokenize becomes `opaque`
+the file needs no marker comments. That second property is also why a created
+declaration is emitted across three lines minimum: `const grass: GrassRect[] = [];`
+on one line matches no region next session, so the array would be invisible to
+every later edit. A line that fails to tokenize becomes `opaque`
 and is never rewritten — the failure mode is always "leave it alone". Multi-line
 entries are the one thing that would break this; the editor treats one as a comment
 and refuses to touch it rather than corrupt it.
