@@ -234,10 +234,12 @@ src/
                         #   trestleBridge, templeRuin, haystack, lamp, cart,
                         #   crates, woodpile, shed, trough, shrine, kiln
     kit/terrain.ts      #   terrace, ramp, road, jetty, boardwalk, stairs
-    kit/city.ts         #   tower, office, parkade, planter, barrier, car,
-                        #   streetLight, monument — the downtown set, and the
-                        #   only builders that stack WALKED floors. Its header
-                        #   owns the four rules that makes necessary
+    kit/city.ts         #   tower, office, shophouse, depot, parkade, planter,
+                        #   barrier, car, streetLight, monument — the downtown
+                        #   set, and the only builders that stack WALKED floors.
+                        #   Its header owns the four rules that makes necessary,
+                        #   what each of the five buildings is FOR, and the
+                        #   collider budget an enterable one is spending
     NavGrid.ts          # Walkable-surface graph + precomputed flow fields
     CoverMap.ts         # Baked per-surface directional cover masks
     boxGeometry.ts      # Analytic WorldBox primitives, shared by NavGrid /

@@ -104,7 +104,7 @@ export interface MapCollision {
    * Not the glazing, which is most of the glass and is drawn on one side only:
    * a sheet with something solid behind it opens nothing, so the authority has
    * no use for it and the bake does not carry it (see `PaneSpec.breakable`).
-   * Coldharbour draws ~6,200 sheets and bakes twelve.
+   * Coldharbour draws ~6,100 sheets and bakes twenty-four.
    *
    * Optional so a map baked before glass existed still loads: absent reads as a
    * map with no glazing, which is what every map but Coldharbour is.

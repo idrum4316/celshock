@@ -218,7 +218,8 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
     the side that is open air first: a point-in-box test over
     `map.colliderBoxes` is four lines and settles it.
   - **`map.panes` is the glass that BREAKS and not the glass that is drawn.**
-    Coldharbour lists twelve — the two offices' shopfront bays — against 6,246
+    Coldharbour lists twenty-four — the two offices' and the eight shophouses'
+    shopfront bays — against 6,061
     sheets in `map.paneGroups`, whose vertex count over 24 is the sheet count.
     A curtain wall, a punched window and a windscreen are glazing: `sweep` will
     never report one, and a test that aims at a tower expecting a break is
@@ -234,17 +235,17 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   one will be wrong on the other. Two standing checks are cheap and are worth
   asserting instead of eyeballing — `map.paneGroups.every(g =>
   !g.mesh.renderOutline)` and no pane mesh in
-  `g.shadows.generator.getShadowMap().renderList` (37 pane meshes against 257
+  `g.shadows.generator.getShadowMap().renderList` (40 pane meshes against 316
   casters on Coldharbour). A pane that gains either is drawn as a dark plate or
   lays a hard shadow through clear glass.
 - **What a pane REFLECTS is checkable without a screenshot, and the CUBE is the
   place to check it.** There is one probe per glazed map block —
-  `g.reflections.probes[slot]` against `g.map.paneGroups[slot]`, 37 of each on
+  `g.reflections.probes[slot]` against `g.map.paneGroups[slot]`, 40 of each on
   Coldharbour — and `probe.cubeTexture.readPixels(face)` gives one baked face:
   alpha over 128 is world, everything else is the sky the shader fills in. Three
   standing checks:
   - **Coverage says the enclosure rule fired.** Mean coverage over all six faces
-    is 0.69 across the 37 probes as shipped. Put the enclosing meshes back
+    is 0.711 across the 40 probes as shipped. Put the enclosing meshes back
     (`probe.cubeTexture.renderList = allOpaque; probe.cubeTexture.render()`) and
     a tower's goes 0.57 → 0.84 and **a parked car's 0.68 → 0.99** — a probe
     inside its own bodywork, which is the failure the rule exists for.

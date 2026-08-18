@@ -39,10 +39,12 @@ import {
 import {
   buildBarrier,
   buildCar,
+  buildDepot,
   buildMonument,
   buildOffice,
   buildParkade,
   buildPlanter,
+  buildShophouse,
   buildStreetLight,
   buildTower,
 } from "./kit/city";
@@ -118,6 +120,8 @@ export const BUILDERS = {
   // building that stacks walked floors has to obey.
   tower: buildTower,
   office: buildOffice,
+  shophouse: buildShophouse,
+  depot: buildDepot,
   parkade: buildParkade,
   planter: buildPlanter,
   barrier: buildBarrier,

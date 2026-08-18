@@ -399,7 +399,7 @@ merged and frozen at all: the world is static, so a bake is a build step rather
 than a pass. **There is one probe per GLAZED BLOCK, not one for the map**,
 because a cube baked 150 m away has the right city in it seen from the wrong
 place and cannot show the building opposite; the glazing is already merged one
-mesh per block, so a probe each costs 37 cubes and no extra draw call, and each
+mesh per block, so a probe each costs 40 cubes and no extra draw call, and each
 bake leaves out whatever ENCLOSES its probe.
 Everything else here is a flat opaque colour — the water fakes its depth rather
 than showing the bed through itself, and the capture zone's skirt is annotation
@@ -676,10 +676,12 @@ pull-in.
 everywhere else.** That is a design rule first: a sheet hung on a solid mass
 stops nothing, so shooting it out changes nothing you can play with and costs
 the building its word — a street-level shopfront that shatters into a blank grey
-shaft says plainly that there is no inside. Coldharbour draws 6,246 sheets and
-twelve of them break, all of them the two offices' shopfront bays. A tower's
+shaft says plainly that there is no inside. Coldharbour draws 6,061 sheets and
+twenty-four of them break, all of them SHOPFRONT bays — twelve on the two
+offices and twelve on the eight shophouses. A tower's
 curtain wall hangs 4 cm off a solid shaft, a punched window is a hole drawn on
-the same shaft, a car's greenhouse is a cabin nobody gets into: those stay whole
+the same shaft, a shophouse's sash window is a hole drawn on its own shell, a
+car's greenhouse is a cabin nobody gets into: those stay whole
 and the round sparks on what is behind them. (An office's upper window band is
 the case one step further on — it is left OPEN, because glass over a spandrel
 that already stops a body would be worth neither the pane nor the drawing.)
@@ -701,9 +703,9 @@ a flow field computed before a window opened is stale rather than wrong.
 which means the hitscan's wall pick can never report one.** `CombatSystem.fire`
 raises `onShotPath` with the segment the round actually flew and `GlassSystem`
 answers it analytically, bucketed by map block: nothing on `Player.probeGround`,
-nothing on the bots' line of sight, and ~0.6 µs on a shot — twelve panes in two
-buckets, against ~15 µs when six thousand sheets of decorative glazing were
-panes too. The same code runs on the authority, which gets its panes off the
+nothing on the bots' line of sight, and ~1 µs on a shot — twenty-four panes in
+a handful of buckets, against ~15 µs when six thousand sheets of decorative
+glazing were panes too. The same code runs on the authority, which gets its panes off the
 collision bake and draws none of them.
 
 **A pane's index in `GameMap.panes` is its identity**, on both sides and on the

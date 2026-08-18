@@ -71,7 +71,7 @@ export interface WorldFingerprint {
    *
    * Not how much glass is drawn — a sheet with something solid behind it is
    * never in `GameMap.panes` and never in the bake (see `PaneSpec.breakable`),
-   * so what this counts is the openings, and Coldharbour's twelve shopfront
+   * so what this counts is the openings, and Coldharbour's two dozen shopfront
    * bays are all of them.
    *
    * Here for `porousBoxes`' reason taken further. A pane's index is its NAME on

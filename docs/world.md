@@ -404,10 +404,12 @@ cost one: glass breaks where there is enterable space behind it.** A sheet hung
 on something solid stops nothing — the round has always ended on the concrete —
 so breaking it changes nothing you can play with, and it costs the building the
 one thing an elevation was saying: a street-level shopfront that shatters into a
-blank grey shaft is a building admitting it is a box. Coldharbour draws **6,246
-sheets and twelve of them break**, all twelve the two offices' shopfront bays.
+blank grey shaft is a building admitting it is a box. Coldharbour draws **6,061
+sheets and twenty-four of them break**, all twenty-four SHOPFRONT bays — twelve
+on the two offices and twelve on the eight shophouses.
 The curtain walls (4 cm off a solid shaft), the punched windows drawn on the
-same shaft and the cars' greenhouses (a cabin nobody gets into) stay whole. The
+same shaft, the shophouses' sash windows drawn on their own shells and the cars'
+greenhouses (a cabin nobody gets into) stay whole. The
 offices' upper window bands are the case one step further on: they are left
 OPEN, because glass over a spandrel that already stops a body is worth neither
 the pane nor the drawing.
@@ -420,16 +422,16 @@ no other part of the game.
 
 **The DRAW CALLS are the one cost every sheet pays, and the answer is that
 glazing is merged and a pane is a vertex range rather than a mesh.** A mesh each
-would be 6,246 meshes against ~150 for the whole map — and worse than the count
+would be 6,061 meshes against ~150 for the whole map — and worse than the count
 says, because glazing is alpha-blended and a transparent mesh is sorted and
 drawn on its own rather than batched. Instead it merges per placement
 (`MapBuilder.paneGroup`) and then again per 48 m block (`PaneBlocks`), which on
-Coldharbour is **75 glazed placements into 37 meshes**. A breakable pane's
+Coldharbour is **82 glazed placements into 40 meshes**. A breakable pane's
 positions are a known range in the result: breaking one collapses that range
 onto its own first vertex, every triangle in it becomes degenerate and
 rasterizes nothing, and the cost is one `updateVerticesData` on one small
-buffer. Only the two blocks that hold a breakable pane keep an updatable
-position buffer at all; the other 35 are immutable for the life of the map.
+buffer. Only the eight blocks that hold a breakable pane keep an updatable
+position buffer at all; the other 32 are immutable for the life of the map.
 
 That is what makes the glazing unit a free choice — a tower is cut into bays
 because a curtain wall's whole appearance is the grid it is divided by, and the
@@ -468,8 +470,19 @@ reason the flag has to stay rare is `MapBuilder.struts`'s header: 161 loose
 collider boxes put ~17% on every ray in the game, `Player.probeGround` — already
 the most expensive per-frame call at 2.45 ms (FINDINGS #6) — included. Six
 thousand pickable boxes is not a trade, it is a regression. Twelve is nothing,
-and the sweep that goes with them costs **~0.6 µs a shot** (twelve panes in two
-buckets; it was ~15 µs when every sheet on the map was a pane).
+and the sweep that goes with them costs **~1 µs a shot** (twenty-four panes in
+a handful of buckets; it was ~15 µs when every sheet on the map was a pane).
+
+**What the enterable buildings cost is colliders, and that is the budget to
+check before adding another.** A pick costs per MESH, so the whole solid set is
+on the bill for every ray in the game; a tower is 3 boxes and an enterable
+building is 35–50. Coldharbour's eight shophouses and two depots took it from
+**425 solid meshes to 783**, measured A/B in one session at **+95% on every
+ray** — the ground probe 91 → 180 µs and a 120 m shot 93 → 180 µs over a
+196-ray spray, headless, so read the ratio and not the absolute. The ceiling that buys is Hollowmere's **863**, which is what
+ships and what FINDINGS #6 was measured against — so this made the cheap map
+dearer without moving the game's worst case. Check that number rather than the
+building count.
 
 **A pane that DOES break is sized like the thing that breaks, and the
 elevation's own framing is what says how big that is.** `kit/city.ts` cuts the
@@ -478,8 +491,10 @@ one panel out of its frame with the piers either side still standing, where a
 single sheet would take the whole frontage on one round. The second reason is
 the shards: `DebrisSystem` cuts a burst of twelve pieces from the pane's own
 face, so a pane much past ~20 m² is one the burst can only cover a patch of.
-Coldharbour's bays are 12–19 m², which twelve pieces of about a metre account
-for. The tower's bays are cut to the same rhythm for the look alone — nothing
+Measured over Coldharbour's twenty-four, the bays run **7.8–12.5 m²** — the
+offices' 11.5 and 12.5, the shophouses' 7.8 and 11.6, the latter cut into one
+bay or two by the unit's own width — which twelve pieces of about a metre
+account for. The tower's bays are cut to the same rhythm for the look alone — nothing
 holds a range into them and nothing ever will.
 
 **Breaking a pane is five writes and one deferred rebuild.** The visual

@@ -26,7 +26,7 @@ import { ColdharbourHeights } from "./heights";
  * **320 x 320 m**, origin at the map centre, +Z is north. It is the first map
  * that is not 240: `MapLayout.size` states it and everything downstream takes
  * the extent as an argument, so nothing here is a special case. It is also the
- * first that stacks floors, which is what `surfaces: 5` at the bottom pays for
+ * first that stacks floors, which is what `surfaces: 4` at the bottom pays for
  * — see `MapLayout.surfaces` and the header of `world/kit/city.ts`.
  *
  * ## The plan
@@ -38,13 +38,13 @@ import { ColdharbourHeights } from "./heights";
  *      z=+160  +----+------+------+------+----+
  *              | 26 |  ##  |  ##  |  ##  | 26 |
  *      z=+120  ~~~~~~ avenue ~~~~~~~~~~~~~~~~~~
- *              | ## |  A   |  ##  |  D   | ## |     A  the Exchange (office)
+ *              | ## | A ss |  ##  | D ss | ## |     A  the Exchange (office)
  *      z= +40  ~~~~~~ avenue ~~~~~~~~~~~~~~~~~~     D  the Terminal forecourt
  *              | ## |  ##  |  C   |  ##  | ## |     C  the civic square
  *      z= -40  ~~~~~~ avenue ~~~~~~~~~~~~~~~~~~     B  the parkade
- *              | ## |  B   |  ##  |  E   | ## |     E  the tower plaza (office)
- *      z=-120  ~~~~~~ avenue ~~~~~~~~~~~~~~~~~~
- *              | 26 |  ##  |  ##  |  ##  | 26 |
+ *              | ## |ss dp |  ##  |E ss  | ## |     E  the tower plaza (office)
+ *      z=-120  ~~~~~~ avenue ~~~~~~~~~~~~~~~~~~     ss shophouse terrace
+ *              | 26 |  ##  |  ##  |dp##  | 26 |     dp goods depot
  *      z=-160  +----+------+------+------+----+
  *             x=-160  -120   -40    +40   +120  +160
  *
@@ -73,6 +73,31 @@ import { ColdharbourHeights } from "./heights";
  * - **D, the terminal forecourt.** Open ground under a long low hall, with
  *   planters and a tower for cover and no interior at all. It is the fast flag,
  *   and it is deliberately the one that plays like Hollowmere's square.
+ *
+ * ## The mixed-use stock, and what it is doing between the towers
+ *
+ * Eight `shophouse`s in four terraces and two `depot`s, all of them enterable,
+ * and three of the towers gave up their plots for them. They are not near a
+ * flag by accident and they are not on one either: each pair stands on the
+ * block face BESIDE an objective — the two north of A, the two either side of
+ * the terminal block, the two east of E, and the terrace and depot south of B —
+ * so every flag but C now has a covered bound on its approach that somebody can
+ * be holding. C stays open ground on purpose; it is the objective the whole
+ * plan turns on being crossable and exposed.
+ *
+ * The second thing they do is the elevation. A block face of 26 m towers is one
+ * building repeated, and a street reads at the scale of its FRONTAGES: a 13 m
+ * shopfront with a blind over it and flats above puts a rhythm on the same
+ * hundred metres that no arrangement of towers can. The storey count picks the
+ * material (see `buildShophouse`), so a terrace written as a run of placements
+ * comes out mixed without a layout naming a colour.
+ *
+ * **What they cost is colliders, and it is the number to check before adding a
+ * ninth.** An enterable building is 35–50 boxes against a tower's 3, and these
+ * ten took the map from 425 solid meshes to 783 — about +95% on every ray in
+ * the game, measured. That is still under Hollowmere's shipped 863, and there
+ * is not much room left; see `world/kit/city.ts`'s header, which owns the
+ * budget.
  *
  * ## The sightlines, which are the thing this map exists to have
  *
@@ -153,15 +178,34 @@ const placements: Placement[] = [
   { kind: "tower", x: 103, z: 0, params: { width: 12, depth: 30, height: 25 } },
   { kind: "office", x: -80, z: 66, params: { width: 30, depth: 24, floors: 3, litWindows: true } }, // A
   { kind: "tower", x: -95, z: 96, params: { width: 34, depth: 26, height: 33 } },
-  { kind: "tower", x: -62, z: 96, params: { width: 26, depth: 26, height: 20 } },
+  // A pair of shophouses where a 20 m tower stood: the block face onto the
+  // north avenue, at the scale a street is actually read at. See the note
+  // above this array on what the mixed-use stock is for.
+  { kind: "shophouse", x: -68.5, z: 98, params: { width: 13, depth: 16, floors: 3, tint: "#5c5340", litWindows: true } },
+  { kind: "shophouse", x: -55.5, z: 98, params: { width: 13, depth: 16, floors: 2, tint: "#7c4a3f" } },
   { kind: "parkade", x: -80, z: -78, params: { width: 36, depth: 26, floors: 3 } }, // B
+  // The strip between the parkade and the south avenue, built out to the
+  // pavement: two shops with flats over them and a goods depot backing onto
+  // the car park. It is the densest bit of fabric on the map and it is
+  // deliberately the approach to B — a bound of covered interior on the one
+  // side of the objective an attacker would otherwise cross in the open.
+  { kind: "shophouse", x: -105, z: -56.6, params: { width: 13, depth: 16, floors: 3, tint: "#7c4a3f", litWindows: true } },
+  { kind: "shophouse", x: -92, z: -56.6, params: { width: 13, depth: 16, floors: 2, tint: "#4a5a4a" } },
+  { kind: "depot", x: -70, z: -56.6, params: { width: 28, depth: 16, litWindows: true } },
   { kind: "tower", x: -95, z: -100, params: { width: 34, depth: 14, height: 17 } },
   { kind: "tower", x: -62, z: -100, params: { width: 24, depth: 14, height: 12 } },
   { kind: "tower", x: 80, z: 96, params: { width: 58, depth: 26, height: 15 } },
-  { kind: "tower", x: 97, z: 62, params: { width: 24, depth: 20, height: 26 } },
+  // Fronting the avenue at the east end of the terminal block, backs to the
+  // yard behind. Turned to face -Z, which is the street here.
+  { kind: "shophouse", x: 90.5, z: 62, rotY: Math.PI, params: { width: 11, depth: 16, floors: 3, tint: "#3f4b52" } },
+  { kind: "shophouse", x: 101.5, z: 62, rotY: Math.PI, params: { width: 11, depth: 16, floors: 2, tint: "#6b4a2f", litWindows: true } },
   { kind: "office", x: 78, z: -66, params: { width: 28, depth: 24, floors: 3, litWindows: true } }, // E
   { kind: "tower", x: 94, z: -98, params: { width: 34, depth: 26, height: 44 } },
-  { kind: "tower", x: 62, z: -98, params: { width: 22, depth: 26, height: 23 } },
+  { kind: "depot", x: 62, z: -98, rotY: Math.PI, params: { width: 22, depth: 16, litWindows: true } },
+  // East of E, turned to face the avenue at x = +120: the flank a squad
+  // holding the office has to watch, and now somewhere to watch it from.
+  { kind: "shophouse", x: 103, z: -71.5, rotY: Math.PI / 2, params: { width: 11, depth: 16, floors: 2, tint: "#7c4a3f" } },
+  { kind: "shophouse", x: 103, z: -60.5, rotY: Math.PI / 2, params: { width: 11, depth: 16, floors: 3, tint: "#4a5a4a", litWindows: true } },
   { kind: "tower", x: -144, z: -144, params: { width: 26, depth: 26, height: 24 } },
   { kind: "tower", x: -95, z: -144, params: { width: 26, depth: 26, height: 31 } },
   { kind: "tower", x: -65, z: -144, params: { width: 26, depth: 26, height: 18 } },
@@ -363,14 +407,21 @@ export const ColdharbourLayout: MapLayout = {
    * `NavGrid` DROPS the overflow rather than sorting it in.
    *
    * **Four is a MEASURED number and the measurement is the interesting part.**
-   * Probing every walked level of both offices and all three parkade decks —
-   * the six stair landings included — for
+   * Probing every walked level of both offices, all three parkade decks, all
+   * eight shophouses and both depots — every stair landing included — for
    * "is it a surface, did the flood fill reach it, can both home fields route
-   * to it", the answer is identical at 3, 4 and 5: 32,529 walkable surfaces,
-   * every level reachable. Three is enough — because the builders emit walked
+   * to it", the answer is the same at 3, 4 and 5: **34,088 / 34,101 / 34,101
+   * walkable surfaces, every level reachable at all three**. The thirteen
+   * surfaces between them are prop tops, not floors. Three is enough — because the
+   * builders emit walked
    * surfaces FIRST (see `world/kit/city.ts`), so the floors fill the slots and
-   * it is the spandrels and the roof that get dropped, which is exactly the
-   * right thing to lose.
+   * it is the spandrels, the wall heads and the roof that get dropped, which is
+   * exactly the right thing to lose.
+   *
+   * That was re-derived rather than assumed when the mixed-use stock went in,
+   * and it had to be: a shophouse stacks a partition head and a shell-wall head
+   * into the same cells its three floors are in, which is exactly the kind of
+   * thing that spends the last slot on the wrong candidate.
    *
    * So this is one slot of margin over a value that already works, and it is
    * bought for a reason rather than for comfort: the guarantee rests entirely

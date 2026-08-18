@@ -1,8 +1,29 @@
 /**
- * kit/city.ts — The downtown builders: tower, office, parkade, and the street
- * furniture that makes a roadway read as one.
+ * kit/city.ts — The downtown builders: tower, office, shophouse, depot,
+ * parkade, and the street furniture that makes a roadway read as one.
  * All follow the contract in kit/core.ts (origin-local geometry, no
  * solid/pickable/collisions metadata, colliders declared not created).
+ *
+ * ## The five buildings, and what each one is FOR
+ *
+ * A downtown that is all one kind of building is a downtown with one kind of
+ * fight in it, so each of these answers a different question and none of them
+ * is a variation on another:
+ *
+ * - **`tower`** — not enterable, and the stock the skyline is made of. What it
+ *   contributes is silhouette and a wall to a sightline, and both are three
+ *   colliders. The others are worth entering partly because it is not.
+ * - **`office`** — a plate you fight ACROSS: one room per storey, cover in the
+ *   middle of it, a window band on three bearings.
+ * - **`shophouse`** — the opposite at a quarter of the footprint. A shop with
+ *   one glazed wall, flats over it cut into rooms, and a passage beside the
+ *   shop with a street door of its own. Doorway-scale, and a terrace of them
+ *   gives a block face a grain a row of 26 m towers cannot.
+ * - **`depot`** — one volume with a gallery round the back of it, so the whole
+ *   interior is visible from the whole interior and the only thing that
+ *   changes is whether you are four metres up.
+ * - **`parkade`** — the same trick with the walls off: three open decks that
+ *   all shoot each other.
  *
  * ## What is different about a city block, and why it is a file of its own
  *
@@ -43,12 +64,36 @@
  *   merges a placement's struts into one collider mesh, which is what makes a
  *   glazed elevation affordable.
  *
+ * ## What an enterable building COSTS, which is the budget for the next one
+ *
+ * Colliders, and they are paid by every ray in the game. A pick costs per MESH
+ * — predicate, matrix inverse, bounding test — so the whole solid set is on the
+ * bill for `Player.probeGround` every frame and for `CombatSystem.fire` every
+ * shot, wherever on the map the ray is (see `MapBuilder.struts`'s header, which
+ * measured 161 loose boxes at ~17% of every ray on Hollowmere).
+ *
+ * A tower is 3 boxes. `office` is ~50, `parkade` ~35, `shophouse` ~42 and
+ * `depot` ~35 — an order of magnitude each, and that is the trade an interior
+ * IS. Measured on Coldharbour when the eight shophouses and two depots went in:
+ * the map went from **425 solid meshes to 783**, and an A/B in one session
+ * (flipping `metadata.solid` on the new meshes, which is the only way to take
+ * one out of the loop — Babylon skips its own enabled/visible checks whenever a
+ * pick predicate is supplied) put the ground probe at **91 to 180 µs** and a
+ * 120 m shot at **93 to 180 µs** over the same 196-ray spray. Call it +95% on
+ * every ray, exactly linear in the mesh count.
+ *
+ * **The ceiling that buys is Hollowmere's 863**, which is what ships and what
+ * FINDINGS #6's 2.45 ms `probeGround` was measured against. Coldharbour at 783
+ * is still under it, so this changed how expensive the cheap map is and not how
+ * expensive the game's worst map is. Another two of these would not be, and
+ * that is the number to check before adding them rather than the building count.
+ *
  * ## The glass, and where it is allowed to matter
  *
- * Six thousand sheets are drawn here and TWELVE of them break, and which twelve
- * is answered by what is behind the glass rather than by what is in front of
- * it: a pane is `breakable` where there is enterable space behind it, and is
- * glazing everywhere else.
+ * Six thousand sheets are drawn here and TWENTY-FOUR of them break, and which
+ * twenty-four is answered by what is behind the glass rather than by what is in
+ * front of it: a pane is `breakable` where there is enterable space behind it,
+ * and is glazing everywhere else.
  *
  * **Glass hung on a solid mass is decoration, and breaking decoration is worse
  * than leaving it alone.** A tower's curtain wall hangs 4 cm off a solid shaft,
@@ -60,13 +105,20 @@
  * 4 cm behind it, and the sheet is never in `GameMap.panes`, the sweep, the
  * collision bake or the wire at all — see `PaneSpec.breakable`.
  *
- * The one place glass is the ONLY thing in the way is `buildOffice`'s +Z
- * elevation, which is a glazed shopfront rather than the blank wall it was: a
- * third and fourth way into the two buildings a round is actually fought
- * inside, opened by shooting rather than by walking. Piers between the bays are
- * ordinary `wall`s so the corners are never glass and the elevation still reads
- * as a building, and each bay is its own pane so one round takes out a bay
- * rather than a frontage.
+ * The places glass is the ONLY thing in the way are the two SHOPFRONTS —
+ * `buildOffice`'s +Z elevation and `buildShophouse`'s, twelve bays each across
+ * the map. Both are a wall until somebody shoots them and a way in afterwards,
+ * which is why both face the street and why the doorways are on the other
+ * sides: a squad holding the doors has an opening they can hear go in behind
+ * them. Piers between the bays are ordinary `wall`s so the corners are never
+ * glass and the elevation still reads as a building, and each bay is its own
+ * pane so one round takes out a bay rather than a frontage.
+ *
+ * The shophouse cuts its frontage into ONE bay or two depending on its width,
+ * which keeps a narrow unit off a sheet too small to be worth a pane and a wide
+ * one off a sheet a burst of twelve shards cannot cover: its bays measure 7.8
+ * and 11.6 m² against the offices' 11.5 and 12.5. It also holds the line on the
+ * count — a terrace of eight added twelve breakable sheets and not twenty-four.
  *
  * The tower's glazing is split one storey band by one BAY for what is now a
  * reason about the LOOK alone: a band is what sits between two collars and a
@@ -81,8 +133,21 @@
  * a carried light always wins one of the sixteen shader slots, so a lamp column
  * that is off is a lamp column that costs nothing — see
  * `EnvironmentSpec.lighting.lampIntensity`, which is the same argument from the
- * player's shoulder. The one exception is `office`'s `litWindows`, which is a
- * single interior light for the buildings a round is actually fought inside.
+ * player's shoulder. The exception is `litWindows`, which every enterable
+ * building here takes: two lights for an office or a depot, three for a
+ * shophouse. **An interior on a daylit map is lit by the ambient and the sky
+ * term, and the sky term is applied by `n.y`** — so it lands in full on a floor
+ * and not at all on a ceiling, and a room with no fixture in it comes out as a
+ * bright plate under a black lid. That is also why the depot's hall lamp hangs
+ * at the trusses rather than at head height, and why its gallery's hangs
+ * mid-span: everything above and beyond a point light in an enclosed room is on
+ * the ambient term alone, because the key is shadowed out by the roof.
+ *
+ * The count is the thing to watch rather than any one lamp. Coldharbour now
+ * carries about two dozen fixtures against the shader's sixteen slots;
+ * `LightingSystem` uploads the sixteen nearest, so what this buys is that they
+ * are all indoors and spread across 320 m, and what it would cost is a street
+ * full of lamp columns competing with them.
  */
 import { Scene } from "@babylonjs/core";
 import { CONFIG } from "../../config";
@@ -93,11 +158,19 @@ import {
   type Structure,
   ALLOY,
   ASPHALT,
+  AWNING,
+  BRICK,
   CITY_BRICK,
   CONCRETE,
   DARK_CONCRETE,
   ENAMEL,
+  IRON,
+  PLANK,
+  PLASTER,
+  RENDER,
   ROAD_PAINT,
+  SLATE,
+  TEAK,
   WINDOW_LIGHT,
 } from "./core";
 
@@ -162,9 +235,106 @@ const SPANDREL = 1.0;
 const HEAD = 2.5;
 /** Metres between mullions. */
 const MULLION_PITCH = 2.6;
+/**
+ * The narrowest opening this file will cut, and a NAV GRID number rather than
+ * an architectural one.
+ *
+ * `NavGrid.severLinks` cuts every link whose segment crosses a wall's box, and
+ * those segments run between CELL CENTRES — 1.5 m apart. So an opening keeps
+ * its links only if a cell centre falls inside it, and a gap under `cellSize`
+ * can land entirely between two and seal the room behind it. Nothing reports
+ * it: the doorway is drawn, a player walks through it, and the flood fill has
+ * simply never been to the other side.
+ *
+ * 1.8 m is `cellSize` plus a cell's worth of margin, so an opening survives
+ * wherever the grid's origin happens to fall relative to the wall. Measured:
+ * at 1.0 m a flat's back room came back standable-but-unreached from both home
+ * fields, and at 1.8 m both rooms of every unit on the map are reached. The
+ * cottage's 1.6 m door is the shipped precedent and is the smallest that has
+ * ever worked; do not go under it, and prefer this.
+ */
+const DOORWAY = 1.8;
 
 /** Walked height of level `s`, 0 being the ground floor. */
 const levelY = (s: number): number => (s === 0 ? GROUND : s * STOREY);
+
+/**
+ * One storey's circulation in a stair LANE: the flight, and the landing at its
+ * head. Every enterable building in this file climbs on this, and it is one
+ * function because the two halves are one decision — a flight whose grade moved
+ * takes its landing with it, and `Build.flight`'s own header is about the copy
+ * of a flight that drifts from the original.
+ *
+ * A lane runs the plate's depth and alternates between the two X edges storey
+ * by storey (see the file header), so which EDGE a storey climbs is always the
+ * caller's. Which END it climbs toward is the caller's too, and it matters for
+ * one reason: **the landing is at the head, so `dir` decides which end of the
+ * lane the way UP is at, and that has to be the end the building's own door
+ * for it is at.** Get it backwards and the door opens into the blind side of a
+ * flight — 3.4 m of concrete two metres inside a doorway, with the graph
+ * perfectly happy because the stair is still reachable from the other end.
+ * `office` climbs +Z (its doorways are on -Z and +X, and the whole plate is one
+ * room, so either end serves); `shophouse` climbs -Z, because its stair has a
+ * street door of its own at +Z and the foot has to be inside it.
+ *
+ * Three things are folded in here rather than left to each caller:
+ *
+ * - **The overrun at the foot.** 0.6 m past the bottom tread, so the joint at
+ *   the floor is buried rather than floating; `Build.flight` drops every tread
+ *   under the local ground line, which is what makes an overrun free.
+ * - **The landing at the head.** `LANDING` deep and the lane's full width,
+ *   because the lane is VOID at the level the flight climbs to — without one
+ *   the top tread is merely flush with the slab beside it and walking off the
+ *   stair in the direction you climbed it drops you a storey. See `LANDING`.
+ * - **The DEV check that the plate can hold both.** The circulation runs from
+ *   `run / 2 + 0.6` short of the -Z elevation to `run / 2 + LANDING` short of
+ *   the +Z one, so a plate too shallow for it pushes a landing through a wall.
+ *   It throws rather than building it, because the symptom otherwise is a
+ *   storey that is drawn and reachable and has a landing outside the building.
+ */
+function laneFlight(o: {
+  b: Build;
+  /** The builder's name, for the DEV message. */
+  tag: string;
+  /** Lane centre on X, and the lane's width — which IS the flight's. */
+  x: number;
+  lane: number;
+  /** The plate's depth, which is what has to hold the run and the landing. */
+  depth: number;
+  /** Walked heights this flight runs between. */
+  from: number;
+  to: number;
+  /** Which end of the lane the head — and so the way up — is at. */
+  dir?: 1 | -1;
+  tread: string;
+  landing: string;
+}): void {
+  const { b } = o;
+  const dir = o.dir ?? 1;
+  const rise = o.to - o.from;
+  const run = rise / GRADE;
+  if (import.meta.env.DEV && run / 2 + LANDING > o.depth / 2 - WALL / 2) {
+    throw new Error(
+      `${o.tag}: a ${o.depth} m plate cannot hold a ${run.toFixed(1)} m flight and ` +
+        `its ${LANDING} m landing — the landing would stand in an elevation. ` +
+        "See laneFlight, and LANDING.",
+    );
+  }
+  b.flight({
+    x: o.x,
+    w: o.lane,
+    topZ: (dir * run) / 2,
+    topY: o.to,
+    run: run + 0.6,
+    rise: rise + 0.6 * GRADE,
+    dir,
+    steps: Math.max(4, Math.round(rise / RISER)),
+    color: o.tread,
+  });
+  const lz = dir * (run / 2 + LANDING / 2);
+  b.box(o.lane, SLAB, LANDING, o.x, o.to - SLAB / 2, lz, o.landing);
+  b.block({ w: o.lane, h: SLAB, d: LANDING, x: o.x, y: o.to - SLAB / 2, z: lz });
+}
 
 /**
  * A tower: the solid stock a downtown is mostly made of, and the thing that
@@ -438,40 +608,20 @@ export function buildOffice(
 
   // The flights and the landings they arrive on. One pair per storey, each in
   // its own lane, all climbing +Z so the building has a single circulation
-  // direction and the landings line up.
+  // direction and the landings line up. `laneFlight` owns both halves and the
+  // check that the plate can hold them.
   for (let s = 0; s + 1 < floors; s++) {
-    const from = levelY(s);
-    const to = levelY(s + 1);
-    const rise = to - from;
-    const run = rise / GRADE;
-    if (import.meta.env.DEV && run / 2 + LANDING > d / 2 - WALL / 2) {
-      throw new Error(
-        `office: a ${d} m plate cannot hold a ${run.toFixed(1)} m flight and its ` +
-          `${LANDING} m landing — the landing would stand in the +Z elevation. ` +
-          "See buildOffice, and LANDING.",
-      );
-    }
-    b.flight({
+    laneFlight({
+      b,
+      tag: "office",
       x: laneX(s),
-      w: lane,
-      topZ: run / 2,
-      topY: to,
-      // Past its own foot, so the bottom tread is buried rather than floating:
-      // `Build.flight` drops every tread under the local ground line, and the
-      // overrun is what makes the joint at the floor look built.
-      run: run + 0.6,
-      rise: rise + 0.6 * GRADE,
-      dir: 1,
-      steps: Math.max(4, Math.round(rise / RISER)),
-      color: DARK_CONCRETE,
+      lane,
+      depth: d,
+      from: levelY(s),
+      to: levelY(s + 1),
+      tread: DARK_CONCRETE,
+      landing: CONCRETE,
     });
-    // The landing, butted against the head of the flight it serves. Emitted
-    // here rather than with the slabs so a flight and its floor stay one thing:
-    // both are keyed to `run`, and a flight whose grade moved takes its landing
-    // with it. See `LANDING`.
-    const lz = run / 2 + LANDING / 2;
-    b.box(lane, SLAB, LANDING, laneX(s), to - SLAB / 2, lz, CONCRETE);
-    b.block({ w: lane, h: SLAB, d: LANDING, x: laneX(s), y: to - SLAB / 2, z: lz });
   }
 
   // --- enclosure ------------------------------------------------------------
@@ -499,10 +649,11 @@ export function buildOffice(
   //
   // Structurally it is piers and bays: the piers are ordinary `wall`s so the
   // elevation still reads as a building and so the corners are never glass, and
-  // each bay between them is one BREAKABLE pane — the only twelve on the map,
-  // because these are the only twelve with a room behind them. Per bay rather
-  // than one sheet across the front, because a pane is what breaks — a single
-  // sheet would take the whole elevation out on one round.
+  // each bay between them is one BREAKABLE pane — twelve of the twenty-four on
+  // the map, the other twelve being the shophouses', because these are the only
+  // sheets with a room behind them. Per bay rather than one sheet across the
+  // front, because a pane is what breaks — a single sheet would take the whole
+  // elevation out on one round.
   {
     const bays = Math.max(3, Math.round(w / 5));
     const pier = 0.6;
@@ -630,6 +781,437 @@ export function buildOffice(
     for (let s = 1; s < floors; s++) {
       b.light(WINDOW_LIGHT, 19, 0.8, 0.02, 0, levelY(s) + 2.1, d * 0.12);
     }
+  }
+  return b;
+}
+
+/**
+ * The shophouse: a shop at the pavement with flats over it, and the piece that
+ * puts something other than a tower between the towers.
+ *
+ * ## Why a city needs one, given it already has an office
+ *
+ * `buildOffice` is a plate you fight ACROSS — one room per storey, cover in
+ * the middle of it, and three bearings of window band to shoot out of. This is
+ * the opposite building at a quarter of the footprint: 13 m of frontage, a
+ * shop at the bottom with one glazed wall and no other opening, and flats over
+ * it cut into rooms by partitions. What you get is the close-quarters space
+ * the downtown had none of — a fight measured in doorways rather than in
+ * sightlines — and a terrace of them gives a block face a grain that a row of
+ * 26 m towers cannot.
+ *
+ * It shares the office's CIRCULATION and nothing else, because the lane
+ * arrangement is the file header's answer to stacking floors rather than one
+ * building's idea: a flight in a lane at one X edge, the lane alternating
+ * storey by storey so the slab above a flight is never the one that would
+ * blank it out of the nav graph, and `laneFlight` emitting both halves. At
+ * this width the lane is a third of the plate, so what is left of each upper
+ * floor is a 9.6 m room — which is a flat, and is why the same arrangement
+ * reads as a tenement stair here and as an atrium there.
+ *
+ * ## What the ground floor is
+ *
+ * Two spaces, not one, and that is the whole of its design. The SHOP is the
+ * glazed frontage and takes the width the lane does not; the CLOSE is the
+ * stairwell over the lane, entered by its own street door beside the shopfront,
+ * with the foot of the stair three metres inside it. So a squad holding the
+ * shop is not holding the flats, and somebody can be on the first floor while
+ * somebody else is behind the counter — which is the thing a single-volume
+ * building can never do.
+ *
+ * **The two are joined at one end and not the other, and the geometry does it
+ * rather than a rule.** The stair climbs -Z, so the close's rear is under the
+ * landing at the far end and opens into the shop's back room; the middle of the
+ * close is under the flight itself, where the headroom falls below `NavGrid`'s
+ * 1.7 m about a third of the way along and the graph stops. So you can step
+ * from the shop into the back of the close and you cannot get to the stair that
+ * way — the way up is the close's own door, off the street. Nothing enforces
+ * that; a flight with a 3.6 m rise over ten metres of run enforces it.
+ *
+ * A lane is void at the level its flight climbs to and covered by the slab two
+ * floors up, so the close is open from the pavement to the SECOND floor's
+ * soffit — two storeys of stairwell to shoot up and down, which is
+ * `buildOffice`'s atrium at a quarter of the width. On a two-storey unit there
+ * is no slab to close it and it runs to the roof.
+ *
+ * ## The glass, and the two sheets that break
+ *
+ * The shopfront is the case `PaneSpec.breakable` exists for and passes its
+ * test outright: there is a room behind it and the pane is the only thing in
+ * the way. It is cut into TWO bays by its piers rather than glazed as one
+ * sheet, for `buildOffice`'s reasons — a round takes out a bay and leaves the
+ * frame, and 12 m² is a burst of shards can account for.
+ *
+ * Everything else glazed here is decoration on a solid wall: the sash windows
+ * upstairs are drawn on the shell, which stops a round 6 cm behind them, and
+ * breaking one would open nothing. They are the brick tower's punched openings
+ * at domestic scale.
+ *
+ * ## The elevation is chosen by the storey count
+ *
+ * Three storeys is later, taller stock in brick; two is older and rendered.
+ * One number, two elevations, exactly as `buildTower` picks its skin off its
+ * own height — so a terrace written as a run of placements comes out mixed
+ * without a layout ever naming a material, and there is no way to ask for a
+ * rendered five-storey block by accident.
+ */
+export function buildShophouse(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  p: BuildParams = {},
+): Structure {
+  const b = new Build(scene, mats, "shophouse");
+  const w = p.width ?? 13;
+  const d = p.depth ?? 16;
+  const floors = Math.max(2, p.floors ?? 3);
+  const top = levelY(floors);
+  /** Stair lane width, and the flight's width with it. `buildOffice`'s. */
+  const lane = 3.4;
+  const laneSide = (s: number): -1 | 1 => (s % 2 === 0 ? -1 : 1);
+  const laneX = (s: number): number => (laneSide(s) * (w - lane)) / 2;
+  /** Where the slab is, at a level whose flight came up the other edge. */
+  const slabX = (s: number): number => (-laneSide(s - 1) * lane) / 2;
+  const slabW = w - lane;
+  /** See the header: the storey count picks the elevation, nothing else does. */
+  const brick = floors >= 3;
+  const skin = brick ? CITY_BRICK : RENDER;
+  const blind = p.tint ?? AWNING;
+  /** Ground-floor clear height, under the first floor's slab. */
+  const gh = STOREY - SLAB - GROUND;
+
+  // --- walked surfaces first (file header, first rule) ----------------------
+
+  b.box(w, SLAB, d, 0, GROUND - SLAB / 2, 0, DARK_CONCRETE);
+  b.block({ w, h: SLAB, d, x: 0, y: GROUND - SLAB / 2, z: 0 });
+
+  // Upper slabs, each one box, each missing the lane its flight climbed. The
+  // slab is PLASTER rather than the city's concrete because its underside is
+  // the ceiling of the room below — the parkade's deck argument, indoors — and
+  // the boards laid on top are what the room above walks on.
+  for (let s = 1; s < floors; s++) {
+    const y = levelY(s);
+    b.box(slabW, SLAB, d, slabX(s), y - SLAB / 2, 0, PLASTER);
+    b.block({ w: slabW, h: SLAB, d, x: slabX(s), y: y - SLAB / 2, z: 0 });
+    b.box(slabW - 0.5, 0.06, d - 0.5, slabX(s), y - 0.03, 0, PLANK);
+  }
+
+  // The stair climbs -Z, which is the one thing about this building's
+  // circulation that is not the office's — see `laneFlight`. The close's own
+  // street door is on +Z, so the FOOT has to be at +Z; with the office's
+  // direction the door opened two metres from the blind end of the flight, and
+  // the way up was a 3.4 m wall you could see the underside of.
+  for (let s = 0; s + 1 < floors; s++) {
+    laneFlight({
+      b,
+      tag: "shophouse",
+      x: laneX(s),
+      lane,
+      depth: d,
+      from: levelY(s),
+      to: levelY(s + 1),
+      dir: -1,
+      tread: PLANK,
+      landing: PLASTER,
+    });
+  }
+
+  // --- the ground floor: the shop, and the close beside it ------------------
+
+  const g0 = GROUND;
+  const gy = g0 + gh / 2;
+  // Back and sides. The sides are PARTY WALLS and stay blank at every level —
+  // a terrace is written as a run of these standing shoulder to shoulder, so
+  // anything drawn on them is drawn inside the neighbour.
+  b.doorWall(w, gh, WALL, 0, gy, -d / 2, skin, DOORWAY, 2.3);
+  b.wall(WALL, gh, d, -w / 2, gy, 0, skin);
+  b.wall(WALL, gh, d, w / 2, gy, 0, skin);
+
+  // The close's street door, over the lane and beside the shopfront. Its own
+  // way in, which is what makes the flats a separate building to fight for.
+  //
+  // **`DOORWAY` wide, and that is a NAV GRID number rather than a taste one.**
+  // `NavGrid.severLinks` cuts every link a wall's box crosses, so an opening
+  // survives only where a link between two cell centres passes through it — and
+  // cell centres are `cellSize` (1.5 m) apart, so a gap narrower than that can
+  // fall entirely between two of them and seal the room with nothing to see.
+  // The cottage's 1.6 m door is the shipped example of the smallest that works;
+  // this is measured, and 1.3 m read as a door and was a wall.
+  b.doorWall(lane, gh, WALL, laneX(0), gy, d / 2, skin, DOORWAY, 2.3);
+
+  // The shopfront: piers, breakable bays between them, and the shop's own door
+  // at the +X end. The piers are ordinary `wall`s so the corner of the building
+  // is never glass, and a bay is a pane rather than the frontage being one —
+  // see the header.
+  //
+  // **The bay count is derived from the width**, so a narrow unit gets one big
+  // window and a wide one gets two, and neither ends up with a sheet outside
+  // the band a burst of twelve shards can account for — measured, these come
+  // out at 7.8 and 11.6 m² against the offices' 11.5 and 12.5 (see
+  // `docs/world.md` on panes). It also keeps the pane budget honest: the map
+  // grew from twelve breakable sheets to twenty-four, and this is what stops a
+  // terrace adding three apiece.
+  const shopW = slabW;
+  const shopX0 = -w / 2 + lane;
+  const pier = 0.6;
+  const bays = shopW >= 9 ? 2 : 1;
+  const bay = (shopW - pier * (bays + 2) - DOORWAY) / bays;
+  let cursor = shopX0;
+  for (let i = 0; i < bays; i++) {
+    b.wall(pier, gh, WALL, cursor + pier / 2, gy, d / 2, skin);
+    cursor += pier;
+    const x = cursor + bay / 2;
+    b.pane(bay, gh, 0.12, x, gy, d / 2, { breakable: true });
+    // The frame, standing proud of the glass so it survives the break: a
+    // shopfront that has lost a bay should read as an empty frame rather than
+    // as a hole in a wall. Visual only — the pane's own collider is what holds
+    // a body out, and it is the thing that goes.
+    for (const sx of [-1, 1]) {
+      b.box(0.14, gh, 0.3, x + (sx * bay) / 2, gy, d / 2 + 0.1, ALLOY);
+    }
+    b.box(bay, 0.14, 0.3, x, g0 + 2.4, d / 2 + 0.1, ALLOY);
+    b.box(bay, 0.2, 0.3, x, g0 + 0.1, d / 2 + 0.1, DARK_CONCRETE);
+    cursor += bay;
+  }
+  b.wall(pier, gh, WALL, cursor + pier / 2, gy, d / 2, skin);
+  cursor += pier;
+  {
+    // The shop door: a lintel over an opening, and the leaf standing open
+    // against the reveal inside it. Drawn open rather than shut because it IS
+    // open — a closed-looking door on a doorway a body walks through is the
+    // one thing an elevation must not say.
+    const dx = cursor + DOORWAY / 2;
+    b.wall(DOORWAY, gh - 2.3, WALL, dx, g0 + 2.3 + (gh - 2.3) / 2, d / 2, skin);
+    b.box(DOORWAY + 0.3, 0.22, 0.34, dx, g0 + 2.42, d / 2 + 0.12, ALLOY);
+    b.box(0.09, 2.2, DOORWAY - 0.5, dx + DOORWAY / 2 - 0.16, g0 + 1.1, d / 2 - 0.9, TEAK);
+    b.box(DOORWAY + 0.2, 0.1, 0.5, dx, g0 + 0.05, d / 2 - 0.1, DARK_CONCRETE);
+    cursor += DOORWAY;
+  }
+  b.wall(pier, gh, WALL, cursor + pier / 2, gy, d / 2, skin);
+
+  // The fascia over the shopfront, the blind under it, and the bracket sign.
+  // A blind is the one warm thing on the elevation and the reason `tint` is
+  // read here at all; a row of these is told apart by its blinds at a hundred
+  // metres, long before its brick is.
+  b.box(shopW + 0.3, 0.7, 0.36, shopX0 + shopW / 2, STOREY - 0.55, d / 2 + 0.14, DARK_CONCRETE);
+  b.box(shopW - 0.4, 0.24, 0.1, shopX0 + shopW / 2, STOREY - 0.55, d / 2 + 0.34, ROAD_PAINT);
+  b.box(shopW, 0.1, 2.0, shopX0 + shopW / 2, STOREY - 1.35, d / 2 + 0.9, blind, { x: -0.26 });
+  b.box(shopW, 0.34, 0.12, shopX0 + shopW / 2, STOREY - 1.62, d / 2 + 1.86, blind);
+  for (const sx of [-1, 1]) {
+    b.box(0.1, 0.62, 1.9, shopX0 + shopW / 2 + sx * (shopW / 2 - 0.2), STOREY - 1.6, d / 2 + 0.9, ALLOY);
+  }
+  b.box(0.12, 0.12, 1.1, shopX0 + 0.4, STOREY - 0.2, d / 2 + 0.6, ALLOY);
+  b.box(0.1, 0.8, 0.66, shopX0 + 0.4, STOREY - 0.72, d / 2 + 1.0, blind);
+
+  // The partition between the close and the shop, stopping short of the back
+  // wall: the shop's own back room opens onto the foot of the stair, so the
+  // two spaces are connected at the far end from both doors.
+  const closeLen = d - 3.4;
+  b.wall(0.22, gh, closeLen, -w / 2 + lane, gy, d / 2 - closeLen / 2, PLASTER);
+
+  // The counter and the stock shelving: the shop's cover. 1.05 m is under
+  // `CoverMap`'s 1.7 m hard-cover line and reads as low cover to a bot, the
+  // shelving above it is over that line and reads as hard.
+  b.wall(4.6, 1.05, 0.6, shopX0 + 4.2, g0 + 0.525, d * 0.08, PLANK);
+  b.box(4.4, 0.08, 0.7, shopX0 + 4.2, g0 + 1.09, d * 0.08, TEAK);
+  b.wall(0.6, 2.0, 4.6, w / 2 - 0.5, g0 + 1.0, -d * 0.12, PLANK);
+  for (let i = 1; i < 4; i++) {
+    b.box(0.68, 0.06, 4.4, w / 2 - 0.5, g0 + i * 0.5, -d * 0.12, TEAK);
+  }
+
+  // --- the flats ------------------------------------------------------------
+
+  // One shell for every storey above the shop rather than a ring per floor:
+  // the sashes on the rear and the sides are punched into it and drawn on it,
+  // so three boxes carry those elevations whatever the storey count, and the
+  // floors inside them are the slabs already emitted. The street elevation is
+  // the exception and is cut per storey — see below.
+  const uy0 = levelY(1) - SLAB;
+  const uh = top - SLAB - uy0;
+  const ucy = uy0 + uh / 2;
+  b.wall(w, uh, WALL, 0, ucy, -d / 2, skin);
+  b.wall(WALL, uh, d, -w / 2, ucy, 0, skin);
+  b.wall(WALL, uh, d, w / 2, ucy, 0, skin);
+
+  // The STREET elevation is the exception, and it is a gameplay decision rather
+  // than an architectural one: one window per storey is a real OPENING, cut
+  // storey by storey instead of being part of the shell.
+  //
+  // A flat whose windows are all drawn on a solid wall is a room you can hide
+  // in and cannot fight from — the round stops on the render 6 cm behind the
+  // glass, so a player who has just cleared two floors to get up there finds
+  // they cannot shoot at the street they climbed off. One opening per storey
+  // fixes that and costs four boxes a floor instead of a share of one.
+  //
+  // It is a WINDOW and not a french door, which is `buildOffice`'s rule about
+  // its window band and matters for the same reason: the spandrel under it
+  // stands 0.9 m over the floor, so a body cannot walk out of it and the nav
+  // graph is never asked whether a 0.3 m ledge three storeys up is somewhere to
+  // be. What it is instead is chest-high cover at a firing position, with the
+  // juliet balcony's rail drawn in front of it.
+  const openW = 1.9;
+  const jamb = (w - openW) / 2;
+  for (let s = 1; s < floors; s++) {
+    const y = levelY(s);
+    const wy0 = y - SLAB;
+    const wy1 = (s + 1 < floors ? levelY(s + 1) : top) - SLAB;
+    for (const sx of [-1, 1]) {
+      b.wall(jamb, wy1 - wy0, WALL, (sx * (openW + jamb)) / 2, (wy0 + wy1) / 2, d / 2, skin);
+    }
+    b.wall(openW, y + 0.9 - wy0, WALL, 0, (wy0 + y + 0.9) / 2, d / 2, skin);
+    if (wy1 > y + 2.5 + 0.05) {
+      b.wall(openW, wy1 - (y + 2.5), WALL, 0, (y + 2.5 + wy1) / 2, d / 2, skin);
+    }
+    // The reveal round the opening: the same trim a drawn sash gets, so the two
+    // read as the same window and only one of them is a hole.
+    b.box(openW + 0.4, 0.16, 0.3, 0, y + 0.82, d / 2 + 0.1, CONCRETE);
+    b.box(openW + 0.4, 0.2, 0.26, 0, y + 2.6, d / 2 + 0.1, CONCRETE);
+    for (const sx of [-1, 1]) {
+      b.box(0.14, 1.8, 0.24, (sx * (openW + 0.14)) / 2, y + 1.7, d / 2 + 0.08, CONCRETE);
+    }
+  }
+
+  // A sash window: the pane straddles the wall's outer plane so half of it
+  // stands proud and is drawn at all (the tower's lesson — a sheet set back
+  // into a solid mass is inside it and invisible), with the sill and the head
+  // standing further out again so the opening reads as punched rather than
+  // painted on.
+  const sash = (x: number, y: number, z: number, sz: -1 | 1, ww: number): void => {
+    const h = 1.6;
+    const cy = y + 0.9 + h / 2;
+    b.pane(ww, h, 0.12, x, cy, z);
+    b.box(ww + 0.36, 0.16, 0.26, x, y + 0.82, z + sz * 0.1, CONCRETE);
+    b.box(ww + 0.36, 0.2, 0.22, x, y + 2.6, z + sz * 0.1, CONCRETE);
+    for (const s of [-1, 1]) {
+      b.box(0.12, h + 0.2, 0.2, x + (s * (ww + 0.12)) / 2, cy, z + sz * 0.08, CONCRETE);
+    }
+    b.box(ww - 0.1, 0.07, 0.14, x, cy, z + sz * 0.07, ALLOY);
+  };
+
+  for (let s = 1; s < floors; s++) {
+    const y = levelY(s);
+    // Two drawn sashes on the street elevation, either side of the opening cut
+    // above, and two on the rear. Glazing on a solid shell: the brick tower's
+    // punched openings at domestic scale, and none of it breaks.
+    for (const sx of [-1, 1]) {
+      sash(sx * (openW / 2 + jamb / 2), y, d / 2, 1, Math.min(1.15, jamb - 0.7));
+    }
+    for (let i = 0; i < 2; i++) {
+      sash(-w / 2 + ((i + 0.5) / 2) * w, y, -d / 2, -1, 0.95);
+    }
+    // The juliet balcony, on the one window that is a hole. A rail and nothing
+    // to stand on: the spandrel behind it is what stops a body, so this is a
+    // silhouette rather than a surface — the planter's argument, one floor up —
+    // and the nav graph is never asked about a 0.3 m ledge three storeys up.
+    b.box(openW, 0.12, 0.5, 0, y + 0.72, d / 2 + 0.24, CONCRETE);
+    b.box(openW, 0.09, 0.09, 0, y + 1.72, d / 2 + 0.42, ALLOY);
+    for (let i = 0; i <= 6; i++) {
+      b.box(0.06, 1.0, 0.06, -openW / 2 + (i / 6) * openW, y + 1.25, d / 2 + 0.42, ALLOY);
+    }
+  }
+
+  // The flats' own partition: one wall across the plate with a doorway in it,
+  // which is what makes an upper storey rooms rather than a gallery. Emitted
+  // after the shell so a perimeter cell spends its last nav slot on a wall
+  // head rather than on the roof — the file header's first rule.
+  //
+  // **It stops short of the lane the NEXT flight climbs, and that is the whole
+  // of it.** A storey's slab covers the lane the flight LEAVING it stands in —
+  // that is what the flight's foot rests on — so a partition run across the
+  // full slab stands squarely across the stairs, from the floor to the ceiling,
+  // a metre in front of the bottom tread. `severLinks` then cuts every link on
+  // the flight and the storey above is drawn, slabbed, stair-served and
+  // unreachable, with nothing anywhere saying so. Measured before and after
+  // with a route probe from both home spawns: level 2 went from standable-but-
+  // unreached to reached, and it is the same failure `buildOffice`'s service
+  // core had for the same reason.
+  for (let s = 1; s < floors; s++) {
+    const ph = STOREY - SLAB;
+    const climbs = s + 1 < floors;
+    const pw = climbs ? slabW - lane : slabW;
+    const px = climbs ? slabX(s) - (laneSide(s) * lane) / 2 : slabX(s);
+    b.doorWall(pw, ph, 0.22, px, levelY(s) + ph / 2, -d * 0.08, PLASTER, DOORWAY, 2.1);
+  }
+
+  // What is in the rooms: a table in the front one and a bed in the back. Two
+  // colliders a storey, and both of them are COVER first — 0.95 m and 0.6 m are
+  // under `CoverMap`'s 1.7 m hard-cover line, so a bot reads either as
+  // something to crouch behind, which is the only move there is in a room this
+  // size. An unfurnished flat is a box with a doorway in it and plays like one.
+  //
+  // Nothing here is `strut`: a chair a round goes through would be the fence's
+  // trick used on a thing that is not mostly air. The chairs themselves are
+  // visual, and small enough that walking through one is the cheaper lie.
+  for (let s = 1; s < floors; s++) {
+    const y = levelY(s);
+    const cx = slabX(s);
+    b.wall(2.0, 0.78, 1.0, cx, y + 0.39, d * 0.24, PLANK);
+    b.box(2.2, 0.09, 1.2, cx, y + 0.82, d * 0.24, TEAK);
+    for (const sx of [-1, 1]) {
+      b.box(0.5, 0.08, 0.5, cx + sx * 1.5, y + 0.44, d * 0.24, TEAK);
+      b.box(0.5, 0.9, 0.09, cx + sx * 1.7, y + 0.45, d * 0.24, TEAK);
+      for (const sz of [-1, 1]) {
+        b.box(0.07, 0.44, 0.07, cx + sx * 1.5, y + 0.22, d * 0.24 + sz * 0.2, TEAK);
+      }
+    }
+    b.wall(2.0, 0.55, 1.9, cx - 2.4, y + 0.275, -d * 0.3, PLANK);
+    b.box(1.9, 0.16, 1.8, cx - 2.4, y + 0.62, -d * 0.3, PLASTER);
+    b.box(1.9, 0.7, 0.14, cx - 2.4, y + 0.35, -d * 0.3 - 0.95, TEAK);
+  }
+
+  // --- the roof, LAST -------------------------------------------------------
+  b.box(w + 0.4, SLAB, d + 0.4, 0, top - SLAB / 2, 0, ASPHALT);
+  b.block({ w: w + 0.4, h: SLAB, d: d + 0.4, x: 0, y: top - SLAB / 2, z: 0 });
+  // A moulded cornice under the parapet, and the parapet over it. Two bands
+  // rather than one is the whole difference between a terrace and a stack of
+  // boxes: the cornice throws the one horizontal shadow the elevation has.
+  b.box(w + 0.7, 0.3, d + 0.7, 0, top - 0.65, 0, CONCRETE);
+  for (const sz of [-1, 1]) {
+    b.box(w + 0.5, 0.8, 0.36, 0, top + 0.4, (sz * (d + 0.4)) / 2, skin);
+  }
+  for (const sx of [-1, 1]) {
+    b.box(0.36, 0.8, d + 0.4, (sx * (w + 0.4)) / 2, top + 0.4, 0, skin);
+  }
+  // The stack and the tank: the two things on a roof at this scale that read
+  // from the street, and what keeps a terrace's skyline from being a ruled
+  // line. Visual — the shell below already stops everything at this height.
+  b.box(1.1, 2.3, 1.3, -w / 2 + 1.6, top + 1.15, -d * 0.24, brick ? CITY_BRICK : BRICK);
+  b.box(1.4, 0.24, 1.6, -w / 2 + 1.6, top + 2.3, -d * 0.24, DARK_CONCRETE);
+  for (const sx of [-1, 1]) {
+    b.cyl(0.5, 0.3, 0.34, 6, -w / 2 + 1.6 + sx * 0.3, top + 2.6, -d * 0.24, DARK_CONCRETE);
+  }
+  b.cyl(1.5, 1.6, 1.6, 8, w / 2 - 2.0, top + 1.7, d * 0.18, ALLOY);
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      b.box(0.14, 1.0, 0.14, w / 2 - 2.0 + sx * 0.5, top + 0.5, d * 0.18 + sz * 0.5, ALLOY);
+    }
+  }
+  // The rainwater goods, which is the one detail that says the wall is masonry
+  // and not a painted box.
+  for (const sx of [-1, 1]) {
+    b.cyl(top - 0.4, 0.16, 0.16, 6, sx * (w / 2 + 0.1), (top - 0.4) / 2, d / 2 - 0.5, ALLOY);
+  }
+
+  if (p.litWindows) {
+    // The shop, the close and the first floor. Three rather than the office's
+    // two, and the third one is the CLOSE — which is a 3.4 m passage under a
+    // landing with no opening in it but the door at each end, and comes out as
+    // the one space on the map with no readable geometry at all. The point
+    // lights here are unshadowed, so the shop's own lamp does reach it through
+    // the partition; it is 7 m away by then and the corridor is still black.
+    //
+    // Every fixture spends one of the sixteen shader slots, so this is not
+    // free and `litWindows` is deliberately set on half the terrace — see the
+    // file header on why a daylit map has no street lighting at all.
+    b.light(WINDOW_LIGHT, 14, 0.65, 0.02, lane / 2, g0 + 2.2, d * 0.2);
+    // Hung at the FRONT of the close, under the landing rather than under the
+    // flight: for most of its length this passage has a staircase for a
+    // ceiling, so a lamp at head height in the middle of it is a lamp above
+    // the treads lighting the underside of nothing. Here it lights the street
+    // door, the head of the stair and the far end of the shop through the
+    // partition's opening, and leaves the run under the stair dark, which is
+    // what a passage under a stair is.
+    b.light(WINDOW_LIGHT, 11, 0.55, 0.02, laneX(0), g0 + 2.2, d * 0.34);
+    b.light(WINDOW_LIGHT, 13, 0.6, 0.02, slabX(1), levelY(1) + 1.9, d * 0.2);
   }
   return b;
 }
@@ -790,6 +1372,401 @@ export function buildParkade(
     b.wall(0.35, 1.05, len, (sx * w) / 2, topY + 0.525, off, CONCRETE);
   }
   b.box(4.0, 2.4, 3.4, w * 0.18, topY + 1.2, -d * 0.3, DARK_CONCRETE);
+  return b;
+}
+
+/**
+ * The goods depot: one big brick shed with a gallery round the back of it, and
+ * the third kind of interior this map has.
+ *
+ * ## What it is FOR, given the office and the parkade
+ *
+ * The three enterable buildings on Coldharbour are three different questions.
+ * The office is a stack of rooms you clear one storey at a time. The parkade
+ * is three open platforms that all shoot each other. This is neither: it is
+ * ONE VOLUME 28 m across with a mezzanine along the back of it, so the whole
+ * interior is visible from the whole interior and the only thing that changes
+ * is whether you are eight metres up. Cover is the crates and the columns and
+ * nothing else, and the mezzanine is a firing platform over the lot of it with
+ * exactly one stair to it.
+ *
+ * What that makes it is a room worth throwing a grenade into, which is a thing
+ * the map otherwise has none of.
+ *
+ * ## The ways in, and why there are three
+ *
+ * The loading elevation faces +Z and is mostly opening: a run of roller bays
+ * between brick piers, tall enough and wide enough that a body walks straight
+ * in without a doorway ever being mentioned. One bay is shuttered, which is
+ * what stops the frontage reading as a colonnade and gives the elevation
+ * somewhere for a round to stop.
+ *
+ * The third is a personnel door in the -X gable, standing beside the FOOT of
+ * the stair. That is deliberate and it is the building's one asymmetry: the
+ * bays put you on the floor in front of everybody on the gallery, and the side
+ * door puts you on the stair before anyone on the gallery can see you.
+ *
+ * ## The mezzanine, and the one number the plate has to hold
+ *
+ * `MEZZ_D` deep along the -Z wall, spanning the full width, with the flight
+ * climbing toward it up a lane at the -X end. It climbs **-Z**, which is the
+ * one flight in this file that does — the loading front has to stay clear, so
+ * the stair runs back from it — and that is why this does not go through
+ * `laneFlight`, whose whole contract is that a lane climbs +Z.
+ *
+ * So the depth is what has to hold `MEZZ_D + run + 0.6`, and DEV throws rather
+ * than pushing a stair through the loading elevation. There is no landing at
+ * the head, and there does not need to be one: the mezzanine slab IS the
+ * landing, because the flight arrives at its front edge rather than into a
+ * void the way a lane's does.
+ *
+ * ## The roof is a sawtooth, and it is the silhouette that does the work
+ *
+ * Three teeth, each a pitched slab with a glazed face standing up at its high
+ * end. It is the one roof shape in the kit that is neither flat nor gabled,
+ * which is most of why this reads as industry from four hundred metres away on
+ * a map with no fog to hide the far side of. The glazing is decoration on the
+ * same terms as a tower's curtain wall — there is a roof void behind it and
+ * nothing anybody can get to — so none of it breaks.
+ *
+ * The gable walls run past the eaves to the tops of the teeth, which is what
+ * closes the triangles at each end. Cut them at the eaves instead and the shed
+ * has three slots in it you can see the sky through from inside.
+ */
+export function buildDepot(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  p: BuildParams = {},
+): Structure {
+  const b = new Build(scene, mats, "depot");
+  const w = p.width ?? 28;
+  const d = p.depth ?? 16;
+  /** Wall head, where the sawtooth springs from. */
+  const eaves = p.height ?? 8;
+  /** How far a tooth climbs above the eaves. */
+  const TOOTH = 1.9;
+  /** The gallery's walked height, and how far it reaches out from the back. */
+  const MEZZ = 3.8;
+  const MEZZ_D = 4.0;
+  /** Stair lane at the -X end. `buildOffice`'s width, for its reason. */
+  const lane = 3.4;
+  /** Clear opening of a roller bay. */
+  const OPEN = 4.6;
+
+  const zBack = -d / 2 + WALL / 2;
+  const zFront = d / 2 - WALL / 2;
+  /** The gallery's front edge — where the flight arrives. */
+  const zMezz = zBack + MEZZ_D;
+  const laneCx = -w / 2 + WALL / 2 + lane / 2;
+  const laneInner = -w / 2 + WALL / 2 + lane;
+  const rise = MEZZ - GROUND;
+  const run = rise / GRADE;
+  const pitch = Math.atan(GRADE);
+
+  if (import.meta.env.DEV && zMezz + run + 0.6 > zFront) {
+    throw new Error(
+      `depot: a ${d} m plate cannot hold a ${MEZZ_D} m gallery and the ` +
+        `${run.toFixed(1)} m flight up to it — the stair would run out through ` +
+        "the loading elevation. See buildDepot.",
+    );
+  }
+
+  // --- walked surfaces first (file header, first rule) ----------------------
+
+  // The floor. Inside `HEIGHT_EPS` of the street, so the nav grid merges it
+  // with the ground rather than spending a slot, and inside `stepHeight`, so
+  // every roller bay links to the pavement without a ramp. See `GROUND`.
+  b.box(w, SLAB, d, 0, GROUND - SLAB / 2, 0, DARK_CONCRETE);
+  b.block({ w, h: SLAB, d, x: 0, y: GROUND - SLAB / 2, z: 0 });
+
+  // The gallery: one slab the full width, so the flight arrives on it at its
+  // front edge and there is no landing to get right.
+  b.box(w - WALL, SLAB, MEZZ_D, 0, MEZZ - SLAB / 2, zBack + MEZZ_D / 2, CONCRETE);
+  b.block({ w: w - WALL, h: SLAB, d: MEZZ_D, x: 0, y: MEZZ - SLAB / 2, z: zBack + MEZZ_D / 2 });
+
+  // The flight, climbing -Z. Overrunning its own foot by 0.6 m, which
+  // `Build.flight` buries: every tread under the ground line is skipped.
+  b.flight({
+    x: laneCx,
+    w: lane,
+    topZ: zMezz,
+    topY: MEZZ,
+    run: run + 0.6,
+    rise: rise + 0.6 * GRADE,
+    dir: -1,
+    steps: Math.max(4, Math.round(rise / RISER)),
+    color: ALLOY,
+  });
+
+  // --- cover and enclosure --------------------------------------------------
+
+  // The gallery's rail, and the stair's. Both are `guard`s rather than boxes
+  // on the edge: a rail has to stop a body (a rail you walk through is a
+  // three-metre fall) and has to stand OFF the surface it guards, or the nav
+  // grid loses the cell it samples. The run stops at the lane, which is where
+  // the stair arrives and the one place the gallery is meant to be open.
+  const railLen = w / 2 - WALL / 2 - laneInner;
+  b.guard("+z", zMezz, laneInner + railLen / 2, railLen, MEZZ, { color: ALLOY });
+  b.guard("+x", laneInner, zMezz + run / 2, run, MEZZ - (run / 2) * GRADE, {
+    pitch: -pitch,
+    color: ALLOY,
+  });
+
+  // The back and the +X gable, solid. The gables run past the eaves to the top
+  // of the teeth — see the header, or the shed has slots of sky in it.
+  const gableH = eaves + TOOTH;
+  b.wall(w, eaves, WALL, 0, eaves / 2, -d / 2, CITY_BRICK);
+  b.wall(WALL, gableH, d, w / 2, gableH / 2, 0, CITY_BRICK);
+
+  // The -X gable, with the personnel door cut by hand: this wall runs along Z
+  // and `doorWall` runs along X, so it is the two jambs and the lintel that
+  // method would emit. The doorway stands beside the foot of the stair.
+  {
+    const gap = DOORWAY;
+    const at = d * 0.24;
+    const lo = -d / 2;
+    const hi = d / 2;
+    const back = at - gap / 2 - lo;
+    const front = hi - (at + gap / 2);
+    b.wall(WALL, gableH, back, -w / 2, gableH / 2, lo + back / 2, CITY_BRICK);
+    b.wall(WALL, gableH, front, -w / 2, gableH / 2, hi - front / 2, CITY_BRICK);
+    b.wall(WALL, gableH - 2.4, gap, -w / 2, 2.4 + (gableH - 2.4) / 2, at, CITY_BRICK);
+  }
+
+  // The loading elevation: brick piers, a header over the lot of them, and one
+  // bay shuttered. The bays are left as OPENINGS rather than doorways — at
+  // 4.6 m of clear height there is nothing for a lintel to do that the header
+  // above is not already doing.
+  const bays = Math.max(2, Math.round(w / 7));
+  const pierW = 1.6;
+  const bayW = (w - pierW * (bays + 1)) / bays;
+  for (let i = 0; i <= bays; i++) {
+    b.wall(pierW, eaves, WALL, -w / 2 + pierW / 2 + i * (pierW + bayW), eaves / 2, d / 2, CITY_BRICK);
+  }
+  b.wall(w, eaves - OPEN, WALL, 0, OPEN + (eaves - OPEN) / 2, d / 2, CITY_BRICK);
+  {
+    // The shut bay. Corrugated: eight ribs drawn on one sheet, which is the
+    // cheapest thing on this elevation that says "steel" rather than "panel".
+    const x = -w / 2 + pierW + bayW / 2;
+    b.wall(bayW, OPEN, 0.18, x, OPEN / 2, d / 2 + 0.1, ENAMEL);
+    const ribs = Math.max(4, Math.round(bayW / 0.6));
+    for (let i = 0; i < ribs; i++) {
+      b.box(0.1, OPEN - 0.2, 0.1, x - bayW / 2 + ((i + 0.5) / ribs) * bayW, OPEN / 2, d / 2 + 0.22, DARK_CONCRETE);
+    }
+  }
+  // Shutter boxes over the open bays, and the guides down each pier: the three
+  // things that say a bay HAS a shutter rolled up rather than being a hole.
+  for (let i = 0; i < bays; i++) {
+    const x = -w / 2 + pierW + bayW / 2 + i * (pierW + bayW);
+    if (i > 0) b.box(bayW, 0.62, 0.5, x, OPEN + 0.31, d / 2 + 0.2, ENAMEL);
+    for (const sx of [-1, 1]) {
+      b.box(0.18, OPEN, 0.3, x + (sx * bayW) / 2, OPEN / 2, d / 2 + 0.16, ALLOY);
+    }
+    // Dock bumpers at the jambs, which is what a lorry has been hitting.
+    for (const sx of [-1, 1]) {
+      b.box(0.3, 0.5, 0.28, x + (sx * (bayW + 0.3)) / 2, 0.85, d / 2 + 0.24, IRON);
+    }
+  }
+
+  // Columns, full height and one box each: a column is solid at every level,
+  // so one box blocks the floor and the roof void together. The parkade's
+  // argument, in a building with one floor to block.
+  const cols = Math.max(1, Math.round(w / 13));
+  for (let i = 1; i <= cols; i++) {
+    const x = -w / 2 + (i / (cols + 1)) * w;
+    const z = d * 0.16;
+    b.wall(0.5, eaves, 0.5, x, eaves / 2, z, ALLOY);
+    b.box(0.9, 0.16, 0.9, x, 0.28, z, DARK_CONCRETE);
+    for (const sz of [-1, 1]) {
+      b.box(0.34, 0.9, 0.34, x, eaves - 0.7, z + sz * 0.3, ALLOY);
+    }
+  }
+
+  // The site office, tucked under the gallery. One box and a strip of glazing
+  // — it is cover in the middle of an otherwise empty floor, and the only
+  // thing under the mezzanine worth walking behind.
+  {
+    const ox = w * 0.24;
+    const oz = zBack + MEZZ_D / 2;
+    b.wall(5.0, 2.7, 3.2, ox, GROUND + 1.35, oz, ENAMEL);
+    b.box(5.2, 0.16, 3.4, ox, GROUND + 2.78, oz, DARK_CONCRETE);
+    b.pane(3.0, 1.1, 0.1, ox - 0.6, GROUND + 1.9, oz + 1.6);
+    b.box(1.0, 2.2, 0.12, ox + 1.8, GROUND + 1.1, oz + 1.6, TEAK);
+  }
+
+  // Pallets and crates: the floor's cover, and what stops 28 m of concrete
+  // being a shooting gallery. Under `CoverMap`'s 1.7 m line except the tall
+  // stack, which is over it on purpose — one piece of hard cover in the room.
+  const stacks: [number, number, number, number, number][] = [
+    // [w, h, d, x, z]
+    [2.6, 1.5, 2.2, -w * 0.24, d * 0.26],
+    [3.2, 1.2, 2.4, w * 0.3, d * 0.3],
+    [2.2, 2.1, 2.2, w * 0.04, -d * 0.06],
+  ];
+  for (const [cw, ch, cd, cx, cz] of stacks) {
+    b.wall(cw, ch, cd, cx, GROUND + ch / 2, cz, PLANK);
+    for (let i = 1; i * 0.75 < ch; i++) {
+      b.box(cw + 0.08, 0.1, cd + 0.08, cx, GROUND + i * 0.75, cz, TEAK);
+    }
+  }
+
+  // --- the elevations, as drawn ---------------------------------------------
+
+  // Brick pilasters on the back and the gables, and a corbelled cornice at the
+  // eaves. Both are what makes a 28 m brick wall read as bays rather than as a
+  // painted plane, and the cornice is the one horizontal on the building.
+  const pilasters = Math.max(2, Math.round(w / 5));
+  for (let i = 1; i < pilasters; i++) {
+    b.box(0.5, eaves - 0.4, 0.3, -w / 2 + (i / pilasters) * w, (eaves - 0.4) / 2, -d / 2 - 0.2, CITY_BRICK);
+  }
+  const ribsZ = Math.max(2, Math.round(d / 5));
+  for (const sx of [-1, 1]) {
+    for (let i = 1; i < ribsZ; i++) {
+      b.box(0.3, eaves - 0.4, 0.5, (sx * (w + 0.6)) / 2, (eaves - 0.4) / 2, -d / 2 + (i / ribsZ) * d, CITY_BRICK);
+    }
+  }
+  b.box(w + 0.7, 0.42, d + 0.7, 0, eaves - 0.2, 0, DARK_CONCRETE);
+
+  // Clerestory glazing: a strip under the eaves on the back and both gables.
+  // Drawn on a solid wall, so a round stops on the brick 6 cm behind it and
+  // none of it is a `breakable` pane — the tower's punched windows, lying
+  // down. It is what puts light on the gallery from outside.
+  const clerY = eaves - 1.5;
+  const clerH = 1.5;
+  {
+    const n = Math.max(3, Math.round(w / 4.5));
+    for (let i = 0; i < n; i++) {
+      const x = -w / 2 + ((i + 0.5) / n) * w;
+      b.pane(w / n - 0.7, clerH, 0.12, x, clerY, -d / 2);
+      for (const sx of [-1, 1]) {
+        b.box(0.16, clerH + 0.24, 0.26, x + (sx * (w / n - 0.5)) / 2, clerY, -d / 2 - 0.06, DARK_CONCRETE);
+      }
+    }
+    const m = Math.max(2, Math.round(d / 4.5));
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < m; i++) {
+        const z = -d / 2 + ((i + 0.5) / m) * d;
+        b.pane(0.12, clerH, d / m - 0.7, (sx * w) / 2, clerY, z);
+        for (const sz of [-1, 1]) {
+          b.box(0.26, clerH + 0.24, 0.16, (sx * (w + 0.12)) / 2, clerY, z + (sz * (d / m - 0.5)) / 2, DARK_CONCRETE);
+        }
+      }
+    }
+  }
+
+  // The hoist beam over the middle of the loading front, and the sign band on
+  // the header. The beam is the one thing that projects from this building and
+  // is most of its silhouette from the street.
+  b.box(0.34, 0.5, 2.6, 0, OPEN + 1.5, d / 2 + 1.0, ALLOY);
+  b.box(0.7, 0.3, 0.7, 0, OPEN + 1.5, d / 2 + 2.1, DARK_CONCRETE);
+  b.cyl(0.9, 0.1, 0.1, 5, 0, OPEN + 0.9, d / 2 + 2.1, IRON);
+  b.box(w * 0.42, 0.9, 0.16, 0, eaves - 1.1, d / 2 + 0.28, DARK_CONCRETE);
+  b.box(w * 0.34, 0.34, 0.1, 0, eaves - 1.1, d / 2 + 0.4, ROAD_PAINT);
+  // Rainwater goods down the gable corners.
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      b.cyl(eaves - 0.4, 0.18, 0.18, 6, (sx * (w + 0.5)) / 2, (eaves - 0.4) / 2, (sz * (d - 0.8)) / 2, DARK_CONCRETE);
+    }
+  }
+
+  // --- the roof, LAST -------------------------------------------------------
+  // A sawtooth: a pitched slab per tooth with its glazed face standing up at
+  // the high end. The collider is ONE flat slab at the eaves rather than three
+  // rotated planes — `gableRoof`'s call, for `gableRoof`'s reason: nothing
+  // walks up there and a round only has to stop.
+  const teeth = Math.max(2, Math.round(d / 5.5));
+  const pitchZ = d / teeth;
+  const toothPitch = Math.atan(TOOTH / pitchZ);
+  for (let i = 0; i < teeth; i++) {
+    const z0 = -d / 2 + i * pitchZ;
+    // CONCRETE and not `SLATE`, and it is the parkade's deck argument on a
+    // roof: a slab is ONE BOX, so its underside wears whatever its top does,
+    // and this underside is the ceiling of the only room in the building. A
+    // downward normal gets nothing from the sky term and the AO bake takes
+    // more off what is left, so slate came back as a black lid over a lit
+    // floor. It is also what a north-light shed's soffit actually is — pale,
+    // so the daylight the teeth let in bounces off it.
+    b.box(
+      w - WALL,
+      0.26,
+      Math.hypot(pitchZ, TOOTH),
+      0,
+      eaves + TOOTH / 2,
+      z0 + pitchZ / 2,
+      CONCRETE,
+      { x: -toothPitch },
+    );
+    // The ridge cap, which is what keeps a pale roof from reading as one plane
+    // from the towers above it.
+    b.box(w - WALL + 0.2, 0.2, 0.34, 0, eaves + TOOTH + 0.06, z0 + pitchZ * 0.02, SLATE);
+    // The north light. Glazing on a roof void, so it is decoration by the same
+    // test the curtain walls pass — see the header.
+    const gw = w - 1.4;
+    b.pane(gw, TOOTH - 0.5, 0.12, 0, eaves + TOOTH / 2, z0 + pitchZ);
+    b.box(w - WALL, 0.22, 0.3, 0, eaves + TOOTH - 0.12, z0 + pitchZ, ALLOY);
+    b.box(w - WALL, 0.22, 0.3, 0, eaves + 0.12, z0 + pitchZ, ALLOY);
+    const mull = Math.max(2, Math.round(gw / 3.4));
+    for (let j = 1; j < mull; j++) {
+      b.box(0.14, TOOTH - 0.4, 0.22, -gw / 2 + (j / mull) * gw, eaves + TOOTH / 2, z0 + pitchZ, ALLOY);
+    }
+    // A ridge vent on every other tooth, so the roofscape is not a repeat.
+    if (i % 2 === 0) {
+      b.cyl(0.9, 0.7, 0.9, 6, w * 0.3, eaves + TOOTH + 0.4, z0 + pitchZ * 0.75, ALLOY);
+    }
+    // The truss under it: a tie beam across the width at the eaves, with
+    // hangers up to the slab.
+    //
+    // **This is the only thing that makes the roof void READ, and a colour
+    // could not have done it.** The soffit is a downward normal, where the sky
+    // term contributes nothing at all and the AO bake takes most of the
+    // ambient that is left — so a pale slab up there is still near black, and
+    // the parkade's fix (choose a lighter tone) is about a walked surface in
+    // shade rather than about a ceiling. What answers it is geometry with
+    // UPWARD and SIDE faces in the light: the tie beam catches the sky term on
+    // its top, the hangers catch the key on one cheek, and the void stops
+    // being a lid with nothing in it. It is also just what a north-light shed
+    // has in it. Visual only — nothing up here has to stop anything, and the
+    // roof's own collider already caps the building.
+    b.box(w - WALL, 0.3, 0.3, 0, eaves - 0.25, z0 + 0.2, ALLOY);
+    b.box(w - WALL, 0.16, 0.16, 0, eaves + 0.55, z0 + 0.2, ALLOY);
+    const hangers = Math.max(3, Math.round(w / 4));
+    for (let j = 0; j <= hangers; j++) {
+      const hx = -(w - WALL) / 2 + (j / hangers) * (w - WALL);
+      b.box(0.14, 0.9, 0.14, hx, eaves + 0.15, z0 + 0.2, ALLOY);
+      if (j < hangers) {
+        b.box((w - WALL) / hangers, 0.1, 0.1, hx + (w - WALL) / hangers / 2, eaves + 0.3, z0 + 0.2, ALLOY);
+      }
+    }
+    // Purlins running back up the pitch, spaced so the slab above reads as
+    // sheeting on a frame rather than as one plane.
+    for (let j = 1; j < 3; j++) {
+      const t = j / 3;
+      b.box(w - WALL, 0.14, 0.14, 0, eaves + TOOTH * t - 0.22, z0 + pitchZ * t, ALLOY);
+    }
+  }
+  b.block({ w: w + 0.4, h: 0.4, d: d + 0.4, x: 0, y: eaves + 0.2, z: 0 });
+
+  if (p.litWindows) {
+    // Two, for `buildOffice`'s reason: this is a deep enclosed room on a
+    // daylit map, and the sky term lands on the floor and not at all on the
+    // ceiling — so an unlit shed reads as a bright plate under a black lid.
+    // One over the floor and one over the gallery, which is the storey the
+    // clerestory is furthest from.
+    //
+    // **The hall's one hangs AT THE TRUSSES rather than over head height**, and
+    // that is what makes the roof void read at all. Everything above the point
+    // lights is on the ambient term alone in here: the sky term is zero on a
+    // downward normal and the key is shadowed out by the roof, so the soffit
+    // and the steelwork are lit by this lamp or by nothing. Hung at 5.6 m it
+    // lit the floor and left a black lid four metres over the gallery; hung
+    // under the tie beam it lights both, which is also where a high bay
+    // actually goes.
+    b.light(WINDOW_LIGHT, 24, 0.75, 0.02, 0, eaves - 1.1, d * 0.16);
+    // The gallery's own, and it hangs mid-span rather than off to one side for
+    // the same reason: a 27 m gallery lit from one end is a gallery whose far
+    // half is on the ambient term. High, so it reaches the soffit too.
+    b.light(WINDOW_LIGHT, 20, 0.6, 0.02, 0, MEZZ + 3.2, zBack + MEZZ_D / 2);
+  }
   return b;
 }
 

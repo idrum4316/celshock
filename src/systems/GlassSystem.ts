@@ -34,9 +34,9 @@
  * `GameMap.panes`. The six thousand sheets of curtain wall and windscreen on
  * Coldharbour are hung on something solid, break nothing open, and are geometry
  * this system has never heard of: they are not swept, not bucketed, not baked
- * and not nameable on the wire. So the whole of this file runs over the twelve
- * shopfront bays a round can actually open, and the sweep costs what twelve
- * panes cost.
+ * and not nameable on the wire. So the whole of this file runs over the two
+ * dozen shopfront bays a round can actually open, and the sweep costs what two
+ * dozen panes cost.
  *
  * ## The three things a break touches, and the one it defers
  *

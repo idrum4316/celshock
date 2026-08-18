@@ -195,6 +195,31 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
     num("floors", "floors", 3, 2, 4, 1),
     bool("litWindows", "lit windows"),
   ],
+  shophouse: [
+    // The width floor is the stair lane plus a shopfront worth glazing; the
+    // depth floor is `laneFlight`'s check, which throws in DEV below ~15.5 for
+    // a three-storey unit. 16 is the shipped default and leaves 0.26 m of it.
+    num("width", "width", 13, 10, 24),
+    num("depth", "depth", 16, 16, 30),
+    num("floors", "floors", 3, 2, 4, 1),
+    bool("litWindows", "lit windows"),
+    {
+      key: "tint",
+      type: "choice",
+      label: "blind",
+      def: "#7c4a3f",
+      options: ["#7c4a3f", "#4a5a4a", "#5c5340", "#3f4b52", "#6b4a2f"],
+    },
+  ],
+  depot: [
+    // The depth floor is the gallery plus the flight up to it — DEV throws
+    // under about 15. Height is the eaves, not the ridge: the sawtooth stands
+    // another 1.9 m over it.
+    num("width", "width", 28, 16, 48),
+    num("depth", "depth", 16, 15, 32),
+    num("height", "height", 8, 6.5, 12, 0.5),
+    bool("litWindows", "lit windows"),
+  ],
   parkade: [
     num("width", "width", 32, 20, 56),
     num("depth", "depth", 24, 14, 48),

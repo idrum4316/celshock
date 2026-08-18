@@ -270,10 +270,10 @@ thing a reflection in a city is really made of. A pane returns what lies in the
 mirrored direction, and a bake taken 150 m away has the right city in it seen
 from the wrong place: the tower across the street lands in the pane at the
 angle it subtends from the middle of the map. A cube per PANE is the other end
-and is not on offer, because Coldharbour draws 6,246 sheets. What makes a
+and is not on offer, because Coldharbour draws 6,061 sheets. What makes a
 middle affordable is that the glazing is **already merged into one mesh per map
 block** (`MapBuilder.paneGroup`) — 37 of them — so one probe per merged mesh
-costs 37 cubes and **not one extra draw call**. Each block's mesh gets a
+costs 40 cubes and **not one extra draw call**. Each block's mesh gets a
 material of its own, which is the one place `CelMaterialFactory`'s per-colour
 cache is deliberately widened: a cube is not shared state, it is one probe's
 picture of one place. The probe stands within ~25 m of every pane it serves
@@ -349,7 +349,7 @@ The remaining approximation is that a probe serves a whole block: a pane
 returns the right city seen from the middle of its own block rather than from
 the pane itself. `graphics.reflection.strength` (0.9) is deliberately short of
 1 for that reason — the last tenth is what lets a player catch it out by
-walking along a frontage. The alternatives were a probe per pane (6,246 of
+walking along a frontage. The alternatives were a probe per pane (6,061 of
 them) and a screen-space pass, which cannot answer the question the feature
 exists for at all: a pane you are looking at reflects what is behind YOU. A map
 with no glazing bakes nothing; the default cube stays bound to the glazing

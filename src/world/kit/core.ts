@@ -153,9 +153,10 @@ export interface PaneSpec {
    * grey shaft says plainly that the building is a box. A tower's curtain wall
    * hangs 4 cm off one and a punched window is drawn on the same shaft, so
    * neither breaks; an office's upper window band is not even glazed, because
-   * glass over a spandrel that already stops a body would buy nothing at all.
-   * The two offices' ground-floor shopfronts are the whole of what does break,
-   * because behind those there is a room.
+   * glass over a spandrel that already stops a body would buy nothing at all,
+   * and a shophouse's sash windows are the same case one floor up. The
+   * ground-floor SHOPFRONTS — the two offices' and the eight shophouses' — are
+   * the whole of what does break, because behind those there is a room.
    *
    * So the collider comes WITH this flag rather than beside it: a pane with
    * somewhere to get into is by construction the only thing in the way, which
@@ -168,7 +169,10 @@ export interface PaneSpec {
    * records what loose collider boxes cost: 161 of them put ~17% on every ray
    * in the game, `probeGround` — the most expensive per-frame call there is —
    * included. Coldharbour draws some six thousand sheets of glass, and six
-   * thousand pickable boxes is not a trade, it is a regression. Twelve is.
+   * thousand pickable boxes is not a trade, it is a regression. Twenty-four is
+   * — and it is twenty-four rather than the forty a terrace of eight
+   * shophouses would have cost, because a shophouse cuts its frontage into one
+   * bay or two by its own width rather than into three regardless.
    */
   breakable?: true;
 }
@@ -208,10 +212,13 @@ export interface BuildParams {
    */
   floors?: number;
   /**
-   * A body colour, for the one piece in the kit that comes in more than one: a
-   * parked car. Deliberately not `teamColor`, which is already spoken for and
-   * means "whose gatehouse is this" — a field that answers two questions is a
-   * field that will be read for the wrong one.
+   * A body colour, for the pieces in the kit that come in more than one: a
+   * parked car's paint, and a shophouse's blind. Deliberately not `teamColor`,
+   * which is already spoken for and means "whose gatehouse is this" — a field
+   * that answers two questions is a field that will be read for the wrong one.
+   *
+   * Both readers mean the same thing by it — "the one part of this that is not
+   * the city's grey" — which is what keeps it one field rather than two.
    */
   tint?: string;
   /**
@@ -355,6 +362,25 @@ export const ENAMEL = "#3f4b52";
 export const ROAD_PAINT = "#9c9887";
 /** A lit window or a shopfront at dusk; the city's `FLAME`. */
 export const WINDOW_LIGHT = "#ffd79a";
+/**
+ * Painted render over masonry: the older mixed-use stock between the towers.
+ *
+ * Warmer and lighter than `CONCRETE` and greyer than the jungle's `STUCCO`,
+ * which is the whole reason it is a colour of its own — a rendered terrace
+ * beside a poured-concrete office has to read as a different DECADE, and value
+ * is the only axis the cel bands leave to say it with.
+ */
+export const RENDER = "#6e6a5e";
+/**
+ * Shop canvas: a blind over a pavement, and the one warm accent the downtown
+ * palette allows itself.
+ *
+ * It is the default for `BuildParams.tint` on a shophouse rather than a fixed
+ * colour in the builder, because a terrace of them wants four different blinds
+ * — that variation is what stops a row of identical plates reading as one
+ * building, and it costs a layout one field per placement.
+ */
+export const AWNING = "#7c4a3f";
 
 // --- guard rails -----------------------------------------------------------
 

@@ -84,8 +84,8 @@ export const glass = {
    * the band nothing on the shipped maps reaches: every pane that breaks today
    * is a shopfront bay, because that is where the glass has a room behind it
    * (see `PaneSpec.breakable`). **The ceiling is the number to move if a burst
-   * stops covering its pane**: those bays run 12–19 m², which is twelve cells of
-   * a metre or so, and a ceiling under that turns the burst into a patch around
+   * stops covering its pane**: those bays run 7.8–12.5 m², which is twelve cells
+   * of about a metre, and a ceiling under that turns the burst into a patch around
    * the hole instead of the whole sheet. That is the graceful failure rather
    * than the intent — the glass that IS drawn stays where the player is looking
    * — and it is what any pane much larger than these gets.

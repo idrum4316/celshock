@@ -288,7 +288,7 @@ export interface GameMap {
    *
    * Not every sheet of glass: a building's glazing is in `paneGroups` whether
    * or not anything can take it away, and only the panes with somewhere to get
-   * into behind them are here. Coldharbour draws ~6,200 and lists twelve.
+   * into behind them are here. Coldharbour draws ~6,100 and lists twenty-four.
    *
    * Empty on a map whose builders declare none, which is every map but
    * Coldharbour today. See `WorldPane`, and `systems/GlassSystem.ts` for the
@@ -1280,7 +1280,7 @@ export class MapBuilder {
    *
    * A breakable pane's collider is an ordinary `collider()` box, one mesh each,
    * which is affordable for the same reason the flag is rare: there is a room
-   * behind twelve sheets on this map and behind none of the rest. Breaking one
+   * behind twenty-four sheets on this map and behind none of the rest. Breaking one
    * is then two property writes rather than vertex surgery — see `GlassSystem`.
    */
   private paneGroup(
@@ -1616,9 +1616,9 @@ class BlockMerge {
  * A breakable pane must survive it, so this one carries every such pane's
  * vertex range across by the running offset of the meshes ahead of it. Same
  * key, same reason (glass is unbatched alpha, so a mesh is a sorted draw of its
- * own), and measured on Coldharbour: 6,246 sheets across 75 glazed placements
- * (47 towers, 26 cars, 2 offices) come out as 37 meshes, two of which hold a
- * range anything will ever write.
+ * own), and measured on Coldharbour: 6,061 sheets across 82 glazed placements
+ * (44 towers, 26 cars, 8 shophouses, 2 offices, 2 depots) come out as 40
+ * meshes, eight of which hold a range anything will ever write.
  *
  * **The editor keys per placement instead**, so nothing merges across
  * placements there — the same exemption `BlockMerge` gets, for the same reason.

@@ -402,8 +402,10 @@ part):
 | all seven | 15.9 |
 | the local relink + flood (`NavGrid.openBox`) | under the timer's resolution |
 
-183,184 surfaces, 32,529 walkable, seven fields (five control points and both
-home spawns). 15.9 ms in one frame is a dropped frame on a 60 Hz budget that
+183,184 surfaces, 34,101 walkable, seven fields (five control points and both
+home spawns). The walkable count grew by ~5% when the mixed-use blocks went in
+and the timings above were not re-taken; a field is linear in it, so read them
+as a floor rather than as current. 15.9 ms in one frame is a dropped frame on a 60 Hz budget that
 FINDINGS #1 already says drops one every 1.7 s; spread over seven it is
 invisible, and the staleness in between costs nothing because breaking is
 monotonic — the graph only ever gains links, so a stale field walks the long way
@@ -417,8 +419,9 @@ field per frame is comfortable or whether it wants spreading further. The
 cheapest way to settle it is the same harness as the table above with the page's
 own frame loop rather than a synchronous call.
 
-**How it scales with the breakable count.** Coldharbour has twelve breakable
-panes — the two offices' shopfront bays, the only glass on the map with a room
+**How it scales with the breakable count.** Coldharbour has twenty-four breakable
+panes — the two offices' and the eight shophouses' shopfront bays, the only
+glass on the map with a room
 behind it — and a firefight breaks perhaps two or three of them, so the rebuild
 queue is usually one pass. A map that made every ground floor enterable would
 break several per exchange — and while the coalescing means that is still one

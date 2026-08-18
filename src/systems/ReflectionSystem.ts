@@ -53,9 +53,9 @@ import type { GameMap, WorldBox } from "../world/MapBuilder";
  * first version of this file, and it was a decal with parallax on it.
  *
  * **A cube per PANE is the other end and is not on offer**: Coldharbour draws
- * 6,246 sheets. What makes a middle affordable is that the glazing is already
+ * 6,061 sheets. What makes a middle affordable is that the glazing is already
  * merged into one mesh per map block — 37 of them — so one probe per merged
- * mesh costs 37 cubes and not one extra draw call. A probe then stands within
+ * mesh costs 40 cubes and not one extra draw call. A probe then stands within
  * ~25 m of every pane it serves rather than ~150, and the building opposite is
  * genuinely in its cube.
  *
