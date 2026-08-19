@@ -733,6 +733,31 @@ frame (player + all bots). The player's health regenerates after
 `CONFIG.player.regenDelay`: with eight hostile bots and no medics, a pool that
 never refills turns the round into a respawn queue.
 
+**A round is SCORED as well as counted, and the score is not the kills.**
+`ScoreBook` is one ledger per simulation — points, kills and deaths, one row per
+roster SLOT — held by `Game` offline and by `HeadlessGame` on the authority, so
+the two boards cannot drift and a client in a match writes to neither (the table
+arrives whole, as it always has). `CONFIG.score` is what an award pays and
+`ScoreBook.awardKill` is the one place the shape of a payout is decided: a kill,
+a headshot on top of it, and — keyed on **the flag the VICTIM was standing in,
+never the killer's own position** — an attack or a defend bonus. Taking a flag
+pays every body of that side inside the ring when the meter ends, and driving it
+neutral pays them on the way; neither is split between them. So the top of the
+board is not the top of the kill column, which is the point of having one.
+
+**Two consequences reach outside the scoring.** `ConquestSystem.onCaptured` and
+`onNeutralised` are now the SIMULATION's callbacks on both sides, because paying
+the bodies in the ring is a rule — `HeadlessGame` hands the news back out
+through `onCapturedEvent`/`onNeutralisedEvent` for `Match` to put on the wire,
+and anything that takes the conquest callback directly (as `npm run simulate`
+did) silently turns the capture awards off. And the offline board is indexed by
+slot rather than by bot: the player holds a slot like everybody else, so their
+line IS that slot's line.
+
+→ **[`docs/multiplayer.md`](docs/multiplayer.md)** for the wire's half — the
+optional `points` column, and the addressed `score` event the HUD's feed is made
+of.
+
 **A capture zone is drawn, not just counted** (`CaptureZoneSystem`, plus
 `HUD.setCapture` for the panel that appears while you stand in one):
 

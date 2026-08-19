@@ -2,7 +2,7 @@
  * HUD.ts — The gameplay chrome, and only that: vitals/ammo/grenades, the stowed
  * slot, reinforcement gauge, flag strip, capture-zone panel, crosshair,
  * hitmarker, damage vignette, directional damage arcs, toasts, killfeed,
- * scoreboard.
+ * score feed, scoreboard.
  * Invariants: Game pushes state every frame (setHealth/setAmmo/setFlags/
  * setCapture/setViewYaw/...) — setting HUD state from anywhere else is
  * overwritten next tick. Pure DOM manipulation; reads ControlPoint data, never
@@ -33,6 +33,7 @@
 import "./hud.css";
 import { CONFIG } from "../config";
 import type { ControlPoint } from "../systems/ConquestSystem";
+import type { ScoreKind } from "../systems/ScoreBook";
 import { pingQuality, pingText } from "./ping";
 
 /**
@@ -168,6 +169,22 @@ function angleDelta(a: number, b: number): number {
 }
 
 /**
+ * What each award is called on the score feed.
+ *
+ * A total map over `ScoreKind`, which is derived from `CONFIG.score` — so
+ * adding a way to earn points fails to compile here until it has a name the
+ * player will read, and there is no award that can appear as a bare number.
+ */
+const LABELS: Record<ScoreKind, string> = {
+  kill: "KILL",
+  headshot: "HEADSHOT",
+  attack: "ATTACK",
+  defend: "DEFEND",
+  capture: "CAPTURE",
+  neutralise: "NEUTRALISE",
+};
+
+/**
  * One combatant's line on the scoreboard.
  *
  * A body, not a person: a bot and a human are the same row with the same three
@@ -184,6 +201,16 @@ export interface ScoreRow {
   team: number;
   kills: number;
   deaths: number;
+  /**
+   * Points: kills, the bonuses on them, and what this body has been paid for
+   * the flags — see `config/score.ts`.
+   *
+   * The column the board is SORTED by, and the reason it exists: a round is
+   * won on flags and lost on tickets, so the player who took three of them is
+   * doing more for the win than the one with four more kills, and a board
+   * ordered by kills says the opposite in the one place everybody looks.
+   */
+  score: number;
   /** The local player's own row, which the board picks out. */
   you: boolean;
   /**
@@ -277,6 +304,7 @@ export class HUD {
   private toasts: HTMLElement;
   private lockHint: HTMLElement;
   private killfeed: HTMLElement;
+  private scorefeed: HTMLElement;
   private scoreboard: HTMLElement;
   private capture: HTMLElement;
   /** The capture panel's parts, looked up once — it is written every frame. */
@@ -407,6 +435,7 @@ export class HUD {
       <div id="message" class="hidden"></div>
       <div id="toasts"></div>
       <div id="killfeed"></div>
+      <div id="scorefeed"></div>
       <div id="scoreboard" class="frame hidden"></div>
       <div id="lock-hint" class="hidden"><b>CLICK</b> TO CAPTURE THE MOUSE</div>
       <div id="hud-fps" class="hidden">
@@ -478,6 +507,7 @@ export class HUD {
     this.toasts = document.getElementById("toasts")!;
     this.lockHint = document.getElementById("lock-hint")!;
     this.killfeed = document.getElementById("killfeed")!;
+    this.scorefeed = document.getElementById("scorefeed")!;
     this.scoreboard = document.getElementById("scoreboard")!;
     this.capture = document.getElementById("capture-status")!;
     this.captureParts = {
@@ -1140,6 +1170,42 @@ export class HUD {
     setTimeout(() => el.remove(), 4800);
   }
 
+  /**
+   * One line on the score feed: what you were just paid, and for what.
+   *
+   * **The feed is the only place a player sees the scoring system work.** The
+   * board is behind Tab and the number on it is a total; this is what says
+   * that the flag you just stood on was worth two and a half kills, which is
+   * the thing that changes how the next five minutes are played. Every award
+   * gets a line, so a headshot on an attacker in your own zone is three of
+   * them stacked — which is Battlefield's read exactly: one kill, itemised.
+   *
+   * `LABELS` is a total map over `ScoreKind`, so a new award in
+   * `config/score.ts` does not compile until this file has decided what to
+   * call it on screen. That is the only thing the interface owes the table.
+   *
+   * Presentation only, and transient like the killfeed next door: the numbers
+   * that survive are the book's, and this is a receipt.
+   */
+  addScore(kind: ScoreKind, points: number): void {
+    const el = document.createElement("div");
+    el.className = "score-line";
+    const n = document.createElement("b");
+    n.textContent = `+${points}`;
+    const what = document.createElement("span");
+    what.textContent = LABELS[kind];
+    el.append(n, what);
+    this.scorefeed.appendChild(el);
+    // Capped like the killfeed, and lower: a capture pays five people at once
+    // and a good exchange stacks three lines on its own, so the cap is what
+    // keeps a busy second from becoming a column up the side of the screen.
+    while (this.scorefeed.childElementCount > 5) {
+      this.scorefeed.firstElementChild!.remove();
+    }
+    setTimeout(() => el.classList.add("fade"), 1500);
+    setTimeout(() => el.remove(), 2100);
+  }
+
   setScoreboard(
     visible: boolean,
     rows?: {
@@ -1150,6 +1216,8 @@ export class HUD {
       flags: readonly number[];
       kills: readonly number[];
       deaths: readonly number[];
+      /** Team totals, summed from the rows by the caller like the two above. */
+      score: readonly number[];
       playerTeam: number;
       /**
        * Whether the board has a ping column at all — true in a match, false
@@ -1200,9 +1268,12 @@ export class HUD {
     // column frozen at whatever it read when somebody last died.
     const key =
       `${rows.map}|${rows.playerTeam}|${rows.teams}|${rows.tickets}|` +
-      `${rows.flags}|${rows.kills}|${rows.deaths}|${rows.pings}|` +
+      `${rows.flags}|${rows.kills}|${rows.deaths}|${rows.score}|${rows.pings}|` +
       rows.rows
-        .map((r) => `${r.name}:${r.team}:${r.kills}:${r.deaths}:${r.ping}`)
+        .map(
+          (r) =>
+            `${r.name}:${r.team}:${r.score}:${r.kills}:${r.deaths}:${r.ping}`,
+        )
         .join(",");
     if (key === this.lastScoreboardKey) return;
     this.lastScoreboardKey = key;
@@ -1217,6 +1288,7 @@ export class HUD {
           <i class="sb-gauge"><u style="width:${(frac * 100).toFixed(1)}%"></u></i>
         </span>
         <span class="sb-n">${rows.flags[t]}</span>
+        <span class="sb-n sb-score">${rows.score[t]}</span>
         <span class="sb-n">${rows.kills[t]}</span>
         <span class="sb-n">${rows.deaths[t]}</span>
       </div>`;
@@ -1232,7 +1304,7 @@ export class HUD {
       </div>
       <div class="sb-cols">
         <span></span><span>REINFORCEMENTS</span><span>FLAGS</span>
-        <span>KILLS</span><span>LOSSES</span>
+        <span>SCORE</span><span>KILLS</span><span>LOSSES</span>
       </div>
       ${row(rows.playerTeam)}${row(1 - rows.playerTeam)}
       <div class="sb-teams">
@@ -1258,12 +1330,17 @@ export class HUD {
       column.appendChild(
         this.scoreHeading(rows.teams[team].toUpperCase(), rows.pings),
       );
-      // Sorted by kills, then by the fewer deaths. `sort` is stable, so bodies
-      // level on both keep roster order and a row does not jitter between two
-      // places while a player is looking at it.
+      // Sorted by SCORE, then by kills, then by the fewer deaths. Score first
+      // because it is what the board is now for: the player who has been
+      // taking flags outranks the one who has been shooting people away from
+      // them, which is the whole reason there is a column beside the kills.
+      // `sort` is stable, so bodies level on all three keep roster order and a
+      // row does not jitter between two places while a player is looking at it.
       const side = rows.rows
         .filter((r) => r.team === team)
-        .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+        .sort(
+          (a, b) => b.score - a.score || b.kills - a.kills || a.deaths - b.deaths,
+        );
       for (const r of side) column.appendChild(this.scoreRow(r, rows.pings));
     }
   }
@@ -1275,11 +1352,13 @@ export class HUD {
     const name = document.createElement("span");
     name.className = "sb-pname";
     name.textContent = team;
+    const s = document.createElement("span");
+    s.textContent = "PTS";
     const k = document.createElement("span");
     k.textContent = "K";
     const d = document.createElement("span");
     d.textContent = "D";
-    el.append(name, k, d);
+    el.append(name, s, k, d);
     if (pings) {
       const ms = document.createElement("span");
       ms.textContent = "MS";
@@ -1303,12 +1382,15 @@ export class HUD {
     const name = document.createElement("span");
     name.className = "sb-pname";
     name.textContent = r.name;
+    const score = document.createElement("span");
+    score.className = "sb-ps";
+    score.textContent = String(r.score);
     const kills = document.createElement("span");
     kills.textContent = String(r.kills);
     const deaths = document.createElement("span");
     deaths.className = "sb-pd";
     deaths.textContent = String(r.deaths);
-    el.append(name, kills, deaths);
+    el.append(name, score, kills, deaths);
     // The connection behind the row, in the band that says how bad it is. A
     // bot's is an em dash rather than a zero — it has no connection at all, and
     // a zero would read as the best one on the board. Both the number and the

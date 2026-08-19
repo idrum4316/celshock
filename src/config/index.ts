@@ -13,6 +13,7 @@
  */
 
 import { conquest } from "./conquest";
+import { score } from "./score";
 import { bots, nav } from "./bots";
 import { player } from "./player";
 import { weapons, combat, gunfeel } from "./weapons";
@@ -38,6 +39,7 @@ export { FOG_WALL } from "./fogWall";
 export const CONFIG = {
   ao,
   conquest,
+  score,
   bots,
   nav,
   map,

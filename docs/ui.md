@@ -228,8 +228,35 @@ screen it is meant to be read over.
 **Your side is the LEFT column, whichever side you were seated onto.** A board is
 read from where the reader is standing, and a column that changes ends between
 matches is one a player has to find before they can read it. The rows are sorted
-by kills and then by fewer deaths, on a stable sort, so bodies level on both keep
-roster order instead of trading places while somebody is looking at them.
+by SCORE, then by kills, then by fewer deaths, on a stable sort, so bodies level
+on all three keep roster order instead of trading places while somebody is
+looking at them.
+
+**Score leads the row, and that is the reason the column exists.** A round is
+won on flags and lost on tickets, so the player who took three of them has done
+more for the win than the one with four more kills — and a board ordered by
+kills says the opposite in the one place everybody looks. The number is the
+`ScoreBook`'s (`config/score.ts` is the table it spends), the team's own total
+is drawn in that team's colour because it is the summary of the whole round, and
+the figures are tabular because a sorted column of proportional digits does not
+look sorted. The panel's `min-width` grew with the column: `#scoreboard` is
+inside `#hud` and so is NOT scaled by `--ov-scale`, which makes that width a
+promise to the shortest viewport the game runs on.
+
+**The score FEED is where a player actually learns the scoring system**, and it
+is a separate thing from the board: the board is behind Tab and shows a total,
+while the feed says "+250 CAPTURE" at the moment the flag flips. One line per
+award, so a headshot on an attacker in your own zone is three of them stacked —
+that itemisation is the feature rather than a side effect, which is why the
+authority sends one `score` event per award instead of a total. It is anchored
+by its BOTTOM edge over the ammunition column, so the newest line sits still and
+the older ones ride up off it; a top-anchored stack slides the line the player
+is reading downward every time another award lands. It lives on the right
+because that is where the HUD's numbers already are — centre is `#message` and
+`#capture-status`, and anything that moves under the crosshair reads as
+something to shoot at. `HUD.LABELS` is a total map over `ScoreKind`, so a new
+award in `config/score.ts` does not compile until this file has decided what to
+call it.
 
 **The magazine strip is markup the WEAPON TABLE sizes**, and it is the one place
 a number in `CONFIG.weapons` reaches the DOM. `HUD.setAmmo` builds one `<i>` per

@@ -59,6 +59,9 @@ src/
                         #   distance now: a map's own `fogEnd` overrides it, and
                         #   Game.installMap pushes that into the three systems
     conquest.ts         # Flags, capture meter, tickets, bleed
+    score.ts            # What a kill, a bonus and a flag are worth on the
+                        #   board. Spent by both simulations, so a value here
+                        #   moves the offline round and the authority together
     bots.ts             # Bot AI + the nav grid (bots, nav)
     player.ts           # Movement, crouch, ground probe, vitals
     weapons.ts          # The weapon table, the round, gunfeel (weapons, combat,
@@ -149,6 +152,11 @@ src/
   systems/
     BattleSystem.ts     # Bot pool, AI scheduling, LOS, distance LOD
     ConquestSystem.ts   # Flags, meters, tickets, bleed, spawns, planSquads
+    ScoreBook.ts        # The round's board: points, kills and deaths, one row
+                        #   per roster SLOT. A ledger, not a system — no update,
+                        #   reaches nothing. One per simulation (Game offline,
+                        #   HeadlessGame on the authority) and `awardKill` is
+                        #   the one place a payout's shape is decided
     CaptureZoneSystem.ts# Flags drawn in the world: ring, skirt, beacon
     CombatSystem.ts     # Hitscan, fall-off, the head zone; pooled tracers, sparks, impacts
     GrenadeSystem.ts    # The one thing that isn't hitscan + BlastDust
@@ -295,7 +303,8 @@ src/
                         #   or more screens share. Imported by main.ts
     HUD.ts/hud.css      # Gameplay chrome ONLY: tickets, flags, capture panel,
                         #   vitals, ammo, the stowed slot, crosshair, killfeed,
-                        #   scoreboard, damage arcs, + .paused/.editing/.dying
+                        #   score feed, scoreboard, damage arcs, +
+                        #   .paused/.editing/.dying
     OverlayScreen.ts    # The four cards — menu, round-over, pause, building —
       overlay.css       #   and the .overlaid class they raise. The menu is a
                         #   LIST: MENU_ITEMS is the cursor's whole world

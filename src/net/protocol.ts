@@ -13,10 +13,16 @@
  * because `Vector3` is a Babylon class with private `_x` fields that neither
  * `JSON.stringify` nor a `DataView` encoder has any business knowing about.
  *
+ * The one import in the file is a TYPE, and it is allowed for the reason the
+ * ban above exists: `import type` is erased, so `ScoreKind` costs this module
+ * no runtime edge to `CONFIG` while keeping the awards the wire can name and
+ * the awards the game can pay a single declaration (`config/score.ts`).
+ *
  * Encoding is JSON today. Every message is a flat object with short, fixed
  * fields precisely so that swapping in a binary encoder later is a change to
  * `encode`/`decode` and to nothing that calls them.
  */
+import type { ScoreKind } from "../systems/ScoreBook";
 
 /**
  * Protocol version. Bumped on any incompatible change; a mismatch is refused.
@@ -451,6 +457,32 @@ export type ServerEvent =
    * protocol break, so this arrived without a `PROTOCOL_VERSION` bump.
    */
   | { e: "glass"; panes: number[]; at: Vec3; dir: Vec3 }
+  /**
+   * THIS client was just paid for something. Addressed to the earner, and to
+   * nobody else.
+   *
+   * The receipt behind the score feed, and it is a message rather than a
+   * derivation for the reason the board itself is state on the wire: a client
+   * runs none of the fight, so it cannot know that the body it just shot was
+   * standing on a flag its side does not hold. It could diff the totals in the
+   * next `ScoresMessage` and would get the NUMBER right and the reason wrong —
+   * "+150" once, instead of a kill and the attack that earned the bonus.
+   *
+   * Addressed rather than broadcast, on the rule `hit` and `nearmiss` follow:
+   * it is feedback about one player's own round, and sixteen clients hearing
+   * every award anybody earns is a live feed of who is doing what and where.
+   * There is no slot on it, for `nearmiss`'s reason exactly — the only client
+   * it is ever sent to is the one it happened to.
+   *
+   * The authority sends one per award, so a headshot on an attacker inside a
+   * contested zone is three of these — the itemisation IS the feature, and
+   * folding them into a total on the wire would be the client-side diff this
+   * message exists to avoid. The rate is bounded by how often a person kills.
+   *
+   * Additive: an older client has no case for it and simply shows no feed,
+   * while its board still fills in from `scores`.
+   */
+  | { e: "score"; kind: ScoreKind; points: number }
   | { e: "captured"; point: string; by: NetTeam }
   | { e: "neutralised"; point: string }
   | { e: "spawn"; slot: number; pos: Vec3; yaw: number }
@@ -532,7 +564,8 @@ export interface Rejected {
 }
 
 /**
- * The round's scoreboard: kills and deaths for every slot, in slot order.
+ * The round's scoreboard: points, kills and deaths for every slot, in slot
+ * order.
  *
  * **State, not events, and that is the whole design.** A client could add up
  * the `kill` events instead, and it would be wrong within a minute — events are
@@ -542,14 +575,14 @@ export interface Rejected {
  * missed message is corrected by the next one and a joiner is right on arrival.
  *
  * **Sent only when it changes**, which is a few times a minute rather than
- * twenty times a second: `Match` compares `HeadlessGame.scoreVersion` against
+ * twenty times a second: `Match` compares `HeadlessGame.scores.version` against
  * what it last sent, on the same tick the snapshot goes out. Thirty-two numbers
  * on a snapshot that carries none of them is the trade the `fire` event makes
  * next door — the wire says a thing once rather than repeating it at the
  * simulation's cadence.
  *
- * Both arrays are indexed by slot and always the full roster's length, so a
- * client indexes them with the same number it indexes everything else with.
+ * All three arrays are indexed by slot and always the full roster's length, so
+ * a client indexes them with the same number it indexes everything else with.
  * Deaths are counted at the victim's door and kills at the killer's, once each
  * — see `HeadlessGame.creditKill`.
  *
@@ -561,6 +594,23 @@ export interface ScoresMessage {
   t: "scores";
   kills: number[];
   deaths: number[];
+  /**
+   * What each slot has been PAID — kills, the bonuses on them and the flags —
+   * against `config/score.ts`, which both sides read.
+   *
+   * Optional for the reason `fire`'s `n` is: it arrived after the message did,
+   * and the two images deploy separately. A server old enough not to send it
+   * leaves a client showing a score column of zeros beside kills and deaths
+   * that are right, which is a board that is missing a column rather than one
+   * that is wrong — and the alternative, bumping `PROTOCOL_VERSION`, would
+   * refuse the match outright over a number nothing in the simulation reads.
+   *
+   * The client never adds these up for itself, exactly as it never adds up the
+   * kills: an award is decided where the fight is simulated, and a client
+   * that inferred one from the events it happened to receive would show a
+   * different board on every screen.
+   */
+  points?: number[];
 }
 
 /**

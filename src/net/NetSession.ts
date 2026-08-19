@@ -93,6 +93,13 @@ export class NetSession {
    */
   readonly slotKills: number[] = [];
   readonly slotDeaths: number[] = [];
+  /**
+   * What each slot has been paid this round, mirrored from the same message.
+   *
+   * Empty against a server too old to send the column, which the board reads
+   * as a row of zeros — see `ScoresMessage.points`.
+   */
+  readonly slotScores: number[] = [];
 
   /**
    * The round trip to each slot's peer in ms, as the authority last measured
@@ -369,6 +376,7 @@ export class NetSession {
         // finished round's kills against a map that has just been built.
         this.slotKills.length = 0;
         this.slotDeaths.length = 0;
+        this.slotScores.length = 0;
         // Last round's broken glass, over last round's map. A rotation rebuilds
         // the world and every pane with it, so carrying the list would put
         // holes in this round's windows wherever last round's happened to fall.
@@ -392,8 +400,13 @@ export class NetSession {
       case "scores":
         this.slotKills.length = 0;
         this.slotDeaths.length = 0;
+        this.slotScores.length = 0;
         this.slotKills.push(...msg.kills);
         this.slotDeaths.push(...msg.deaths);
+        // Absent from a server that predates the column, and an empty array
+        // is exactly what that should read as — a board with kills and deaths
+        // in it and no points, rather than one carrying last message's.
+        if (msg.points) this.slotScores.push(...msg.points);
         break;
 
       // The latencies, whole, and copied in for the reason the board above is.

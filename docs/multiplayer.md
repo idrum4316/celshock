@@ -620,6 +620,12 @@ Two are not, and both were broadcast with the client filtering them on arrival:
   player's exact pool, live, with the bearing they were shot from beside it.
   That pair is precisely the read a wallhack is after.
 
+**Two more are addressed and were never anything else**, which is what the
+mechanism is for once it exists: `nearmiss`, which says a named player was very
+nearly hit, and `score`, which says what one player was just paid and for what.
+Neither carries a slot at all — the only client either is ever sent to is the
+one it happened to, so there is nothing for a guard to compare.
+
 A filter on the far side does not fix either, because it is a promise about the
 client rather than a property of the server, and the payload is on the wire
 regardless for anything reading the socket. So `PendingEvent` carries the
@@ -647,16 +653,47 @@ new client in front of a server that still broadcasts, and neither event's shape
 changed, so the handshake's version check would not catch it.
 
 **The scoreboard is STATE and is sent as state, not added up from events.** The
-authority keeps one line per slot — `HeadlessGame.slotKills`/`slotDeaths` — and
-`Match` broadcasts the pair whole as a `scores` message on the ticks it has
-moved, which it learns by comparing `scoreVersion` against what it last sent. A
-client that instead counted the `kill` events it saw would be wrong three ways
-at once: events are a queue a reconnect drops, a joiner has missed every one of
-them that happened before they arrived, and `kill` names the killer's *team*
-rather than the body, because the killfeed only ever needed a side. As state it
-self-corrects — a lost message is superseded by the next — and a joiner is
-handed the table on admission, which is a message to one peer for the same
-reason `hit` is.
+authority keeps one line per slot — `HeadlessGame.scores`, a `ScoreBook` of
+points, kills and deaths — and `Match` broadcasts all three columns whole as a
+`scores` message on the ticks it has moved, which it learns by comparing the
+book's `version` against what it last sent. A client that instead counted the
+`kill` events it saw would be wrong three ways at once: events are a queue a
+reconnect drops, a joiner has missed every one of them that happened before they
+arrived, and `kill` names the killer's *team* rather than the body, because the
+killfeed only ever needed a side. As state it self-corrects — a lost message is
+superseded by the next — and a joiner is handed the table on admission, which is
+a message to one peer for the same reason `hit` is.
+
+**`points` is optional on that message and the column it fills is not.** It
+arrived after the message did, and the two images deploy separately, so a client
+in front of a server that predates it shows kills and deaths that are right and
+a score column of zeros — a board missing a column rather than one that is
+wrong. Bumping `PROTOCOL_VERSION` for it would have refused the match outright
+over a number nothing in the simulation reads.
+
+**What each award WAS is a separate, addressed event, and it exists because a
+client cannot infer one.** `score` carries a kind and a number to the one slot
+that earned it, and it is what the HUD's feed is made of. The board would give a
+client the total a moment later, and diffing it would get the number right and
+the reason wrong — "+150" once, where the authority paid a kill and then the
+attack bonus the flag under the body earned. Addressed rather than broadcast on
+`hit` and `nearmiss`'s rule: it is feedback about one person's own round, and
+sixteen clients hearing every award anybody earns is a live feed of who is doing
+what and where. `Match` queues it only for a slot a person is actually sitting
+in — bots earn all round with nobody behind them to show a feed to, and queueing
+theirs would push every tick with a bot kill on it onto the per-peer flush path
+for an event no client would be sent.
+
+**A flag pays the bodies standing on it, so `ConquestSystem`'s two callbacks are
+the SIMULATION's and not `Match`'s.** They used to be wired straight to the
+event queue; a callback has one owner, and the owner has to be the side that
+decides something. `HeadlessGame.wire` takes both, pays everyone of the
+capturing side inside the ring (`awardZone`, the same `pointAt` that moved the
+meter), and hands the news back out through `onCapturedEvent` /
+`onNeutralisedEvent` for `Match` to put on the wire — the shape `onKillEvent`
+already had. `npm run simulate` is the worked example of why that matters: it
+took `conquest.onCaptured` for its own tally and would have silently turned the
+capture awards off in the one tool that can check them.
 
 **A kill is counted at the KILLER's door and a death at the VICTIM's, once
 each.** They are separate facts with separate witnesses: every death in the game
@@ -667,6 +704,17 @@ single door would mean one path inventing the half it cannot see. That is what
 the shooting BOT and any victim rather than the falling bot and a team — the
 older shape dropped every kill whose victim was a person, which on a server is
 half the roster. The client's `Game` runs the identical pair offline.
+
+**What a kill is WORTH is decided in one place for both sides.**
+`ScoreBook.awardKill` is a free function over the book, the killer's team, the
+control point the VICTIM was standing in and whether it was a headshot, and both
+`Game.creditKill` and `HeadlessGame.creditKill` reach it with those four facts.
+The failure it prevents is not a crash but a quiet disagreement: a player who
+learns in a single-player round that clearing attackers off a flag pays extra,
+taking that into a match where it does not. Keyed on the victim rather than the
+killer, and that is the whole of the attack/defend rule — a marksman clearing
+attackers off their own flag from the next street is defending it, however far
+outside the ring they are standing.
 
 **A team's totals are SUMMED from the rows and stored nowhere.** Two counters
 for one fact is two counters that can disagree, and the one that would be wrong
@@ -1494,6 +1542,13 @@ Stated so nobody assumes otherwise:
   until it asks, which is why the deploy screen goes back up on a re-seat. The
   match keeps its world for a minute, so the round survives; the seat is not
   reserved, and neither is the position you were standing in.
+- **A kill ASSIST.** The board pays the body that landed the last round and
+  nothing to whoever put the first eighty damage into it, which is the one part
+  of Battlefield's scoring the score system deliberately left out. It is not a
+  wire question: `Hittable.takeDamage` takes an amount and an origin and never
+  the shooter, so crediting an assist means threading an attacker through the
+  hottest path in the game and keeping a per-victim damage ledger that a respawn
+  has to clear. Worth doing, and worth doing as its own change.
 - **Moving a player between regions, or matching them across regions.** A region
   is chosen before the socket opens and holds for the round: there is no "your
   friends are in US East, come over", no cross-region party, and nothing that

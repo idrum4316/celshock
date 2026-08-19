@@ -69,8 +69,16 @@ export class ConquestSystem {
 
   /** Wired by Game: a flag changed hands (for the HUD and a sound). */
   onCaptured: (point: ControlPoint, by: Team) => void = () => {};
-  /** Wired by Game: a flag went neutral. */
-  onNeutralised: (point: ControlPoint) => void = () => {};
+  /**
+   * Wired by Game: a flag went neutral, and which side pushed it there.
+   *
+   * The team is carried rather than looked up by the handler, because by the
+   * time one runs the only trace of who did it is who is standing in the ring
+   * — and the ring empties. It is the side the meter was moving toward when it
+   * crossed, which is the side with bodies in the zone: the meter moves only
+   * while exactly one team is present, so there is never a second candidate.
+   */
+  onNeutralised: (point: ControlPoint, by: Team) => void = () => {};
 
   private spawns: SpawnPointDef[] = [];
   private bleedT = 0;
@@ -155,7 +163,9 @@ export class ConquestSystem {
       // Crossing zero neutralises; reaching the end captures.
       if (before !== 0 && Math.sign(before) !== Math.sign(p.meter) && p.owner !== null) {
         p.owner = null;
-        this.onNeutralised(p);
+        // The pushing side is the one that is here: `direction` was chosen
+        // from exactly that, one branch up.
+        this.onNeutralised(p, a > 0 ? 0 : 1);
       }
       const team: Team | null =
         p.meter <= -1 ? 0 : p.meter >= 1 ? 1 : null;

@@ -354,7 +354,8 @@ export class Match {
   private readonly firedRounds = new Map<number, number>();
 
   /**
-   * The `scoreVersion` the clients have been told about, or -1 for "tell them".
+   * The `ScoreBook` version the clients have been told about, or -1 for "tell
+   * them".
    *
    * The board is state and goes out only when it moves, so this is the whole of
    * that test: `broadcastSnapshot` compares it against the simulation's counter
@@ -408,10 +409,24 @@ export class Match {
     // and the next round in the firefight overwrites it.
     this.game.onNearMiss = (player, at) =>
       this.queueTo(player.slot, { e: "nearmiss", at: [at.x, at.y, at.z] });
-    this.game.conquest.onCaptured = (point, by) =>
+    // Through the simulation rather than off `ConquestSystem` directly: a flag
+    // changing hands pays everybody standing on it, which is a rule, so
+    // `HeadlessGame` takes the conquest callbacks and hands the news back out
+    // — the same shape `onKillEvent` has, and for the same reason.
+    this.game.onCapturedEvent = (point, by) =>
       this.queue({ e: "captured", point: point.def.id, by });
-    this.game.conquest.onNeutralised = (point) =>
+    this.game.onNeutralisedEvent = (point) =>
       this.queue({ e: "neutralised", point: point.def.id });
+    // Somebody was paid. Addressed to the one slot that earned it, and only
+    // when a PERSON is sitting in it: bots earn all round and there is nobody
+    // behind them to show a feed to, so queueing theirs would push every tick
+    // with a bot kill on it onto `flushEvents`'s per-peer path for an event no
+    // client would be sent.
+    this.game.scores.onAward = (slot, kind, points) => {
+      if (this.game.players.has(slot)) {
+        this.queueTo(slot, { e: "score", kind, points });
+      }
+    };
     this.game.onPlayerDamaged = (player, amount, from, killed) => {
       // Addressed to the victim, and the sharpest case for it: this is the ONE
       // message in the protocol carrying a health, so broadcasting it published
@@ -994,9 +1009,9 @@ export class Match {
     // same reason the fire events are queued after it: a death is visible in
     // this snapshot, so the score that counts it should not arrive ahead of the
     // body going down.
-    if (this.game.scoreVersion !== this.sentScoreVersion) {
+    if (this.game.scores.version !== this.sentScoreVersion) {
       this.broadcast(this.scores());
-      this.sentScoreVersion = this.game.scoreVersion;
+      this.sentScoreVersion = this.game.scores.version;
     }
 
     // What each connection is costing, once a second: the last sweep's answers
@@ -1486,8 +1501,9 @@ export class Match {
   private scores(): ServerMessage {
     return {
       t: "scores",
-      kills: [...this.game.slotKills],
-      deaths: [...this.game.slotDeaths],
+      kills: [...this.game.scores.kills],
+      deaths: [...this.game.scores.deaths],
+      points: [...this.game.scores.points],
     };
   }
 

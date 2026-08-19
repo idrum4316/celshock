@@ -84,7 +84,7 @@ import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
 import { CaptureZoneSystem } from "../systems/CaptureZoneSystem";
 import { CombatSystem, type Hittable } from "../systems/CombatSystem";
-import { ConquestSystem } from "../systems/ConquestSystem";
+import { ConquestSystem, type ControlPoint } from "../systems/ConquestSystem";
 import { DeathCam } from "../systems/DeathCam";
 import { GrassSystem } from "../systems/GrassSystem";
 import { DebrisSystem } from "../systems/DebrisSystem";
@@ -93,6 +93,7 @@ import { GrenadeSystem } from "../systems/GrenadeSystem";
 import { PhysicsWorld, type HavokInstance } from "../systems/PhysicsWorld";
 import { RagdollSystem } from "../systems/RagdollSystem";
 import { ReflectionSystem } from "../systems/ReflectionSystem";
+import { ScoreBook, awardKill } from "../systems/ScoreBook";
 import { LightingSystem } from "../systems/LightingSystem";
 import { ShadowSystem } from "../systems/ShadowSystem";
 import { Sky } from "../systems/Sky";
@@ -395,15 +396,17 @@ export class Game {
   /** Where the player's feet were when they died — scratch for `enterDying`. */
   private readonly deathFeet = new Vector3();
   /**
-   * The round's scoreboard, OFFLINE: one line per body, indexed by bot.
+   * The round's board, OFFLINE: kills, deaths and points, one row per roster
+   * SLOT.
    *
    * Per body rather than per team, because the team totals are the sum of the
    * rows and a second set of counters for them is a second set that can drift.
-   * The player is not in these — they hold a roster slot but they are not in
-   * the bot pool — and their own two numbers are below, which is the same
-   * split every other list in this file makes between `battle.bots` and
-   * `this.player`. The slot they sit in is a benched bot, and `scoreRows`
-   * leaves its line out for exactly that reason.
+   * Indexed by slot rather than split between the bot pool and a pair of
+   * fields for the player, which is what it was before points arrived: a human
+   * holds a roster slot like everybody else (`BattleSystem.seatPlayer`) and the
+   * bot sitting in it is benched, so the player's line simply IS that slot's
+   * line and nothing has to reconcile a seventeenth body with a sixteen-row
+   * board.
    *
    * **Netplay writes none of this.** In a match the board is the authority's
    * and arrives whole (`NetSession.slotKills`): this client runs no AI, its
@@ -412,10 +415,7 @@ export class Game {
    * different board on every screen. `scoreRows` is where the two sources
    * meet, and it is the only reader of either.
    */
-  private readonly botKills: number[] = [];
-  private readonly botDeaths: number[] = [];
-  private playerKills = 0;
-  private playerDeaths = 0;
+  private readonly scores = new ScoreBook();
 
   /**
    * `havok` is the instantiated WASM module, awaited by `main.ts` before this
@@ -650,8 +650,15 @@ export class Game {
     // corpse are owed only when a BOT fell. The player's own death goes through
     // `onPlayerDamaged`, which `takeDamage` reached before this callback ran.
     this.battle.onBotKill = (victim, by) => {
-      this.creditKill(by);
+      this.creditKill(by, victim);
       if (victim instanceof Bot) this.registerBotKill(victim, by.team, false);
+    };
+    // The score feed, OFFLINE: every body on the roster earns, and the one
+    // row this screen belongs to is the filter. In a match the same feed is
+    // fed by the `score` event instead, because the awards are the
+    // authority's — see `onNetEvent`.
+    this.scores.onAward = (slot, kind, points) => {
+      if (slot === this.battle.playerSlot) this.hud.addScore(kind, points);
     };
     this.wireDeaths();
     this.wireGrenades();
@@ -720,7 +727,7 @@ export class Game {
       const byPlayer = by === this.player;
       // The killer's row, whoever fell, and before the victim filter below:
       // a blast that finishes the player is still a kill somebody threw.
-      if (killed) this.creditKill(by);
+      if (killed) this.creditKill(by, victim);
       // The player's own death is already handled, all the way down to the
       // deploy screen, by `onPlayerDamaged` — `takeDamage` routed it there
       // before this callback ran. Only bots are this handler's business.
@@ -817,14 +824,51 @@ export class Game {
    */
   private wireConquest(): void {
     this.conquest.onCaptured = (point, by) => {
+      this.awardZone(point, by, "capture");
       if (by === this.player.team) this.sfx.capture();
       else this.sfx.flagLost();
       const who = CONFIG.teams[by].name.toUpperCase();
       this.hud.showMessage(`${point.def.name.toUpperCase()} CAPTURED BY ${who}`, 2.5);
     };
-    this.conquest.onNeutralised = (point) => {
+    this.conquest.onNeutralised = (point, by) => {
+      this.awardZone(point, by, "neutralise");
       this.hud.toast(`${point.def.name} — neutralised`);
     };
+  }
+
+  /**
+   * Pays everyone of `by` standing in `point` for what the flag just did.
+   *
+   * **Presence at the moment it happened is the whole rule**, which is why
+   * this runs from inside the conquest callback rather than off a snapshot of
+   * who was there a moment ago: the meter moved because those bodies were in
+   * the ring, and the ring is `pointAt` — the same test that moved it, so the
+   * board cannot pay somebody the capture never counted.
+   *
+   * Not split between them. A squad that takes a flag in a third of the time
+   * one body would has done the thing the mode is about, and dividing the
+   * award would pay each of them less for doing it better.
+   *
+   * The dead and the benched are skipped by the same `alive` test the
+   * occupancy pass uses — a benched bot is `alive = false` (see
+   * `BattleSystem.setBenched`), which matters here for a sharper reason than
+   * tidiness: its slot is the PLAYER's, so counting it would pay the player's
+   * own row twice for one capture.
+   *
+   * Offline only, and by construction rather than by a gate: no client steps
+   * `ConquestSystem`, so neither callback above ever fires in a match. There
+   * the authority runs this same pass over its own bodies.
+   */
+  private awardZone(
+    point: ControlPoint,
+    by: Team,
+    kind: "capture" | "neutralise",
+  ): void {
+    for (const unit of this.combatants) {
+      if (!unit.alive || unit.team !== by) continue;
+      if (this.conquest.pointAt(unit.position) !== point) continue;
+      this.scores.award(this.slotOf(unit), kind);
+    }
   }
 
   /**
@@ -2541,15 +2585,10 @@ export class Game {
     // `BattleSystem.seatPlayer`.
     if (!this.net) this.battle.seatPlayer(this.player.team);
     // A new round is a new board. Sized from the pool here rather than at
-    // construction, so it is the roster that says how many rows there are.
-    this.botKills.length = 0;
-    this.botDeaths.length = 0;
-    for (let i = 0; i < this.battle.bots.length; i++) {
-      this.botKills.push(0);
-      this.botDeaths.push(0);
-    }
-    this.playerKills = 0;
-    this.playerDeaths = 0;
+    // construction, so it is the roster that says how many rows there are —
+    // and after `seatPlayer` above, so the slot the player's own line is kept
+    // in is one this book has a row for.
+    this.scores.reset(this.battle.bots.length);
     // The building card comes down on the far side of the work it covered, and
     // with it `.overlaid` — the deploy screen is one of the two that reads the
     // HUD underneath it rather than hiding it.
@@ -2799,7 +2838,7 @@ export class Game {
           // Both doors, one line apart: our row, and the body's. Offline only
           // — in a netplay round `killed` is false above, because the roster's
           // bodies refuse local damage and the authority scores this round.
-          this.creditKill(this.player);
+          this.creditKill(this.player, shot.target, shot.headshot);
           this.registerBotKill(shot.target, this.player.team, true);
         }
       }
@@ -3154,6 +3193,13 @@ export class Game {
         break;
       case "neutralised":
         this.hud.toast(`${event.point} — neutralised`);
+        break;
+      // We were paid for something. Offline the same line comes off
+      // `ScoreBook.onAward`; in a match it is a receipt the authority
+      // addressed to us, and the client neither adds it up nor checks it —
+      // what the board shows is the `scores` table, and this is the reason.
+      case "score":
+        this.hud.addScore(event.kind, event.points);
         break;
       case "roundover":
         this.endRound(event.winner);
@@ -4122,8 +4168,9 @@ export class Game {
     if (died) {
       this.conquest.registerDeath(this.player.team);
       // Our own row's death, offline: the victim's door, and the bot that shot
-      // us was credited at its own by `battle.onBotKill`.
-      this.playerDeaths += 1;
+      // us was credited at its own by `battle.onBotKill`. The row is the SLOT
+      // we are sitting in, which is the same one the board draws us on.
+      this.scores.registerDeath(this.battle.playerSlot);
       this.hud.addKill(
         CONFIG.teams[1 - this.player.team].name,
         "YOU",
@@ -4217,8 +4264,7 @@ export class Game {
     this.ragdolls.spawn(bot, this.cameraSys.camera.position);
     this.sfx.enemyDie();
     this.conquest.registerDeath(bot.team);
-    const slot = this.battle.bots.indexOf(bot);
-    if (slot >= 0) this.botDeaths[slot] = (this.botDeaths[slot] ?? 0) + 1;
+    this.scores.registerDeath(this.battle.bots.indexOf(bot));
     this.hud.addKill(
       byPlayer ? "YOU" : CONFIG.teams[killer].name,
       CONFIG.teams[bot.team].name,
@@ -4250,7 +4296,7 @@ export class Game {
    * numbers hanging over the next screen.
    *
    * Assembled only while the board is actually up: the payload is an object
-   * and three arrays, and `flagsHeld` counts the control points twice.
+   * and four arrays, and `flagsHeld` counts the control points twice.
    */
   private pushScoreboard(): void {
     if (!this.screens.inRound || !this.input.scoreboard) {
@@ -4264,9 +4310,11 @@ export class Game {
     // wrong together, because nothing on screen shows which is which.
     const kills: [number, number] = [0, 0];
     const deaths: [number, number] = [0, 0];
+    const score: [number, number] = [0, 0];
     for (const r of rows) {
       kills[r.team] += r.kills;
       deaths[r.team] += r.deaths;
+      score[r.team] += r.score;
     }
     this.hud.setScoreboard(true, {
       map: this.mapDef.name,
@@ -4275,6 +4323,7 @@ export class Game {
       flags: [this.conquest.flagsHeld(0), this.conquest.flagsHeld(1)],
       kills,
       deaths,
+      score,
       playerTeam: this.player.team,
       // Whether there is a connection to report at all, which is a fact about
       // the ROUND rather than about the rows: the column is there for every
@@ -4288,11 +4337,11 @@ export class Game {
    * One row per body in the round, for the scoreboard.
    *
    * **The two sources meet HERE and nowhere else.** Offline the board is this
-   * client's own — the player's two numbers plus a line per bot in the pool.
-   * In a match it is the authority's, read off the session: a slot's name from
-   * the roster, its kills and deaths from the last `scores` message, and the
-   * row order straight from the roster, because a slot index is the same number
-   * on both sides of the wire and on both sides of this branch.
+   * client's own `ScoreBook`, one line per roster slot. In a match it is the
+   * authority's, read off the session: a slot's name from the roster, its
+   * points, kills and deaths from the last `scores` message, and the row order
+   * straight from the roster, because a slot index is the same number on both
+   * sides of the wire and on both sides of this branch.
    *
    * A bot's name is DERIVED rather than sent (`callsign`), which is what keeps
    * "a bot and a person are the same body on screen" true while still letting
@@ -4313,6 +4362,7 @@ export class Game {
           team: slot.team,
           kills: this.net.slotKills[slot.index] ?? 0,
           deaths: this.net.slotDeaths[slot.index] ?? 0,
+          score: this.net.slotScores[slot.index] ?? 0,
           you: slot.index === this.net.slot,
           // The authority's own measurement of the connection to that slot,
           // and -1 for a bot — which is also what a slot reads as before the
@@ -4323,31 +4373,25 @@ export class Game {
       }
       return rows;
     }
-    // Offline the player's counters are their own rather than the pool's, so
-    // their line is pushed rather than found — but it IS one of the sixteen,
-    // because they hold a slot like everybody else.
+    // Offline the whole board is one loop over the pool, the player's line
+    // included: they hold a slot like everybody else and the bot in it is
+    // benched for as long as they do (`BattleSystem.seatPlayer`), so the row
+    // that used to be pushed separately and then skipped in the loop is simply
+    // the row at their own slot. Drawing both would put a seventeenth body on a
+    // sixteen-slot board and count one that is not in the fight into the team
+    // totals.
     // Every offline row's ping is -1 and the board draws no column for it:
     // there is no server in a single-player round to be any distance from.
-    rows.push({
-      name: "YOU",
-      team: this.player.team,
-      kills: this.playerKills,
-      deaths: this.playerDeaths,
-      you: true,
-      ping: -1,
-    });
     for (let i = 0; i < this.battle.bots.length; i++) {
-      // The row above IS this slot's line — its bot is benched for as long as
-      // the player sits there (`BattleSystem.seatPlayer`). Drawing the bot as
-      // well would put a seventeenth body on a sixteen-slot board and count a
-      // body that is not in the fight into the player's team totals.
-      if (i === this.battle.playerSlot) continue;
+      const you = i === this.battle.playerSlot;
+      const row = this.scores.row(i);
       rows.push({
-        name: callsign(i),
-        team: this.battle.bots[i].team,
-        kills: this.botKills[i] ?? 0,
-        deaths: this.botDeaths[i] ?? 0,
-        you: false,
+        name: you ? "YOU" : callsign(i),
+        team: you ? this.player.team : this.battle.bots[i].team,
+        kills: row.kills,
+        deaths: row.deaths,
+        score: row.points,
+        you,
         ping: -1,
       });
     }
@@ -4355,7 +4399,8 @@ export class Game {
   }
 
   /**
-   * Somebody put a body down: one kill on their own row, OFFLINE.
+   * Somebody put a body down: the kill, and everything it earned, on their own
+   * row, OFFLINE.
    *
    * **The kill is counted at the killer's door and the death at the victim's,
    * once each**, because the two are known in different places. Every death in
@@ -4371,17 +4416,40 @@ export class Game {
    * gates it — the callers that could fire in a match are the ones whose local
    * `takeDamage` returns false, so no kill is ever raised to be counted.
    */
-  private creditKill(by: Combatant | null): void {
-    if (by === this.player) {
-      this.playerKills += 1;
-      return;
-    }
-    const slot = by instanceof Bot ? this.battle.bots.indexOf(by) : -1;
-    // `?? 0` rather than a bare increment, for the reason the authority's copy
-    // takes the same care: the rows are sized at the round's build, and one
-    // that is somehow not there yet starts at one rather than at `NaN`, which
-    // would spread through the team totals on the way to the screen.
-    if (slot >= 0) this.botKills[slot] = (this.botKills[slot] ?? 0) + 1;
+  private creditKill(
+    by: Combatant | null,
+    victim: Hittable,
+    headshot = false,
+  ): void {
+    if (!by) return;
+    // The flag the VICTIM fell on decides whether this was an attack or a
+    // defence, and `awardKill` is where that rule lives — shared with the
+    // authority, so the two boards pay a kill the same way. A body that fell
+    // nowhere near a ring is `null` and earns the kill alone.
+    //
+    // `eyePos` rather than a body's feet because the victim is a `Hittable`
+    // here — every path that resolves a kill has one, and only some of them
+    // have a `Combatant`. It costs nothing: `pointAt` is a radius test on x
+    // and z, and a head is directly over the feet under it.
+    awardKill(
+      this.scores,
+      this.slotOf(by),
+      by.team,
+      this.conquest.pointAt(victim.eyePos),
+      headshot,
+    );
+  }
+
+  /**
+   * Which roster slot a body holds, or -1 for one that holds none.
+   *
+   * The player's is `BattleSystem.seatPlayer`'s and a bot's IS its index in the
+   * pool — the same identity the authority's `HeadlessGame.slotOf` rests on,
+   * which is what lets one `ScoreBook` mean the same thing on both sides.
+   */
+  private slotOf(c: Combatant | null): number {
+    if (c === this.player) return this.battle.playerSlot;
+    return c instanceof Bot ? this.battle.bots.indexOf(c) : -1;
   }
 
   /**

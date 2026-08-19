@@ -137,6 +137,53 @@
   from { opacity: 0; transform: translateX(16px); }
 }
 
+/* --- score feed ---
+   What you were just paid, over the ammunition column and under the
+   killfeed's stretch of the same edge. Right-hand side because that is
+   where the numbers of the HUD already live (ammo, magazine, grenades)
+   and the left is vitals; centre would put it under the crosshair, where
+   `#capture-status` and `#message` already are and where anything that
+   moves is read as something to shoot at.
+
+   Anchored by its BOTTOM edge, so the newest line — appended last, and
+   therefore drawn last — sits still at a fixed height and the older ones
+   ride up off it. A top-anchored stack would slide the line the player is
+   actually reading downward every time another award landed. */
+#scorefeed {
+  position: absolute;
+  right: 34px;
+  bottom: 190px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+.score-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.62);
+  transition: opacity 0.5s ease-out;
+  animation: scoreIn 0.16s ease-out;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+.score-line.fade { opacity: 0; }
+/* The number in the colour the HUD keeps for the player and nothing else,
+   which is what makes a line about YOU rather than about the round — the
+   killfeed's `.mine` tint is the same idea one panel over. */
+.score-line b {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--hot);
+}
+@keyframes scoreIn {
+  from { opacity: 0; transform: translateX(14px); }
+}
+
 /* --- scoreboard (hold Tab) --- */
 #scoreboard {
   position: absolute;
@@ -154,7 +201,11 @@
   z-index: 9;
   --cham: 20px;
   --frame-fill: rgba(6, 8, 13, 0.94);
-  min-width: 620px;
+  /* Wide enough for the score column on both sides of the panel and the
+     ping column beside it, and no wider: this is inside #hud and so is NOT
+     scaled by --ov-scale (see base.css), which makes the width a promise to
+     the shortest viewport the game runs on rather than a layout preference. */
+  min-width: 700px;
   padding: 0 0 15px;
 }
 #scoreboard .sb-head {
@@ -178,7 +229,7 @@
 #scoreboard .sb-cols,
 #scoreboard .sb-row {
   display: grid;
-  grid-template-columns: 1fr 190px 74px 74px 74px;
+  grid-template-columns: 1fr 190px 74px 74px 74px 74px;
   align-items: center;
   gap: 10px;
   padding: 0 26px;
@@ -222,6 +273,10 @@
   letter-spacing: 0.16em;
 }
 #scoreboard .sb-n { color: #dfe5ee; }
+/* The team's points, in the row's own team colour rather than the neutral
+   the other counts take: it is the column the bodies below are ordered by,
+   and the one number on the panel that is a summary of the whole round. */
+#scoreboard .sb-score { color: currentColor; }
 #scoreboard .sb-tickets {
   display: flex;
   align-items: center;
@@ -252,7 +307,7 @@
 #scoreboard .sb-col.theirs { color: var(--theirs); }
 #scoreboard .sb-prow {
   display: grid;
-  grid-template-columns: 1fr 34px 34px;
+  grid-template-columns: 1fr 52px 34px 34px;
   align-items: baseline;
   gap: 8px;
   padding: 3px 8px;
@@ -273,11 +328,19 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Points lead the row and kills follow them, so the eye goes down the
+   column the board is sorted by. Tabular figures because it is four digits
+   by the end of a round and a proportional font makes a sorted column look
+   unsorted. */
+#scoreboard .sb-ps {
+  color: #f2f5fa;
+  font-variant-numeric: tabular-nums;
+}
 #scoreboard .sb-pd { color: rgba(255, 255, 255, 0.45); }
 /* The ping column exists only in a match — offline there is no server to be
    any distance from — so the fourth track is added by a class on the panel
    rather than sitting empty in every single-player round. */
-#scoreboard.pinged .sb-prow { grid-template-columns: 1fr 34px 34px 46px; }
+#scoreboard.pinged .sb-prow { grid-template-columns: 1fr 52px 34px 34px 46px; }
 #scoreboard .sb-ping {
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.45);
@@ -986,6 +1049,7 @@
 #hud.overlaid #damage-dirs,
 #hud.overlaid #hud-bottom,
 #hud.overlaid #killfeed,
+#hud.overlaid #scorefeed,
 #hud.overlaid #message,
 #hud.overlaid #toasts { display: none; }
 
@@ -1047,4 +1111,5 @@
 #hud.editing #damage-dirs,
 #hud.editing #hud-bottom,
 #hud.editing #killfeed,
+#hud.editing #scorefeed,
 #hud.editing #lock-hint { display: none; }

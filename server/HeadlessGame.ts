@@ -33,10 +33,18 @@ import { Bot } from "../src/entities/Bot";
 import type { Combatant, Team } from "../src/entities/Combatant";
 import type { WeaponSetup } from "../src/entities/weapons";
 import { BattleSystem } from "../src/systems/BattleSystem";
-import { CombatSystem, type ShotResult } from "../src/systems/CombatSystem";
-import { ConquestSystem } from "../src/systems/ConquestSystem";
+import {
+  CombatSystem,
+  type Hittable,
+  type ShotResult,
+} from "../src/systems/CombatSystem";
+import {
+  ConquestSystem,
+  type ControlPoint,
+} from "../src/systems/ConquestSystem";
 import { GlassSystem } from "../src/systems/GlassSystem";
 import { GrenadeSystem } from "../src/systems/GrenadeSystem";
+import { ScoreBook, awardKill } from "../src/systems/ScoreBook";
 import { CelMaterialFactory } from "../src/shaders/CelShader";
 import type { GameMap } from "../src/world/MapBuilder";
 import type { MapDef } from "../src/world/maps";
@@ -114,17 +122,11 @@ export class HeadlessGame {
     for (const bot of this.battle.bots) this.lag.track(bot);
     this.tick = 0;
     // A new round is a new board. Sized here rather than at construction
-    // because the pool is what says how many slots there are, and bumping the
-    // version is what makes the cleared table go out to everybody still seated
-    // — a rotation that left last round's kills on sixteen screens is exactly
-    // the kind of stale state a client cannot detect.
-    this.slotKills.length = 0;
-    this.slotDeaths.length = 0;
-    for (let i = 0; i < this.battle.bots.length; i++) {
-      this.slotKills.push(0);
-      this.slotDeaths.push(0);
-    }
-    this.scoreVersion++;
+    // because the pool is what says how many slots there are, and `reset`
+    // bumping the version is what makes the cleared table go out to everybody
+    // still seated — a rotation that left last round's kills on sixteen
+    // screens is exactly the kind of stale state a client cannot detect.
+    this.scores.reset(this.battle.bots.length);
   }
 
   /**
@@ -233,21 +235,26 @@ export class HeadlessGame {
    * difference is whether the fight cares:
    *
    * - **`onBotFired` and `onBotReloaded` are `Match`'s**, wired straight to the
-   *   event queue exactly as `conquest.onCaptured` is. Nothing here decides
-   *   anything on them, so nothing here has to see them.
+   *   event queue. Nothing here decides anything on them, so nothing here has
+   *   to see them.
    * - **`onNearMiss` is this method's**, because half of it is suppression —
    *   which is the fight, and which had no caller on this side at all until it
    *   was wired. The other half is a person's crack past the ear, and that
    *   leaves through `onNearMiss` below for `Match` to address to them.
+   * - **`conquest.onCaptured` and `onNeutralised` are this method's**, and they
+   *   were `Match`'s until a flag started paying the bodies standing on it.
+   *   That is a rule, a callback has one owner, and the owner has to be the
+   *   side that decides: the news goes back out through `onCapturedEvent` /
+   *   `onNeutralisedEvent` for `Match` to put on the wire.
    */
   private wire(): void {
     // A death costs the dying side a reinforcement. This is the whole of what
     // `Game.registerBotKill` does that is about RULES rather than about feel —
     // the ragdoll, the sound and the killfeed line are all presentation, and
-    // the scores are the client's to display. Without this the only thing
-    // draining tickets is the flag bleed, and a round runs several times too
-    // long in a way that looks like mistuned config rather than a missing
-    // callback.
+    // the board is this side's to keep and the clients' to draw. Without this
+    // the only thing draining tickets is the flag bleed, and a round runs
+    // several times too long in a way that looks like mistuned config rather
+    // than a missing callback.
     //
     // The victim may be a person as easily as a bot — half a full roster is
     // people — so the two halves of a kill are taken separately: `creditKill`
@@ -256,7 +263,7 @@ export class HeadlessGame {
     // its own door (`NetPlayer.onDamaged`, wired in `addPlayer`), which is
     // where it is charged and announced.
     this.battle.onBotKill = (victim, by) => {
-      this.creditKill(by);
+      this.creditKill(by, victim);
       if (victim instanceof Bot) this.onKill(victim, by.team);
     };
     // A round that went past somebody without connecting, which is two
@@ -297,6 +304,19 @@ export class HeadlessGame {
       const broke = this.glass.shoot(origin, dir, dist, true);
       if (broke.length > 0 && firstAt) this.onGlassBroken(broke, firstAt, dir);
     };
+    // A flag changing hands pays whoever was standing on it, which is a RULE
+    // and so is taken here — the events the clients need are raised back out
+    // for `Match` to queue, exactly as `onKillEvent` is. It used to be
+    // `Match`'s callback outright; a callback has one owner, and the half that
+    // decides something has to be the half that lives on this side.
+    this.conquest.onCaptured = (point, by) => {
+      this.awardZone(point, by, "capture");
+      this.onCapturedEvent(point, by);
+    };
+    this.conquest.onNeutralised = (point, by) => {
+      this.awardZone(point, by, "neutralise");
+      this.onNeutralisedEvent(point);
+    };
     this.battle.spawnPointFor = (bot) => this.spawnPointFor(bot.team);
     this.battle.planSquads = (team, centroids, previous) =>
       this.conquest.planSquads(team, centroids, previous);
@@ -320,7 +340,7 @@ export class HeadlessGame {
       // rifle path above follows, and the reason a bot's grenade is worth
       // something on the board rather than being the one kill in the game
       // nobody is credited with.
-      this.creditKill(by);
+      this.creditKill(by, victim);
       // A person's damage already left through `NetPlayer.onDamaged`, which
       // `takeDamage` raised before this callback ran — the same split the
       // client makes, where `onPlayerDamaged` has already handled the player by
@@ -402,7 +422,7 @@ export class HeadlessGame {
       // The shooter's row first, whoever fell — a person killing a person
       // reaches this line and nothing else on the server would ever credit it,
       // since the victim's own door only knows it was the other side.
-      this.creditKill(shooter);
+      this.creditKill(shooter, result.target, result.headshot);
       if (result.target instanceof Bot) {
         this.onKill(result.target, shooter.team, result.headshot);
       }
@@ -481,7 +501,8 @@ export class HeadlessGame {
   }
 
   /**
-   * A combatant put somebody down: one kill on their own row.
+   * A combatant put somebody down: the kill, and everything it earned, on
+   * their own row.
    *
    * **The kill is counted at the KILLER's door and the death at the victim's,
    * once each.** They are separate doors because they are separate facts with
@@ -497,15 +518,46 @@ export class HeadlessGame {
    * error: the death is counted regardless, so the board still balances at the
    * team level even when a row cannot be found for the credit.
    */
-  private creditKill(by: Combatant | null): void {
-    const slot = this.slotOf(by);
-    if (slot < 0) return;
-    // `?? 0` rather than a bare increment: the arrays are sized in
-    // `startRound`, and a row that somehow is not there yet should start at one
-    // rather than at `NaN` — a number that spreads through the totals and out
-    // onto sixteen screens before anybody can tell where it came from.
-    this.slotKills[slot] = (this.slotKills[slot] ?? 0) + 1;
-    this.scoreVersion++;
+  private creditKill(
+    by: Combatant | null,
+    victim: Hittable | null,
+    headshot = false,
+  ): void {
+    if (!by) return;
+    // What the kill is WORTH is `awardKill`'s, and it is shared with the
+    // client rather than restated here: the flag the victim fell on decides
+    // whether this was an attack or a defence, and a server that answered that
+    // question its own way would pay a player differently from the round they
+    // learned the rule in. `eyePos` because that is what every path resolving
+    // a kill has in its hand, and `pointAt` is a radius test on x and z.
+    awardKill(
+      this.scores,
+      this.slotOf(by),
+      by.team,
+      victim ? this.conquest.pointAt(victim.eyePos) : null,
+      headshot,
+    );
+  }
+
+  /**
+   * Pays everyone of `by` standing in `point` for what the flag just did.
+   *
+   * The authority's half of `Game.awardZone`, and the same rule: presence at
+   * the moment the meter moved, tested with the same `pointAt` that moved it,
+   * not split between the bodies that earned it. The dead and the benched fall
+   * out through `alive`, which is what stops a benched bot being paid for a
+   * capture the person in its slot is standing somewhere else for.
+   */
+  private awardZone(
+    point: ControlPoint,
+    by: Team,
+    kind: "capture" | "neutralise",
+  ): void {
+    for (const unit of this.combatants) {
+      if (!unit.alive || unit.team !== by) continue;
+      if (this.conquest.pointAt(unit.position) !== point) continue;
+      this.scores.award(this.slotOf(unit), kind);
+    }
   }
 
   /**
@@ -519,22 +571,23 @@ export class HeadlessGame {
    * it from the pool means this answers the same for a bot and for the person
    * standing in its place.
    */
-  teamScore(team: Team): { kills: number; deaths: number } {
+  teamScore(team: Team): { kills: number; deaths: number; points: number } {
     let kills = 0;
     let deaths = 0;
+    let points = 0;
     for (let i = 0; i < this.battle.bots.length; i++) {
       if (this.battle.bots[i].team !== team) continue;
-      kills += this.slotKills[i] ?? 0;
-      deaths += this.slotDeaths[i] ?? 0;
+      const row = this.scores.row(i);
+      kills += row.kills;
+      deaths += row.deaths;
+      points += row.points;
     }
-    return { kills, deaths };
+    return { kills, deaths, points };
   }
 
   /** One death on `slot`'s row. Called once per body that goes down. */
   registerDeath(slot: number): void {
-    if (slot < 0) return;
-    this.slotDeaths[slot] = (this.slotDeaths[slot] ?? 0) + 1;
-    this.scoreVersion++;
+    this.scores.registerDeath(slot);
   }
 
   /**
@@ -558,6 +611,18 @@ export class HeadlessGame {
    * rather than a missing one, and a blast has no such zone to hit.
    */
   onKillEvent: (bot: Bot, killer: Team, headshot: boolean) => void = () => {};
+
+  /**
+   * Wired by `Match`: a flag was taken, or driven to neutral, for the clients
+   * to hear about.
+   *
+   * The presentation half of the two conquest callbacks this class now takes
+   * for the scoring in `wire`. `Match` queues an event on each and decides
+   * nothing, which is why they are shaped as the events rather than as the
+   * points that were paid a line earlier.
+   */
+  onCapturedEvent: (point: ControlPoint, by: Team) => void = () => {};
+  onNeutralisedEvent: (point: ControlPoint) => void = () => {};
 
   /** Wired by `Match`: a person has been placed in the world. */
   onPlayerSpawned: (player: NetPlayer, at: Vector3, yaw: number) => void = () => {};
@@ -593,11 +658,11 @@ export class HeadlessGame {
   ) => void = () => {};
 
   /**
-   * The round's scoreboard: kills and deaths per SLOT, in slot order.
+   * The round's board: points, kills and deaths per SLOT, in slot order.
    *
    * Per slot rather than per team because a team's totals are the sum of its
    * eight rows and can be added up wherever they are wanted, whereas the rows
-   * cannot be recovered from the totals. It is also the only place either
+   * cannot be recovered from the totals. It is also the only place any of it
    * exists: the clients hold no simulation, so a board they added up from the
    * `kill` events they happened to receive would be a different board on every
    * screen.
@@ -605,22 +670,13 @@ export class HeadlessGame {
    * A slot is a bot or a person and this makes no distinction — the number is
    * about the BODY in that slot, which is what makes benching invisible here
    * exactly as it is everywhere else. Sized to the roster in `startRound`.
-   */
-  readonly slotKills: number[] = [];
-  readonly slotDeaths: number[] = [];
-
-  /**
-   * How many times the two arrays above have changed.
    *
-   * `Match` sends the table only when this moves, so a round in which nobody
-   * dies puts nothing on the wire and one in which somebody does puts the whole
-   * table out once. A counter rather than a dirty flag because the reader is
-   * not the writer: a flag would have to be cleared by whoever sent it, and two
-   * senders (a broadcast and a joiner's first message) clearing one flag is how
-   * a client ends up with a board that is one kill stale for the rest of the
-   * round.
+   * The same class the offline round keeps, holding the same three columns and
+   * spending the same point table, which is what makes a kill worth what a
+   * player learned it was worth wherever they learned it. `Match` watches its
+   * `version` to decide when the table has to go out again.
    */
-  scoreVersion = 0;
+  readonly scores = new ScoreBook();
 
   /**
    * Where a combatant of `team` deploys.
