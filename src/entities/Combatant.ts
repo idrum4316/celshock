@@ -7,7 +7,7 @@
 import type { Vector3 } from "@babylonjs/core";
 import type { Hittable } from "../systems/CombatSystem";
 
-/** 0 = Wardens, 1 = The Blight. Indexes into `CONFIG.teams`. */
+/** 0 = Valeguard, 1 = Redline. Indexes into `CONFIG.teams`. */
 export type Team = 0 | 1;
 
 export const OTHER_TEAM: Record<Team, Team> = { 0: 1, 1: 0 };

@@ -32,7 +32,7 @@ import { HollowmereHeights } from "./heights";
  * ```
  *                             N
  *    +---------------------------------------------------+
- *    |  * WARDEN GATEHOUSE          ~ ASHWOOD ~           |
+ *    |  * VALEGUARD GATEHOUSE       ~ ASHWOOD ~           |
  *    |        (-100,+110)         logging camp, kilns,    |
  *    |                            watchtower (+34,+75)    |
  *    |     [A] CHAPEL              [D] FARMSTEAD          |
@@ -46,7 +46,7 @@ import { HollowmereHeights } from "./heights";
  *    |   ~ THE MOOR ~      ~ BURYING                      |
  *    |  mire (-56,-96)       GROUND ~      [E] BOG DOCKS  |
  *    |  crofts, kilns       (-24,-52)          (+40,-85)  |
- *    |                                    * BLIGHT CAMP   |
+ *    |                                    * REDLINE CAMP  |
  *    |                                      (+105,-110)   |
  *    +---------------------------------------------------+
  * ```
@@ -81,8 +81,8 @@ import { HollowmereHeights } from "./heights";
  *   region that blankets a structure just wastes its count on rejects.
  */
 
-const WARDEN = "#c9a15e";
-const BLIGHT = "#ff3b3b";
+const VALEGUARD = "#c9a15e";
+const REDLINE = "#ff3b3b";
 
 /** Bank top height — the creek floor is the ground plane, 1.5 m below. */
 const BANK_H = 1.5;
@@ -228,7 +228,7 @@ const placements: Placement[] = [
 
   // ===== ASHWOOD — the logging camp (north-east) =============================
   // Dirt lanes off the farmstead road into the felled woods: charcoal kilns,
-  // stacked cordwood, and the Wardens' watchtower looking north.
+  // stacked cordwood, and the Valeguard watchtower looking north.
   { kind: "road", x: 34, z: 61.5, params: { length: 55, width: 7, surface: "dirt" } },
   { kind: "road", x: 28, z: 90, rotY: Math.PI / 2, params: { length: 30, width: 7, surface: "dirt" } },
   { kind: "watchtower", x: 20, z: 82 },
@@ -261,7 +261,7 @@ const placements: Placement[] = [
   { kind: "cart", x: 88, z: 62, params: { ruined: true } },
 
   // ===== the east holdings ===================================================
-  // A dirt lane from the Blight gatehouse up the map's east side, with the
+  // A dirt lane from the Redline gatehouse up the map's east side, with the
   // outbuildings that give their approach cover it never had.
   { kind: "road", x: 86, z: -50, params: { length: 100, width: 7, surface: "dirt" } },
   { kind: "watchtower", x: 106, z: -29.991, rotY: 1.566 },
@@ -362,8 +362,8 @@ const placements: Placement[] = [
   { kind: "cottage", x: 56, z: -60, params: { width: 8, litWindows: true } },
 
   // ===== home spawns ==========================================================
-  { kind: "gatehouse", x: -100, z: 110, params: { teamColor: WARDEN } },
-  { kind: "gatehouse", x: 105, z: -110, rotY: Math.PI, params: { teamColor: BLIGHT } },
+  { kind: "gatehouse", x: -100, z: 110, params: { teamColor: VALEGUARD } },
+  { kind: "gatehouse", x: 105, z: -110, rotY: Math.PI, params: { teamColor: REDLINE } },
   { kind: "barn", x: 104, z: -70.746, y: -0.17, rotY: -Math.PI / 2 },
   { kind: "fence", x: 25.285, z: -19.321, rotY: Math.PI / 2, params: { length: 14 } },
   { kind: "woodpile", x: 20.478, z: -47.91, y: 0.05, rotY: 0.495 },
@@ -429,7 +429,7 @@ const scatter: ScatterSpec[] = [
   { prop: "rubble", x: -64, z: -78, radius: 8, count: 4, scale: [0.8, 1.2], blocking: true, clearance: 1.1 },
   { prop: "barrel", x: -46, z: -80, radius: 6, count: 3, blocking: true, clearance: 0.55 },
   { prop: "boulder", x: -84, z: -58, radius: 12, count: 6, scale: [0.8, 1.3], blocking: true, clearance: 1.0 },
-  // The east holdings, along the Blight's lane.
+  // The east holdings, along the Redline lane.
   { prop: "boulder", x: 98, z: -30, radius: 13, count: 7, scale: [0.8, 1.3], blocking: true, clearance: 1.0 },
   { prop: "bramble", x: 78, z: -40, radius: 14, count: 10, scale: [0.8, 1.4] },
   { prop: "deadTree", x: 106, z: -16, radius: 12, count: 8, scale: [0.9, 1.7], blocking: true, clearance: 0.55 },
@@ -509,7 +509,7 @@ const water: WaterRect[] = [
   // lane so the edges tuck under the retaining walls instead of showing a seam.
   { x: -85, z: -10, width: 6.6, depth: 76, y: -0.246 },
   // The bog: the pool the boathouse and jetties stand in. Stops short of the
-  // boathouse ramp foot in the north and the Blight road in the east.
+  // boathouse ramp foot in the north and the Redline road in the east.
   { x: 37, z: -95, width: 55, depth: 50 },
   // The mire: the moor's own pool, out where the south-west crofts drowned.
   // One jetty runs into it; everything else around it is ruin.
@@ -550,7 +550,7 @@ const grass: GrassRect[] = [
   { x: -30, z: -84, width: 40, depth: 20, density: 0.55 },
   // The mire's shallows — reeds, same trick as the bog.
   { x: -56, z: -94, width: 30, depth: 20, density: 0.8 },
-  // The east holdings' rough grazing, east of the Blight lane.
+  // The east holdings' rough grazing, east of the Redline lane.
   { x: 98, z: -20, width: 16, depth: 26, density: 0.5 },
   { x: 53.884, z: -15.486, width: 57, depth: 22, density: 2 },
   { x: 63.027, z: -48.428, width: 39, depth: 44, density: 2 },
@@ -570,15 +570,15 @@ export const HollowmereLayout: MapLayout = {
    *
    * Each col sits over the road that leaves the valley through a gatehouse, so
    * the two home spawns look out through a saddle in the crag rather than at a
-   * blank rock face. Both roads run along Z, so the Warden's gap is in the
-   * north rim and the Blight's is in the SOUTH rim — not the east, though its
+   * blank rock face. Both roads run along Z, so the Valeguard gap is in the
+   * north rim and Redline's is in the SOUTH rim — not the east, though its
    * gatehouse stands only 15 m off it.
    */
   ridge: {
     passes: [
-      // Above the Warden road, which runs north to z ≈ 116.5.
+      // Above the Valeguard road, which runs north to z ≈ 116.5.
       { x: -100, z: 120, width: 26 },
-      // The Blight's track south. Narrower: the corner massif is close.
+      // The Redline track south. Narrower: the corner massif is close.
       { x: 105, z: -120, width: 18 },
     ],
   },

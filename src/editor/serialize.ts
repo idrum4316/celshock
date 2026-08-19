@@ -11,7 +11,7 @@
  *   value is still equal to what was loaded re-emits its **original source
  *   token**.
  *
- * That second half is what preserves `TERRACE_H`, `BANK_H`, `WARDEN`,
+ * That second half is what preserves `TERRACE_H`, `BANK_H`, `VALEGUARD`,
  * `Math.PI / 2` and hand-chosen spacing even inside an entry that was
  * partially edited — without this file ever having to evaluate or understand
  * those expressions. It compares against a deep snapshot of the layout taken
@@ -49,8 +49,8 @@ const CONSTANTS: Record<string, [number, string][]> = {
 };
 
 const COLORS: Record<string, string> = {
-  "#c9a15e": "WARDEN",
-  "#ff3b3b": "BLIGHT",
+  "#c9a15e": "VALEGUARD",
+  "#ff3b3b": "REDLINE",
 };
 
 /** Fields that read better as multiples of pi, matching how they're authored. */

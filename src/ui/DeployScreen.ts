@@ -338,10 +338,13 @@ export class DeployScreen {
    * An unselected spawn: a dark disc so it reads against a building footprint,
    * a ring, and a downward chevron so a spawn never reads as a flag.
    *
-   * The ring is the team's colour lightened rather than the colour itself. Both
-   * teams' colours are chosen for a night scene and one of them (the Blight's
-   * plum) is within a few points of this map's own background — at 2 px it
-   * simply is not there.
+   * The ring is the team's colour lightened rather than the colour itself.
+   * Both teams' colours are chosen to sit in a night scene, and this map is a
+   * dark plan drawn at 2 px a stroke — the margin is thin enough that Redline's
+   * old plum was within a few points of the background and simply was not
+   * there. That colour is a crimson now and would survive on its own; the
+   * lightening stays because what it protects against is the next dark team
+   * colour, not that one.
    */
   private drawMarker(x: number, y: number, ink: string): void {
     const c = this.ctx;

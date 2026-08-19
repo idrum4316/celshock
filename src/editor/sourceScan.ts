@@ -7,7 +7,8 @@
  *
  * Why text and not a code generator: layout.ts is authored, not generated. It
  * carries a large ASCII map of the village, per-district commentary, and local
- * constants (BANK_H, TERRACE_H, WARDEN, BLIGHT) used in place of bare numbers.
+ * constants (BANK_H, TERRACE_H, VALEGUARD, REDLINE) used in place of bare
+ * numbers.
  * Regenerating the file from data would destroy all of it on the first save.
  * So the rule is inverted — the source is authoritative and the editor patches
  * the individual lines it actually changed.

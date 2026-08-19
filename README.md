@@ -206,8 +206,13 @@ a committed swipe cancels the pull exactly as a committed stick does.
 
 ### How a round works
 
-- Two teams of eight — the **Wardens** (warm amber) and **the Blight** (cold
+- Two teams of eight — **Valeguard** (warm amber) and **Redline** (cold
   crimson) — fight over **five control points** across a 240 × 240 m village.
+  A side is told apart three ways, so the read survives losing any one of
+  them: the whole kit is warm or cold, the team colour is worn on pauldrons,
+  bandolier and helmet band where some of it faces every direction, and each
+  side wears a helmet of its own shape — a peak against a respirator — for
+  when a body is backlit, in fog, or too far away to have a colour at all.
 - Stand inside a zone to capture it. More bodies capture faster, with
   diminishing returns; if both teams are inside, the meter freezes. A flag has
   to be swept through **neutral** before it changes hands, so you cannot steal

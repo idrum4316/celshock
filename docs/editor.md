@@ -136,7 +136,7 @@ against the map it is going onto is the whole point of doing it here.
 
 **Saving (`Ctrl+S`) patches `layout.ts`'s text; it does not regenerate it.** The
 file is authored — the ASCII village map, the district commentary, and
-`BANK_H`/`TERRACE_H`/`WARDEN`/`BLIGHT` in place of bare numbers would all die on the
+`BANK_H`/`TERRACE_H`/`VALEGUARD`/`REDLINE` in place of bare numbers would all die on the
 first save of a code generator. So the editor rewrites only the lines that changed:
 an entry nobody touched is re-emitted **byte for byte** (a no-op save is verified to
 reproduce the file exactly); an edited entry is rebuilt field by field, and each

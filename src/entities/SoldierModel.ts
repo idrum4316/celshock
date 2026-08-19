@@ -67,8 +67,8 @@ const GUN = "#2b2b33";
  * answers here are stacked deliberately, because each covers where the one
  * before it fails:
  *
- * - **Hue.** A whole kit that is warm (the Wardens: khaki plate, brown canvas)
- *   or cold (the Blight: slate plate, blue-black suit). It costs NOTHING — the
+ * - **Hue.** A whole kit that is warm (Valeguard: khaki plate, brown canvas)
+ *   or cold (Redline: slate plate, blue-black suit). It costs NOTHING — the
  *   same boxes in different paint — and it is the only one of the three that
  *   still works on a body three pixels wide, because it is the average of every
  *   one of those pixels rather than a feature inside them.
@@ -264,7 +264,7 @@ export const RAGDOLL_BONES: readonly BoneSpec[] = [
   // collar reaches 0.54 and the antenna off the pack 0.79; neither is body.
   { joint: "torso", size: [0.42, 0.52, 0.3], center: [0, 0.23, -0.03], mass: 34 },
   // Helmet, neck and visor, y in [-0.025, 0.235]. Neither side's face — a
-  // Warden's peak, a Blight's respirator and shroud — is inside this box.
+  // Valeguard peak, a Redline respirator and shroud — is inside this box.
   { joint: "head", size: [0.26, 0.26, 0.27], center: [0, 0.105, 0], mass: 6 },
   // Shoulder to hand in one piece, y in [-0.48, 0.07], the glove trimmed off
   // the end of it.
@@ -532,9 +532,9 @@ type SegmentBox = [
  * Paint is the read that dies first — at dusk, in mist, or against a bright
  * Coldharbour sky a body is a value and not a hue — and a helmet is the part of
  * a soldier a player sees before any of the rest of them. So the sides differ
- * in the OUTLINE of the head as well as in its colour: the Wardens wear a
- * peaked helmet with a short neck guard, the Blight a respirator under a long
- * shroud. Both are drawn in `armor`, so a side pays no mesh for having a face.
+ * in the OUTLINE of the head as well as in its colour: Valeguard wear a peaked
+ * helmet with a short neck guard, Redline a respirator under a long shroud.
+ * Both are drawn in `armor`, so a side pays no mesh for having a face.
  */
 function faceBoxes(kit: SoldierKit): SegmentBox[] {
   return kit.face === "brim"

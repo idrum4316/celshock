@@ -99,7 +99,7 @@
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.1em;
-  /* Names arrive as CONFIG.teams entries ("The Blight"), and mixed case
+  /* Names arrive as CONFIG.teams entries ("Valeguard"), and mixed case
      against an all-caps HUD reads as a different piece of software. */
   text-transform: uppercase;
 }

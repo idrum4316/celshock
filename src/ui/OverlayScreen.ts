@@ -224,7 +224,7 @@ export class OverlayScreen {
     this.root.innerHTML = `
       <div class="ov-title">
         <h1>HOLLOWMERE</h1>
-        <p class="tagline">Conquest &mdash; take and hold ${spellCount(flagCount)} points against the Blight</p>
+        <p class="tagline">Conquest &mdash; take and hold ${spellCount(flagCount)} points against Redline</p>
       </div>
       <div class="ov-settings">
         <div class="segmented" data-menu="map">

@@ -86,7 +86,7 @@ export const REWIND_WINDOW_MS = 400;
 /** A world position or direction on the wire. */
 export type Vec3 = [x: number, y: number, z: number];
 
-/** 0 = Wardens, 1 = The Blight — the same indices `CONFIG.teams` uses. */
+/** 0 = Valeguard, 1 = Redline — the same indices `CONFIG.teams` uses. */
 export type NetTeam = 0 | 1;
 
 // --- lobby ----------------------------------------------------------------
