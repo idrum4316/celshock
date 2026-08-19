@@ -54,7 +54,17 @@ interface ScatterBase {
     | "fireDrum"
     | "boulder"
     | "bramble"
-    | "barrel";
+    | "barrel"
+    // The city's own, and the first props in this list that are not rural.
+    // Three carry a body and two carry nothing at all — see `PROP_BODIES`,
+    // and note that a non-blocking prop emits no collider, no `WorldBox` and
+    // nothing to any ray, which is what makes urban clutter affordable at a
+    // density the ray budget could never buy in cover.
+    | "skip"
+    | "binPair"
+    | "palletStack"
+    | "trafficCone"
+    | "litter";
   x: number;
   z: number;
   count: number;

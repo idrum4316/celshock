@@ -1100,6 +1100,12 @@ export class Game {
       const tint = Color3.FromHexString(env.sky.moonGlowColor);
       this.godRays.setTint(tint.r, tint.g, tint.b);
     }
+    // The shafts' own two numbers, and this is pushed UNCONDITIONALLY where the
+    // tint above is not: a map with no `sky` block draws no disc and detaches
+    // the pass, but the pass is shared and the next map to attach it would
+    // otherwise inherit whatever the last one set. `setRays(undefined)` is what
+    // puts `CONFIG.godRays` back.
+    this.godRays.setRays(env.sky?.rays);
   }
 
   /**
@@ -2431,6 +2437,12 @@ export class Game {
     // The shadow camera follows the environment's key light, and its casters
     // are the fresh map's visuals — last build's meshes are now disposed.
     this.shadows.setLightDirection(environment.lighting.direction);
+    // And how far that light's shadows are allowed to reach. It travels with
+    // the direction rather than beside it, because it is a consequence of the
+    // direction's elevation — see `EnvironmentSpec.lighting.shadowWindow`.
+    this.shadows.setShadowWindow(
+      environment.lighting.shadowWindow ?? CONFIG.graphics.shadows.frustumSize,
+    );
     this.shadows.setFogRange(environment.fogStart, environment.fogEnd);
     // The same fog range, to the three systems that gate on where it ENDS: past
     // it there is nothing to see, so a rig is not drawn, a remote body is not

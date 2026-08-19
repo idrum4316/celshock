@@ -447,6 +447,29 @@ fix, and it is **lossless rather than a quality trade**: the light is orthograph
 so a caster's shadow lands at its own position in the light's plane and a box test
 there cannot drop anything that could have darkened a texel.
 
+**The window's size is the MAP's, not the config's** — `CONFIG.graphics.shadows.
+frustumSize` (110) is only the default, and `EnvironmentSpec.lighting.shadowWindow`
+is the override (Coldharbour: 200). It had to become one when a map lowered its
+sun: shadow length is `h / tan(elevation)`, and the same 40 m tower throws 25 m
+at 58 degrees and 90 m at 24. **What happens outside the window is not a fade —
+`shadowVisibility` returns 1.0, fully lit, for any fragment outside the depth
+map's UV or its depth volume**, so an undersized window draws a straight line
+across open ground where the shadows stop and slides it along with the player.
+
+Two consequences of the geometry, both easy to get backwards. The window is a
+square perpendicular to the LIGHT, so its ground footprint stretches by
+`1/sin(elevation)` along the sun's azimuth — which means a low sun improves the
+along-sun reach for free, and along that axis it is `depthRange` rather than
+`frustumSize` that binds. And the price is texel density, `frustumSize /
+mapSize`: 5.4 cm at 110, 9.8 cm at 200. The four-tap kernel is sized in TEXELS
+so it still cancels the staircase, but the range over which an edge is sub-pixel
+scales with it. `mapSize` stays global — it is fixed at `ShadowGenerator`
+construction, and raising it is four times the fill on a pass that re-renders
+whenever the snapped focus moves.
+
+The count above is Hollowmere's; note both numbers move with the window, since a
+200 m square straddles roughly twice the 48 m blocks a 110 m one does.
+
 **The blob shadows do not probe for the player's ground; they are handed
 `Player.floorY`.** `Player.probeGround` is a whole-scene ray pick (1,775 meshes
 walked, 758 solid colliders tested, ~2.5 ms) and `ShadowSystem` used to cast the
@@ -708,6 +731,27 @@ There is no occlusion render pass — the substitute-material trick Babylon's
 luminance threshold IS the occlusion test**, and it has to sit above the brightest
 non-sky thing in the frame. That is the wet cobbled street (~0.67 looking along the
 moon); below it the road smears upward and the frame fills with ground haze.
+
+**Because that number is a statement about how bright a particular world is, it
+is the MAP's** — `SkySpec.rays` (`{ threshold, intensity }`), each falling back
+to `CONFIG.godRays`, which is the night village's. `samples` deliberately is not
+overridable: it is interpolated into the shader source as a `#define` at module
+evaluation.
+
+**On a lit map the threshold is BRACKETED rather than chosen, and both ends are
+measurable.** The floor is what every distant surface asymptotes to — the fog
+colour, and the ground mist with it — which is why Coldharbour holds `fogColor`
+and `mistColor` at the same luma (0.753) and treats moving either as a hue
+change only. The ceiling is the dimmest sky the shafts can reach: that map's
+`moonGlowColor` is 0.867 and its `cloudLitColor` 0.891, so 0.82 sits in the gap.
+**The two things that can still defeat the bracket are the ones added PAST the
+soft shoulder** — the ground spec and the translucency band — since everything
+diffuse is compressed under ~0.75 and those two are explicitly allowed over it.
+
+`intensity` moves WITH the threshold rather than independently: at night the sky
+is a thin band over a near-black village and on a lit map it is half the frame
+at 0.9+, so the same accumulation is a different size and the night value (1.3)
+returns a white wash instead of beams — Coldharbour runs 0.5.
 
 **The pass is DETACHED whenever the moon is behind the camera or off the side of the
 screen**, which is most of a round (22 of 24 bearings on a level sweep). Its shader

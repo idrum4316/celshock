@@ -63,6 +63,7 @@ import { ObstacleField } from "./ObstacleField";
 import { mulberry32 } from "./rng";
 import {
   buildBarrel,
+  buildBinPair,
   buildBoulder,
   buildBramble,
   buildButtressLog,
@@ -73,9 +74,13 @@ import {
   buildFungus,
   buildGravestone,
   buildJungleTree,
+  buildLitter,
   buildLog,
+  buildPalletStack,
   buildPine,
   buildRubble,
+  buildSkip,
+  buildTrafficCone,
 } from "./Props";
 
 /** A capturable flag. */
@@ -350,6 +355,11 @@ const SCATTER_BUILDERS = {
   boulder: buildBoulder,
   bramble: buildBramble,
   barrel: buildBarrel,
+  skip: buildSkip,
+  binPair: buildBinPair,
+  palletStack: buildPalletStack,
+  trafficCone: buildTrafficCone,
+  litter: buildLitter,
 } as const;
 
 /** Lights carried by scatter props. Kept sparse — every one costs a shader slot. */
@@ -451,6 +461,23 @@ const PROP_BODIES: Record<ScatterSpec["prop"], PropBody> = {
   boulder: { w: 2.1, d: 1.9, h: 1.45, visualTop: 1.4 },
   bramble: { w: 0.8, d: 0.8, h: 1.2, visualTop: 1.6 },
   barrel: { w: 0.88, d: 0.88, h: 1.25, visualTop: 1.3 },
+  // The skip is the one prop in this table that needs no compromise: it IS a
+  // rectangular prism, so the box is the shape rather than an approximation of
+  // it. Oriented, per the gravestone lesson — 1.9 one way and 1.2 the other is
+  // meaningless squared off. The flared rim (2.04 x 1.34) is deliberately
+  // OUTSIDE this: 8 cm of proud lip is not worth stopping a round through.
+  skip: { w: 1.9, d: 1.2, h: 1.1, visualTop: 1.25 },
+  // The pair together, along its own local X — the mate stands at +0.56.
+  binPair: { w: 1.14, d: 0.6, h: 1.04, visualTop: 1.1 },
+  palletStack: { w: 1.2, d: 1.0, h: 0.99, visualTop: 1.05 },
+  // Never blocking, so w/d/h are never read — filled honestly anyway, for the
+  // reason the fern's entry states: this is a Record and a lie here would be
+  // believed the day someone sets `blocking` on a cone. `visualTop` IS read,
+  // because findSpot's burial check runs for every prop.
+  trafficCone: { w: 0.42, d: 0.42, h: 0.65, visualTop: 0.7 },
+  // Likewise never blocking. The scraps scatter about 0.55 m from the root in
+  // each direction, so the footprint is wider than the root box suggests.
+  litter: { w: 1.3, d: 1.3, h: 0.04, visualTop: 0.09 },
 };
 
 /**

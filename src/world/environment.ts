@@ -28,6 +28,22 @@ export interface ParticleSpec {
   size: number;
   /** Positive rises (embers), negative falls (ash). */
   riseSpeed: number;
+  /**
+   * Lateral drift, in metres per second on X and Z. Absent leaves the
+   * symmetric jitter the field has always had, which reads as motes MILLING —
+   * right for still air under a dead valley, wrong anywhere the air is meant
+   * to be going somewhere.
+   *
+   * **This is deliberately not a per-map wind SYSTEM**, which is what it looks
+   * like it wants to be. Wind lives in `CONFIG.grass` and has exactly one
+   * reader (`GrassShader`); promoting it to the environment would give it two,
+   * and the second would be a lawn on one square of one map. Nothing else in
+   * the tree can consume one — the world is merged and frozen, the props are
+   * static meshes, there is no cloth. What a wind field would actually have
+   * bought is that the dust and the grass agree about a bearing, so a map that
+   * wants that states it here and matches `CONFIG.grass.windDir` by hand.
+   */
+  drift?: [number, number];
 }
 
 /**
@@ -81,6 +97,21 @@ export interface SkySpec {
    * for a disc that is not drawn.
    */
   haloStrength?: number;
+  /**
+   * The shafts' own two numbers, each defaulting to `CONFIG.godRays`.
+   *
+   * They live on the SKY rather than at the top of the spec because the whole
+   * feature already does: `discRadius` is what switches the shafts on and off,
+   * through the zero-`moonDir` contract above, and `Game.applySky` already
+   * reads `moonGlowColor` to tint them. `EnvironmentSpec.grade` is the shape
+   * this copies — a block of `CONFIG.graphics` defaults a map may override.
+   *
+   * Only these two, and the omission is mechanical rather than a judgement:
+   * `samples` is interpolated into the shader source as a `#define` at module
+   * evaluation and cannot be per-map at all. Of what is left, these are the
+   * two that are statements about a MAP rather than about the shape of a beam.
+   */
+  rays?: { threshold?: number; intensity?: number };
   /** Drifting cloud decks: tint (the shadowed body) and 0..1 ceiling alpha. */
   cloudColor: string;
   cloudOpacity: number;
@@ -191,6 +222,24 @@ export interface EnvironmentSpec {
     skyLightIntensity: number;
     rimColor: string;
     rimIntensity: number;
+    /**
+     * The ortho window the shadow camera covers, in metres, overriding
+     * `CONFIG.graphics.shadows.frustumSize`.
+     *
+     * **This is the fourth thing that reads like a global constant and is the
+     * MAP's**, and it is here rather than on the layout for the reason
+     * `fogEnd` is here: it is not a shape, it is a consequence of the key
+     * light's ELEVATION, which is the field directly above it. A 40 m tower
+     * throws 25 m of shadow at 58 degrees and 90 m at 24, and
+     * `shadowVisibility` returns fully-lit outside the window rather than
+     * fading — so a window sized for a high sun does not soften under a low
+     * one, it draws a straight line across the ground where the shadows stop.
+     *
+     * Raising it costs texel density (`window / mapSize`), and there is a
+     * ceiling past which it buys nothing: along the sun's own azimuth the
+     * depth volume binds first. See `ShadowSystem.setShadowWindow`.
+     */
+    shadowWindow?: number;
     /**
      * The player's own shoulder lamp, overriding `CONFIG.lighting.lampIntensity`.
      *

@@ -101,6 +101,27 @@ export class GodRays {
   private lightY = 0.5;
   private presence = 0;
   private tint = new Vector3(1, 1, 1);
+  /**
+   * The luminance a pixel needs before it radiates, and the map's rather than
+   * the config's — `CONFIG.godRays.threshold` until a sky states its own.
+   *
+   * It has to be the map's because it IS the occlusion test (there is no depth
+   * pass), so it is a statement about how bright a particular world is. The
+   * shipped 0.78 sits above a wet cobbled night street at ~0.67; under a lit
+   * sky the same number is below the ground MIST, never mind a pale slab, and
+   * the frame fills with haze rising off the floor. A daylight map's value is
+   * bracketed rather than chosen: above the fog colour every distant surface
+   * asymptotes to, and below the dimmest sky inside the shafts' reach.
+   */
+  private threshold: number = CONFIG.godRays.threshold;
+  /**
+   * Final scale on the accumulated shafts, likewise the map's. It moves WITH
+   * the threshold rather than independently: at night the sky is a thin band
+   * over a near-black village, and on a lit map it is half the frame at 0.9+,
+   * so the same accumulation is a different size and the night value returns a
+   * white wash instead of beams.
+   */
+  private intensity: number = CONFIG.godRays.intensity;
   /** Scratch for the projection — no per-frame allocation. */
   private readonly moonPos = new Vector3();
   private readonly projected = new Vector3();
@@ -146,8 +167,8 @@ export class GodRays {
       effect.setFloat("density", g.density);
       effect.setFloat("decay", g.decay);
       effect.setFloat("weight", g.weight);
-      effect.setFloat("intensity", g.intensity);
-      effect.setFloat("threshold", g.threshold);
+      effect.setFloat("intensity", this.intensity);
+      effect.setFloat("threshold", this.threshold);
     };
   }
 
@@ -179,6 +200,17 @@ export class GodRays {
   /** The shafts take the moon's own colour; called when the sky is applied. */
   setTint(r: number, g: number, b: number): void {
     this.tint.set(r, g, b);
+  }
+
+  /**
+   * The map's own occlusion threshold and shaft strength, pushed beside the
+   * tint when the sky is applied. Either omitted falls back to `CONFIG.godRays`,
+   * which is the shipped night village's — see the fields.
+   */
+  setRays(rays: { threshold?: number; intensity?: number } | undefined): void {
+    const g = CONFIG.godRays;
+    this.threshold = rays?.threshold ?? g.threshold;
+    this.intensity = rays?.intensity ?? g.intensity;
   }
 
   /**

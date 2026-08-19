@@ -712,11 +712,21 @@ void main() {
   vec3 mirrored = reflect(-viewDir, n);
   vec3 sky = mix(fogColor, skyZenithColor,
     smoothstep(0.0, 0.55, mirrored.y));
-  // The sun in that sky, as a HALO rather than a disc, which is what makes it
-  // agree with the dome: SkySpec.discRadius is 0 on the one map with glass on
-  // it, so a hard disc here would be a reflection of something the player
-  // cannot look up and see. Gated by the same shadow map as everything else —
-  // glass in a tower's shade does not glare.
+  // The sun in that sky, as a HALO rather than a disc, and it is a GLARE rather
+  // than a stand-in for one.
+  //
+  // This used to be justified by there being no disc to reflect:
+  // SkySpec.discRadius was 0 on the one map with glass on it, so a hard disc
+  // here would have been a reflection of something the player could not look up
+  // and see. Coldharbour has a disc now (1.35 degrees of it), and the halo
+  // stays broad anyway — CONFIG.graphics.glass.halo is ~21 degrees, which is
+  // not that disc and is not trying to be. A low sun on a curtain wall is a
+  // wide smeared glare across the whole elevation, not a sharp second sun — and
+  // the same breadth is what the moon wants on Hollowmere, which is why the
+  // number is global.
+  //
+  // Gated by the same shadow map as everything else — glass in a tower's shade
+  // does not glare.
   float halo = smoothstep(glassParams.z, 1.0, dot(mirrored, -lightDir));
   sky += lightColor * halo * shadow;
 

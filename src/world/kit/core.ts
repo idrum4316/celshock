@@ -230,6 +230,39 @@ export interface BuildParams {
    * make a corridor of it); a walk along a channel wants one on the wet side.
    */
   railSide?: "both" | "none" | "-x" | "+x";
+  /**
+   * Street light: carry a real `LocalLight` as well as the lens, and NOT
+   * whether the lamp is on — every lamp on a map is on together, so the lens
+   * is unconditional and this is only whether the shader can afford to prove
+   * it.
+   *
+   * The two are different questions because they cost different things. A lens
+   * is `Build.glow` — an emissive box that takes the GlowLayer's bloom and
+   * `EmissiveFog`'s per-pixel fade for free and spends NO light slot. A light
+   * is one of sixteen, uploaded nearest-first, and a street full of them
+   * evicts the interior fixtures a lit building is legible by. So a map lights
+   * the few columns whose pool of light is somewhere a player stands, and lets
+   * the rest be lamps you can see rather than lamps that light you.
+   *
+   * This is the same split `litWindows` already makes across a terrace, for
+   * the same reason and out of the same budget.
+   */
+  lit?: boolean;
+  /**
+   * Shophouse: the frontage sign's colour, and what makes its face emissive.
+   *
+   * The bracket sign is drawn either way — it is geometry the builder has
+   * always emitted, in the blind's own colour. Naming a colour here is what
+   * turns its FACE into a `Build.glow`, which is why this is a colour rather
+   * than a flag: an unlit sign is a board and a lit one is a board with a
+   * lamp behind it, and the only thing that differs is what colour is coming
+   * off the front of it.
+   *
+   * No light comes with it, deliberately — see `lit` on the budget, and note a
+   * `flicker` is only visible on a light, so `LightSpec`'s anticipated
+   * "neon ~.9" stays unused until something can afford a slot for it.
+   */
+  sign?: string;
 }
 
 /**
@@ -374,6 +407,20 @@ export const ROAD_PAINT = "#9c9887";
 export const LAMP_RED = "#7b2f2c";
 /** A lit window or a shopfront at dusk; the city's `FLAME`. */
 export const WINDOW_LIGHT = "#ffd79a";
+/**
+ * A street lamp's lens, and the one emissive on this map that is meant to be
+ * seen from the far side of it.
+ *
+ * **Saturated on purpose, where `WINDOW_LIGHT` is pale.** A lit window is seen
+ * against the wall it is cut into and wants to read as warm light on a room; a
+ * lamp head is a hand-sized emissive hanging in open sky at the top of a
+ * column, and a pale one blooms through the GlowLayer into a hard white disc —
+ * which is exactly why `buildStreetLight` carried no lens at all until the map
+ * moved to an hour that wanted one. Sodium orange survives the bloom as a
+ * colour rather than as a hole in the frame, and it holds its hue as
+ * `EmissiveFog` takes it into the haze.
+ */
+export const LAMP_SODIUM = "#ff9a3c";
 /**
  * Painted render over masonry: the older mixed-use stock between the towers.
  *

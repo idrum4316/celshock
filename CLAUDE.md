@@ -446,9 +446,9 @@ nothing outside `maps.ts` may import a map's own modules. A `MapDef` must be a
 **scatter placement is seeded — never call `Math.random()` in world-building
 code**, or the nav graph differs between page loads.
 
-**Three things that read like global constants are the MAP's, and each one used
+**Four things that read like global constants are the MAP's, and each one used
 to be a global that a second map had to agree with rather than override.** All
-three default to what the shipped valleys are, so a map that says nothing is
+four default to what the shipped valleys are, so a map that says nothing is
 unaffected:
 
 - **How big it is.** `MapLayout.size` (`CONFIG.map.size`, 240) — carried on
@@ -461,11 +461,21 @@ unaffected:
   gated on `FOG_WALL`. That constant is now the DEFAULT view distance rather
   than the answer, because a map is allowed to have no fog and on a clear one a
   body vanishing at seventy-eight vanishes in plain sight. What did NOT move with
-  it: `audio.maxDistance` (70), `bots.perception.engageRange` (55) and the 110 m
-  shadow window. A clear map has to be laid out knowing that.
+  it: `audio.maxDistance` (70) and `bots.perception.engageRange` (55). A clear
+  map has to be laid out knowing that.
 - **How deep it stacks.** `MapLayout.surfaces` (`CONFIG.nav.maxSurfaces`, 3) —
   how many standable heights `NavGrid` keeps per cell. A map raises it only
   because it stacks FLOORS; see the bots section.
+- **How far its shadows reach.** `EnvironmentSpec.lighting.shadowWindow`
+  (`CONFIG.graphics.shadows.frustumSize`, 110) — the side of the ortho window
+  the shadow camera covers, pushed by `installMap` beside the light direction
+  it is a consequence OF. Shadow length is `h / tan(elevation)`, so a 40 m
+  tower throws 25 m at Coldharbour's old 58-degree sun and 90 m at its present
+  24; and `shadowVisibility` returns FULLY LIT outside the window rather than
+  fading, so an undersized one does not soften, it draws a line across the
+  ground where the shadows stop. It costs texel density (`window / mapSize`)
+  and there is a ceiling past which it buys nothing, because along the sun's
+  own azimuth the DEPTH volume binds first — see `ShadowSystem.setShadowWindow`.
 
 **The shipped maps are Hollowmere** (a night village), **Greyfen** (a jungle
 valley at first light) **and Coldharbour** (a city's business district on a clear

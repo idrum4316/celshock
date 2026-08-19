@@ -189,9 +189,18 @@ export class Atmosphere {
       : GPUParticleSystem.BLENDMODE_STANDARD;
 
     // Slow lateral drift plus the theme's vertical motion.
+    //
+    // With no `drift` the two bounds are symmetric about zero, so a mote takes
+    // a random lateral velocity and the field mills in place — still air. A
+    // `drift` offsets both bounds by the same amount, which keeps the SPREAD
+    // (the ±0.35 that makes a field look like separate specks rather than a
+    // sheet) while moving the mean, so the whole field travels without any two
+    // motes agreeing exactly. Turning it into a mean rather than a floor is
+    // what stops a wind from also making the dust uniform.
     const rise = spec.riseSpeed;
-    ps.direction1 = new Vector3(-0.35, rise * 0.6, -0.35);
-    ps.direction2 = new Vector3(0.35, rise * 1.4, 0.35);
+    const [dx, dz] = spec.drift ?? [0, 0];
+    ps.direction1 = new Vector3(dx - 0.35, rise * 0.6, dz - 0.35);
+    ps.direction2 = new Vector3(dx + 0.35, rise * 1.4, dz + 0.35);
     ps.gravity = new Vector3(0, rise * 0.15, 0);
     ps.minEmitPower = 0.2;
     ps.maxEmitPower = 0.6;

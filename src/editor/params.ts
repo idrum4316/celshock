@@ -210,6 +210,16 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
       def: "#7c4a3f",
       options: ["#7c4a3f", "#4a5a4a", "#5c5340", "#3f4b52", "#6b4a2f"],
     },
+    {
+      key: "sign",
+      type: "choice",
+      label: "sign",
+      def: "#ff5f7a",
+      options: [
+        "#ff5f7a", "#4fd6ff", "#ffc63c", "#7dff9e",
+        "#ff7a3c", "#c46cff", "#39e0d0", "#ff4f4f",
+      ],
+    },
   ],
   depot: [
     // The depth floor is the gallery plus the flight up to it — DEV throws
@@ -230,7 +240,7 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
     num("depth", "depth", 1.4, 0.8, 6, 0.2),
   ],
   barrier: [num("length", "length", 6, 3, 40, 1)],
-  streetLight: [num("height", "height", 7.5, 4, 12, 0.5)],
+  streetLight: [num("height", "height", 7.5, 4, 12, 0.5), bool("lit", "lit")],
   monument: [num("width", "width", 11, 5, 20, 0.5)],
   car: [
     {
@@ -238,7 +248,13 @@ export const PARAMS: Record<BuilderKind, ParamSpec[]> = {
       type: "choice",
       label: "paint",
       def: "#3f4b52",
-      options: ["#3f4b52", "#5d4a3a", "#4a4f45", "#6b463a", "#2f3338"],
+      // The five muted body colours the fleet is made of, then the six accents
+      // — six of twenty-six on Coldharbour, kept a minority on purpose so they
+      // read as accents rather than as a paint chart.
+      options: [
+        "#3f4b52", "#5d4a3a", "#4a4f45", "#6b463a", "#2f3338",
+        "#a8352e", "#2f5f9c", "#c2762a", "#3f7d5a", "#8d3f7a", "#b8a63c",
+      ],
     },
   ],
 
@@ -337,6 +353,21 @@ export const SCATTER_DEFAULTS: Record<ScatterProp, ScatterDefaults> = {
   boulder: { radius: 10, count: 5, scale: [0.8, 1.3], blocking: true, clearance: 1.0 },
   bramble: { radius: 12, count: 7, scale: [0.8, 1.4] },
   barrel: { radius: 6, count: 3, blocking: true, clearance: 0.55 },
+  // The city's, and the two halves of it want opposite defaults.
+  //
+  // The three that carry a body are SPARSE and generously spaced: they are
+  // cover, every one costs a solid mesh against the map's collider budget, and
+  // a heap of them in a back lot is a wall nobody meant to build. Clearance is
+  // the prop's own footprint plus room to walk between two of them.
+  skip: { radius: 6, count: 2, scale: [0.9, 1.1], blocking: true, clearance: 2.4 },
+  binPair: { radius: 5, count: 3, scale: [0.9, 1.15], blocking: true, clearance: 1.4 },
+  palletStack: { radius: 5, count: 2, scale: [0.9, 1.2], blocking: true, clearance: 1.6 },
+  // The two that carry nothing are DENSE, and can be, because a non-blocking
+  // prop emits no collider and costs no ray anything. These are what close a
+  // twelve-fold dressing gap that the ray budget could never have bought in
+  // cover — see coldharbour/layout.ts.
+  trafficCone: { radius: 5, count: 6, scale: [0.9, 1.1], clearance: 1.1 },
+  litter: { radius: 9, count: 14, scale: [0.8, 1.3], clearance: 1.2 },
 };
 
 export const SCATTER_PROPS = Object.keys(SCATTER_DEFAULTS).sort() as ScatterProp[];

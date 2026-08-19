@@ -322,6 +322,12 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   across, so the gaps are metres; the four avenues (`x` and `z` at ±40 and ±120)
   and the central square are the reliably open ground. Standing in a tower reads
   as a black frame with a sliver of city in it and looks like a render bug.
+  **The square is open ground but it is PLANTED** — four 20 x 20 m stands of
+  pines at (+/-19, +/-19) — so an eye-height camera anywhere out toward its
+  corners is inside a tree, and the tree fills the frame looking exactly like a
+  piece of the map gone wrong. Within ~15 m of the centre, or on an avenue, is
+  clear; and the monument at the origin reaches ~10 m, so a camera placed above
+  the square looks down at the top of it and not at the floor.
 - **The flow-field rebuild is what a break costs, and it is measurable in one
   line**: `map.nav.rebuildField(name)` for each of `map.nav.fieldNames`.
   Measured headless on Coldharbour — 4.7 ms for one and 15.9 ms for all seven,
@@ -478,13 +484,27 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   (`cameraSys.pitch` is NEGATIVE downward) with `player.view` disabled — and
   point a run at the surfaces no map ships, since `turf` rotted precisely because
   nothing ever selected it.
-- **The ash field is frozen for a pixel diff with `stop()` + `reset()`** on
+- **The mote field is frozen for a pixel diff with `stop()` + `reset()`** on
   `g.atmosphere.system`. That works on `GPUParticleSystem` only because
   `Atmosphere` constructs it with `emitRateControl: true`; Babylon's legacy GPU
   mode keeps accumulating while stopped and refills the sky a second later — do not
   change that option. The field takes `maxLifeTime` to reach steady state, so let
   `getActiveCount()` settle first. Read `system` through the handle each time: a
-  *different* `ParticleSpec` replaces the whole system.
+  *different* `ParticleSpec` replaces the whole system. **Two maps have one now**
+  — Hollowmere's falling ash and Coldharbour's rising dust — so a script that
+  froze the field on one map and not the other no longer covers both.
+- **`godRays.isLive` is set by the PREVIOUS frame's `update`, so reading it in
+  the same `evaluate()` that moves the camera always answers about where the
+  camera WAS.** It reads `false` from a vantage plainly pointed at the sun, which
+  looks exactly like the pass being broken. Move the camera, wait, then read.
+  The same is true of anything else derived in `Game.tick` rather than assigned
+  where you set it.
+- **A heavy frame outruns Playwright's default 30 s `page.screenshot` deadline**,
+  and the error names the screenshot rather than the cause. Coldharbour with the
+  shafts attached, ~15k GPU particles and 37 reflection probes does it every
+  time under swiftshader. Pass an explicit `timeout:`, and expect a single
+  vantage on that map to take several minutes end to end — most of it in the
+  map build, not the capture.
 - **Water needs a vantage computed, not guessed, and the map picker is
   `localStorage["hollowmere.map"]` set in an `addInitScript` before the load.** A
   `WaterRect` is not where the water is (see [`docs/world.md`](docs/world.md)): on

@@ -85,6 +85,17 @@ export class ShadowSystem {
   private readonly windowCasters: AbstractMesh[] = [];
   private fogStart = 24;
   private fogEnd = 78;
+  /**
+   * The ortho window's side, in metres — `CONFIG.graphics.shadows.frustumSize`
+   * until a map states its own (`EnvironmentSpec.lighting.shadowWindow`).
+   *
+   * It is the map's for the reason `fogEnd` is: how far a shadow REACHES is a
+   * function of the key light's elevation and of how tall the map builds, and
+   * the two shipped valleys agree about neither with a downtown. A 40 m tower
+   * throws 25 m at Coldharbour's old 58 deg sun and 90 m at the 24 it has now,
+   * so a window sized for the first truncates the second across open ground.
+   */
+  private window: number = CONFIG.graphics.shadows.frustumSize;
 
   constructor(private scene: Scene, mats: CelMaterialFactory) {
     const c = CONFIG.graphics.shadows;
@@ -95,7 +106,7 @@ export class ShadowSystem {
     );
     // Fixed square ortho window; auto-extends against the render list would
     // stretch the window to the whole 240 m map and halve the texel density.
-    this.light.shadowFrustumSize = c.frustumSize;
+    this.light.shadowFrustumSize = this.window;
     this.light.shadowMinZ = 1;
     this.light.shadowMaxZ = c.depthRange;
     this.light.autoUpdateExtends = false;
@@ -150,6 +161,39 @@ export class ShadowSystem {
     this.blobMaterial.disableLighting = true;
     this.blobMaterial.opacityTexture = tex;
     this.blobMaterial.disableDepthWrite = true;
+  }
+
+  /**
+   * Resizes the ortho window to the map's own (`EnvironmentSpec.lighting.shadowWindow`).
+   *
+   * **The window is bounded by two different things and only one of them is
+   * this.** It is a square perpendicular to the light, so its footprint on the
+   * ground stretches by `1/sin(elevation)` along the sun's azimuth — and along
+   * THAT axis it is `depthRange` that binds, not this. Which one is the
+   * constraint is therefore a function of the map's hour: at Hollowmere's 38
+   * degrees the two are close, and at a low sun the along-sun reach comes for
+   * free while the across-sun reach is all this buys.
+   *
+   * So a map that lowers its sun raises this to match, and there is a ceiling
+   * past which it buys nothing: the depth volume reaches `shadowMaxZ` either
+   * side of the light camera, which lands on the ground along the sun as
+   * `2 * halfDepth / cos(elevation)`. With the shipped `distance` 90 and
+   * `depthRange` 180 that half-depth is 89.5 m, so at 24 degrees the along-sun
+   * reach is +/-98 m and matching it across-sun wants ~196. Widening
+   * `depthRange` to push past that is not free: `shadowParams.x` is a
+   * NORMALISED bias, so a deeper volume rescales what it means in metres and
+   * the failure is peter-panning at the foot of a wall.
+   *
+   * Invalidating the snapped focus is not optional. The texel quantum is
+   * `window / mapSize`, so changing the window changes the grid the focus is
+   * rounded to, and a focus still snapped to the old quantum is stale — which
+   * shows up as the crawling edges the snapping exists to prevent.
+   */
+  setShadowWindow(metres: number): void {
+    if (metres === this.window) return;
+    this.window = metres;
+    this.light.shadowFrustumSize = metres;
+    this.snappedFocus.setAll(Number.POSITIVE_INFINITY);
   }
 
   /** Points the shadow camera along the environment's key light. */
@@ -217,7 +261,7 @@ export class ShadowSystem {
    */
   private cullToWindow(all: readonly AbstractMesh[]): AbstractMesh[] {
     const c = CONFIG.graphics.shadows;
-    const half = c.frustumSize / 2;
+    const half = this.window / 2;
     const dir = this.light.direction;
     const ax = this.xAxis;
     const ay = this.yAxis;
@@ -268,7 +312,7 @@ export class ShadowSystem {
   update(focus: Vector3, mats: CelMaterialFactory): void {
     const c = CONFIG.graphics.shadows;
     const dir = this.light.direction;
-    const texel = c.frustumSize / c.mapSize;
+    const texel = this.window / c.mapSize;
     // LookAtLH basis: x = normalize(cross(up, z)), y = cross(z, x). Kept on
     // the instance rather than in locals because the render-list cull projects
     // into the same basis, and because this runs every frame — the ToRef forms

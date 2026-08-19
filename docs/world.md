@@ -33,7 +33,7 @@ nothing else, so it is the map being built rather than a second finished one.
 Coldharbour was written from nothing and is the one that pushed on what a map is
 allowed to be — see the next section. No two share a module in any direction.
 
-## Three things that look global and are the map's
+## Four things that look global and are the map's
 
 Everything below defaults to what the two valleys are, so a map that states
 nothing is bit-identical to before any of them existed. Each was a genuine
@@ -67,17 +67,54 @@ old dev warning that checked the two against each other is gone, because the
 disagreement it reported is now the feature.
 
 **What deliberately did NOT move with it** is the whole reason a clear map is a
-layout problem as well as a palette one: `audio.maxDistance` is still 70 m,
-`bots.perception.engageRange` still 55, and the shadow window still a fixed
-110 m square following the player. So on Coldharbour you can see four times
-further than a bot will start shooting, and the map is laid out knowing it — a
-high sun to keep shadows inside the window, and streets whose clear line is
-broken at chest height every few tens of metres.
+layout problem as well as a palette one: `audio.maxDistance` is still 70 m and
+`bots.perception.engageRange` still 55. So on Coldharbour you can see far
+further than a bot will start shooting, and the map is laid out knowing it —
+streets whose clear line is broken at chest height every few tens of metres.
+
+The shadow window used to be on that list, and it is not any more: it is the
+map's too (`EnvironmentSpec.lighting.shadowWindow`, below). Coldharbour kept a
+high sun *because of* the fixed 110 m window, and when the map moved to a low
+one the window had to move with it — which is the same argument `fogEnd` makes,
+one term along.
 
 **`MapLayout.surfaces` — how deep the nav graph stacks** (`CONFIG.nav.maxSurfaces`,
 3). See `docs/bots.md`: a map raises it only because it stacks FLOORS, and the
 guarantee that a floor survives is the ORDER its builder declares colliders in,
 not the number.
+
+**`EnvironmentSpec.lighting.shadowWindow` — how far its shadows reach**
+(`CONFIG.graphics.shadows.frustumSize`, 110). Coldharbour is 200, and it is the
+newest of the four for the most direct reason: the map moved its sun.
+
+It lives on the ENVIRONMENT rather than on the layout, unlike the three above,
+and that is the tell for what it is. The others are shape — how big, how deep,
+what the floor does. This one is a consequence of `lighting.direction`, sitting
+two fields above it, and `Game.installMap` pushes the two together. It also
+means the editor's work light inherits it for nothing, since that spreads
+`...env.lighting`.
+
+Shadow length is `h / tan(elevation)`, so Coldharbour's 40 m towers threw 25 m
+at the 58-degree sun the map shipped with and throw 90 m at the 24 it has now.
+The failure when the window is too small is not a soft edge: `shadowVisibility`
+returns **fully lit** for any fragment outside the depth map's UV *or* its depth
+volume, so what you get is a straight line across open ground where the shadows
+stop, sliding with the player.
+
+**Two things bound it, and which one binds is a function of the hour.** The
+window is a square perpendicular to the light, so its footprint on the ground
+stretches by `1/sin(elevation)` along the sun's own azimuth — and along that
+axis it is `depthRange` that runs out first. At a low sun the along-sun reach
+therefore comes for free and this number only buys the across-sun half; there is
+no point raising it past where the depth volume clips, and widening `depthRange`
+to chase it is its own trap, because `shadowParams.x` is a NORMALISED bias and a
+deeper volume rescales what it means in metres.
+
+What it costs is texel density — `window / mapSize`, so 5.4 cm at 110 and 9.8 cm
+at 200. The four-tap kernel is measured in TEXELS and still cancels the
+staircase, but the distance at which a shadow edge is sub-pixel roughly doubles.
+`mapSize` stays global: it is baked into the `ShadowGenerator` at construction,
+and 4096 would be four times the fill on a pass that runs on most frames.
 
 Three rules:
 

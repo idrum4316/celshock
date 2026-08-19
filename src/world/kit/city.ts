@@ -129,27 +129,44 @@
  * elevation first — the same triangles either way, and every one of them
  * merged into the same mesh, so the unit costs nothing and buys the reveal.
  *
- * ## What is deliberately NOT here
+ * ## The light budget, which is what decides what is drawn here
  *
- * No fixture lights on the street. A daylit map has nothing for them to do and
- * a carried light always wins one of the sixteen shader slots, so a lamp column
- * that is off is a lamp column that costs nothing — see
- * `EnvironmentSpec.lighting.lampIntensity`, which is the same argument from the
- * player's shoulder. The exception is `litWindows`, which every enterable
- * building here takes: two lights for an office or a depot, three for a
- * shophouse. **An interior on a daylit map is lit by the ambient and the sky
- * term, and the sky term is applied by `n.y`** — so it lands in full on a floor
- * and not at all on a ceiling, and a room with no fixture in it comes out as a
- * bright plate under a black lid. That is also why the depot's hall lamp hangs
+ * **A LENS is free and a LIGHT is one of sixteen, and almost everything in this
+ * file follows from that.** `Build.glow` is an emissive box: it takes the
+ * GlowLayer's bloom and `EmissiveFog`'s per-pixel fade for nothing and spends
+ * no shader slot at all. `Build.light` spends one, `LightingSystem` uploads the
+ * sixteen nearest, and there is no arbitration beyond distance — so an
+ * unbudgeted fixture is not a fixture that costs a little, it is an interior
+ * somewhere going dark.
+ *
+ * This file used to say there were no street fixtures at all, and under the
+ * afternoon sun the map shipped with that was right: a lamp had nothing to do.
+ * The map moved its hour (see `coldharbour/environment.ts`) and the rule became
+ * a split rather than a refusal — **every street light carries a lens and only
+ * the ones a layout marks `lit` carry a light**, which on Coldharbour is eight
+ * of twenty. Shop signs are lenses only, for the same arithmetic: a `flicker`
+ * is visible on a light and not on an emissive, so `LightSpec`'s anticipated
+ * "neon ~.9" stays unused until something can afford a slot for it.
+ *
+ * `litWindows` is the other spender, and every enterable building here takes
+ * it: two lights for an office or a depot, three for a shophouse. **An interior
+ * on a daylit map is lit by the ambient and the sky term, and the sky term is
+ * applied by `n.y`** — so it lands in full on a floor and not at all on a
+ * ceiling, and a room with no fixture in it comes out as a bright plate under a
+ * black lid. That is also why the depot's hall lamp hangs
  * at the trusses rather than at head height, and why its gallery's hangs
  * mid-span: everything above and beyond a point light in an enclosed room is on
  * the ambient term alone, because the key is shadowed out by the roof.
  *
- * The count is the thing to watch rather than any one lamp. Coldharbour now
- * carries about two dozen fixtures against the shader's sixteen slots;
- * `LightingSystem` uploads the sixteen nearest, so what this buys is that they
- * are all indoors and spread across 320 m, and what it would cost is a street
- * full of lamp columns competing with them.
+ * The count is the thing to watch rather than any one lamp. Coldharbour carries
+ * about two dozen interior fixtures and eight outdoor ones against the shader's
+ * sixteen slots. **`LightingSystem` scores by `distance - range` and never
+ * culls by range**, so a fixture well out of its own reach still takes a slot
+ * ahead of a nearer-to-nothing one — which means the budget is about where
+ * fixtures are CLUSTERED, not how many there are. Coldharbour's worst case is
+ * a firefight on the civic square with all eight lamps in contention, four
+ * muzzle flashes and a grenade: thirteen of sixteen. Lighting all twenty
+ * columns is what the budget refuses, not lighting any.
  */
 import { Scene } from "@babylonjs/core";
 import { CONFIG } from "../../config";
@@ -168,6 +185,7 @@ import {
   ENAMEL,
   IRON,
   LAMP_RED,
+  LAMP_SODIUM,
   PLANK,
   PLASTER,
   RENDER,
@@ -1026,7 +1044,20 @@ export function buildShophouse(
     b.box(0.1, 0.62, 1.9, shopX0 + shopW / 2 + sx * (shopW / 2 - 0.2), STOREY - 1.6, d / 2 + 0.9, ALLOY);
   }
   b.box(0.12, 0.12, 1.1, shopX0 + 0.4, STOREY - 0.2, d / 2 + 0.6, ALLOY);
+  // The bracket sign. It hangs either way — what `sign` changes is whether its
+  // FACE is lit, which is why the param is a colour and not a flag: an unlit
+  // sign is a board and a lit one is a board with a lamp behind it, and the
+  // only thing that differs is what comes off the front of it.
+  //
+  // Drawn as a board with a face rather than as one emissive box, because a
+  // box glowing on all six sides is a lamp rather than a sign — the back of a
+  // projecting sign is the back of a projecting sign. The board is 0.1 deep in
+  // the blind's colour and the face is 0.02 proud of it on the far side from
+  // the wall, which is the side the street reads.
   b.box(0.1, 0.8, 0.66, shopX0 + 0.4, STOREY - 0.72, d / 2 + 1.0, blind);
+  if (p.sign) {
+    b.glow(0.02, 0.66, 0.54, shopX0 + 0.46, STOREY - 0.72, d / 2 + 1.0, p.sign);
+  }
 
   // The partition between the close and the shop, stopping short of the back
   // wall: the shop's own back room opens onto the foot of the stair, so the
@@ -1227,7 +1258,7 @@ export function buildShophouse(
     //
     // Every fixture spends one of the sixteen shader slots, so this is not
     // free and `litWindows` is deliberately set on half the terrace — see the
-    // file header on why a daylit map has no street lighting at all.
+    // file header on the budget these share with the eight lit lamp columns.
     b.light(WINDOW_LIGHT, 14, 0.65, 0.02, lane / 2, g0 + 2.2, d * 0.2);
     // Hung at the FRONT of the close, under the landing rather than under the
     // flight: for most of its length this passage has a staircase for a
@@ -2115,9 +2146,11 @@ export function buildCar(
   b.cyl(0.12, 0.09, 0.09, 6, -nose - 0.04, 0.34, -0.5, ASPHALT, {
     z: Math.PI / 2,
   });
-  // Lamps, unlit metal and a flat lens rather than a glow: twenty-six parked
-  // cars with their headlights on would be twenty-six emissive meshes in the
-  // bloom for nothing, in the middle of the afternoon.
+  // Lamps, unlit metal and a flat lens rather than a glow, and this stays true
+  // at any hour: a PARKED car does not have its lights on. Twenty-six of them
+  // that did would be fifty-two emissive meshes in the bloom saying nothing —
+  // which is a different argument from the street lamps' overhead, and it is
+  // why they gained a lens when the map's hour dropped and these did not.
   for (const sz of [-1, 1]) {
     b.box(0.06, 0.18, 0.42, nose, 0.85, sz * 0.6, ROAD_PAINT);
     b.box(0.06, 0.2, 0.36, -nose, 0.87, sz * 0.62, LAMP_RED);
@@ -2154,7 +2187,18 @@ export function buildStreetLight(
   b.cyl(h, 0.16, 0.3, 8, 0, h / 2, 0, ALLOY);
   b.box(reach, 0.16, 0.16, reach / 2, h - 0.1, 0, ALLOY);
   b.box(0.9, 0.18, 0.42, reach, h - 0.24, 0, ALLOY);
-  b.box(0.7, 0.06, 0.3, reach, h - 0.35, 0, ROAD_PAINT);
+  // The lens, and it is `glow` rather than a flat tone for the reason the whole
+  // fixture argument turns on: an emissive box costs no light slot, takes the
+  // GlowLayer's bloom, and is faded per pixel by `EmissiveFog` like everything
+  // else `getEmissive` hands out. Sodium orange rather than a pale white — a
+  // pale lens against a lit sky blooms to a hard white disc, which is why the
+  // lens was left off this model in the first place; a saturated one reads as a
+  // lamp at any hour and goes to the fog with the rest of the skyline.
+  b.glow(0.7, 0.06, 0.3, reach, h - 0.35, 0, LAMP_SODIUM);
+  // And the light itself, only where the map asks. See `BuildParams.lit`: the
+  // lens says the lamp is on and this says the shader can afford to prove it.
+  // Steady — a sodium lamp does not flicker, and the term exists for flame.
+  if (p.lit) b.light(LAMP_SODIUM, 16, 0.9, 0, reach, h - 0.5, 0);
   b.block({ w: 0.4, h, d: 0.4, x: 0, y: h / 2, z: 0 });
   return b;
 }

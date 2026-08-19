@@ -198,31 +198,31 @@ const placements: Placement[] = [
   // A pair of shophouses where a 20 m tower stood: the block face onto the
   // north avenue, at the scale a street is actually read at. See the note
   // above this array on what the mixed-use stock is for.
-  { kind: "shophouse", x: -68.5, z: 98, params: { width: 13, depth: 16, floors: 3, tint: "#5c5340", litWindows: true } },
-  { kind: "shophouse", x: -55.5, z: 98, params: { width: 13, depth: 16, floors: 2, tint: "#7c4a3f" } },
+  { kind: "shophouse", x: -68.5, z: 98, params: { width: 13, depth: 16, floors: 3, tint: "#5c5340", litWindows: true, sign: "#ff5f7a" } },
+  { kind: "shophouse", x: -55.5, z: 98, params: { width: 13, depth: 16, floors: 2, tint: "#7c4a3f", sign: "#4fd6ff" } },
   { kind: "parkade", x: -80, z: -78, params: { width: 36, depth: 26, floors: 3 } }, // B
   // The strip between the parkade and the south avenue, built out to the
   // pavement: two shops with flats over them and a goods depot backing onto
   // the car park. It is the densest bit of fabric on the map and it is
   // deliberately the approach to B — a bound of covered interior on the one
   // side of the objective an attacker would otherwise cross in the open.
-  { kind: "shophouse", x: -105, z: -56.6, params: { width: 13, depth: 16, floors: 3, tint: "#7c4a3f", litWindows: true } },
-  { kind: "shophouse", x: -92, z: -56.6, params: { width: 13, depth: 16, floors: 2, tint: "#4a5a4a" } },
+  { kind: "shophouse", x: -105, z: -56.6, params: { width: 13, depth: 16, floors: 3, tint: "#7c4a3f", litWindows: true, sign: "#ffc63c" } },
+  { kind: "shophouse", x: -92, z: -56.6, params: { width: 13, depth: 16, floors: 2, tint: "#4a5a4a", sign: "#7dff9e" } },
   { kind: "depot", x: -70, z: -56.6, params: { width: 28, depth: 16, litWindows: true } },
   { kind: "tower", x: -95, z: -100, params: { width: 34, depth: 14, height: 17 } },
   { kind: "tower", x: -62, z: -100, params: { width: 24, depth: 14, height: 12 } },
   { kind: "tower", x: 80, z: 96, params: { width: 58, depth: 26, height: 15 } },
   // Fronting the avenue at the east end of the terminal block, backs to the
   // yard behind. Turned to face -Z, which is the street here.
-  { kind: "shophouse", x: 90.5, z: 62, rotY: Math.PI, params: { width: 11, depth: 16, floors: 3, tint: "#3f4b52" } },
-  { kind: "shophouse", x: 101.5, z: 62, rotY: Math.PI, params: { width: 11, depth: 16, floors: 2, tint: "#6b4a2f", litWindows: true } },
+  { kind: "shophouse", x: 90.5, z: 62, rotY: Math.PI, params: { width: 11, depth: 16, floors: 3, tint: "#3f4b52", sign: "#ff7a3c" } },
+  { kind: "shophouse", x: 101.5, z: 62, rotY: Math.PI, params: { width: 11, depth: 16, floors: 2, tint: "#6b4a2f", litWindows: true, sign: "#c46cff" } },
   { kind: "office", x: 78, z: -66, params: { width: 28, depth: 24, floors: 3, litWindows: true } }, // E
   { kind: "tower", x: 94, z: -98, params: { width: 34, depth: 26, height: 44 } },
   { kind: "depot", x: 62, z: -98, rotY: Math.PI, params: { width: 22, depth: 16, litWindows: true } },
   // East of E, turned to face the avenue at x = +120: the flank a squad
   // holding the office has to watch, and now somewhere to watch it from.
-  { kind: "shophouse", x: 103, z: -71.5, rotY: Math.PI / 2, params: { width: 11, depth: 16, floors: 2, tint: "#7c4a3f" } },
-  { kind: "shophouse", x: 103, z: -60.5, rotY: Math.PI / 2, params: { width: 11, depth: 16, floors: 3, tint: "#4a5a4a", litWindows: true } },
+  { kind: "shophouse", x: 103, z: -71.5, rotY: Math.PI / 2, params: { width: 11, depth: 16, floors: 2, tint: "#7c4a3f", sign: "#39e0d0" } },
+  { kind: "shophouse", x: 103, z: -60.5, rotY: Math.PI / 2, params: { width: 11, depth: 16, floors: 3, tint: "#4a5a4a", litWindows: true, sign: "#ff4f4f" } },
   { kind: "tower", x: -144, z: -144, params: { width: 26, depth: 26, height: 24 } },
   { kind: "tower", x: -95, z: -144, params: { width: 26, depth: 26, height: 31 } },
   { kind: "tower", x: -65, z: -144, params: { width: 26, depth: 26, height: 18 } },
@@ -251,61 +251,82 @@ const placements: Placement[] = [
   { kind: "tower", x: 144, z: 144, params: { width: 26, depth: 26, height: 31 } },
 
   // --- the street, as furnished ---------------------------------------------
-  // All of this is one collider apiece and all of it is cover. The lamps carry
-  // NO light: it is the middle of the afternoon, and a fixture would spend one
-  // of the sixteen shader slots saying so (see kit/city.ts).
+  // All of this is one collider apiece and all of it is cover.
+  //
+  // **Every lamp carries a LENS and eight of the twenty carry a LIGHT**, and
+  // the split is the sixteen-slot budget made concrete rather than a statement
+  // about which lamps are switched on — a city's lamps come on together. A
+  // lens is `Build.glow` and costs no slot; a light is one of sixteen,
+  // uploaded nearest-first, and twenty of them out here would evict the
+  // interior fixtures the lit buildings are legible by. So the eight are the
+  // ones whose pool of light falls somewhere a player actually stands: the
+  // square's own four, and the junction lamp nearest each of A, B, D and E.
+  //
+  // The eight are also the eight NEAREST THE MIDDLE, because the lamp grid's
+  // inner ring is what happens to sit closest to the four diagonal flags — so
+  // the worst case is a firefight on the civic square, where all eight can
+  // contend at once. `LightingSystem` scores a fixture by `distance - range`
+  // and does not cull by range at all, so the four junction lamps 47 m out
+  // still take slots ahead of any interior further off; with up to four muzzle
+  // flashes (`Game.spendMuzzleLightBudget`) and a grenade taken off the top,
+  // that is thirteen of sixteen and three left for interiors nobody standing
+  // on the square is inside of. That is the tightest this map gets, and it is
+  // the reason the other twelve columns are lenses.
+  //
+  // This file used to say the lamps carry no light at all, and at three in the
+  // afternoon that was right; see coldharbour/environment.ts on the hour.
   { kind: "planter", x: -18, z: 4, params: { width: 2.6, depth: 1.4 } },
   { kind: "planter", x: 16, z: -7, params: { width: 2.6, depth: 1.4 } },
   { kind: "planter", x: 2.5, z: 13.5, rotY: Math.PI / 2, params: { width: 2.6, depth: 1.4 } },
   { kind: "planter", x: 2.5, z: -15.5, rotY: Math.PI / 2, params: { width: 2.6, depth: 1.4 } },
   { kind: "barrier", x: 2, z: -25, params: { length: 8 } },
   { kind: "barrier", x: -24, z: 4, rotY: Math.PI / 2, params: { length: 8 } },
-  { kind: "car", x: 24, z: -33.5, params: { tint: "#5d4a3a" } },
+  { kind: "car", x: 24, z: -33.5, params: { tint: "#a8352e" } },
   { kind: "car", x: -34, z: -22, rotY: Math.PI / 2, params: { tint: "#4a4f45" } },
   { kind: "streetLight", x: -129.6, z: -129.6, params: { height: 7.5 } },
   { kind: "streetLight", x: -129.6, z: -49.6, params: { height: 7.5 } },
   { kind: "streetLight", x: -129.6, z: 30.4, params: { height: 7.5 } },
   { kind: "streetLight", x: -129.6, z: 110.4, params: { height: 7.5 } },
   { kind: "streetLight", x: -49.6, z: -129.6, params: { height: 7.5 } },
-  { kind: "streetLight", x: -49.6, z: -49.6, params: { height: 7.5 } },
-  { kind: "streetLight", x: -49.6, z: 30.4, params: { height: 7.5 } },
+  { kind: "streetLight", x: -49.6, z: -49.6, params: { height: 7.5, lit: true } },
+  { kind: "streetLight", x: -49.6, z: 30.4, params: { height: 7.5, lit: true } },
   { kind: "streetLight", x: -49.6, z: 110.4, params: { height: 7.5 } },
   { kind: "streetLight", x: 30.4, z: -129.6, params: { height: 7.5 } },
-  { kind: "streetLight", x: 30.4, z: -49.6, params: { height: 7.5 } },
-  { kind: "streetLight", x: 30.4, z: 30.4, params: { height: 7.5 } },
+  { kind: "streetLight", x: 30.4, z: -49.6, params: { height: 7.5, lit: true } },
+  { kind: "streetLight", x: 30.4, z: 30.4, params: { height: 7.5, lit: true } },
   { kind: "streetLight", x: 30.4, z: 110.4, params: { height: 7.5 } },
   { kind: "streetLight", x: 110.4, z: -129.6, params: { height: 7.5 } },
   { kind: "streetLight", x: 110.4, z: -49.6, params: { height: 7.5 } },
   { kind: "streetLight", x: 110.4, z: 30.4, params: { height: 7.5 } },
   { kind: "streetLight", x: 110.4, z: 110.4, params: { height: 7.5 } },
-  { kind: "streetLight", x: -14, z: 4.5, rotY: Math.PI / 2, params: { height: 7.5 } },
-  { kind: "streetLight", x: 12.5, z: -7.5, rotY: -Math.PI / 2, params: { height: 7.5 } },
-  { kind: "streetLight", x: 0, z: -34, params: { height: 7.5 } },
-  { kind: "streetLight", x: 0, z: 34, params: { height: 7.5 } },
+  { kind: "streetLight", x: -14, z: 4.5, rotY: Math.PI / 2, params: { height: 7.5, lit: true } },
+  { kind: "streetLight", x: 12.5, z: -7.5, rotY: -Math.PI / 2, params: { height: 7.5, lit: true } },
+  { kind: "streetLight", x: 0, z: -34, params: { height: 7.5, lit: true } },
+  { kind: "streetLight", x: 0, z: 34, params: { height: 7.5, lit: true } },
   { kind: "car", x: -46, z: -136, rotY: Math.PI / 2, params: { tint: "#3f4b52" } },
   { kind: "car", x: -46, z: -104, rotY: Math.PI / 2, params: { tint: "#3f4b52" } },
-  { kind: "car", x: -46, z: -70, rotY: Math.PI / 2, params: { tint: "#3f4b52" } },
+  { kind: "car", x: -46, z: -70, rotY: Math.PI / 2, params: { tint: "#2f5f9c" } },
   { kind: "car", x: -46, z: 70, rotY: Math.PI / 2, params: { tint: "#3f4b52" } },
   { kind: "car", x: -46, z: 104, rotY: Math.PI / 2, params: { tint: "#3f4b52" } },
   { kind: "car", x: -46, z: 136, rotY: Math.PI / 2, params: { tint: "#3f4b52" } },
   { kind: "car", x: 46, z: -118, rotY: Math.PI / 2, params: { tint: "#6b463a" } },
-  { kind: "car", x: 46, z: -84, rotY: Math.PI / 2, params: { tint: "#6b463a" } },
+  { kind: "car", x: 46, z: -84, rotY: Math.PI / 2, params: { tint: "#c2762a" } },
   { kind: "car", x: 46, z: -56, rotY: Math.PI / 2, params: { tint: "#6b463a" } },
   { kind: "car", x: 46, z: 56, rotY: Math.PI / 2, params: { tint: "#6b463a" } },
   { kind: "car", x: 46, z: 84, rotY: Math.PI / 2, params: { tint: "#6b463a" } },
   { kind: "car", x: 46, z: 118, rotY: Math.PI / 2, params: { tint: "#6b463a" } },
   { kind: "car", x: -136, z: -46, params: { tint: "#4a4f45" } },
   { kind: "car", x: -104, z: -46, params: { tint: "#4a4f45" } },
-  { kind: "car", x: -70, z: -46, params: { tint: "#4a4f45" } },
+  { kind: "car", x: -70, z: -46, params: { tint: "#3f7d5a" } },
   { kind: "car", x: 70, z: -46, params: { tint: "#4a4f45" } },
   { kind: "car", x: 104, z: -46, params: { tint: "#4a4f45" } },
   { kind: "car", x: 136, z: -46, params: { tint: "#4a4f45" } },
   { kind: "car", x: -118, z: 46, params: { tint: "#2f3338" } },
-  { kind: "car", x: -84, z: 46, params: { tint: "#2f3338" } },
+  { kind: "car", x: -84, z: 46, params: { tint: "#8d3f7a" } },
   { kind: "car", x: -56, z: 46, params: { tint: "#2f3338" } },
   { kind: "car", x: 56, z: 46, params: { tint: "#2f3338" } },
   { kind: "car", x: 84, z: 46, params: { tint: "#2f3338" } },
-  { kind: "car", x: 118, z: 46, params: { tint: "#2f3338" } },
+  { kind: "car", x: 118, z: 46, params: { tint: "#b8a63c" } },
   { kind: "barrier", x: -40, z: 90, params: { length: 12 } },
   { kind: "barrier", x: -40, z: -30, params: { length: 12 } },
   { kind: "barrier", x: 40, z: 30, params: { length: 12 } },
@@ -368,6 +389,74 @@ const scatter: ScatterSpec[] = [
   { prop: "pine", x: -19, z: 19, width: 20, depth: 20, count: 10, scale: [0.9, 1.3], blocking: true, clearance: 4 },
   { prop: "pine", x: -19, z: -19, width: 20, depth: 20, count: 10, scale: [0.8, 1.2], blocking: true, clearance: 4 },
   { prop: "pine", x: 19, z: -19, width: 20, depth: 20, count: 10, scale: [0.9, 1.3], blocking: true, clearance: 4 },
+
+  // --- the city's own dressing ----------------------------------------------
+  //
+  // **Appended, never inserted, and that is a rule rather than a style.**
+  // `findSpot` draws from the map's single seeded stream once per ATTEMPT, in
+  // authored order, so a region added in the middle rerolls every region after
+  // it — a diff nobody can read, and a nav graph that quietly moves. Anything
+  // further added goes below this block.
+  //
+  // **The split between what blocks and what does not is the whole design.**
+  // A blocking prop emits one collider apiece through `MapBuilder.collider()`,
+  // and every solid mesh is on the bill for every ray in the game — the
+  // hitscan, both LOS tests, the ground probe, the grenade step. A
+  // non-blocking one emits NOTHING: no collider, no `WorldBox`, no nav cell,
+  // no cover, nothing in the collision bake. So the ray budget buys cover and
+  // the merge buys dressing, and the complaint this answers — that a downtown
+  // looked swept — is about dressing.
+  //
+  // That is what lets the instance count go up by a factor of four while the
+  // solid-mesh count moves by a couple of dozen. A literal density match with
+  // the valleys would be ~750 instances over this map's open ground; that is
+  // deliberately not the target, because a city's cover is its architecture
+  // and a scatter field here is for what you fight AROUND rather than from.
+
+  // Skips and bins against the building bases and in the back closes, which is
+  // where a city actually accumulates. Clear of every flag by the region's own
+  // radius plus the prop's half-length.
+  { prop: "skip", x: -62, z: 84, radius: 7, count: 2, scale: [0.9, 1.1], blocking: true, clearance: 2.4 },
+  { prop: "skip", x: 96, z: 48, radius: 7, count: 2, scale: [0.9, 1.1], blocking: true, clearance: 2.4 },
+  { prop: "skip", x: -98, z: -42, radius: 7, count: 2, scale: [0.9, 1.1], blocking: true, clearance: 2.4 },
+  { prop: "skip", x: 58, z: -112, radius: 7, count: 2, scale: [0.9, 1.1], blocking: true, clearance: 2.4 },
+  { prop: "binPair", x: -46, z: 112, radius: 6, count: 3, scale: [0.9, 1.15], blocking: true, clearance: 1.4 },
+  { prop: "binPair", x: 112, z: -46, radius: 6, count: 3, scale: [0.9, 1.15], blocking: true, clearance: 1.4 },
+  { prop: "binPair", x: -112, z: -84, radius: 6, count: 3, scale: [0.9, 1.15], blocking: true, clearance: 1.4 },
+  { prop: "binPair", x: 84, z: 108, radius: 6, count: 3, scale: [0.9, 1.15], blocking: true, clearance: 1.4 },
+  // The depot and parkade yards, which are the two places a pallet belongs.
+  { prop: "palletStack", x: -70, z: -42, radius: 6, count: 3, scale: [0.9, 1.2], blocking: true, clearance: 1.6 },
+  { prop: "palletStack", x: 62, z: -112, radius: 6, count: 2, scale: [0.9, 1.2], blocking: true, clearance: 1.6 },
+  { prop: "palletStack", x: -92, z: -92, radius: 6, count: 2, scale: [0.9, 1.2], blocking: true, clearance: 1.6 },
+
+  // Cones, in runs down the avenues — roadworks that were, and the only
+  // saturated warm thing at ground level on a map made of grey. Non-blocking,
+  // so a run of them costs nothing but the merge; laid as rotated rectangles
+  // along the carriageway rather than as discs, because a lane closure is a
+  // line and a disc of cones is a spill.
+  { prop: "trafficCone", x: -40, z: 62, width: 8, depth: 34, count: 9, scale: [0.9, 1.1], clearance: 1.6 },
+  { prop: "trafficCone", x: 40, z: -70, width: 8, depth: 30, count: 8, scale: [0.9, 1.1], clearance: 1.6 },
+  { prop: "trafficCone", x: 74, z: 40, width: 30, depth: 8, count: 8, scale: [0.9, 1.1], clearance: 1.6 },
+  { prop: "trafficCone", x: -86, z: -40, width: 28, depth: 8, count: 7, scale: [0.9, 1.1], clearance: 1.6 },
+  { prop: "trafficCone", x: 120, z: 96, width: 8, depth: 26, count: 6, scale: [0.9, 1.1], clearance: 1.6 },
+  { prop: "trafficCone", x: -120, z: -104, width: 8, depth: 26, count: 6, scale: [0.9, 1.1], clearance: 1.6 },
+
+  // Litter, and this is where the density actually comes from: 130 instances
+  // for no collider, no nav cost and nothing to any ray. Banked against the
+  // kerbs and blown into the corners of the square rather than spread evenly —
+  // a uniform sprinkle over a 320 m map reads as a texture, not as a place.
+  //
+  // These are laid straight over the objectives where they fall, which the
+  // blocking regions above never are. That is the same distinction the square
+  // pines make: dressing that would clutter a flag stays off it, and dressing
+  // that cannot be walked into or shot at is not clutter.
+  { prop: "litter", x: -40, z: 0, width: 14, depth: 200, count: 22, scale: [0.8, 1.3], clearance: 3.5 },
+  { prop: "litter", x: 40, z: 0, width: 14, depth: 200, count: 22, scale: [0.8, 1.3], clearance: 3.5 },
+  { prop: "litter", x: 0, z: -40, width: 200, depth: 14, count: 22, scale: [0.8, 1.3], clearance: 3.5 },
+  { prop: "litter", x: 0, z: 40, width: 200, depth: 14, count: 22, scale: [0.8, 1.3], clearance: 3.5 },
+  { prop: "litter", x: -120, z: 20, width: 14, depth: 150, count: 14, scale: [0.8, 1.3], clearance: 3.5 },
+  { prop: "litter", x: 120, z: -20, width: 14, depth: 150, count: 14, scale: [0.8, 1.3], clearance: 3.5 },
+  { prop: "litter", x: 0, z: 0, radius: 30, count: 14, scale: [0.8, 1.3], clearance: 3.5 },
 ];
 
 /**
