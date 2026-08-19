@@ -1,10 +1,16 @@
 /**
- * AimAssistSystem.ts — Gamepad-only aim assist: an outer bubble that slows the
- * stick over a target and an inner one that rotates the camera, the rotation
- * being mostly ADHESION (matching the target's angular velocity) rather than
- * magnetism (pulling toward its centre).
+ * AimAssistSystem.ts — Aim assist for the two devices that need it, the pad and
+ * the glass: an outer bubble that slows the input over a target and an inner
+ * one that rotates the camera, the rotation being mostly ADHESION (matching the
+ * target's angular velocity) rather than magnetism (pulling toward its centre).
  * Invariants: NEVER affects mouse/keyboard — it disengages the moment the
- * mouse moves and leaves mouse sensitivity untouched. Its rotation is capped
+ * mouse moves and leaves mouse sensitivity untouched. A THUMB gets it for the
+ * same reason a stick does and no other: it is a coarse pointing device with no
+ * wrist behind it, and every shipped mobile shooter has this. What makes that
+ * safe is that the three invariants below are written in terms of the player's
+ * OWN input, so they hold for a drag as soon as a drag can be expressed in
+ * them — `CONFIG.touch.swipeReference` is the full deflection a swipe does not
+ * have, and `CONFIG.touch.cancelDrag` is the committed push. Its rotation is capped
  * at a fraction of the player's OWN full-stick turn rate, is gated on the
  * player actually driving, and is cancelled by opposing stick deflection — so
  * a committed push always wins. LOS ray filters OPAQUE_ONLY (walls block
@@ -77,7 +83,7 @@ export interface AssistFrame {
  */
 export class AimAssistSystem {
   /** The device that produced the most recent look input. */
-  private lastDevice: "mouse" | "stick" = "mouse";
+  private lastDevice: "mouse" | "stick" | "touch" = "mouse";
 
   /** The target being assisted, held across frames for hysteresis. */
   private held: AimTarget | null = null;
@@ -135,14 +141,26 @@ export class AimAssistSystem {
   ): AssistFrame | null {
     // Device arbitration. Any mouse movement disengages instantly; any real
     // pad activity (stick past the deadzone, or any pad button — e.g. holding
-    // LT to ADS) claims it back. An idle pad next to a mouse player engages
-    // nothing, and with no pad connected there is no assist at all.
-    if (input.mouseLookX !== 0 || input.mouseLookY !== 0) {
+    // LT to ADS) claims it back, and so does a phone in the player's hands. An
+    // idle pad next to a mouse player engages nothing, and with neither a pad
+    // nor a touch device there is no assist at all.
+    //
+    // Touch is asked FIRST because it is the only one of the three that is
+    // sticky: `touchActive` says which device the player is holding, not what
+    // it did this frame, so a thumb resting between bursts still owns the
+    // assist — where a resting stick has to keep proving it is there, next to a
+    // mouse that might be the real input.
+    if (input.touchActive) {
+      this.lastDevice = "touch";
+    } else if (input.mouseLookX !== 0 || input.mouseLookY !== 0) {
       this.lastDevice = "mouse";
     } else if (input.padActive) {
       this.lastDevice = "stick";
     }
-    if (!input.gamepadConnected || this.lastDevice !== "stick") {
+    const engaged =
+      (this.lastDevice === "stick" && input.gamepadConnected) ||
+      (this.lastDevice === "touch" && input.touchActive);
+    if (!engaged) {
       this.clear();
       return null;
     }
@@ -217,12 +235,19 @@ export class AimAssistSystem {
     // inner bubble, only while the player is driving (stick past the
     // threshold, or the trigger held), and it fades out with distance. ---
     const rotAngle = bubbleAngle(a.rotateRadius, bestDist);
+    // This frame's drag, in the units a stick deflection is in: a full
+    // committed push is `CONFIG.touch.cancelDrag` pixels. Expressing it this
+    // way is what lets the two gates below stay one expression each rather
+    // than forking per device — and it is zero on a pad, where the fields are.
+    const dragX = clamp(input.touchLookX / CONFIG.touch.cancelDrag, -1, 1);
+    const dragY = clamp(input.touchLookY / CONFIG.touch.cancelDrag, -1, 1);
     const drive = Math.max(
       input.fire ? 1 : 0,
       smoothstep01(
         (Math.max(
           Math.hypot(input.stickLookX, input.stickLookY),
           Math.hypot(input.moveX, input.moveY),
+          Math.hypot(dragX, dragY),
         ) -
           a.stickThreshold) /
           a.stickThreshold,
@@ -283,13 +308,13 @@ export class AimAssistSystem {
       yaw = clamp(yaw, -cap, cap);
       pitch = clamp(pitch, -cap, cap);
 
-      // Invariant 3: stick deflection AGAINST the rotation cancels it in
-      // proportion — full stick away means none at all, so a committed push
-      // always walks the crosshair out of the bubble and drops the target,
-      // while a resting stick keeps the track. (Stick signs match
-      // CameraSystem: +lookX turns +yaw, +lookY turns -pitch.)
-      yaw *= 1 - clamp(-Math.sign(yaw) * input.stickLookX, 0, 1);
-      pitch *= 1 - clamp(Math.sign(pitch) * input.stickLookY, 0, 1);
+      // Invariant 3: input AGAINST the rotation cancels it in proportion —
+      // full deflection away means none at all, so a committed push always
+      // walks the crosshair out of the bubble and drops the target, while a
+      // resting stick keeps the track. (Signs match CameraSystem for both
+      // devices: +lookX turns +yaw, +lookY turns -pitch.)
+      yaw *= 1 - clamp(-Math.sign(yaw) * (input.stickLookX + dragX), 0, 1);
+      pitch *= 1 - clamp(Math.sign(pitch) * (input.stickLookY + dragY), 0, 1);
     }
 
     this.prevCenter.copyFrom(best.center);

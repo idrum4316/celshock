@@ -179,6 +179,20 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 #hud { --ov-scale: 1; }
 @media (max-height: 620px) { #hud { --ov-scale: 0.75; } }
 @media (max-height: 430px) { #hud { --ov-scale: 0.45; } }
+
+/* --- and the gauges, when a thumb needs the corner they are in ---
+   `--hud-touch` is the sibling ladder, applied under `#hud.touching`
+   (HUD.setTouching) by two rules that live beside the markup they move:
+   `#hud-bottom` in hud.css and `#minimap-frame` in minimap.css. It is here
+   because two sheets read it, which is the only thing this file is for.
+
+   Milder than `--ov-scale`, and it stops rather than following it down: what
+   this frees is the two BOTTOM corners and the top-left, where a full-screen
+   card needs the whole viewport. It is 1 on any screen tall enough that the
+   controls and the gauges never met, so a tablet is untouched. */
+#hud { --hud-touch: 1; }
+@media (max-height: 620px) { #hud { --hud-touch: 0.78; } }
+@media (max-height: 430px) { #hud { --hud-touch: 0.62; } }
 #overlay, #deploy, #settings, #lobby {
   width: calc(100% / var(--ov-scale));
   height: calc(100% / var(--ov-scale));

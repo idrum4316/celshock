@@ -392,6 +392,7 @@ export class HUD {
   private lastScoreboardVisible = false;
   private lastScoreboardKey = "";
   private lastLockHint = false;
+  private lastTouching = false;
   private lastStowedDry = false;
   private lastStowedReady = false;
   /**
@@ -1531,5 +1532,27 @@ export class HUD {
    */
   setDeathCam(on: boolean): void {
     this.root.classList.toggle("dying", on);
+  }
+
+  /**
+   * The on-screen controls are up, so the chrome gets out of their way.
+   *
+   * It hides nothing — every gauge here is exactly as true on a phone — it
+   * SHRINKS the two that sit where the thumbs go: the bottom band (about its
+   * bottom centre, which pulls both ends inward as it goes) and the minimap.
+   * The rules are in `hud.css` and `minimap.css` beside the markup they move,
+   * and the ladder they share is `--hud-touch` in `base.css`.
+   *
+   * This is a fix the gauges had coming anyway. They are authored in pixels for
+   * a 720p window — a 224 px health bar, 46 px ammo numerals, a 220 px minimap
+   * — and a landscape phone is ~390 px tall, so the corners were already
+   * carrying about twice the chrome they should. The controls are simply what
+   * made it impossible to ignore: a trigger drawn over the magazine strip is a
+   * trigger that reads as part of it.
+   */
+  setTouching(on: boolean): void {
+    if (on === this.lastTouching) return;
+    this.lastTouching = on;
+    this.root.classList.toggle("touching", on);
   }
 }

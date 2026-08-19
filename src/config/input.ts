@@ -1,8 +1,9 @@
 /**
- * config/input.ts — deadzones, curves and pad haptics.
- * Owns: stick shaping, the trigger threshold and the rumble pulses.
- * Gotcha: unsupported pads silently no-op on haptics; never gate gameplay on
- * a rumble having been delivered.
+ * config/input.ts — deadzones, curves and haptics.
+ * Owns: stick shaping, the trigger threshold and the rumble pulses — which a
+ * phone's single motor spends too; see `rumble` below and `InputManager`.
+ * Gotcha: unsupported pads and phones silently no-op on haptics; never gate
+ * gameplay on a rumble having been delivered.
  */
 
 export const input = {
@@ -75,10 +76,15 @@ export const input = {
 } as const;
 
 /**
- * Gamepad haptics (GamepadHapticsActuator "dual-rumble"). Magnitudes are
- * 0..1, durations in ms. Unsupported pads/browsers silently no-op. Per-shot
- * pulses are kept light and short so full-auto reads as a buzz; each new
- * pulse preempts the previous one rather than queueing.
+ * Haptics. Magnitudes are 0..1, durations in ms. Unsupported pads/browsers
+ * silently no-op. Per-shot pulses are kept light and short so full-auto reads
+ * as a buzz; each new pulse preempts the previous one rather than queueing.
+ *
+ * Named for the pad because that is what it was written against
+ * (GamepadHapticsActuator "dual-rumble"), and read by the PHONE as well: a
+ * single motor with no magnitude channel gets the strength spent as duration
+ * instead. See `InputManager.rumble`, which is the one place that conversion
+ * happens — these numbers mean the same thing in both hands.
  */
 export const rumble = {
   enabled: true,

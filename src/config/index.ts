@@ -25,6 +25,7 @@ import { grenade } from "./grenade";
 import { camera } from "./camera";
 import { aimAssist } from "./aimAssist";
 import { input, rumble } from "./input";
+import { touch } from "./touch";
 import { audio } from "./audio";
 import { graphics, effects } from "./graphics";
 import { minimap, damageIndicator } from "./hud";
@@ -56,6 +57,7 @@ export const CONFIG = {
   aimAssist,
   input,
   rumble,
+  touch,
   audio,
   effects,
   graphics,

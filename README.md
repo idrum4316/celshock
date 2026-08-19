@@ -154,9 +154,10 @@ to landscape instead, so the URL bar is out of the way either way.
 This needs the site served over **HTTPS** (or `localhost`) — a service worker
 will not register otherwise, and without one there is no install prompt.
 
-**A phone still needs a controller.** The game reads keyboard, mouse and
-gamepad; there are no on-screen touch controls, so a phone plays it with a
-Bluetooth pad paired to it and not with thumbs on the glass.
+**A phone plays it with thumbs.** The on-screen controls appear the moment
+touch is the device in your hands and get out of the way the moment a mouse or
+a pad is used — so a phone with a Bluetooth controller paired to it works
+either way round, with no setting to find.
 
 ## Controls
 
@@ -175,6 +176,17 @@ Bluetooth pad paired to it and not with thumbs on the glass.
 | Loadout    | Y / △ (menus)       | L (menus)        |
 | Confirm    | A or Start          | Enter / Click    |
 
+On a phone, the same actions are on the glass: **drag the left of the screen**
+to move (push to the edge to sprint), **drag the right** to look, and the
+buttons over them are fire, ADS, jump, crouch, reload, grenade and swap, with
+the scoreboard and the pause menu in the top corner. The trigger also steers —
+press it and keep sliding, and the view follows your thumb, so you never have
+to choose between shooting and aiming. ADS and the scoreboard are taps rather
+than holds; the second, smaller fire button on the left edge is for a claw
+grip. They are drawn only while a finger is what is playing, and the HUD's own
+gauges shrink out of the corners while they are up. Touch look speed has its
+own row in Settings.
+
 Click the page once to capture the mouse (pointer lock). Gamepads use the
 browser's standard mapping and are hot-pluggable — press any button after
 connecting. Pads with vibration support get **rumble** for shots, hits,
@@ -187,7 +199,10 @@ crosshair is over an enemy, and the view pulls gently toward the target
 steering). Pushing the stick against the pull cancels it — a committed push
 always breaks free. It only engages while the right stick is the active
 look device — the moment the mouse moves, assist disengages and sensitivity
-is untouched, so mixed setups never penalize keyboard/mouse aim.
+is untouched, so mixed setups never penalize keyboard/mouse aim. **Touch gets
+it too**, and for the same reason: a thumb on glass is a coarse pointing
+device with no wrist behind it. The three rules above hold there unchanged —
+a committed swipe cancels the pull exactly as a committed stick does.
 
 ### How a round works
 
@@ -265,9 +280,11 @@ the top.
   behind the same address — that needs a shared matchmaker, which is not built.
   There is also no way to choose your name in the interface yet (`?name=` on the
   URL), and no reconnecting into the seat you left.
-- **No touch controls.** The game installs and runs on a phone, but every input
-  is keyboard, mouse or gamepad — a touch is only good for the menus' "tap to
-  continue", so playing on a phone means pairing a controller.
+- **The touch controls are not customisable.** The layout is fixed — no drag to
+  reposition, no size or opacity sliders, and no left-handed mirror, all of
+  which every shipped mobile shooter has. Nor is there an auto-fire mode (CoD
+  Mobile's "Simple"), a gyro aim, or a lean button. What is there is the shape
+  those games agree on, at one size per screen height.
 
 ## Next steps for expansion
 

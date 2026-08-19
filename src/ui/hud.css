@@ -1078,6 +1078,18 @@
 #hud.paused #capture-status,
 #hud.paused #lock-hint { display: none; }
 
+/* --- the on-screen controls are up (HUD.setTouching) ---
+   The bottom band scales about its own bottom CENTRE, which is what makes one
+   rule free both corners: `#hud-bottom` is a full-width row with the vitals
+   pinned left and the ammo right, so shrinking it toward the middle walks both
+   ends inward as well as down. The ladder is `--hud-touch` in base.css and is 1
+   on a screen with room for both, so a desktop and a tablet are untouched.
+   See `docs/pwa.md` for what is standing where. */
+#hud.touching #hud-bottom {
+  transform: scale(var(--hud-touch));
+  transform-origin: bottom center;
+}
+
 /* --- death cam ---
    Raised by HUD.setDeathCam while the player is down and the camera is
    watching their body. It hides the same four things a pause does and is

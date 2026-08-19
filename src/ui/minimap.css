@@ -21,6 +21,16 @@
   opacity: 0.94;
   filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.7));
 }
+/* The controls are up, and on a landscape phone this is 220px of a ~390px
+   screen — most of the left zone the movement thumb works in. Scaled from its
+   pinned corner rather than resized, so the canvas's backing store and its CSS
+   box still cannot drift (the whole point of sizing it from JS); the ladder is
+   `--hud-touch` in base.css, and it is 1 wherever there was room all along. */
+#hud.touching #minimap-frame {
+  transform: scale(var(--hud-touch));
+  transform-origin: top left;
+}
+
 #minimap {
   display: block;
   /* Same cut corners as .frame, so the map reads as part of the set. */

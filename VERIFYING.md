@@ -64,6 +64,24 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   ~0.5 s frame gap, leaving the key set empty on every `input.update()`. A long
   wait after getting in gets the player killed (state drops to `deploy`, pose
   freezes) — override `player.takeDamage` to stand still.
+- **The touch controls need a touch CONTEXT and CDP, not `page.touchscreen`.**
+  `browser.newContext({ hasTouch: true })` is what makes Chromium raise
+  `pointerType: "touch"` at all, and `page.touchscreen.tap()` can only tap — a
+  stick push and a look drag are multi-finger drags, so drive them with
+  `Input.dispatchTouchEvent` over a CDP session, one `id` per finger, and hold
+  the ids apart (the stick, the look drag and the fire button are three
+  simultaneous roles). The controls are `display: none` until touch is the
+  device in hand, and **`boundingBox()` returns null for a hidden element**, so
+  a `.tb-fire` lookup that reads as "the button is missing" usually means
+  `input.touchActive` is false — check that first.
+- **Getting into a round by finger** is a tap on `#overlay .ov-start` and then on
+  `#deploy-go`, with a wait between: the same `overlayT > 0.5` gate the keyboard
+  path has applies, so tap until `state === "playing"`.
+- **A locked pointer emits a zero-delta `pointermove` every frame in headless**,
+  which is what the movement gate in `InputManager`'s handler exists for. If you
+  are testing device arbitration, that stream is the thing most likely to be
+  handing the round back to a mouse that is not there — log
+  `input.lastKbmAt`/`lastTouchAt` rather than guessing.
 - Assigning `input.ads` or `cameraSys.adsBlend` does not stick;
   `InputManager.update()` rewrites the flag every tick. Redefine instead —
   `Object.defineProperty(g.input, "ads", { get: () => true, set: () => {} })` —

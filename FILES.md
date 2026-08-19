@@ -76,7 +76,11 @@ src/
     grenade.ts          # The throw, bounce, fuse and blast
     camera.ts           # Look, FOV, view punch, shake
     aimAssist.ts        # Controller aim assist and its three invariants
-    input.ts            # Deadzones, curves, pad haptics (input, rumble)
+    input.ts            # Deadzones, curves, haptics — pad and phone alike
+                        #   (input, rumble)
+    touch.ts            # The on-screen controls: the stick's shape, what a drag
+                        #   does to the aim, and how long a synthesized mouse
+                        #   event is disbelieved after a finger
     audio.ts            # Levels, distances, rolloff for the synthesized mix
     graphics.ts         # Render pipeline knobs + pooled effects (graphics,
                         #   effects)
@@ -99,7 +103,9 @@ src/
                         #   world offline, what owes the netplay frame, what is
                         #   owed the scoreboard), and the raised-lid stack. A
                         #   new state does not compile without a row
-    InputManager.ts     # Keyboard/mouse + gamepad state + rumble
+    InputManager.ts     # Keyboard/mouse + gamepad + TOUCH state, and rumble.
+                        #   Three sources, one composition, one set of fields —
+                        #   and the clock that says which device is in hand
     CameraSystem.ts     # First-person cam at the eye; ADS zooms and slows by
                         #   the fitted optic, at the weapon's own rate
     Sfx.ts              # Procedural WebAudio, spatialised, voice-capped
@@ -336,6 +342,18 @@ src/
                         #   collapses it to the three-column screen it was
     Minimap.ts          # Corner minimap: flags, friendlies, firing enemies
       minimap.css
+    TouchControls.ts    # The on-screen controls a phone plays with: a FLOATING
+      touch.css         #   movement stick in the left zone, a look DRAG in the
+                        #   right one, and the button cluster over both. A
+                        #   DEVICE, not a screen that acts — InputManager polls
+                        #   it (setTouchSource) exactly as it polls a gamepad,
+                        #   so nothing in gameplay has heard of it. The one
+                        #   thing on it that is not input is the pause button,
+                        #   which a phone has no Escape key for. Game pushes the
+                        #   two states it draws but cannot know (crouched, and
+                        #   the magazine wanting attention) and decides when it
+                        #   is up: `playing`, and only while touch is the
+                        #   device in hand
     ping.ts             # What a latency LOOKS like — the text and the quality
                         #   band, shared by the scoreboard's column and the
                         #   lobby's reading so the two cannot disagree. No

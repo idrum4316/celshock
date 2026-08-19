@@ -109,6 +109,7 @@ import { kitLabel, LoadoutScreen } from "../ui/LoadoutScreen";
 import { SettingsScreen } from "../ui/SettingsScreen";
 import { LobbyScreen } from "../ui/LobbyScreen";
 import { Minimap } from "../ui/Minimap";
+import { TouchControls } from "../ui/TouchControls";
 import { enterFullscreenOnTouch } from "../pwa/register";
 import { CameraSystem } from "./CameraSystem";
 import { InputManager } from "./InputManager";
@@ -164,6 +165,16 @@ export class Game {
   private settingsScreen: SettingsScreen;
   private lobbyScreen: LobbyScreen;
   private minimap: Minimap;
+  /**
+   * The on-screen controls, drawn only while a phone is what is playing.
+   *
+   * It is a screen like the five above it and NOT a system: it draws, it is
+   * polled, and it decides nothing. `InputManager` reads it as a third device
+   * (`setTouchSource`), which is why nothing in gameplay below this line has
+   * heard of it — the one exception being the pause button, which is a callback
+   * out like every other screen's.
+   */
+  private touch: TouchControls;
   private sfx: Sfx;
   private mapBuilder: MapBuilder;
   private combat: CombatSystem;
@@ -565,6 +576,7 @@ export class Game {
     this.settingsScreen = new SettingsScreen(this.settings);
     this.lobbyScreen = new LobbyScreen();
     this.minimap = new Minimap();
+    this.touch = new TouchControls();
     this.lighting = new LightingSystem();
     this.atmosphere = new Atmosphere(this.scene);
     // `mats` is not for building materials here — both systems own their own
@@ -884,9 +896,18 @@ export class Game {
     // Pointer lock + audio unlock must happen inside a user gesture.
     // (pointerdown, not click: Babylon may preventDefault the pointer event,
     // which suppresses the compatibility click event entirely.)
-    document.addEventListener("pointerdown", () => {
+    document.addEventListener("pointerdown", (e) => {
       this.sfx.unlock();
-      if (!this.input.pointerLocked && this.state === "playing") {
+      // Not for a finger. There is no lock to take on a touch screen, and
+      // asking for one on every press of the fire button is a rejected promise
+      // per shot — plus, where a browser DOES grant it, it hides the cursor a
+      // phone does not have and buys nothing at all.
+      if (
+        e.pointerType !== "touch" &&
+        e.pointerType !== "pen" &&
+        !this.input.pointerLocked &&
+        this.state === "playing"
+      ) {
         this.requestLock();
       }
       // The touch-device equivalent of the pointer lock: on a phone opened in
@@ -918,10 +939,14 @@ export class Game {
       // is nothing to click, and dropping it on the way in would pause the
       // very shot it is about to show — so it has a lock to lose like any
       // other live frame, and an alt-tab out of one must hold the round.
+      // …and neither is a lock the game itself gave up because the player put
+      // the mouse down and reached for the screen (`pushTouchControls`). That
+      // is the one hand-over that looks exactly like an alt-tab from here.
       if (
         !locked &&
         this.hadPointerLock &&
         !refused &&
+        !this.input.touchActive &&
         (this.state === "playing" || this.state === "dying")
       ) {
         this.pause();
@@ -987,6 +1012,15 @@ export class Game {
     this.player.onReload = () => {
       this.sfx.reload(this.player.reloadTime);
       this.net?.sendReload();
+    };
+    // The controls talk to `InputManager` rather than to `Game`: they are a
+    // DEVICE, and the one thing on them that is not input is the pause button.
+    // A phone has no Escape key, so that button is the only way off a round —
+    // guarded on the state like the Deploy handlers above, because the layer it
+    // is drawn on outlives none of them.
+    this.input.setTouchSource(this.touch);
+    this.touch.onPause = () => {
+      if (this.state === "playing") this.pause();
     };
     this.overlayScreen.onOpenSettings = () => this.openSettings();
     this.overlayScreen.onOpenMultiplayer = () => this.openLobby();
@@ -1354,6 +1388,7 @@ export class Game {
     this.cameraSys.setLookScale(
       this.settings.mouseSensitivity,
       this.settings.stickSensitivity,
+      this.settings.touchSensitivity,
     );
   }
 
@@ -1805,6 +1840,7 @@ export class Game {
     // round has already changed it by the time this reads it. That is what
     // makes "the board goes away when the round does" a property of one line
     // rather than a call every one of those boundaries has to remember.
+    this.pushTouchControls();
     this.pushScoreboard();
     this.scene.render();
   }
@@ -2174,6 +2210,11 @@ export class Game {
       return;
     }
     if (this.input.pauseKeyHeld) return;
+    // Nothing to chase on a phone: see the note in `spawnPlayer`.
+    if (this.input.touchActive) {
+      this.lockPending = false;
+      return;
+    }
     this.lockRetryT -= dt;
     if (this.lockRetryT > 0) return;
     this.lockRetryT = CONFIG.input.lockRetryInterval;
@@ -2679,7 +2720,13 @@ export class Game {
     // path asks at all. It is a best effort, exactly as `requestLock`'s note
     // says: a browser that insists on a user gesture refuses, and a pad player
     // there is no worse off than before.
-    this.requestLock();
+    //
+    // Never for a THUMB, and that is a correctness rule rather than a saving.
+    // A held lock zeroes `clientX/clientY` on EVERY pointer event, touch ones
+    // included — so the floating stick would be born at the top-left corner of
+    // the screen and the look drag would read one long jump to it. Measured:
+    // with the lock granted, both read exactly zero.
+    if (!this.input.touchActive) this.requestLock();
   }
 
   /**
@@ -2751,7 +2798,14 @@ export class Game {
     // The trigger goes IN rather than gating the call: a semi-automatic weapon
     // has to be told when it comes up, and only Player knows whether the one
     // being carried cares.
-    const canFire = this.input.pointerLocked || this.input.gamepadConnected;
+    // A phone has no pointer lock to take and never will, so the gate has a
+    // third term rather than an exception: the trigger is a button on the
+    // controls, and a button that only exists while the round is being played
+    // cannot be the UI click this gate was written to catch.
+    const canFire =
+      this.input.pointerLocked ||
+      this.input.gamepadConnected ||
+      this.input.touchActive;
     if (this.player.tryShot(this.input.fire && canFire)) {
       const blend = this.cameraSys.adsBlend;
       const spread = this.player.spread(blend);
@@ -3885,7 +3939,13 @@ export class Game {
       this.cameraSys.forwardToRef(this.aimForward),
       this.cameraSys.aimYaw,
       this.cameraSys.aimPitch,
-      this.cameraSys.stickYawRate,
+      // The rate the assist is bounded below, from whichever device is in the
+      // player's hands — a drag has no full deflection of its own, so touch
+      // brings its own reference. Picked here rather than inside either system:
+      // the camera does not read input and the assist does not read the camera.
+      this.input.touchActive
+        ? this.cameraSys.touchYawRate
+        : this.cameraSys.stickYawRate,
       this.enemyTargets(),
     );
     // First person: the camera goes to the eye the bots shoot at, so what a
@@ -4021,7 +4081,11 @@ export class Game {
     // in, and a body on the ground is not standing in one — a panel counting a
     // capture nobody is contributing to is worse than no panel.
     this.hud.setCapture(dying ? null : this.captureStatus());
-    this.hud.setLockHint(!this.input.pointerLocked && !this.input.gamepadConnected);
+    this.hud.setLockHint(
+      !this.input.pointerLocked &&
+        !this.input.gamepadConnected &&
+        !this.input.touchActive,
+    );
     this.minimap.update(
       dt,
       this.player.position,
@@ -4298,6 +4362,45 @@ export class Game {
    * Assembled only while the board is actually up: the payload is an object
    * and four arrays, and `flagsHeld` counts the control points twice.
    */
+  /**
+   * The on-screen controls: whether they are up, and the two things drawn on
+   * them that they cannot know.
+   *
+   * Pushed from `tick` after the switch, in the same place and for the same
+   * reason as `pushScoreboard` below — what decides is the state the frame ENDS
+   * in, so a frame that paused, died or deployed has already taken them away by
+   * the time this reads it, and no boundary owes a call of its own.
+   *
+   * `playing` alone, and that is narrower than `inRound` on purpose: the deploy
+   * screen is a MAP the player taps a spawn on and the death cam is four
+   * seconds of watching, so in both there is a body's worth of controls over a
+   * body nobody is driving. Taking them away also drops whatever they were
+   * holding — see `setVisible`.
+   */
+  private pushTouchControls(): void {
+    const live = this.state === "playing" && this.input.touchActive;
+    this.touch.setVisible(live);
+    // Pushed either way, and BEFORE the early return: the chrome has to get out
+    // of the thumbs' way while they are there and go back to full size the
+    // moment they are not. It is the HUD's own class because `#hud` is the
+    // HUD's — the same arrangement `setPaused` and `setDeathCam` have.
+    this.hud.setTouching(live);
+    if (!live) return;
+    // A machine can have both, and a lock held while a finger drives is not a
+    // preference — it is broken input: the lock zeroes `clientX/clientY` on
+    // every pointer event, so the stick would be born in the corner of the
+    // screen. Giving it up is what hands a touchscreen laptop over cleanly, and
+    // `pointerlockchange` knows not to read this particular loss as the player
+    // leaving. The mouse takes it back on its next click, as it always did.
+    if (document.pointerLockElement) document.exitPointerLock();
+    this.touch.setCrouched(this.player.crouching);
+    // "The magazine wants attention", which is either state it can be in: empty
+    // and waiting, or filling. A phone player has no eye spare for the corner
+    // of the screen, and the weapon reloads itself on the last round anyway —
+    // so the button is where that news can be seen without looking for it.
+    this.touch.setReloadDue(this.player.reloading || this.player.ammo === 0);
+  }
+
   private pushScoreboard(): void {
     if (!this.screens.inRound || !this.input.scoreboard) {
       this.hud.setScoreboard(false);

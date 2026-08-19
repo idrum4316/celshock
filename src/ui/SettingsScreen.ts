@@ -163,6 +163,13 @@ const PAGES: readonly Page[] = [
         options: LOOK_SCALES,
         style: "slider",
       },
+      {
+        key: "touchSensitivity",
+        label: "Touch look",
+        hint: "How far a drag turns the view",
+        options: LOOK_SCALES,
+        style: "slider",
+      },
     ],
     bindings: BINDINGS,
   },

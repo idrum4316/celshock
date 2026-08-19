@@ -96,6 +96,7 @@ export class CameraSystem {
    */
   private mouseScale = 1;
   private stickScale = 1;
+  private touchScale = 1;
 
   /**
    * Head-bob phase, in radians, advanced by travel rather than by time.
@@ -202,9 +203,10 @@ export class CameraSystem {
    * The player's look-speed settings. Cheap enough to call on every change,
    * like `setLoadout`; `Game.applySettings` is the only caller.
    */
-  setLookScale(mouse: number, stick: number): void {
+  setLookScale(mouse: number, stick: number, touch: number): void {
     this.mouseScale = mouse;
     this.stickScale = stick;
+    this.touchScale = touch;
   }
 
   /**
@@ -269,6 +271,24 @@ export class CameraSystem {
       CONFIG.camera.stickSensX *
       this.stickScale *
       (aiming ? this.sight.stickMult : 1)
+    );
+  }
+
+  /**
+   * The same quantity for a THUMB (rad/s), and the reason it needs inventing:
+   * a stick has a full deflection to measure "as fast as the player can turn"
+   * against, and a drag does not. `CONFIG.touch.swipeReference` stands in for
+   * one — the speed a brisk swipe travels at — so the aim assist's bound means
+   * the same thing on glass as it does on a pad, and shrinks with the optic and
+   * with the player's own touch sensitivity exactly as the stick's does.
+   */
+  get touchYawRate(): number {
+    const aiming = this.adsBlend > 0.5;
+    return (
+      CONFIG.touch.lookSensX *
+      CONFIG.touch.swipeReference *
+      this.touchScale *
+      (aiming ? this.sight.mouseMult : 1)
     );
   }
 
@@ -462,10 +482,11 @@ export class CameraSystem {
    * `eyePos` is the player's eye in world space — the camera goes there
    * outright, offset only by the cosmetic bob and punch.
    *
-   * `assist` is the gamepad aim-assist frame from `AimAssistSystem` (null
-   * when inactive). Its slowdown is multiplied into the stick terms ONLY —
-   * the mouse look path is deliberately never scaled — and its rotation is
-   * applied on top of the player's own input, then clamped like any other.
+   * `assist` is the aim-assist frame from `AimAssistSystem` (null when
+   * inactive). Its slowdown is multiplied into the stick and touch terms only
+   * — the MOUSE look path is deliberately never scaled, which is that system's
+   * first invariant — and its rotation is applied on top of the player's own
+   * input, then clamped like any other.
    */
   update(
     dt: number,
@@ -486,6 +507,16 @@ export class CameraSystem {
     this.pitch -= input.mouseLookY * c.sensY * mouseMult;
     this.yaw += input.stickLookX * c.stickSensX * stickMult * assistMult * dt;
     this.pitch -= input.stickLookY * c.stickSensY * stickMult * assistMult * dt;
+    // The touch drag. No `dt`: it is a delta the finger already made, the same
+    // as the mouse's, so the frame rate is in the size of it rather than in a
+    // rate to be integrated. It takes the OPTIC's per-pixel multiplier for the
+    // same reason — a scoped drag has to cover fewer radians per pixel, which
+    // is what `mouseMult` means — and unlike the mouse it takes the assist's
+    // slowdown, because a thumb has none of a mouse's precision to trade away.
+    const touchMult =
+      (aiming ? this.sight.mouseMult : 1) * this.touchScale * assistMult;
+    this.yaw += input.touchLookX * CONFIG.touch.lookSensX * touchMult;
+    this.pitch -= input.touchLookY * CONFIG.touch.lookSensY * touchMult;
     if (assist) {
       this.yaw += assist.yaw;
       this.pitch += assist.pitch;

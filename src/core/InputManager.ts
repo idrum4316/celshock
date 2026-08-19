@@ -12,14 +12,49 @@
  * Every key this file binds is listed in BOUND_CODES and has its browser
  * default suppressed; a new binding that is not added there will fight the
  * browser (Ctrl+letter combinations especially — crouch is Ctrl).
+ * TOUCH is a third source folded in exactly as the pad is — one poll at the
+ * top of update(), OR'd into the same fields — so nothing downstream knows how
+ * many devices the player has. It is INJECTED (`setTouchSource`) rather than
+ * imported: the layer that draws it is a screen, and core does not import
+ * src/ui. The one thing that is not a fold is `touchLookX/Y`, which the camera
+ * reads on its own path; see the field.
  */
 import { CONFIG } from "../config";
 
 /**
- * Unified input for keyboard/mouse and gamepad (Xbox/PlayStation standard
- * mapping). Call `update()` exactly once per frame, then read the public
- * state fields. Mouse deltas are accumulated between frames and consumed
- * on each update.
+ * One frame of on-screen touch input — the structural subset of
+ * `TouchControls` (src/ui/TouchControls.ts) this file needs, declared here so
+ * core does not import a screen. The same shape `AimAssistSystem` declares
+ * `AimTarget` in, and for the same reason: the dependency is a fact about the
+ * data, not about the module.
+ *
+ * Held state rather than edges, because that is what a device reports. The
+ * rising-edge bookkeeping below is already written and already correct, and it
+ * serves the pad and the glass alike.
+ */
+export interface TouchSource {
+  consume(): {
+    moveX: number;
+    moveY: number;
+    lookX: number;
+    lookY: number;
+    fire: boolean;
+    ads: boolean;
+    sprint: boolean;
+    crouch: boolean;
+    jump: boolean;
+    reload: boolean;
+    grenade: boolean;
+    swap: boolean;
+    scoreboard: boolean;
+  };
+}
+
+/**
+ * Unified input for keyboard/mouse, gamepad (Xbox/PlayStation standard
+ * mapping) and the on-screen touch controls. Call `update()` exactly once per
+ * frame, then read the public state fields. Mouse deltas are accumulated
+ * between frames and consumed on each update.
  */
 export class InputManager {
   // --- composed per-frame state (read these) ---
@@ -232,6 +267,34 @@ export class InputManager {
    * apart from "pad is idle on the desk while the mouse does the aiming".
    */
   padActive = false;
+  /**
+   * Look drag from the touch layer since the last frame, in CSS pixels.
+   *
+   * A THIRD look path rather than a share of one of the other two, because a
+   * drag is neither: it is a delta like the mouse's, which is why it cannot be
+   * folded into the stick's rate, and it wants the aim assist, which is why it
+   * cannot be folded into the mouse's. `CameraSystem` scales it by the touch
+   * device's own sensitivity and `AimAssistSystem` treats it as a third device;
+   * the mouse path is untouched by both, exactly as its contract promises.
+   */
+  touchLookX = 0;
+  touchLookY = 0;
+  /**
+   * Whether TOUCH is the device in the player's hands.
+   *
+   * STICKY, unlike `padActive`: a thumb resting still between bursts is still a
+   * phone, and a control layer that took itself off screen every time the
+   * player stopped moving would be worse than no control layer. It goes out
+   * only when another device is used, and "used" is measured against the clock
+   * because a tap arrives twice — once as a pointer event and again, a moment
+   * later, as a synthesized mouse one that would otherwise read as a mouse
+   * having turned up (`CONFIG.touch.mouseGrace`).
+   *
+   * Three things downstream ask: whether the controls are drawn, whether the
+   * trigger is live without a pointer lock, and whether the CLICK hint is a
+   * lie.
+   */
+  touchActive = false;
 
   // --- internals ---
   private keys = new Set<string>();
@@ -277,10 +340,26 @@ export class InputManager {
   private crouchLatched = false;
   /** Set by `consumeFire()`; cleared the frame the trigger reads released. */
   private fireBlocked = false;
+  /** The on-screen controls, when there are any. See `setTouchSource`. */
+  private touch: TouchSource | null = null;
+  private prevTouchSprint = false;
+  /**
+   * When each device was last used, as `performance.now()` stamps. The most
+   * recent one is the device in hand — an arrangement that needs no rules
+   * about which beats which, and self-corrects the moment a player picks
+   * something else up.
+   */
+  private lastKbmAt = 0;
+  private lastTouchAt = 0;
+  private lastPadAt = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", (e) => {
       this.keys.add(e.code);
+      // A key is the one piece of evidence no touch can fake: nothing
+      // synthesizes a keydown from a finger, so this one skips the grace
+      // window a mouse event has to clear.
+      this.lastKbmAt = performance.now();
       if (BOUND_CODES.has(e.code) && !isTyping(e.target)) e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
@@ -296,6 +375,7 @@ export class InputManager {
       // and would fire the moment its repeat clock came round.
       this.navX.dir = 0;
       this.navY.dir = 0;
+      this.prevTouchSprint = false;
     });
 
     // Button state is read from `buttons` bitmasks (not individual
@@ -306,14 +386,22 @@ export class InputManager {
     // PointerEvents report pointerType "" and are accepted.)
     const isMouse = (e: PointerEvent) => e.pointerType === "mouse" || e.pointerType === "";
     const readPointer = (e: PointerEvent) => {
+      if (isMouse(e)) this.noteMouse();
+      else this.lastTouchAt = performance.now();
       if (isMouse(e)) this.pointerMask = e.buttons;
     };
-    // A touch is felt nowhere in here, and does not need to be: every screen a
-    // phone meets carries its own button (the menu's and the round-over card's
-    // Deploy, the deploy screen's map and `#deploy-go`, the kit screen's), each
-    // listening for its own `pointerdown`. A tap latched into `confirmPressed`
-    // is what used to get past the title screen, and it deployed the player off
-    // the map and difficulty rows on the way — see `confirmPressed`.
+    // A touch still drives no BUTTON MASK in here, and must not: a tap latched
+    // into `confirmPressed` is what used to get past the title screen, and it
+    // deployed the player off the menu's map and difficulty rows on the way
+    // (see `confirmPressed`). Every screen a phone meets carries its own
+    // button — the menu's and the round-over card's Deploy, the deploy
+    // screen's map and `#deploy-go`, the kit screen's — each listening for its
+    // own `pointerdown`, which a finger raises like any other pointer.
+    //
+    // What a touch DOES do here is say which device is in the player's hands,
+    // which is a different question and is asked of every pointer that lands
+    // anywhere, not just of the ones on the controls: a phone is a phone while
+    // its owner is still tapping through the menu.
     document.addEventListener("pointerdown", readPointer);
     document.addEventListener("pointerup", readPointer);
     document.addEventListener("pointercancel", (e) => {
@@ -329,6 +417,13 @@ export class InputManager {
 
     document.addEventListener("pointermove", (e) => {
       if (!isMouse(e)) return;
+      // A mouse that has not MOVED is not a mouse being used, and saying so is
+      // load-bearing rather than pedantic: a locked pointer delivers a
+      // zero-delta `pointermove` every frame it is held, so believing the event
+      // itself would hand the round back to a mouse that is not there — once a
+      // frame, for as long as the lock lasts. Measured headless, that alone
+      // took the on-screen controls off a phone the moment it deployed.
+      if (e.movementX !== 0 || e.movementY !== 0) this.noteMouse();
       this.pointerMask = e.buttons;
       if (this.pointerLocked) {
         this.accumX += e.movementX;
@@ -350,6 +445,7 @@ export class InputManager {
       "wheel",
       (e) => {
         const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
+        this.noteMouse();
         this.wheelAccum += e.deltaY * scale;
       },
       { passive: true },
@@ -369,6 +465,12 @@ export class InputManager {
   update(): void {
     const pad = this.readGamepad();
     this.gamepadConnected = pad !== null;
+    // Polled once, at the top, exactly as the pad is — and for the same
+    // reason. `consume()` is spend-on-read (it zeroes the drag and clears the
+    // one-frame floor under a fast tap), so a second call inside one frame
+    // would lose input rather than repeat it. That is the other half of this
+    // class's "update() runs exactly once per frame" invariant.
+    const t = this.touch?.consume() ?? null;
     const dz = CONFIG.input.deadzone;
     const trig = CONFIG.input.triggerThreshold;
 
@@ -385,8 +487,8 @@ export class InputManager {
       px = applyDeadzone(pad.axes[0] ?? 0, dz);
       py = -applyDeadzone(pad.axes[1] ?? 0, dz);
     }
-    this.moveX = clamp(kx + px, -1, 1);
-    this.moveY = clamp(ky + py, -1, 1);
+    this.moveX = clamp(kx + px + (t ? t.moveX : 0), -1, 1);
+    this.moveY = clamp(ky + py + (t ? t.moveY : 0), -1, 1);
 
     // Look
     this.mouseLookX = this.accumX;
@@ -395,6 +497,10 @@ export class InputManager {
     this.accumY = 0;
     this.stickLookX = pad ? applyDeadzone(pad.axes[2] ?? 0, dz) : 0;
     this.stickLookY = pad ? applyDeadzone(pad.axes[3] ?? 0, dz) : 0;
+    // Already consumed above, so this is a copy rather than an accumulator
+    // drain — the drag was zeroed by the layer that handed it over.
+    this.touchLookX = t ? t.lookX : 0;
+    this.touchLookY = t ? t.lookY : 0;
 
     // Actions (LT=6 ADS, RT=7 shoot, RB=5 grenade, A=0 jump, B=1 crouch,
     // X=2 reload, L3=10, Start=9)
@@ -426,12 +532,24 @@ export class InputManager {
         padStart ||
         padSprint ||
         buttonHeld(pad, 8, trig));
+    // Whichever device spoke last is the one in hand. The pad stamps itself
+    // from the state above rather than from a listener, because a pad has no
+    // events — it is polled, so "being used" is a fact about this frame.
+    if (this.padActive) this.lastPadAt = performance.now();
+    this.touchActive =
+      this.lastTouchAt > 0 &&
+      this.lastTouchAt >= this.lastKbmAt &&
+      this.lastTouchAt >= this.lastPadAt;
 
     const buttons = this.pointerMask | this.mouseMask;
-    this.ads = (buttons & 2) !== 0 || padAds;
+    // The touch ADS arrives already LATCHED. A hold is not available on glass:
+    // the thumb that would hold it is the thumb that looks, so the control
+    // layer resolves the tap-on/tap-off itself and reports the answer. See its
+    // header.
+    this.ads = (buttons & 2) !== 0 || padAds || (t ? t.ads : false);
     // The trigger is held, not edge-triggered — full-auto depends on it — so a
     // suppressed press is cleared by the release rather than by a timer.
-    const fireNow = (buttons & 1) !== 0 || padFire;
+    const fireNow = (buttons & 1) !== 0 || padFire || (t ? t.fire : false);
     if (!fireNow) this.fireBlocked = false;
     this.fire = fireNow && !this.fireBlocked;
 
@@ -445,14 +563,32 @@ export class InputManager {
     }
     this.prevPadSprint = padSprint;
 
+    // The stick pushed to its rim, resolved by the control layer (it owns the
+    // hysteresis either side of the threshold). Not a latch like L3's: a thumb
+    // that lets go of the stick has stopped running, and there is nothing left
+    // holding an intention to.
+    const touchSprint = t ? t.sprint : false;
+    // The same exclusivity the pad's latch has, in the same direction: asking
+    // to run spends a crouch rather than queueing behind it.
+    if (touchSprint && !this.prevTouchSprint) this.crouchLatched = false;
+    this.prevTouchSprint = touchSprint;
+
     this.sprint =
-      this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.padSprintOn;
+      this.keys.has("ShiftLeft") ||
+      this.keys.has("ShiftRight") ||
+      this.padSprintOn ||
+      touchSprint;
 
     // Crouch: `C` and pad B flip the shared latch on their rising edge, Ctrl
     // is held on top of whatever the latch says. Both toggles are OR'd into
     // one edge, so pressing them on the same frame is one flip rather than
     // two that cancel.
-    const crouchToggleNow = this.keys.has("KeyC") || padCrouch;
+    // The touch button is a MOMENTARY press, deliberately: it flips the one
+    // shared latch on its rising edge exactly as `C` and the pad's B do,
+    // rather than keeping a second latch of its own that the other two could
+    // disagree with.
+    const crouchToggleNow =
+      this.keys.has("KeyC") || padCrouch || (t ? t.crouch : false);
     if (crouchToggleNow && !this.prevCrouchToggle) {
       this.crouchLatched = !this.crouchLatched;
       // The other half of the exclusivity above: asking to get down ends a
@@ -467,17 +603,23 @@ export class InputManager {
       this.keys.has("ControlRight");
     this.altHeld = this.keys.has("AltLeft") || this.keys.has("AltRight");
     // Back / View button (6 on the standard mapping is LT, 8 is Back).
-    this.scoreboard = this.keys.has("Tab") || (pad ? buttonHeld(pad, 8, trig) : false);
+    // Latched by the control layer for the reason ADS is: Tab is held by a
+    // finger with nothing else to do, and no thumb here has one to spare.
+    this.scoreboard =
+      this.keys.has("Tab") ||
+      (pad ? buttonHeld(pad, 8, trig) : false) ||
+      (t ? t.scoreboard : false);
 
-    const jumpNow = this.keys.has("Space") || padJump;
+    const jumpNow = this.keys.has("Space") || padJump || (t ? t.jump : false);
     this.jumpPressed = jumpNow && !this.prevJump;
     this.prevJump = jumpNow;
 
-    const reloadNow = this.keys.has("KeyR") || padReload;
+    const reloadNow = this.keys.has("KeyR") || padReload || (t ? t.reload : false);
     this.reloadPressed = reloadNow && !this.prevReload;
     this.prevReload = reloadNow;
 
-    const grenadeNow = this.keys.has("KeyG") || padGrenade;
+    const grenadeNow =
+      this.keys.has("KeyG") || padGrenade || (t ? t.grenade : false);
     this.grenadePressed = grenadeNow && !this.prevGrenade;
     this.prevGrenade = grenadeNow;
 
@@ -491,8 +633,13 @@ export class InputManager {
     // second notch would only undo the first.
     const wheeled = Math.abs(this.wheelAccum) >= CONFIG.input.wheelStep;
     this.wheelAccum = 0;
-    this.swapPressed = wheeled || (padLoadout && !this.prevSwap);
-    this.prevSwap = padLoadout;
+    // The touch button shares the pad's edge rather than growing a second one.
+    // It does NOT join `loadoutNow` below, which is the other half of what Y
+    // means: the kit screen is not something a thumb should be able to open
+    // from inside a round.
+    const swapNow = padLoadout || (t ? t.swap : false);
+    this.swapPressed = wheeled || (swapNow && !this.prevSwap);
+    this.prevSwap = swapNow;
 
     // …and naming a slot outright. Nothing on the pad: there is no button left
     // for it, and Y already reaches both weapons in the two presses this saves.
@@ -580,6 +727,36 @@ export class InputManager {
   }
 
   /**
+   * Hands over the on-screen controls, which are polled from `update()` from
+   * here on. `Game` wires it; passing `null` takes them away again.
+   *
+   * INJECTED rather than imported, the `BattleSystem`←`CombatSystem`
+   * arrangement: the thing on the other end is a screen, and core does not
+   * import `src/ui`. What arrives is a `TouchSource` — the shape above, and
+   * nothing about a DOM.
+   */
+  setTouchSource(source: TouchSource | null): void {
+    this.touch = source;
+  }
+
+  /**
+   * A mouse event, believed only if no finger has touched the glass recently.
+   *
+   * A tap raises a `pointerdown` and then, for the benefit of pages written
+   * before touch existed, a synthesized `mousedown`/`mousemove` pair. Believing
+   * those is how the on-screen controls would take themselves off screen on the
+   * first press of the fire button — the layer calls `preventDefault`, which
+   * suppresses them where it is honoured, and this is the belt to that pair of
+   * braces. A real mouse alongside a real phone loses one gesture to this and
+   * nothing more.
+   */
+  private noteMouse(): void {
+    const now = performance.now();
+    if (now - this.lastTouchAt < CONFIG.touch.mouseGrace * 1000) return;
+    this.lastKbmAt = now;
+  }
+
+  /**
    * Suppresses `fire` until the trigger is physically released, so a button
    * still held from a UI click cannot discharge the gun.
    *
@@ -641,6 +818,24 @@ export class InputManager {
    */
   rumble(strong: number, weak: number, durationMs: number): void {
     if (!CONFIG.rumble.enabled) return;
+    // A phone has ONE motor and no magnitudes at all — `navigator.vibrate`
+    // takes a duration and nothing else. So the strength is spent on the only
+    // channel there is: a shot's light tick becomes ~24 ms, a kill ~80, a hit
+    // taken ~143 and a death ~468, which is the same ladder the two motors
+    // play, flattened. Ignoring the magnitudes and buzzing for the pad's
+    // duration instead would make a rifle's 70 ms-per-round read as one
+    // continuous rattle for as long as the trigger is held.
+    //
+    // Same contract as the actuator below: absent on iOS, ignored by a browser
+    // that has not seen a gesture yet, and a no-op either way. A later call
+    // replaces the pattern still playing rather than queueing behind it, which
+    // is the preemption full-auto needs, for free.
+    if (this.touchActive) {
+      if (typeof navigator.vibrate === "function") {
+        navigator.vibrate(Math.round(durationMs * clamp((strong + weak) / 2, 0, 1)));
+      }
+      return;
+    }
     const actuator = this.readGamepad()?.vibrationActuator;
     if (!actuator) return;
     actuator

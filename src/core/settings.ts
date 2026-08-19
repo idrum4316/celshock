@@ -74,6 +74,17 @@ export type Settings = {
    * able to out-turn a slowed stick.
    */
   stickSensitivity: LookScale;
+  /**
+   * Touch look speed, as a multiplier on `CONFIG.touch.lookSensX`/`lookSensY`.
+   *
+   * A third, for the reason there is a second: a machine can have all three
+   * plugged in at once, and the one number a phone player changes first is this
+   * one — every mobile shooter puts touch sensitivity at the top of its
+   * settings because a thumb's comfortable travel varies more between people
+   * and screen sizes than a mouse's does between desks. It bounds the aim
+   * assist through `CameraSystem.touchYawRate`, exactly as the stick's does.
+   */
+  touchSensitivity: LookScale;
 };
 
 /**
@@ -145,6 +156,7 @@ export const SETTING_DEFAULTS: Settings = {
   // in `CONFIG.camera` are what every other number there was tuned against.
   mouseSensitivity: 1,
   stickSensitivity: 1,
+  touchSensitivity: 1,
 };
 
 /** One key per field, so the fields are independent in the store as well. */
@@ -222,6 +234,7 @@ const CODECS: { [K in keyof Settings]: Codec<Settings[K]> } = {
   renderScale: oneOf(CONFIG.graphics.renderScales),
   mouseSensitivity: oneOf(CONFIG.camera.lookScales),
   stickSensitivity: oneOf(CONFIG.camera.lookScales),
+  touchSensitivity: oneOf(CONFIG.camera.lookScales),
 };
 
 function readRaw(key: keyof Settings): string | null {

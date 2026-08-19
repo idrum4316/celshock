@@ -82,6 +82,43 @@ Details about the phone, each of which was a visible bug first:
   the map at a quarter of the height it asked for, and the divide is the identity on
   every desktop.
 
-There are **no touch controls** — every input is keyboard, mouse or gamepad, so a
-phone plays this with a pad paired to it. Menus and the deploy map take a tap;
-nothing in a round does.
+## The controls a phone plays with
+
+`src/ui/TouchControls.ts` is the on-screen set, and it is a **device rather than a
+screen**: `InputManager` polls it once a frame exactly as it polls a gamepad, so
+nothing in gameplay has heard of it. The shape is the one every shipped mobile
+shooter converged on — floating stick left, look drag right, cluster over both —
+and the reasoning for each part is in that file's header, next to the code it
+explains.
+
+What belongs here is the part that is about **the phone rather than the game**:
+
+- **They are drawn only when touch is the device in the player's hands**, which
+  is a question `InputManager` answers with a clock: three stamps, one per
+  device, most recent wins. A pad or a mouse takes the controls off screen the
+  moment it is used and a tap puts them back, so a phone with a controller
+  paired to it plays either way round without a setting.
+- **A tap arrives twice** — once as a `pointerdown`, and again a moment later as
+  a synthesized `mousedown`/`mousemove` pair for the benefit of pages written
+  before touch existed. Believing the second is how the controls take themselves
+  off screen on the first press of the fire button. Two things stop it: the layer
+  calls `preventDefault` (which suppresses the pair where it is honoured), and
+  mouse evidence inside `CONFIG.touch.mouseGrace` of a finger is disbelieved.
+- **A mouse that has not moved is not a mouse being used.** A locked pointer
+  delivers a zero-delta `pointermove` every frame it is held, which is a mouse
+  arriving 60 times a second by any test that trusts the event itself. Measured
+  headless, that alone took the controls off a phone the instant it deployed.
+  There is no pointer lock to take on a phone, and the `pointerdown` that asks
+  for one skips a finger for the same reason.
+- **The fire gate has a third term.** `Game`'s trigger asks for a pointer lock or
+  a gamepad, because a UI click must never discharge the gun; a phone has neither
+  and never will, so `touchActive` joins them rather than an exception being
+  carved out. The CLICK hint takes the same third term — it is a lie on a device
+  with nothing to click.
+- **`#touch` is `position: fixed`, not `absolute`**, which is load-bearing: the
+  stick is drawn at the `clientX/clientY` of the finger that made it, and `#hud`
+  carries the safe-area padding, so an absolutely positioned layer would put the
+  ring one notch's width from the thumb holding it. The three button groups take
+  their own `env(safe-area-inset-*)` back, and scale on short viewports through
+  `--tscale` — the same trick `--ov-scale` plays for the menu, one transform per
+  group about the corner that group is pinned to.

@@ -11,7 +11,9 @@ contract for everything under `src/ui/`.
 goes: `OverlayScreen` owns the four full-screen cards, `DeployScreen` the deploy
 map, `LoadoutScreen` the kit, `SettingsScreen` the settings list, `LobbyScreen`
 the match browser, `Minimap` the corner map, and `HUD` **only** the gameplay
-chrome.
+chrome. `TouchControls` is in the directory and is deliberately not in that
+count — it draws like a screen and answers like a gamepad; see the last section
+here.
 
 **The boot screen is the one piece of interface that is not in this directory**,
 and the exception is what defines it: it covers the stretch before any module
@@ -511,3 +513,52 @@ alone on a night game's albedo is a black silhouette. `stowKit` is the single
 teardown — screen, pose and lamps — and all four exits go through it, because a
 carried light nobody removes survives `lighting.clear()` and follows the player into
 the round.
+
+
+## The controls a phone plays with
+
+`TouchControls` lives in this directory, builds a root, appends it to `#hud` and
+carries a stylesheet of its own, so by every rule above it is a screen. It is
+counted as one nowhere, because **what it IS is a device**: `InputManager` polls
+it once a frame exactly as it polls a gamepad (`setTouchSource`), and nothing
+downstream of that poll has heard of it. The distinction is worth keeping because
+it decides where a change goes — a new control is a button in that file and a
+term in `InputManager.update`, never a new callback into `Game`.
+
+The shape of the set — floating stick left, look drag right, cluster over both,
+a fire button that also steers — is the one Call of Duty Mobile and Delta Force
+Mobile both arrived at, and the argument for each part is in the file's own
+header where the code that implements it can be read beside it.
+[`pwa.md`](pwa.md) carries the half that is about the phone rather than the
+game: when the controls are drawn, why a tap arrives twice, and why the layer is
+`fixed` rather than `absolute`.
+
+What belongs *here*, with the other screens:
+
+- **It is the one thing on `#hud` that is drawn for exactly one state.** Every
+  other screen is raised and lowered by a transition; this one is pushed from
+  `Game.tick` every frame (`pushTouchControls`) next to the scoreboard's push and
+  for the same reason — the state a frame ENDS in decides, so no boundary owes a
+  call. `playing` alone, which is narrower than `inRound`: the deploy screen is a
+  map you tap a spawn on and the death cam is four seconds of watching, and in
+  both there would be a body's worth of controls over a body nobody is driving.
+- **Taking it away drops what it was holding.** `setVisible(false)` calls
+  `releaseAll`, and that is the whole reason visibility is a method rather than a
+  CSS class: a pause taken with the trigger down must not come back with the
+  trigger down. The class rules in `touch.css` (`#hud.paused #touch` and its
+  three neighbours) are the one-frame belt to that brace — the push lands on the
+  next tick, and a trigger drawn over the pause card for a frame is a trigger
+  somebody tries to press.
+- **The two things it draws that it cannot know are pushed in**, exactly as every
+  gauge in `HUD` is and with the same write guards: whether the body is crouched
+  (it owns no crouch latch — `InputManager` has one already, shared with `C` and
+  the pad's B) and whether the magazine wants attention. Nothing else about the
+  round reaches it.
+- **The buttons are `.frame`s**, the same chamfered hull the panels use, cut on
+  the same two corners. Not decoration: `base.css` bans `border-radius` on
+  gameplay chrome, and a set of round translucent buttons is precisely the "web
+  card" that rule exists to keep off this HUD.
+- **The one control that is not input is the pause button**, and it is a callback
+  out (`onPause`) like every other screen's, guarded on the state in
+  `wireScreens` like every other one. A phone has no Escape key, so without it a
+  round cannot be left at all.

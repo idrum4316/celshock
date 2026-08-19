@@ -345,6 +345,17 @@ interface: the black background, and the boot screen `main.ts` takes down once a
 frame has been drawn (or turns into the "needs WebGL2" message). Nothing that
 reacts to game state may join them.
 
+**A phone gets a sixth thing on `#hud`, and it is a DEVICE rather than a
+screen.** `TouchControls` draws the floating movement stick, the look drag and
+the button cluster, and `InputManager` polls it once a frame exactly as it polls
+a gamepad (`setTouchSource`) — so it is folded into the same fields every
+consumer already reads, and nothing in gameplay has heard of it. It is drawn for
+`playing` alone and only while touch is the device in the player's hands, which
+`InputManager` answers with one clock stamp per device; taking it away DROPS
+what it was holding, because a pause taken with the trigger down must not come
+back with it down. The one control on it that is not input is the pause button,
+because a phone has no Escape key.
+
 **Every screen here is a LIST, and a list whose rows can change under the cursor
 keeps its place by IDENTITY rather than by index.** The lobby is the one that
 can: a refresh inserts match rows above the actions, and a carried index means
@@ -361,7 +372,8 @@ it moves as the list grows and wears the same Enter as the rows that act.
 menu cursor and the list-shaped screens, the shared footer and why Back is not a
 row, why **the pointer deploys only through the Deploy button**, the deploy map,
 the kit turntable that is the real viewmodel in a hole in the scrim, the lobby's
-row identity, and the short-viewport scaling.
+row identity, the short-viewport scaling, and the touch controls as a screen —
+with [`docs/pwa.md`](docs/pwa.md) carrying them as a phone.
 
 ### The scene has (almost) no Babylon lights
 
@@ -785,15 +797,23 @@ of.
 The build installs to a home screen and launches fullscreen, landscape and
 offline. Four files carry it — `public/manifest.webmanifest`, `public/icons/`,
 `src/pwa/register.ts` and `src/pwa/sw.js` — and nothing in the game knows any of
-it exists. **`public/` is the one place a URL is written by hand**, because a home
+it exists. What a phone is PLAYED with is `src/ui/TouchControls.ts`, above; the
+three rules that are about the device rather than the game are that a tap
+arrives twice (the second time as a synthesized mouse event, which is
+disbelieved for `CONFIG.touch.mouseGrace`), that a mouse which has not MOVED is
+not a mouse being used (a locked pointer reports one every frame), and that the
+trigger's gate takes `touchActive` as a third term beside the pointer lock and
+the pad. **`public/` is the one place a URL is written by hand**, because a home
 screen keeps the `start_url` it installed with. The service worker is a
 **template, not a module**: never imported, never typechecked, substituted into
 `dist/sw.js` at `writeBundle`.
 
 → **[`docs/pwa.md`](docs/pwa.md)** — the version hash over names *and* contents,
-the `no-cache` requirement, cache-first and what it costs a returning player, and
-the phone-shaped details (fullscreen on the document element, `--ov-scale`, why
-`#loadout` is excluded from it).
+the `no-cache` requirement, cache-first and what it costs a returning player, the
+phone-shaped details (fullscreen on the document element, `--ov-scale`, why
+`#loadout` is excluded from it), and the controls a phone plays with: when they
+are drawn, the two ways a synthesized mouse event is disbelieved, and why the
+layer is `fixed` rather than `absolute`.
 
 ### Multiplayer: the server is the authority, and a slot is a slot
 
