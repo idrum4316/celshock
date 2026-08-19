@@ -114,6 +114,21 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   the tree.
 - The muzzle flash is unhittable at 2 fps (`gunfeel.flashTime` 0.05 s); force it
   with `player.flashRoot.setEnabled(true)`.
+- **A soldier is judged in a picture, and the rig can be photographed without
+  fighting a round for it.** `await import("/src/entities/SoldierModel.ts")`
+  inside `page.evaluate` hands back the real module — the same URL Vite already
+  resolved, so it is the same instance the game is using — and
+  `buildSoldier(g.scene, g.mats, team)` builds one of each side to park wherever
+  you like. An `onBeforeRenderObservable` that puts them a few metres along
+  `scene.activeCamera.getDirection(...)` keeps them in shot whatever the camera
+  does, `deploy` is the cheapest state to do it in (the map is up and nothing is
+  shooting), an injected `#hud{display:none}` takes the interface off the glass,
+  `animateSoldier` poses them and writing `rig.root.rotation.y` turns them for a
+  turntable. Two traps: there is no `BABYLON` global, so build a vector with
+  `new (cam.position.constructor)(x, y, z)`; and **the team read has to be
+  checked at RANGE, not only in the close-up** — park the same pair 25–30 m out,
+  where a body is ~40 px tall, which is the size at which a kit that only works
+  in a portrait stops telling you anything.
 - **Sight alignment is checkable without a picture**, and should be after anything
   touching the viewmodel or camera — for **every** optic, since each carries its
   own eye reference. Take

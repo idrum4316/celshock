@@ -163,8 +163,7 @@ export class DeathCam {
     if (this.builtFor === team && this.corpse) return;
     this.stop();
     this.corpse?.rig.root.dispose(false, true);
-    const spec = CONFIG.teams[team];
-    const rig = buildSoldier(this.scene, this.mats, spec.color, spec.eyeColor);
+    const rig = buildSoldier(this.scene, this.mats, team);
     rig.root.setEnabled(false);
     this.corpse = new Corpse(rig);
     this.builtFor = team;

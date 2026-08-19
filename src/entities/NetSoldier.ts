@@ -131,12 +131,10 @@ export class NetSoldier implements Combatant, RagdollSubject {
     mats: CelMaterialFactory,
     slot: number,
     team: Team,
-    color: string,
-    eyeColor: string,
   ) {
     this.slot = slot;
     this.team = team;
-    this.rig = buildSoldier(scene, mats, color, eyeColor);
+    this.rig = buildSoldier(scene, mats, team);
     this.setEnabled(false);
   }
 

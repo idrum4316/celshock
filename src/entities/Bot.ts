@@ -356,15 +356,9 @@ export class Bot implements Combatant {
   /** While positive, the bot may clip geometry to get out of a pinch. */
   private squeezeT = 0;
 
-  constructor(
-    scene: Scene,
-    mats: CelMaterialFactory,
-    team: Team,
-    teamColor: string,
-    eyeColor: string,
-  ) {
+  constructor(scene: Scene, mats: CelMaterialFactory, team: Team) {
     this.team = team;
-    this.rig = buildSoldier(scene, mats, teamColor, eyeColor);
+    this.rig = buildSoldier(scene, mats, team);
     this.setEnabled(false);
   }
 

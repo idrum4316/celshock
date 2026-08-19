@@ -1,16 +1,15 @@
 /**
- * SoldierModel.ts — The cheap bot rig: nine merged meshes (vs ~60 for the
- * player's GLB body) plus procedural animation (animateSoldier: walk cycle,
- * aim, upper-body twist, crouch, death collapse — posed TransformNode joints,
- * never clips), plus the bone table `RagdollSystem` builds a corpse's rigid
- * bodies from.
- * Invariants: merging per color is what keeps 16 bots affordable — the outline
- * pass draws every mesh twice. Do NOT "unify" this rig with the player's
- * detailed GLB body; the player keeps fidelity because it's the only character
- * always on screen. Emissive parts (visor) need metadata.noOutline. Rigs are
- * built once by BattleSystem's pool and re-posed on respawn, never disposed.
- * `rig.rest` is the hierarchy as built and is the ONLY thing a ragdoll may
- * restore from — see JointRest.
+ * SoldierModel.ts — The bot rig: ~40 boxes merged down to nineteen meshes, plus
+ * procedural animation (animateSoldier: walk cycle, aim, upper-body twist,
+ * crouch — posed TransformNode joints, never clips), plus the bone table
+ * `RagdollSystem` builds a corpse's rigid bodies from.
+ * Invariants: merging per colour is what keeps 16 bots affordable — the outline
+ * pass draws every mesh twice, so the cost of this rig is COLOURS PER SEGMENT
+ * and not boxes. A box in a colour a segment already carries is free; a fifth
+ * colour on the torso is 32 draw calls across a full roster. Emissive parts
+ * (visor) need metadata.noOutline. Rigs are built once by BattleSystem's pool
+ * and re-posed on respawn, never disposed. `rig.rest` is the hierarchy as built
+ * and is the ONLY thing a ragdoll may restore from — see JointRest.
  */
 import {
   Mesh,
@@ -21,32 +20,109 @@ import {
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
+import type { Team } from "./Combatant";
 
 /**
  * The bot soldier rig: a humanoid built to be cheap enough to draw sixteen
- * of at once.
+ * of at once, and detailed enough to be read as a soldier at the range one is
+ * usually shot at.
  *
- * `Player.buildBody` assembles ~60 individual meshes, and every one of them is
- * drawn twice because of the outline pass. That is fine for the one character
- * always at the centre of the screen, and ruinous for a full Conquest roster —
- * 16 bots at that fidelity is ~850 draw calls before the village is drawn at
- * all.
+ * Every limb is built from several boxes and then **merged into one mesh per
+ * colour**, the same trick `RifleModel.buildRifle` uses to collapse ~50 boxes
+ * into 3. The joints stay as `TransformNode`s above the merged meshes, so
+ * procedural animation is unaffected — only the leaf geometry is batched.
  *
- * So each limb here is built from several boxes and then **merged into one mesh
- * per colour**, the same trick `RifleModel.buildRifle` uses to collapse ~50
- * boxes into 3. A bot ends up at nine meshes: torso, sash, head, visor, two
- * arms, two legs, rifle. The joints stay as `TransformNode`s above the merged
- * meshes, so procedural animation is unaffected — only the leaf geometry is
- * batched.
+ * **What that merge means for anyone adding detail: geometry is nearly free and
+ * PAINT is not.** Forty-odd boxes come out as nineteen meshes — torso (shell,
+ * webbing, accent), head (shell, webbing, neck, accent, visor), two arms (suit,
+ * accent), two legs (thigh, shin, boot) and the rifle — because a segment pays
+ * per colour in it and not per box. The outline pass draws each of those twice
+ * and a Conquest roster is sixteen bodies, so one more colour on a segment is
+ * ~32 draw calls and one more box in a colour that segment already has is none.
+ * Pouches, a bedroll, a kneepad and an antenna are all in the second category
+ * on purpose; the helmet band is the only thing here that was worth paying a
+ * mesh for, and it is paid because the head is what peeks over cover.
  *
- * The player keeps its own detailed rig. Sharing one model between the two
- * would mean either downgrading the player or paying full price for bots.
+ * The player has no rig at all — the camera is inside the head, and there is no
+ * own-body to draw. The one thing that stands a player's body up is the death
+ * cam, and it builds one of these.
  */
 
-const ARMOR = "#3b443d";
-const SUIT = "#20262b";
-const TRIM = "#2b2b33";
+/**
+ * A weapon is a weapon whoever is holding it — the one colour on this model
+ * that is not the team's. It is `weaponKit`'s `BODY`, so a bot's rifle and the
+ * one in the player's hands are cut from the same steel.
+ */
 const GUN = "#2b2b33";
+
+/**
+ * What one side is DRAWN in: three cel colours of its own, the two the team
+ * palette owns, and which head it wears.
+ *
+ * Both sides used to be the same three greys with a single sash to tell them
+ * apart, and that sash is a stripe inset in the LEFT of the chest — so it is
+ * gone from either side of a body, and gone from every side of one far enough
+ * away for a 0.1 m stripe to fall under a pixel. What was left telling the
+ * sides apart in both cases was the visor's glow and nothing else. The three
+ * answers here are stacked deliberately, because each covers where the one
+ * before it fails:
+ *
+ * - **Hue.** A whole kit that is warm (the Wardens: khaki plate, brown canvas)
+ *   or cold (the Blight: slate plate, blue-black suit). It costs NOTHING — the
+ *   same boxes in different paint — and it is the only one of the three that
+ *   still works on a body three pixels wide, because it is the average of every
+ *   one of those pixels rather than a feature inside them.
+ * - **Accent.** `CONFIG.teams[].color` on the pauldrons, the bandolier and the
+ *   helmet band — the one saturated colour on the model, placed so that some of
+ *   it faces every direction: the shoulders from the sides and from above, the
+ *   bandolier from front and back, the band on the head that clears cover
+ *   first.
+ * - **Silhouette.** `face` gives each side its own head against the sky, which
+ *   is what is left when a body is backlit, in Greyfen's mist or in a night
+ *   village where the whole model is one value. It is the only read that
+ *   survives with no colour at all.
+ *
+ * **The accent and the visor are READ from `CONFIG.teams` rather than written
+ * here**, because the friend/foe colour is a rule the deploy map, the flag
+ * markers and the killfeed all share: a soldier painted in a fifth colour of
+ * its own would be the one body on the field wearing the wrong side's marker.
+ * The other three are ART and live here for the reason `RAGDOLL_BONES` does —
+ * they belong with the box lists they are painted onto.
+ */
+interface SoldierKit {
+  /** Plate carrier, helmet and thighs: the hard shell, and most of the body. */
+  armor: string;
+  /** Undersuit — sleeves, gloves, shins, neck. The darkest of the three. */
+  suit: string;
+  /** Webbing: belt, pouches, pack, bedroll, antenna, boots. */
+  webbing: string;
+  /** The friend/foe colour, from `CONFIG.teams`. */
+  accent: string;
+  /** The visor's emissive, from `CONFIG.teams`. */
+  visor: string;
+  /** Which head this side wears — see `faceBoxes`. */
+  face: "brim" | "respirator";
+}
+
+/** One kit per team, indexed by `Team`. */
+const KITS: readonly SoldierKit[] = [
+  {
+    armor: "#474436",
+    suit: "#272521",
+    webbing: "#3a3126",
+    accent: CONFIG.teams[0].color,
+    visor: CONFIG.teams[0].eyeColor,
+    face: "brim",
+  },
+  {
+    armor: "#3a4250",
+    suit: "#1d2129",
+    webbing: "#2b303a",
+    accent: CONFIG.teams[1].color,
+    visor: CONFIG.teams[1].eyeColor,
+    face: "respirator",
+  },
+];
 
 /** Which joint a ragdoll bone hangs off. Keys into `SoldierRig`. */
 export type BoneJoint =
@@ -141,8 +217,12 @@ const CROUCH_LEAN = 0.3;
  * from the extents it goes with, so the pair stays together — what `CONFIG`
  * owns is the sim (impulse, gravity, corpse life), not the skeleton.
  *
- * The extents are the union of each limb's boxes, not a fitted hull: a bot is
- * a stack of blocks and a box per limb is exactly the right fidelity for one.
+ * The extents are the union of each limb's STRUCTURAL boxes, not a fitted hull:
+ * a bot is a stack of blocks and a box per limb is exactly the right fidelity
+ * for one. What is left out is kit — a radio antenna, a helmet's peak, a
+ * respirator, a shroud, a glove — because a collider fatter than the body makes
+ * a corpse hover, which is the same tell `terrainSlab` documents from the other
+ * side, and none of those is what a body lands on.
  */
 export interface BoneSpec {
   joint: BoneJoint;
@@ -155,9 +235,8 @@ export interface BoneSpec {
 
 /**
  * The ragdoll's ten bones, derived from the segment box lists below. Extents
- * are the union of a joint's boxes, trimmed a little inside the silhouette: a
- * collider fatter than the mesh makes a corpse hover, which is the same tell
- * `terrainSlab` documents from the other side.
+ * are the union of a joint's boxes, trimmed inside the silhouette — see
+ * `BoneSpec` for what that leaves out and why.
  *
  * **The legs are three bones apiece — thigh, shin and boot — because a body can
  * die crouched.** They were one rigid 0.72 m segment from hip to sole until
@@ -181,11 +260,14 @@ export interface BoneSpec {
  * nothing, which reads as a bug rather than as a dropped weapon.
  */
 export const RAGDOLL_BONES: readonly BoneSpec[] = [
-  // Chest: the carrier plate, pack and sash, spanning y in [-0.03, 0.49].
+  // Chest: the carrier, the pack and the bandolier, y in [-0.03, 0.49]. The
+  // collar reaches 0.54 and the antenna off the pack 0.79; neither is body.
   { joint: "torso", size: [0.42, 0.52, 0.3], center: [0, 0.23, -0.03], mass: 34 },
-  // Helmet, neck and visor, y in [-0.025, 0.235].
+  // Helmet, neck and visor, y in [-0.025, 0.235]. Neither side's face — a
+  // Warden's peak, a Blight's respirator and shroud — is inside this box.
   { joint: "head", size: [0.26, 0.26, 0.27], center: [0, 0.105, 0], mass: 6 },
-  // Shoulder to hand in one piece, y in [-0.48, 0.07].
+  // Shoulder to hand in one piece, y in [-0.48, 0.07], the glove trimmed off
+  // the end of it.
   {
     joint: "shoulderL",
     size: [0.16, 0.55, 0.18],
@@ -423,13 +505,58 @@ export interface RagdollSubject {
   setEnabled(on: boolean): void;
 }
 
-/** Builds one soldier in the given team's colours. */
+/**
+ * One box in a segment: extents, its offset from the joint, its colour, and an
+ * optional cant in the xy plane.
+ *
+ * `rotZ` is `weaponKit.box`'s parameter under its own name and exists for one
+ * part — the bandolier, which has to cross the chest rather than hang down it.
+ * A rotation is safe where a scale is not: `MergeMeshes` bakes world matrices,
+ * and a rotation carries normals across unit-length while a non-uniform scale
+ * hands `renderOutline` a shell that is fat on the squashed axis.
+ */
+type SegmentBox = [
+  w: number,
+  h: number,
+  d: number,
+  x: number,
+  y: number,
+  z: number,
+  color: string,
+  rotZ?: number,
+];
+
+/**
+ * The boxes that give one side's head a shape of its own.
+ *
+ * Paint is the read that dies first — at dusk, in mist, or against a bright
+ * Coldharbour sky a body is a value and not a hue — and a helmet is the part of
+ * a soldier a player sees before any of the rest of them. So the sides differ
+ * in the OUTLINE of the head as well as in its colour: the Wardens wear a
+ * peaked helmet with a short neck guard, the Blight a respirator under a long
+ * shroud. Both are drawn in `armor`, so a side pays no mesh for having a face.
+ */
+function faceBoxes(kit: SoldierKit): SegmentBox[] {
+  return kit.face === "brim"
+    ? [
+        // A peak shading the visor, and the guard down the back of the neck.
+        [0.27, 0.035, 0.1, 0, 0.155, 0.15, kit.armor],
+        [0.25, 0.08, 0.07, 0, 0.06, -0.145, kit.armor],
+      ]
+    : [
+        // A filter over the mouth, under a shroud that hangs past the collar.
+        [0.16, 0.11, 0.09, 0, 0.05, 0.145, kit.armor],
+        [0.26, 0.15, 0.07, 0, 0.045, -0.15, kit.armor],
+      ];
+}
+
+/** Builds one soldier in the given team's kit. */
 export function buildSoldier(
   scene: Scene,
   mats: CelMaterialFactory,
-  teamColor: string,
-  eyeColor: string,
+  team: Team,
 ): SoldierRig {
+  const kit = KITS[team];
   const centerHeight = 0.9;
   const root = MeshBuilder.CreateCapsule(
     "bot",
@@ -451,17 +578,18 @@ export function buildSoldier(
   const segment = (
     name: string,
     parent: TransformNode,
-    boxes: [number, number, number, number, number, number, string][],
+    boxes: SegmentBox[],
   ): void => {
     const parts: Mesh[] = [];
     for (let i = 0; i < boxes.length; i++) {
-      const [w, h, d, x, y, z, color] = boxes[i];
+      const [w, h, d, x, y, z, color, rotZ = 0] = boxes[i];
       const m = MeshBuilder.CreateBox(
         `${name}${i}`,
         { width: w, height: h, depth: d },
         scene,
       );
       m.position.set(x, y, z);
+      m.rotation.z = rotZ;
       m.material = mats.get(color);
       parts.push(m);
     }
@@ -472,70 +600,106 @@ export function buildSoldier(
     }
   };
 
-  // --- torso: chest block, carrier plate, pack, and the team sash ---
+  // --- torso: plate carrier, webbing, pack, and the team's bandolier ---
   const torso = new TransformNode("bot-torso", scene);
   torso.parent = body;
   torso.position.y = 0.1;
   segment("bot-torso-m", torso, [
-    [0.44, 0.5, 0.26, 0, 0.24, 0, ARMOR],
-    [0.36, 0.22, 0.06, 0, 0.32, 0.15, ARMOR],
-    [0.42, 0.1, 0.28, 0, 0.02, 0, TRIM],
-    [0.28, 0.3, 0.13, 0, 0.26, -0.18, TRIM],
-    // The sash is the friend/foe read at range — the only saturated colour on
-    // the whole model, so it survives being three pixels wide through fog.
-    [0.1, 0.46, 0.3, -0.13, 0.26, 0, teamColor],
+    // The shell: chest, the plate over it, and a collar the neck stands out of.
+    [0.44, 0.5, 0.26, 0, 0.24, 0, kit.armor],
+    [0.36, 0.26, 0.07, 0, 0.31, 0.155, kit.armor],
+    [0.32, 0.07, 0.24, 0, 0.505, 0, kit.armor],
+    // Webbing: belt, two magazine pouches under the plate, a canteen on the
+    // right hip, the pack, its bedroll, and the radio antenna off that. All one
+    // mesh with the belt, so the whole load-out costs what the belt alone did.
+    [0.44, 0.1, 0.28, 0, 0.02, 0, kit.webbing],
+    [0.1, 0.13, 0.08, -0.12, 0.13, 0.15, kit.webbing],
+    [0.1, 0.13, 0.08, 0.12, 0.13, 0.15, kit.webbing],
+    [0.09, 0.11, 0.09, 0.21, 0.05, -0.06, kit.webbing],
+    [0.3, 0.3, 0.14, 0, 0.26, -0.19, kit.webbing],
+    [0.32, 0.08, 0.11, 0, 0.44, -0.185, kit.webbing],
+    // The antenna tops out 3 cm above the helmet: a soldier's tell against the
+    // sky, and short enough not to read as a mast.
+    [0.03, 0.34, 0.03, 0.13, 0.62, -0.19, kit.webbing],
+    // The bandolier crosses the chest and stands 1.5 cm proud of it front and
+    // back, so the body's share of the team colour is on both faces. The sash
+    // it replaces was a stripe down one side of the front, inset far enough in
+    // x that the chest occluded it the moment a body turned side-on.
+    [0.075, 0.58, 0.29, -0.02, 0.26, 0, kit.accent, 0.5],
   ]);
 
-  // --- head: helmet with a glowing visor slit ---
+  // --- head: helmet, the side's own face, and a glowing visor slit ---
   const head = new TransformNode("bot-head", scene);
   head.parent = torso;
   head.position.y = 0.52;
   segment("bot-head-m", head, [
-    [0.25, 0.23, 0.26, 0, 0.13, 0, ARMOR],
-    [0.27, 0.05, 0.28, 0, 0.21, 0, TRIM],
-    [0.13, 0.07, 0.13, 0, 0.01, 0, SUIT],
+    [0.25, 0.2, 0.26, 0, 0.125, 0, kit.armor],
+    ...faceBoxes(kit),
+    [0.27, 0.05, 0.28, 0, 0.215, 0, kit.webbing],
+    [0.26, 0.05, 0.2, 0, 0.045, -0.01, kit.webbing],
+    [0.13, 0.07, 0.13, 0, 0.01, 0, kit.suit],
+    // The helmet band, and the one mesh this rig pays for the team read. It
+    // wraps the sides and the back and its front face stops 1 cm inside the
+    // helmet's, so the helmet occludes it head-on and it can never cross the
+    // visor. Worth a draw call because the head is what clears a wall first
+    // and is often all there is to shoot at.
+    [0.265, 0.065, 0.25, 0, 0.1625, -0.005, kit.accent],
   ]);
   // The visor protrudes past the helmet so the outline shell can't swallow it.
   const visor = MeshBuilder.CreateBox(
     "bot-visor",
-    { width: 0.19, height: 0.05, depth: 0.05 },
+    { width: 0.16, height: 0.045, depth: 0.05 },
     scene,
   );
   visor.parent = head;
-  visor.position.set(0, 0.13, 0.145);
-  visor.material = mats.getEmissive(eyeColor);
+  visor.position.set(0, 0.12, 0.145);
+  visor.material = mats.getEmissive(kit.visor);
   visor.metadata = { noOutline: true };
   visor.isPickable = false;
   meshes.push(visor);
 
-  // --- arms ---
+  // --- arms: shoulder to fist in one welded segment, with a team pauldron ---
+  /**
+   * The pauldron is `accent` rather than `armor`, which is what makes the
+   * shoulders a team read from every angle for no draw call at all: the arm
+   * carried two colours before and carries two now. It is also the highest
+   * thing on the body after the helmet, so it is what shows over a wall and
+   * what a rooftop looks down on.
+   */
+  const armBoxes = (): SegmentBox[] => [
+    [0.17, 0.095, 0.17, 0, 0.025, 0, kit.accent],
+    [0.14, 0.26, 0.14, 0, -0.13, 0, kit.suit],
+    [0.145, 0.08, 0.145, 0, -0.265, 0.015, kit.suit],
+    [0.13, 0.24, 0.13, 0, -0.36, 0.05, kit.suit],
+    [0.125, 0.1, 0.14, 0, -0.475, 0.075, kit.suit],
+  ];
+
   const shoulderL = new TransformNode("bot-shL", scene);
   shoulderL.parent = torso;
   shoulderL.position.set(-0.28, 0.42, 0);
-  segment("bot-armL", shoulderL, [
-    [0.14, 0.26, 0.14, 0, -0.13, 0, SUIT],
-    [0.16, 0.1, 0.16, 0, 0.02, 0, ARMOR],
-    [0.13, 0.24, 0.13, 0, -0.36, 0.05, SUIT],
-  ]);
+  segment("bot-armL", shoulderL, armBoxes());
 
   const shoulderR = new TransformNode("bot-shR", scene);
   shoulderR.parent = torso;
   shoulderR.position.set(0.28, 0.42, 0);
-  segment("bot-armR", shoulderR, [
-    [0.14, 0.26, 0.14, 0, -0.13, 0, SUIT],
-    [0.16, 0.1, 0.16, 0, 0.02, 0, ARMOR],
-    [0.13, 0.24, 0.13, 0, -0.36, 0.05, SUIT],
-  ]);
+  segment("bot-armR", shoulderR, armBoxes());
 
   // --- rifle: one merged block held across the chest ---
   const gun = new TransformNode("bot-gun", scene);
   gun.parent = torso;
   gun.position.set(0.2, 0.2, 0.2);
+  // Eight boxes and still one mesh, because they are all one colour — the
+  // cheapest detail on the whole model, on the part of it that is held out in
+  // front of the body and read against the sky.
   segment("bot-rifle", gun, [
-    [0.08, 0.1, 0.7, 0, 0, 0, GUN],
-    [0.06, 0.14, 0.18, 0, -0.11, -0.02, GUN],
-    [0.07, 0.16, 0.16, 0, 0.03, -0.28, GUN],
-    [0.05, 0.05, 0.3, 0, 0.01, 0.4, GUN],
+    [0.08, 0.12, 0.42, 0, 0, 0.03, GUN],
+    [0.07, 0.11, 0.22, 0, -0.005, -0.24, GUN],
+    [0.06, 0.16, 0.12, 0, -0.13, 0, GUN],
+    [0.055, 0.12, 0.1, 0, -0.1, -0.11, GUN],
+    [0.065, 0.075, 0.26, 0, 0.005, 0.35, GUN],
+    [0.04, 0.04, 0.14, 0, 0.01, 0.49, GUN],
+    [0.045, 0.055, 0.16, 0, 0.09, 0.06, GUN],
+    [0.03, 0.05, 0.03, 0, 0.07, 0.44, GUN],
   ]);
   const muzzle = new TransformNode("bot-muzzle", scene);
   muzzle.parent = gun;
@@ -545,27 +709,37 @@ export function buildSoldier(
   /**
    * Thigh, shin and boot, hung off a hip, a knee and an ankle.
    *
-   * The three boxes are the three the leg has always been and they are drawn in
-   * the same places: the knee is the bottom of the thigh box and the ankle the
-   * bottom of the shin box, so every offset here is the old hip-frame one minus
-   * the joint it now hangs from, and a rig at rest is unchanged to the
-   * micrometre. It also costs nothing to draw — each box is its own colour, so
-   * `mergeByColor` produced three meshes for a leg before the joints existed and
-   * produces the same three now.
+   * The three SEGMENTS are the three the leg has always been and they are drawn
+   * in the same places: the knee is the bottom of the thigh box and the ankle
+   * the bottom of the shin box, so every offset here is the old hip-frame one
+   * minus the joint it now hangs from, and a rig at rest is unchanged to the
+   * micrometre. Each carries a second box — the plate above the knee, the
+   * kneepad, the toe of the boot — in the colour that segment was already
+   * drawn in, so `mergeByColor` still returns three meshes for a leg and the
+   * detail is silhouette that costs nothing.
    */
   const leg = (
     name: string,
     hip: TransformNode,
   ): [TransformNode, TransformNode] => {
-    segment(name, hip, [[0.17, 0.34, 0.18, 0, -0.17, 0, ARMOR]]);
+    segment(name, hip, [
+      [0.17, 0.34, 0.18, 0, -0.17, 0, kit.armor],
+      [0.175, 0.08, 0.19, 0, -0.31, 0.005, kit.armor],
+    ]);
     const knee = new TransformNode(`${name}-knee`, scene);
     knee.parent = hip;
     knee.position.y = -THIGH;
-    segment(name, knee, [[0.15, 0.32, 0.15, 0, -0.16, 0, SUIT]]);
+    segment(name, knee, [
+      [0.15, 0.32, 0.15, 0, -0.16, 0, kit.suit],
+      [0.16, 0.11, 0.17, 0, -0.055, 0.015, kit.suit],
+    ]);
     const ankle = new TransformNode(`${name}-ankle`, scene);
     ankle.parent = knee;
     ankle.position.y = -SHIN;
-    segment(name, ankle, [[0.17, 0.08, 0.24, 0, -0.02, 0.03, TRIM]]);
+    segment(name, ankle, [
+      [0.17, 0.09, 0.22, 0, -0.025, 0.02, kit.webbing],
+      [0.15, 0.055, 0.07, 0, -0.045, 0.125, kit.webbing],
+    ]);
     return [knee, ankle];
   };
 

@@ -975,6 +975,16 @@ compares, what may never cross the wire, and the list of what is not built yet.
   ONCE per shot into `Player.kickDrift` so the aim, the viewmodel's lean and the
   view punch are all the same round going the same way. `Game` wires the result
   to the camera and does no arithmetic on it.
+- **A team's colour is WORN, not merely drawn.** `CONFIG.teams[].color` paints
+  a soldier's pauldrons, bandolier and helmet band as well as the deploy map's
+  markers, so it has to stay saturated enough to read at three pixels through
+  fog — a dull tone is only dull on a screen, and is no marking at all on a
+  body. `SoldierModel`'s `KITS` owns everything else about how a side looks,
+  and the two sides are told apart three ways on purpose, each covering where
+  the last fails: **hue** (a warm kit against a cold one, which is the only one
+  that survives a body three pixels wide), **accent** (that team colour, placed
+  so some of it faces every direction), and **silhouette** (a helmet shape per
+  side, which is what is left when there is no colour at all).
 - **Every ROUND is hitscan** — player and bots share `CombatSystem.fire()`, which
   takes the shooter's target list (so friendly fire is excluded by construction rather
   than by a team check inside) and the shooter's own `range`, which bounds the wall pick

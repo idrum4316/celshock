@@ -214,15 +214,8 @@ export class BattleSystem {
     private combat: CombatSystem,
   ) {
     for (let team = 0; team < 2; team++) {
-      const spec = CONFIG.teams[team];
       for (let i = 0; i < CONFIG.bots.perTeam; i++) {
-        const bot = new Bot(
-          scene,
-          mats,
-          team as Team,
-          spec.color,
-          spec.eyeColor,
-        );
+        const bot = new Bot(scene, mats, team as Team);
         bot.squad = Math.floor(i / CONFIG.bots.squadSize);
         // A stream per bot, seeded off the pool slot: movement personality
         // differs between bots but is identical between runs.

@@ -387,8 +387,8 @@ without that subtract turns feedback into a punishment.
 - **The body is the BOT rig**, which is why the retired GLB player body could be
   deleted outright: it hands to the pool with nothing adapted and is already what
   `RAGDOLL_BONES` is measured against. It is built at `startRound`, not at the moment
-  of death — nine merged meshes and their GL buffers is not a cost to pay on the frame
-  the player is killed on.
+  of death — nineteen merged meshes and their GL buffers is not a cost to pay on
+  the frame the player is killed on.
 - **It is a stand-in, not the player.** `Player` has no rig and never grows one: it
   is a capsule, a viewmodel and an eye. The corpse is a separate object stood up at
   `Player.floorY` (the FEET — `Player.position` is the middle of the collider capsule)

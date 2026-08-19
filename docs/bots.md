@@ -145,8 +145,13 @@ permanent hitch:
 - **The rig pool is built once and never disposed.** Death hides a rig, respawn
   re-poses it. `new Bot()` allocates a dozen meshes and their GL buffers, and Conquest
   respawns continuously.
-- **Bot rigs are nine merged meshes** (`SoldierModel`). The outline pass draws
-  everything twice, so fidelity is ~2× draw calls per bot per mesh.
+- **Bot rigs are nineteen merged meshes** (`SoldierModel`) — forty-odd boxes
+  merged one mesh per colour per segment. The outline pass draws everything
+  twice, so fidelity is ~2× draw calls per bot per mesh, and **what a rig costs
+  is COLOURS PER SEGMENT rather than boxes**: a pouch, a kneepad or an antenna
+  in a colour that segment already carries is free, while a fifth colour on the
+  torso is 32 draw calls across a full roster. The one mesh this rig spends on
+  looks alone is the helmet band, because the head is what clears cover first.
 - **AI is staggered at `CONFIG.bots.thinkRate`**, round-robin across frames.
   `acquire()` gathers candidates by distance and ray-tests them in ascending order,
   returning the first visible one — testing all of them fires up to 30 picks per think.

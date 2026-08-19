@@ -147,8 +147,9 @@ src/
                         #   retreat/capture) + movement, aim, magazine, peek
     BotMemory.ts        # One bot's decaying picture of the fight
     BotSkill.ts         # skill scalar -> BotProfile; difficulty tiers
-    SoldierModel.ts     # Merged bot rig + procedural animation (walk, aim,
-                        #   twist, crouch), and the RagdollSubject interface
+    SoldierModel.ts     # Merged bot rig + the per-team kit it is painted and
+                        #   shaped in + procedural animation (walk, aim, twist,
+                        #   crouch), and the RagdollSubject interface
     NetSoldier.ts       # Somebody else, drawn from the wire: one rig, the
                         #   interpolation buffer behind it, the gait its boots
                         #   are heard off, no behaviour at all

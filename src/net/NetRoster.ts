@@ -95,15 +95,12 @@ export class NetRoster {
 
   constructor(scene: Scene, mats: CelMaterialFactory) {
     for (let team = 0; team < 2; team++) {
-      const spec = CONFIG.teams[team];
       for (let i = 0; i < CONFIG.bots.perTeam; i++) {
         const soldier = new NetSoldier(
           scene,
           mats,
           this.soldiers.length,
           team as Team,
-          spec.color,
-          spec.eyeColor,
         );
         // Wired once, at construction, because the pool is built once and never
         // disposed — the same lifetime `BattleSystem` gives a bot's own hooks.
