@@ -114,11 +114,43 @@ export const GreyfenEnvironment: EnvironmentSpec = {
     lampIntensity: 0,
   },
   /**
-   * No particles. Hollowmere's falling ash is what tells you the place is
-   * dead, and under a bright sky the same field reads as snow — a different
-   * claim about the weather, made by accident. Omitted rather than re-tinted:
-   * `Atmosphere.apply(undefined)` stops the emitter outright.
+   * Pollen and spores: the air of a wet forest, which has things living in it.
+   *
+   * **This was omitted, and the reasoning for omitting it was half right.**
+   * Hollowmere's ash FALLS because falling is what says the valley is dead, and
+   * a pale field falling under a bright sky reads as snow — a different claim
+   * about the weather, made by accident. All true, and none of it an argument
+   * for empty air. The fix is not to re-tint the ash but to invert what it is
+   * doing: this drifts UP, slowly, which is the thing the ash was avoiding
+   * saying.
+   *
+   * Non-emissive, because emissive is what an ember is and there is nothing
+   * burning here. That leaves it alpha-blended, which decides where it can be
+   * seen: a pale mote over the pale fog band is invisible and the same mote
+   * over the shaded floor, the trunks and the canopy reads clearly. That is not
+   * a compromise — it is what motes actually do. You see them against shadow.
+   *
+   * `size` is the lever and `count` is not, per Hollowmere's note; 0.11 is a
+   * touch under its ash because a spore is finer than a fleck of ash, and the
+   * count buys the density back. 4,800 is an emit rate of 1,600 and a buffer of
+   * 22,400 slots, comfortably inside the 32,000 ceiling.
+   *
+   * **The drift is the grass's own bearing, and it only started mattering when
+   * the layout grew some.** `ParticleSpec.drift` exists so the dust and the
+   * grass agree about which way the air is going, and it has to be matched by
+   * hand — `CONFIG.grass.windDir` is [0.78, 0.63] and this is that direction at
+   * about 0.22 m/s. Deliberately far under the ±0.35 lateral jitter the field
+   * has anyway, so the air still reads as HANGING, the way still, wet air under
+   * a canopy does, while agreeing with the blades about the bearing.
    */
+  particles: {
+    color: "#d9d29a",
+    emissive: false,
+    count: 4800,
+    size: 0.11,
+    riseSpeed: 0.12,
+    drift: [0.17, 0.14],
+  },
   /**
    * An overcast dawn: no disc, no stars, and a low sun's warmth smeared
    * across a white lid of cloud. `discRadius: 0` is what suppresses the sun
