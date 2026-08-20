@@ -243,12 +243,13 @@ precision highp float;
 
 attribute vec3 position;
 attribute vec3 normal;
-// Baked world shading, written by world/ambientOcclusion.ts: alpha is ambient
-// occlusion and green marks a vertex as WORLD geometry. Declared
-// unconditionally and on purpose — a mesh with no colour buffer leaves this
-// attrib array disabled, which reads back as the GL generic default
-// (0, 0, 0, 1): occlusion 1 (none) and mask 0 (not world). Every rig, the
-// viewmodel and every effect mesh is therefore correct without carrying one.
+// Baked world shading, written by world/vertexShading.ts: alpha is ambient
+// occlusion, green marks a vertex as WORLD geometry and RED is how much of the
+// wind's travel this vertex is entitled to. Declared unconditionally and on
+// purpose — a mesh with no colour buffer leaves this attrib array disabled,
+// which reads back as the GL generic default (0, 0, 0, 1): occlusion 1 (none),
+// mask 0 (not world) and sway 0 (planted). Every rig, the viewmodel and every
+// effect mesh is therefore correct without carrying one.
 attribute vec4 color;
 #ifdef CEL_TEXTURED
 attribute vec2 uv;
@@ -261,6 +262,15 @@ attribute vec2 uv;
 
 uniform mat4 world;
 uniform mat4 viewProjection;
+
+// The wind, shared with the grass field (CONFIG.wind). windDir is the bearing,
+// normalised; windParams is (travel in metres at full weight, speed, gust
+// wavenumber). windTime is the same clock the grass runs on, pushed by
+// CelMaterialFactory.updateWind — it advances with the world rather than with
+// the frame, so a pause holds the canopy exactly as it holds the field.
+uniform float windTime;
+uniform vec2 windDir;
+uniform vec3 windParams;
 
 varying vec3 vNormalW;
 varying vec3 vPosW;
@@ -275,6 +285,31 @@ void main() {
   // through the bone matrices.
   #include<bonesVertex>
   vec4 worldPos = finalWorld * vec4(position, 1.0);
+
+  // --- foliage sway, in world space, weighted by the baked red channel ---
+  //
+  // Branched rather than multiplied out, and the branch costs nothing because
+  // it is coherent: the sway mark is part of the merge KEY, so a draw is either
+  // all foliage or all wall and no warp ever has both answers in it. Everything
+  // that is not world geometry — every rig, the viewmodel, every grenade and
+  // every effect mesh — carries no colour buffer at all and takes the disabled
+  // attrib's 0, so it pays one compare and no transcendentals.
+  //
+  // The gust is the grass shader's shape at the canopy's scale: two crossing
+  // sines, the second at 2.33x so the field never repeats on a clean beat,
+  // phased along the wind's own bearing so a gust TRAVELS rather than every
+  // crown leaning at once.
+  if (color.r > 0.0) {
+    // Subtracted, not added: a gust has to travel WITH the wind, and a wave
+    // whose phase runs the other way rolls up the valley against the lean of
+    // everything in it. The grass shader adds instead, and gets away with it
+    // because its phase is not along the bearing at all — here it is.
+    float phase = dot(worldPos.xz, windDir) * windParams.z;
+    float gust = sin(windTime * windParams.y - phase)
+      + 0.5 * sin(windTime * windParams.y * 2.33 - phase * 1.71);
+    worldPos.xz += windDir * (gust * windParams.x * color.r);
+  }
+
   vPosW = worldPos.xyz;
   vNormalW = normalize(mat3(finalWorld) * normal);
   vBaked = color;
@@ -294,8 +329,9 @@ precision highp float;
 varying vec3 vNormalW;
 varying vec3 vPosW;
 // Baked per-vertex world shading. w is ambient occlusion, 1 = unoccluded;
-// y is 1 on map geometry and 0 on everything else. Both defaults come from
-// the disabled attrib rather than from a uniform — see the vertex stage.
+// y is 1 on map geometry and 0 on everything else; x is the wind weight the
+// vertex stage has already spent. All three defaults come from the disabled
+// attrib rather than from a uniform — see the vertex stage.
 varying vec4 vBaked;
 
 uniform vec3 lightDir;
@@ -959,6 +995,9 @@ export class CelMaterialFactory {
     "specColor",
     "specShininess",
     "transColor",
+    "windTime",
+    "windDir",
+    "windParams",
   ];
   /**
    * Every cel material's vertex attributes.
@@ -1062,6 +1101,13 @@ export class CelMaterialFactory {
    */
   private readonly camPos = Vector3.Zero();
 
+  /**
+   * The wind's clock, in seconds of WORLD time — see `updateWind` for why that
+   * is not the same as seconds of wall clock. Shared by every material in the
+   * cache, so a gust crossing the valley crosses every mesh in it at once.
+   */
+  private windTime = 0;
+
   // Shadow-map state, pushed onto every cel material as it is created.
   private shadowMap: BaseTexture | null = null;
   private shadowMatrix = Matrix.Identity();
@@ -1112,6 +1158,7 @@ export class CelMaterialFactory {
       );
       mat.setColor3("baseColor", Color3.FromHexString(hex));
       this.applyCamera(mat);
+      this.applyWind(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -1145,6 +1192,7 @@ export class CelMaterialFactory {
       );
       mat.setColor3("baseColor", Color3.FromHexString(hex));
       this.applyCamera(mat);
+      this.applyWind(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -1185,6 +1233,7 @@ export class CelMaterialFactory {
       );
       mat.setColor3("baseColor", Color3.FromHexString(hex));
       this.applyCamera(mat);
+      this.applyWind(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -1289,6 +1338,7 @@ export class CelMaterialFactory {
         mat.setColor3("glassBackdrop", Color3.FromHexString(backed));
       }
       this.applyCamera(mat);
+      this.applyWind(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -1326,6 +1376,7 @@ export class CelMaterialFactory {
       );
       mat.setTexture("baseColorTex", tex);
       this.applyCamera(mat);
+      this.applyWind(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -1404,6 +1455,7 @@ export class CelMaterialFactory {
         mat.setFloat("bumpScale", opts.bumpScale ?? 0.1);
       }
       this.applyCamera(mat);
+      this.applyWind(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
       this.applyShadow(mat);
@@ -1565,6 +1617,25 @@ export class CelMaterialFactory {
    * already do. Skipping a walk is only sound while the cache cannot hold a
    * material the walk has never visited.
    */
+  /**
+   * Advances the wind and pushes the new clock onto every cel material.
+   *
+   * **Called from the same place in the frame the grass field's clock is**, and
+   * that is the whole of why it is a method rather than a uniform pushed from
+   * `tick` beside `updateCamera`. The shader's EYE is owed by the states that
+   * simulate nothing — a menu, a building card, a kit turntable all fog against
+   * it — but a CLOCK is not: a pause holds the world, the grass stops, and a
+   * canopy still leaning over a frozen field would be the one thing in the
+   * valley the pause did not reach.
+   *
+   * Unguarded, unlike `updateCamera`: `dt` is never zero on a frame that gets
+   * here, so a comparison would only ever cost.
+   */
+  updateWind(dt: number): void {
+    this.windTime += dt;
+    this.cache.forEach((mat) => mat.setFloat("windTime", this.windTime));
+  }
+
   updateCamera(camPos: Vector3): void {
     if (!camPos.equals(this.camPos)) {
       this.camPos.copyFrom(camPos);
@@ -1753,6 +1824,31 @@ export class CelMaterialFactory {
     mat.setVector3("camPos", this.camPos);
   }
 
+  /**
+   * The wind's shape and its clock, pushed onto a material as it is created.
+   *
+   * The shape never changes — it is `CONFIG.wind`, read once — so only the
+   * clock is walked per frame (`updateWind`). Seeding on create matters for
+   * the reason `applyCamera` does: `installMap` mints materials mid-round, and
+   * a canopy built from a material holding `windTime` 0 would start its gust
+   * from wherever the rest of the valley is not.
+   */
+  private applyWind(mat: ShaderMaterial): void {
+    const w = CONFIG.wind;
+    mat.setFloat("windTime", this.windTime);
+    mat.setVector2("windDir", windBearing);
+    mat.setVector3(
+      "windParams",
+      // z is the gust's wavenumber — a wavelength in metres is what the config
+      // states, because that is the number anyone tuning it can pace out.
+      new Vector3(
+        w.foliage.travel,
+        w.foliage.speed,
+        (Math.PI * 2) / w.foliage.gust,
+      ),
+    );
+  }
+
   private applyPointLights(mat: ShaderMaterial): void {
     // Float32Array is accepted by setArray3/setFloats (typed as number[]).
     mat.setArray3("pointPos", this.pointPos as unknown as number[]);
@@ -1885,6 +1981,20 @@ export class CelMaterialFactory {
  *   bloom is a soft blob with no edge to misplace.
  */
 const fogState = { color: new Color3(0.05, 0.06, 0.08), start: 24, end: 78 };
+
+/**
+ * The wind's bearing, normalised once.
+ *
+ * A module constant rather than a field for the reason `CONFIG.wind` is one
+ * table rather than a per-map override: the air over a valley is not something
+ * a map states, and nothing in the game changes it at runtime. `GrassShader`
+ * normalises the same pair for its own material — two readers of one bearing,
+ * which is exactly what moving it out of `CONFIG.grass` bought.
+ */
+const windBearing = new Vector2(
+  CONFIG.wind.dir[0],
+  CONFIG.wind.dir[1],
+).normalize();
 
 /**
  * How much of the fog colour a surface `dist` from the eye is buried under, on

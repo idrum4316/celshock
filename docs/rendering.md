@@ -135,7 +135,7 @@ Three rules about that invalidation, all learned the hard way:
   cut split it across the caller and got that list wrong.
 
 **A fifth term modifies two of the four, and it arrives as a VERTEX ATTRIBUTE
-rather than a uniform.** `world/ambientOcclusion.ts` bakes per-vertex ambient
+rather than a uniform.** `world/vertexShading.ts` bakes per-vertex ambient
 occlusion once per map build, out of the collider boxes `MapBuilder.collider()
 already records plus the terrain under them, and the cel shader multiplies it
 into the flat ambient and the sky fill — **not** the key light, which the shadow
@@ -183,6 +183,101 @@ slow value-noise drift over world position that stops a 48 m merged block
 arriving as one flat tone. It is keyed on position rather than on anything
 per-object because that survives the merge for free — and it is gated because a
 world-keyed term on a *moving* mesh makes it shimmer as it walks.
+
+## The wind, and the one thing in the world that moves
+
+The world is merged and frozen because it is static, and that is exactly what
+made a valley of fourteen hundred trees read as a photograph of a jungle. The
+**red channel** is what moves it: how much of `CONFIG.wind.foliage.travel` a
+vertex is entitled to, spent in the cel shader's vertex stage as a lateral
+displacement along a travelling gust. `world/sway.ts` owns what the number
+means, `world/vertexShading.ts` writes it, and the neutral value is the disabled
+attrib's 0 — so every rig, the viewmodel, every grenade and every effect mesh
+stands perfectly still in a gale without carrying a byte. That is the alpha
+channel's trick a third time, and it is why the shader needs no define, no
+branch it would not have taken anyway and no fifth cache variant.
+
+**One wind, two layers, and the direction is what makes them one.**
+`CONFIG.wind` used to be three fields inside `CONFIG.grass` with a single
+reader, which was fine while grass was the only thing in the valley that moved
+— and is the whole problem the moment anything else does, because a field
+leaning one way under a canopy leaning another is two animations rather than a
+breeze. So the bearing is shared and the amplitudes and speeds are not: mass
+sets frequency, and a fern answers a gust in a second where a crown of leaf
+takes three.
+
+**The weight is a ramp in height above the GROUND, and it is that rather than a
+per-part anchor because nothing downstream of the merge knows where the bough
+was.** By the time a vertex attribute can be written, `mergeByMaterial` and
+`BlockMerge` have collapsed a tree into a colour and forty-eight metres of
+forest into one mesh — there is no prop, no part and no local frame left, only a
+world position and the terrain under it. A positional ramp is the one function
+of that which is *continuous* across everything marked, so a frond and the leaf
+plate beside it — in different merge groups, weighted from where they are rather
+than from what they belong to — agree at the join and there is no seam. It is
+the same argument the occlusion estimate makes, on the same buffer.
+
+**Where marked meets unmarked there IS a step, and that is what makes the choice
+of what to mark a geometric argument rather than a taste one.** A marked mesh
+moves and its unmarked neighbour does not, so a mark is only safe where the join
+is buried or the ramp is near its foot: a canopy plate is centred on the trunk
+axis and metres across, so 0.29 m of drift is spent inside its own overlap of
+the bole, and a fern blade leaves its crown at 0.42 m where the ramp has given
+it four centimetres, against a crown 0.3 m across. Marking something whose join
+is neither is what tears.
+
+**What sways is leaf, and what does not is the column holding it up.** A canopy
+tree's plates, fronds and drooping tips lean; its trunk and buttresses do not,
+and the crown does not come off the bole because a plate is centred ON the axis
+and metres across, so a third of a metre of drift is spent inside its own
+overlap. The trunk is left out because a long thing lying ALONG the ramp would
+*bend*, and a bending column is the one shape a vertex ramp cannot draw
+honestly. Fern blades and their tips are the understory layer, at half the
+travel — that is the layer the player walks through, and the one place a sway
+big enough to notice is also big enough to read as the world sliding; its two
+numbers are set against the grass beside it rather than in the abstract, so a
+fern tip moves about 0.09 m where a blade of grass moves 0.16.
+
+**The liana veil is the case that makes the ramp look designed rather than
+lucky**, and it is on the canopy layer despite hanging at eye level. A strand
+does not touch the collar on the trunk — it hangs in the air out under the
+frond whose azimuth `buildJungleTree` measured it against — so the top of a
+strand and the blade above it are at nearly the same height, get nearly the same
+weight, and travel together with no join to shear. Further down the ramp gives
+less, so the hem TRAILS the branch instead of swinging rigidly with it, which is
+the one thing a hand-authored version would have had to fake. The collar itself
+is left out, because it is a thickening on the bole and the bole does not move.
+
+Two consequences are worth stating plainly, because both look like bugs:
+
+- **A swaying merge group is drawn without ink, and that is mechanical rather
+  than a preference.** Babylon draws an outline as an inverted hull through its
+  own shader, whose uniform list is hardcoded (`OutlineRenderer` builds the
+  effect with a fixed `uniformsNames`) and whose attributes are position and
+  normal — there is nowhere to put a clock and no colour attribute to weight a
+  displacement by. So an outlined leaf leans out from under a shell left
+  standing at the rest pose, and a third of a metre against a five centimetre
+  line is a dark ghost of the still canopy hanging behind the moving one.
+  `mergeByMaterial` sets `noOutline` with the mark so the two can never be
+  separated. It is the glass argument with a hardcoded uniform list in place of
+  a stencil buffer, and it loses as little: what draws a crown is the sky
+  between its leaves and the hard band across each plate. Compared frame for
+  frame on Greyfen's canopy from below, the two are nearly indistinguishable.
+- **The shadow it casts is the REST pose's, always.** The depth map is rendered
+  from Babylon's own shadow shader, which never sees the displacement, so the
+  dapple does not move — and, more importantly, does not *stutter*: the map
+  re-renders whenever the snapped focus moves, and a shadow that followed the
+  wind would jump to a new phase every time the player walked a texel. Static is
+  the better of the two answers here, and at Greyfen's 28-degree sun a frond
+  throws its shadow nineteen metres, where nobody is correlating one leaf with
+  one patch of light.
+
+The clock is `CelMaterialFactory.updateWind`, advanced from
+`updateCameraAndLighting` beside the grass field's rather than from `Game.tick`
+beside the shader's eye. The eye is owed by the states that simulate nothing; a
+clock is owed by none of them, and a canopy still leaning over a frozen field
+under the pause card would be the one thing in the valley the pause did not
+reach.
 
 **Four light terms, not three.** Beside the key light, the flat ambient and the
 point lights there is a *hemispheric* term, `skyLightColor`, applied by `n.y` and

@@ -32,7 +32,9 @@ import "@babylonjs/core/Shaders/ShadersInclude/instancesVertex";
  * thin-instance transform:
  *
  * - **wind**: two crossing sine waves phased on world position, so gusts
- *   travel across a field instead of every tuft bobbing in sync;
+ *   travel across a field instead of every tuft bobbing in sync. The bearing
+ *   and the amplitude are `CONFIG.wind`'s, shared with the world's foliage —
+ *   see `CelShader`'s sway, which is the same idea one layer up;
  * - **pushers**: up to `CONFIG.grass.maxPushers` character positions bend
  *   blades radially away and flatten them, with a smoothstep falloff — a
  *   sprinting body parts the grass ahead of its feet;
@@ -267,11 +269,15 @@ export function createGrassMaterial(scene: Scene, name: string): ShaderMaterial 
   );
   mat.backFaceCulling = false;
   const g = CONFIG.grass;
+  // The bearing is the valley's, not the field's — `CONFIG.wind` is shared with
+  // the foliage the same air moves, and a field leaning one way under a canopy
+  // leaning another is two animations rather than a breeze.
+  const w = CONFIG.wind;
+  mat.setVector2("windDir", new Vector2(w.dir[0], w.dir[1]).normalize());
   mat.setVector2(
-    "windDir",
-    new Vector2(g.windDir[0], g.windDir[1]).normalize(),
+    "windParams",
+    new Vector2(w.grass.travel, w.grass.speed),
   );
-  mat.setVector2("windParams", new Vector2(g.windStrength, g.windSpeed));
   mat.setVector2("pushParams", new Vector2(g.pushRadius, g.pushStrength));
   mat.setFloat("time", 0);
   mat.setVector3("camPos", Vector3.Zero());

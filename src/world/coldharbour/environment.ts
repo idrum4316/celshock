@@ -307,9 +307,9 @@ export const ColdharbourEnvironment: EnvironmentSpec = {
     riseSpeed: 0.05,
     /**
      * Drifting with the wind rather than milling, and set to match
-     * `CONFIG.grass.windDir` — the grass on the square and the dust over it
-     * have to agree about which way the air is moving. Change one and change
-     * the other.
+     * `CONFIG.wind.dir` — the grass on the square, the pines planted in it and
+     * the dust over both have to agree about which way the air is moving.
+     * Change the bearing there and change this.
      */
     drift: [0.78, 0.63],
   },

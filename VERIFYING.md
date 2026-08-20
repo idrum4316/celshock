@@ -516,6 +516,25 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   *different* `ParticleSpec` replaces the whole system. **Two maps have one now**
   — Hollowmere's falling ash and Coldharbour's rising dust — so a script that
   froze the field on one map and not the other no longer covers both.
+- **The wind is an A/B, not a wait.** Foliage sway is a per-vertex displacement
+  in the cel shader driven by one clock, and that clock advances in
+  `updateCameraAndLighting` — so at ~2 fps with `dt` clamped it creeps at a
+  quarter of wall clock and a canopy photographed two seconds apart has barely
+  moved. Drive it: `g.mats.updateWind(2.6)` jumps the clock by two and a half
+  seconds of world time and pushes it onto every cel material, so a shot either
+  side of that call is a clean before/after of half a gust. Freeze everything
+  else first (`g.updateWorld`, `g.updateCameraAndLighting` and
+  `g.atmosphere.apply(undefined)`), or the motes and the bots move too and the
+  diff proves nothing. To check a mesh is actually PLUMBED rather than merely
+  drawn, read the buffer instead of the pixels:
+  `m.getVerticesData("color")` on a mesh with `m.metadata.sway` should hold a
+  non-zero red on the vertices high off the ground and near zero at its foot.
+- **A source edit reloads the page and destroys the handle mid-run.** The dev
+  server hot-reloads on any file in the module graph, and the symptom is
+  `page.evaluate: Execution context was destroyed` or a bare `undefined` where
+  `window.__celshock` was — several minutes into a run that had already got into
+  a round. Finish editing before starting a long script, or drive `npm run
+  preview` instead.
 - **`godRays.isLive` is set by the PREVIOUS frame's `update`, so reading it in
   the same `evaluate()` that moves the camera always answers about where the
   camera WAS.** It reads `false` from a vantage plainly pointed at the sun, which

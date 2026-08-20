@@ -393,12 +393,27 @@ wall it hangs in front of.
 
 **The world carries a VERTEX COLOUR buffer and its neutral values are the GL
 defaults, not ours** — baked ambient occlusion in the **alpha**, a world marker
-in the **green**, because a mesh with no such buffer reads the disabled attrib's
-`(0, 0, 0, 1)`: alpha 1 (unoccluded) and green 0 (not world). That is what lets
-the rigs, the viewmodel and every effect mesh stay correct while carrying
-nothing. The bake runs **after every merge**, and cannot be moved earlier:
-`VertexData.merge` throws outright when one mesh in a group has `colors` and
-another does not.
+in the **green**, the wind's sway weight in the **red**, because a mesh with no
+such buffer reads the disabled attrib's `(0, 0, 0, 1)`: alpha 1 (unoccluded),
+green 0 (not world) and red 0 (planted). That is what lets the rigs, the
+viewmodel and every effect mesh stay correct while carrying nothing. The bake
+(`world/vertexShading.ts`) runs **after every merge**, and cannot be moved
+earlier: `VertexData.merge` throws outright when one mesh in a group has
+`colors` and another does not.
+
+**There is ONE wind, and everything that leans in it leans the same way.**
+`CONFIG.wind` carries a single bearing plus a per-layer travel and speed, and it
+is a module of its own because the three numbers used to sit in `CONFIG.grass`
+with a single reader — fine while grass was the only thing in the valley that
+moved, and the whole problem the moment anything else did. The grass field takes
+it in `GrassShader`; the world's foliage takes it in the cel shader's vertex
+stage, weighted by the red channel above and clocked by
+`CelMaterialFactory.updateWind`, which is advanced beside the field's rather
+than beside the shader's eye — a pause holds the world, so it must hold the
+canopy too. **Anything a collider stands in for may never sway** (the box does
+not move with it), and **a swaying merge group is drawn without ink**, because
+Babylon's outline hull has neither a clock nor a weight and would hang a still
+ghost behind a moving leaf. `world/sway.ts` is where the mark and the ramp live.
 
 **The world is OPAQUE with exactly one exception, and it is glazing you can see
 THROUGH.** `getGlass` (`#define CEL_GLASS`) writes a Fresnel alpha per pixel: a
@@ -440,7 +455,8 @@ hangs on already casts the shadow and carries the ink).
 
 → **[`docs/rendering.md`](docs/rendering.md)** — the four light terms and the
 baked occlusion that modifies two of them (and the three further rules that
-buffer carries), the three light flavours and the muzzle-flash budget, the
+buffer carries), the wind and the two rules it is bounded by, the three light
+flavours and the muzzle-flash budget, the
 per-pixel/per-mesh fog split and `OutlineFog`'s three cache-invalidation rules,
 the shadow window, its four-tap lookup and the registry that lets grass and water
 share it, the glazing's two layers and why its Fresnel is the one unbanded term,

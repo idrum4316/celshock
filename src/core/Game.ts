@@ -3975,8 +3975,8 @@ export class Game {
    * position, so anything that moves the camera must run before them:
    * aim assist -> camera update -> shadows (window, blobs, outline thinning)
    * -> carried lights -> lighting.update() -> water.update() -> grass.update()
-   * -> sfx.setListener(), and then `tick` pushes the shader's eye for every
-   * state on the way into the render.
+   * -> mats.updateWind() -> sfx.setListener(), and then `tick` pushes the
+   * shader's eye for every state on the way into the render.
    * Nothing after this method may move the camera.
    */
   private updateCameraAndLighting(dt: number): void {
@@ -4091,6 +4091,12 @@ export class Game {
       this.lighting.activeLights,
       pushers,
     );
+    // The world's foliage leans in the same air the field does, so its clock is
+    // advanced HERE rather than in `tick` beside the shader's eye. The eye is
+    // owed by every state, including the ones that simulate nothing; a clock is
+    // owed by none of them, and a canopy still moving over a frozen field under
+    // the pause card would be the one thing the pause did not reach.
+    this.mats.updateWind(dt);
     // Same rule as the lights and the fog: this has to follow the camera.
     this.sfx.setListener(
       this.cameraSys.camera.position,

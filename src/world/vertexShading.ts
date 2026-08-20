@@ -1,12 +1,22 @@
 /**
- * ambientOcclusion.ts — Per-vertex ambient occlusion, baked once per map build
- * from the collider boxes and the terrain.
- * Owns: the occlusion estimate and the vertex-colour write. Owns no geometry
- * and no materials; `MapBuilder` calls it and `CelShader` reads what it wrote.
- * Invariants: AO lives in the colour buffer's ALPHA and 1.0 means UNOCCLUDED
- * (see below — the whole design rests on it), the walk runs AFTER every merge,
- * only CEL-SHADED meshes are written to (see the guard in `walk`),
- * and `hasVertexAlpha` must stay false. Contract: `docs/rendering.md`.
+ * vertexShading.ts — The world's baked vertex-colour buffer, written once per
+ * map build from the collider boxes and the terrain: ambient occlusion in the
+ * ALPHA, the world mark in the GREEN, the wind's sway weight in the RED.
+ * Owns: the occlusion estimate, the sway ramp, and the vertex-colour write.
+ * Owns no geometry and no materials; `MapBuilder` calls it, `world/sway.ts`
+ * says what a mesh's weight means and `CelShader` reads what it wrote.
+ * Invariants: AO lives in the ALPHA and 1.0 means UNOCCLUDED (see below — the
+ * whole design rests on it), every channel's NEUTRAL value is the GL default
+ * of the disabled attrib, the walk runs AFTER every merge, only CEL-SHADED
+ * meshes are written to (see the guard in `walk`), and `hasVertexAlpha` must
+ * stay false. Contract: `docs/rendering.md`.
+ *
+ * **Three channels, one walk, and one reason they share a file.** Each is a
+ * per-vertex quantity that can only be known once the merges are done and that
+ * has to be derived from where a vertex ENDED UP rather than from what it was
+ * built as — see the merge argument below, which is the same argument for all
+ * three. Splitting them would mean walking a few hundred thousand vertices
+ * twice and re-uploading the same buffer to say two things about it.
  *
  * WHY. The renderer had four light terms and no occlusion of any kind, and no
  * depth or geometry buffer to do it screen-space with. Nothing was grounded: a
@@ -32,6 +42,14 @@
  * and 0 (the same generic default) everywhere else, so a shader term that must
  * apply to the WORLD and not to a walking bot has a mask for free. `CelShader`'s
  * albedo variation is the one that uses it.
+ *
+ * The RED channel is the third, and it is the same trick a third time: it is
+ * how much of the wind's travel a vertex is entitled to, and its neutral value
+ * — 0, meaning planted — is the generic default again. So every rig, the
+ * viewmodel, every grenade and every effect mesh stands perfectly still in a
+ * gale without carrying a byte, and the shader needs no define and no branch it
+ * would not have taken anyway. `world/sway.ts` owns what the number MEANS; this
+ * file owns where it lands.
  *
  * AFTER THE MERGE, NEVER BEFORE. `VertexData.merge` throws outright —
  * "Cannot merge vertex data that do not have the same set of attributes" — the
@@ -86,6 +104,7 @@ import {
 } from "./boxGeometry";
 import { type BoxIndex, boxesNear, buildBoxIndex } from "./boxIndex";
 import type { WorldBox } from "./MapBuilder";
+import { swayLayerOf, swayWeight } from "./sway";
 import type { TerrainField } from "./TerrainField";
 
 /** Scratch for the box-frame transform; the bake runs it per vertex per box. */
@@ -227,7 +246,7 @@ function occlusionAt(
  * Returns the number of vertices shaded, which is the only number worth having
  * about the cost — everything here is linear in it.
  */
-export function bakeVertexAo(
+export function bakeVertexShading(
   meshes: readonly Mesh[],
   boxes: readonly WorldBox[],
   terrain: TerrainField,
@@ -275,6 +294,11 @@ export function bakeVertexAo(
     const m = world.m;
     const count = positions.length / 3;
     const colors = new Float32Array(count * 4);
+    // Read once per mesh, never per vertex: `mergeByMaterial` keys on the mark,
+    // so a merged mesh is unanimously foliage or unanimously not — which is
+    // also what lets the shader's branch be coherent. Null is every mesh in the
+    // map that is not leaf, and it costs the loop one compare.
+    const layer = swayLayerOf(mesh);
 
     for (let i = 0; i < count; i++) {
       const x = positions[i * 3];
@@ -297,7 +321,13 @@ export function bakeVertexAo(
 
       const occ = occlusionAt(px, py, pz, nx, ny, nz, index, terrain, cfg.radius);
       const ao = 1 - Math.min(1, occ) * cfg.strength;
-      colors[i * 4] = 0;
+      // Height above the GROUND under this vertex, not above sea level: the
+      // valley falls two metres under a stand of trees and dips to -1.34 in a
+      // riverbed, and a ramp measured from y = 0 would plant the ferns on one
+      // bank and let the ones on the other slide.
+      colors[i * 4] = layer
+        ? swayWeight(py - terrain.heightAt(px, pz), layer)
+        : 0;
       colors[i * 4 + 1] = 1;
       colors[i * 4 + 2] = 0;
       colors[i * 4 + 3] = ao;

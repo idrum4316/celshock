@@ -114,7 +114,7 @@ export interface BoxSpec {
    * things that must NOT see a pane can name it.
    *
    * Three of them: `CoverMap` (bots would take cover behind a window),
-   * `ambientOcclusion` (glass casts no ambient shadow), and the collision bake,
+   * `vertexShading` (glass casts no ambient shadow), and the collision bake,
    * which carries the flag to the server so both sides can break the same pane.
    *
    * A pane is the ONE mutable thing in the world layer, and monotonically so —

@@ -11,7 +11,7 @@ export const map = {
 } as const;
 
 /**
- * Baked per-vertex ambient occlusion (`world/ambientOcclusion.ts`). Costs
+ * Baked per-vertex ambient occlusion (`world/vertexShading.ts`). Costs
  * nothing per frame — it is a vertex attribute written once per map build —
  * so both numbers are about the LOOK rather than about the budget.
  */
@@ -134,10 +134,11 @@ export const grass = {
    */
   heightMin: 0.45,
   heightMax: 0.85,
-  /** Ambient wind: XZ direction (normalized on use), tip travel (m), speed. */
-  windDir: [0.78, 0.63],
-  windStrength: 0.16,
-  windSpeed: 1.7,
+  // The ambient wind is NOT here. It moved to `config/wind.ts` when the world's
+  // foliage became a second thing that leans in it: a bearing this file owned
+  // and one reader read is a bearing the canopy could only agree with by
+  // copying it. See that module for why the direction is shared and the
+  // amplitudes are not.
   /**
    * Character interaction: how far out a body bends blades (m) and how far
    * the tip travels at ground zero (m). The radius wants to be just past a

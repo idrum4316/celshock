@@ -35,13 +35,17 @@ export interface ParticleSpec {
    * to be going somewhere.
    *
    * **This is deliberately not a per-map wind SYSTEM**, which is what it looks
-   * like it wants to be. Wind lives in `CONFIG.grass` and has exactly one
-   * reader (`GrassShader`); promoting it to the environment would give it two,
-   * and the second would be a lawn on one square of one map. Nothing else in
-   * the tree can consume one — the world is merged and frozen, the props are
-   * static meshes, there is no cloth. What a wind field would actually have
-   * bought is that the dust and the grass agree about a bearing, so a map that
-   * wants that states it here and matches `CONFIG.grass.windDir` by hand.
+   * like it wants to be, and it is still not one. Wind lives in `CONFIG.wind`
+   * and is now read twice — the grass field and the world's foliage — but both
+   * readers want the SAME bearing over the whole valley, which is exactly what
+   * a per-map environment field is not. Promoting it here would let one map
+   * describe two winds and nothing would catch it.
+   *
+   * What a wind field would have bought is that the dust and the blades agree
+   * about a bearing, and that is now had for the asking: a map that wants it
+   * states this to match `CONFIG.wind.dir`. Matched by HAND on purpose — this
+   * is a velocity rather than a direction, and the two maps that set one differ
+   * by a factor of four in how fast their air moves.
    */
   drift?: [number, number];
 }

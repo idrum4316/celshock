@@ -37,7 +37,8 @@ import {
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { addOutline, type CelMaterialFactory } from "../shaders/CelShader";
-import { bakeVertexAo } from "./ambientOcclusion";
+import { marksSway, type SwayLayer, swayLayerOf } from "./sway";
+import { bakeVertexShading } from "./vertexShading";
 import type { LightingSystem } from "../systems/LightingSystem";
 import { BUILDERS, type BoxSpec, type Structure } from "./BuildingKit";
 import type { EnvironmentSpec } from "./environment";
@@ -885,7 +886,8 @@ export class MapBuilder {
       visuals.push(merged);
     }
 
-    // Ambient occlusion, and the position in this method is the whole of it.
+    // The vertex-colour bake — occlusion, the world mark and the wind's sway
+    // weight — and the position in this method is the whole of it.
     //
     // AFTER every merge, because `VertexData.merge` throws on a group where
     // some meshes carry `colors` and some do not, and `mergeByMaterial`
@@ -897,13 +899,13 @@ export class MapBuilder {
     // reasons and is not affected either way.
     //
     // `this.boxes` is complete here — every `collider()` has run — and it is
-    // the whole input besides the terrain. See `world/ambientOcclusion.ts` for
-    // why the result lives in the vertex colour's alpha.
-    const aoStart = performance.now();
-    const aoVerts = bakeVertexAo(visuals, this.boxes, terrain, size);
+    // the whole input besides the terrain. See `world/vertexShading.ts` for
+    // what each channel of the colour buffer carries and why.
+    const bakeStart = performance.now();
+    const bakedVerts = bakeVertexShading(visuals, this.boxes, terrain, size);
     if (import.meta.env.DEV) {
       console.info(
-        `[ao] ${aoVerts} vertices in ${(performance.now() - aoStart).toFixed(1)} ms`,
+        `[bake] ${bakedVerts} vertices in ${(performance.now() - bakeStart).toFixed(1)} ms`,
       );
     }
 
@@ -1544,7 +1546,7 @@ export class MapBuilder {
    * one is that a pane owns nothing else to take down with it. It casts no
    * shadow and carries no outline (see the `paneBlocks.finish` loop in `build`
    * for why glass has neither), so there is no second registration anywhere to
-   * revoke — and `bakeVertexAo` writes the COLOUR buffer, so the bake is
+   * revoke — and `bakeVertexShading` writes the COLOUR buffer, so the bake is
    * untouched by a later position rewrite and may still run last.
    *
    * A breakable pane's collider is an ordinary `collider()` box, one mesh each,
@@ -2065,6 +2067,13 @@ function rotateY(x: number, y: number, z: number, angle: number): Vector3 {
  * `solid` is deliberately NOT in the set — a merged VISUAL is never a
  * collider, and carrying it up would break the one rule the world layer cannot
  * bend.
+ *
+ * The sway mark is keyed beside these and is not one of them, because it is a
+ * VALUE rather than a flag — a canopy leaf and a fern blade are both foliage
+ * and lean by different amounts. It is in the key for the `noGlow` reason and
+ * one further one: `vertexShading` reads the mark once per MESH and writes the
+ * weight per vertex from it, so a group that disagreed would write one layer's
+ * answer over both.
  */
 const EXEMPTIONS = ["noOutline", "noGlow", "noShadowCaster"] as const;
 
@@ -2089,9 +2098,10 @@ function exemptionsOf(mesh: Mesh): Exemption[] {
  * then positions.
  */
 function mergeByMaterial(meshes: Mesh[], tag: string): Mesh[] {
-  // Material first, then exemption set — see `EXEMPTIONS`. Nested rather than
-  // keyed on a composed string, because two distinct materials are free to
-  // share a name and a merge across them would draw one of them wrong.
+  // Material first, then sway layer and exemption set — see `EXEMPTIONS`.
+  // Nested rather than keyed on a composed string, because two distinct
+  // materials are free to share a name and a merge across them would draw one
+  // of them wrong.
   const groups = new Map<Material, Map<string, Group>>();
   for (const m of meshes) {
     const mat = m.material;
@@ -2099,15 +2109,22 @@ function mergeByMaterial(meshes: Mesh[], tag: string): Mesh[] {
     let byExemption = groups.get(mat);
     if (!byExemption) groups.set(mat, (byExemption = new Map()));
     const flags = exemptionsOf(m);
-    const key = flags.join("-");
+    // The sway mark is in the key for the EXEMPTIONS' reason and one of its
+    // own. It tracks a mesh's ROLE — a canopy tree's leaf plates sway and its
+    // trunk does not, in the same palette green a fern's crown is — so reading
+    // it off one member would hand a whole colour group a lean one mesh asked
+    // for. The extra reason is that the BAKE reads it per mesh rather than per
+    // vertex, so a group that disagreed would write one answer over both.
+    const sway = swayLayerOf(m);
+    const key = `${sway ?? ""}|${flags.join("-")}`;
     const group = byExemption.get(key);
     if (group) group.meshes.push(m);
-    else byExemption.set(key, { flags, meshes: [m] });
+    else byExemption.set(key, { flags, sway, meshes: [m] });
   }
 
   const out: Mesh[] = [];
   for (const [mat, byExemption] of groups) {
-    for (const { flags, meshes: group } of byExemption.values()) {
+    for (const { flags, sway, meshes: group } of byExemption.values()) {
       const merged =
         group.length === 1
           ? // A merge of two or more bakes their world matrices; a group of one
@@ -2120,7 +2137,8 @@ function mergeByMaterial(meshes: Mesh[], tag: string): Mesh[] {
       if (!merged) continue;
       // Suffixed only where a group actually splits, so the common name is the
       // one the rest of the tree already reads in a profile.
-      merged.name = `${tag}-${mat.name}${flags.map((f) => `-${f}`).join("")}`;
+      const suffix = flags.map((f) => `-${f}`).join("");
+      merged.name = `${tag}-${mat.name}${sway ? `-${sway}` : ""}${suffix}`;
       merged.material = mat;
       // From the KEY, not from a member — and this half of it was not a
       // precaution, it was a live bug. The exemption used to be read back off
@@ -2137,11 +2155,39 @@ function mergeByMaterial(meshes: Mesh[], tag: string): Mesh[] {
       for (const flag of flags) {
         merged.metadata = { ...(merged.metadata ?? {}), [flag]: true };
       }
+      // **A swaying group carries the mark forward, and it is given `noOutline`
+      // with it — which is a mechanical consequence, not a preference.**
+      // Babylon draws ink as an inverted hull through its OWN shader, whose
+      // uniform list is hardcoded and takes no clock; there is nowhere to put
+      // the wind, and the hull has no colour attribute to weight it by even if
+      // there were. So an outlined leaf would lean out from under a shell left
+      // standing at the rest pose, and a third of a metre against a five
+      // centimetre line is a dark ghost of the still canopy hanging behind the
+      // moving one. Glass is the same argument with a stencil buffer in place
+      // of a clock, and it loses as little: what draws a crown is the sky
+      // between its leaves and the hard band across each plate, both of which
+      // are still there. Measured on Greyfen's canopy, the two frames are
+      // nearly indistinguishable.
+      if (sway) {
+        markSwayMerged(merged as Mesh, sway);
+      }
       out.push(merged as Mesh);
     }
   }
   return out;
 }
 
-/** One merge group: the meshes, and the exemptions they all agree on. */
-type Group = { flags: Exemption[]; meshes: Mesh[] };
+/** One merge group: the meshes, and the exemptions and sway they all agree on. */
+type Group = { flags: Exemption[]; sway: SwayLayer | null; meshes: Mesh[] };
+
+/**
+ * Carries a merged group's sway mark onto the mesh, with the ink taken off.
+ *
+ * Both writes in one place because the second is a consequence of the first and
+ * nothing must ever do one without the other — see the caller for the whole of
+ * why the ink cannot follow.
+ */
+function markSwayMerged(mesh: Mesh, layer: SwayLayer): void {
+  marksSway(mesh, layer);
+  mesh.metadata = { ...(mesh.metadata ?? {}), noOutline: true };
+}

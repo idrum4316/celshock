@@ -89,6 +89,8 @@ src/
     world.ts            # Map extents, occlusion, water, grass (map, ao, water,
                         #   grass)
     sky.ts              # The painted sky and moon shafts (sky, godRays)
+    wind.ts             # The one wind: a shared bearing, and what the grass
+                        #   field and the world's foliage each do with it
     teams.ts            # The two sides; index 0 is the player's
   core/
     Game.ts             # Orchestrator + main loop + all cross-system wiring.
@@ -238,8 +240,11 @@ src/
                         #   read side of the flags MapBuilder writes. Where may
                         #   a body be, vs what stops a round or a look; the
                         #   three-way table of what a collider answers is here
-    ambientOcclusion.ts # Per-vertex AO, baked from the collider boxes after
-                        #   the merge. Lives in the colour buffer's ALPHA
+    vertexShading.ts    # The world's baked vertex-colour buffer, written after
+                        #   every merge: AO in the ALPHA, the world mark in the
+                        #   GREEN, the wind's sway weight in the RED
+    sway.ts             # Which foliage the wind moves and how much of it moves
+                        #   at a given height. Marks, layers, the weight ramp
     BuildingKit.ts      # Facade: shared types + BUILDERS registry
     kit/core.ts         #   Build accumulator (box/wall/guard/flight/...),
                         #   palette, builder contract

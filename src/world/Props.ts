@@ -5,6 +5,8 @@
  * hierarchy; placement/merging/colliders are the caller's job.
  * Invariants: emissive parts (lantern glow, fire, fungus) MUST set
  * metadata.noOutline (and noGlow where they shouldn't feed the GlowLayer).
+ * Foliage the wind moves calls `marksSway`, and NOTHING a collider stands in
+ * for may (`PROP_BODIES` is the list to check) — see `world/sway.ts`.
  * Never set metadata.solid here — colliders come from MapBuilder only.
  * Never call rng() here — the per-prop jitter that makes a stand of
  * trees look like a stand of trees comes from the caller's seeded `rng`, so the
@@ -17,6 +19,7 @@
 import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
+import { marksSway } from "./sway";
 
 /**
  * Scatter props for Hollowmere — the loose dressing that fills space between
@@ -157,6 +160,11 @@ export function buildPine(
       i < 2 ? NEEDLE : NEEDLE_LIT,
       CONFIG.graphics.translucency.foliage,
     );
+    // The needles lean and the trunk does not — see `world/sway.ts`. A tier is
+    // a cone centred ON the axis and up to 1.65 m across, so the few
+    // centimetres this height is entitled to are spent well inside the overlap
+    // and the crown never comes off the bole.
+    marksSway(tier, "canopy");
   });
   return trunk;
 }
@@ -313,6 +321,11 @@ export function buildJungleTree(
         tier === 0 ? LEAF : LEAF_LIT,
         CONFIG.graphics.translucency.canopy,
       );
+      // The whole crown is what the wind moves, and the trunk under it is not
+      // — `world/sway.ts` carries the argument, and the geometry that makes it
+      // safe is here: a plate is centred on the axis and metres across, so the
+      // third of a metre it drifts is inside its own overlap of the bole.
+      marksSway(plate, "canopy");
     }
   });
 
@@ -361,6 +374,10 @@ export function buildJungleTree(
         ring === 0 ? LEAF : LEAF_LIT,
         CONFIG.graphics.translucency.canopy,
       );
+      // With the plates, and at the same height, so the crown travels as one
+      // piece rather than the fronds shearing off the mass they break the edge
+      // of. The tip below inherits it for the same reason.
+      marksSway(blade, "canopy");
 
       // The drooping tip, hung off the blade's own far end so it rides the
       // parent's yaw and tilt. Its centre is derived from its own break angle
@@ -391,6 +408,7 @@ export function buildJungleTree(
           len / 2 + (Math.cos(brk) * tipLen) / 2,
         );
         tip.material = blade.material;
+        marksSway(tip, "canopy");
         boughs.push({ a, tilt });
       }
     }
@@ -602,6 +620,15 @@ export function buildLianaVeil(
     upper.rotation.y = a;
     upper.rotation.x = -flare * 0.22;
     upper.material = vineMat;
+    // The whole strand leans, and the CANOPY layer is right for it rather than
+    // an understory one: a veil hangs from a blade nine and a half metres up,
+    // so the ramp gives its top almost exactly what it gives the frond it hangs
+    // from and the two travel together. What the ramp does further down is the
+    // thing a hand-authored version would have had to fake — the hem is
+    // entitled to less than the hang, so the curtain trails the branch instead
+    // of swinging rigidly with it. The COLLAR is deliberately left out: it is a
+    // thickening on the bole, and the bole does not move.
+    marksSway(upper, "canopy");
 
     const lowerLen = drop * 0.45;
     const lowerAt = radial(0.78, 0.78);
@@ -615,6 +642,7 @@ export function buildLianaVeil(
     lower.rotation.y = a;
     lower.rotation.x = -flare * 0.1;
     lower.material = vineMat;
+    marksSway(lower, "canopy");
 
     // Leaves down the strand, and they are what the layer is actually SEEN by:
     // a 13 cm vine is under a pixel at the range a belt is read across, so the
@@ -640,6 +668,7 @@ export function buildLianaVeil(
       // Drooping, never level: a horizontal blade at this size reads as a shelf.
       blade.rotation.z = 0.5 + rng() * 0.5;
       blade.material = j === 0 ? leafLitMat : leafMat;
+      marksSway(blade, "canopy");
     }
 
     // A tangle at the hem on some strands — the knot of old growth a liana
@@ -655,6 +684,7 @@ export function buildLianaVeil(
       knot.position.set(at.x, hem + 0.2, at.z);
       knot.rotation.y = rng() * Math.PI;
       knot.material = vineMat;
+      marksSway(knot, "canopy");
     }
   }
   return collar;
@@ -713,6 +743,13 @@ export function buildFernClump(
       i % 2 === 0 ? LEAF_LIT : LEAF,
       CONFIG.graphics.translucency.canopy,
     );
+    // The understory layer, which is the one the player walks THROUGH — so the
+    // ramp matters here in a way it does not nine metres up: a blade leaves its
+    // crown at 0.42 m with four centimetres of travel, and breaks over at 0.7 m
+    // with ten. The crown itself is not marked, because a fern's root ball is
+    // the one part of it that is genuinely planted — and four centimetres is
+    // lost inside a crown 0.3 m across.
+    marksSway(blade, "understory");
 
     // The drooping tip, hung off the blade's far end with its centre derived
     // from its own break angle — buildJungleTree's frond, at a third the size.
@@ -731,6 +768,7 @@ export function buildFernClump(
       len / 2 + (Math.cos(brk) * tipLen) / 2,
     );
     tip.material = blade.material;
+    marksSway(tip, "understory");
   }
   return crown;
 }

@@ -578,7 +578,7 @@ Rolled up by function inside the build (total, so these nest):
 | 389 | `mergeByMaterial` |
 | 383 | `MapBuilder.paneGroup` |
 | 265 + 236 + 160 | `NavGrid`, `link`, `severLinks` |
-| 199 | `bakeVertexAo` |
+| 199 | `bakeVertexShading` |
 | 184 | disposing the standing map |
 
 ### What it means, and what is still a hypothesis

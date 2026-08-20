@@ -33,6 +33,7 @@ import { net } from "./net";
 import { lighting } from "./lighting";
 import { ao, map, water, grass } from "./world";
 import { sky, godRays } from "./sky";
+import { wind } from "./wind";
 import { teams } from "./teams";
 
 export { FOG_WALL } from "./fogWall";
@@ -67,6 +68,7 @@ export const CONFIG = {
   lighting,
   water,
   grass,
+  wind,
   sky,
   godRays,
   teams,

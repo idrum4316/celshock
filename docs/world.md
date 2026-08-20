@@ -212,7 +212,7 @@ this replaced, which scattered a few hundred filled ellipses per tile:
   path in `CelShader`, where it has no period to find.
 
 **The finished visuals also carry BAKED AMBIENT OCCLUSION**, written after the
-merge by `src/world/ambientOcclusion.ts` from the collider boxes and the terrain.
+merge by `src/world/vertexShading.ts` from the collider boxes and the terrain.
 It is a vertex attribute rather than anything the environment can push, so it
 costs nothing per frame and everything at build time (measured: 128k vertices in
 71 ms, against a ~570 ms build). Two consequences for this layer: geometry added
@@ -221,6 +221,18 @@ navigation has and the same reason; and the editor's per-item rebuild moves a
 mesh without rebaking, so a dragged cottage carries stale occlusion until the
 next full rebuild. See `docs/rendering.md` for why the value lives in the colour
 buffer's alpha.
+
+**The same bake writes the SWAY WEIGHT**, and there are two rules this layer
+owes it. A builder marks foliage with `marksSway` (`src/world/sway.ts`), and
+**only geometry no collider stands in for may be marked** — a swaying surface
+leaves its box behind, so `PROP_BODIES` is the list to check against first. And
+the mark is part of the merge KEY, so a merged mesh is unanimously foliage or
+unanimously not; a group that disagreed would be handed one layer's ramp for
+both. Today it is a canopy tree's plates, fronds and tips, the liana veil
+hanging off them, a pine's needle tiers and a fern's blades — never a trunk,
+and never the collar a veil is hung from. See
+`docs/rendering.md` for the ramp, for why the trunk is left out and for what a
+swaying group gives up.
 
 **The floor is a height field, not a flat plane.** A `Heightfield` in the layout
 feeds a `TerrainField` (`src/world/TerrainField.ts`), the one place the ground's
@@ -526,7 +538,7 @@ cut costs nothing the renderer pays per frame.
 What makes that collapse the whole of a break rather than the first half of one
 is that a pane owns nothing else to take down with it: it carries no outline and
 casts no shadow (below), so there is no second registration anywhere to revoke.
-And `bakeVertexAo` writes the COLOUR buffer, so it is untouched by a later
+And `bakeVertexShading` writes the COLOUR buffer, so it is untouched by a later
 position rewrite and the bake may still run last.
 
 **A pane is CLEAR where there is anything to see, and a DRAWING of glass where

@@ -336,10 +336,11 @@ export const GreyfenEnvironment: EnvironmentSpec = {
    * count buys the density back. 4,800 is an emit rate of 1,600 and a buffer of
    * 22,400 slots, comfortably inside the 32,000 ceiling.
    *
-   * **The drift is the grass's own bearing, and it only started mattering when
-   * the layout grew some.** `ParticleSpec.drift` exists so the dust and the
-   * grass agree about which way the air is going, and it has to be matched by
-   * hand — `CONFIG.grass.windDir` is [0.78, 0.63] and this is that direction at
+   * **The drift is the valley's own bearing, and it only started mattering when
+   * the layout grew grass to compare it against — and matters more now that the
+   * canopy over it leans the same way.** `ParticleSpec.drift` exists so the dust
+   * and the grass agree about which way the air is going, and it is matched by
+   * hand — `CONFIG.wind.dir` is [0.78, 0.63] and this is that direction at
    * about 0.22 m/s. Deliberately far under the ±0.35 lateral jitter the field
    * has anyway, so the air still reads as HANGING, the way still, wet air under
    * a canopy does, while agreeing with the blades about the bearing.

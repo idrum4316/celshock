@@ -11,7 +11,7 @@
  *   against ~800 boxes that is nearly nine million box tests for one field.
  * - `MapBuilder.findSpot` rejects buried props. 425 props, up to 14 attempts
  *   each, same 800 boxes.
- * - `ambientOcclusion` already bucketed, correctly, in a private copy of this
+ * - `vertexShading` already bucketed, correctly, in a private copy of this
  *   code — which is where the shape below comes from.
  *
  * All three run inside one `installMap`, on the map build the loading card
@@ -63,7 +63,7 @@ export interface BoxIndex {
    * the valley wall. Dropping them silently moved four props into the rim
    * across the two maps — a small enough number to read as noise, which is
    * exactly why it is worth naming. There are only ever a handful, so a caller
-   * that wants them walks this list; `ambientOcclusion` deliberately does not,
+   * that wants them walks this list; `vertexShading` deliberately does not,
    * for the same reason `NavGrid` and `ObstacleField` do not.
    */
   readonly oversized: WorldBox[];
