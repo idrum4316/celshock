@@ -44,6 +44,7 @@ interface ScatterBase {
     | "deadTree"
     | "pine"
     | "jungleTree"
+    | "lianaVeil"
     | "fernClump"
     | "buttressLog"
     | "carvedStele"

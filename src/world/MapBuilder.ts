@@ -74,6 +74,7 @@ import {
   buildFungus,
   buildGravestone,
   buildJungleTree,
+  buildLianaVeil,
   buildLitter,
   buildLog,
   buildPalletStack,
@@ -362,6 +363,7 @@ const SCATTER_BUILDERS = {
   deadTree: buildDeadTree,
   pine: buildPine,
   jungleTree: buildJungleTree,
+  lianaVeil: buildLianaVeil,
   fernClump: buildFernClump,
   buttressLog: buildButtressLog,
   carvedStele: buildCarvedStele,
@@ -441,6 +443,15 @@ const PROP_BODIES: Record<ScatterSpec["prop"], PropBody> = {
   // rounds through open air across the whole stand. Full trunk height, so a
   // jungle tree bakes as hard cover (CoverMap's 1.7 m) the way a wall does.
   jungleTree: { w: 1.0, d: 1.0, h: 11.2, visualTop: 11.6 },
+  // Never blocking, and never able to be: the whole design is a curtain that
+  // hangs ABOVE the hit sphere so nothing at body height is soft (see
+  // `buildLianaVeil`), and a collider would be a box in clear air where a round
+  // has to pass. So w/d/h are the honest hanging volume rather than anything a
+  // shot may find. `visualTop` is the bough, and it is the field that matters —
+  // findSpot's burial check runs for every prop, and at nearly nine metres this
+  // is the tallest non-blocking thing in the table, which is what keeps a veil
+  // out of the roof it would otherwise hang inside.
+  lianaVeil: { w: 2.4, d: 1.0, h: 6.1, visualTop: 8.7 },
   // Never blocking, so w/d/h are never read — filled honestly anyway, because
   // this is a Record and a lie here would be believed the day someone sets
   // `blocking` on a fern. `visualTop` IS read: findSpot's burial check runs for

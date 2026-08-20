@@ -1,9 +1,8 @@
 /**
  * Props.ts — Scatter prop factories (trees, gravestones, lanterns, fungus,
- * logs, fire drums, rubble, boulders, brambles, barrels, jungle trees). Pure
- * mesh builders:
- * each assembles at the origin
- * and returns a hierarchy; placement/merging/colliders are the caller's job.
+ * logs, fire drums, rubble, boulders, brambles, barrels, jungle trees, liana
+ * veils). Pure mesh builders: each assembles at the origin and returns a
+ * hierarchy; placement/merging/colliders are the caller's job.
  * Invariants: emissive parts (lantern glow, fire, fungus) MUST set
  * metadata.noOutline (and noGlow where they shouldn't feed the GlowLayer).
  * Never set metadata.solid here — colliders come from MapBuilder only.
@@ -289,6 +288,161 @@ export function buildJungleTree(
     }
   });
   return trunk;
+}
+
+/**
+ * Liana veil: a bough with a curtain of vines and aerial roots hanging off it,
+ * leafed along its length and ragged along its hem.
+ *
+ * **This exists to fill a band, and the band is the argument for it.** A fern
+ * tops out at 1.2 m and a canopy tree's lowest frond hangs at 9, so a jungle
+ * belt is a floor, eight metres of clear air, and a ceiling. That gap is what
+ * makes a stand of trunks read as columns in a park rather than as jungle: the
+ * eye gets no layer between its feet and the roof, so there is nothing for
+ * distance to stack. Every other fix for it fights the belt's own promise —
+ * more trunks is a thicker plantation, and foliage brought DOWN to chest height
+ * is the thing `buildFernClump` explains at length must never exist. Hanging
+ * the layer from ABOVE is the one direction that is free.
+ *
+ * **Nothing it draws is below 2.4 m, and that number is the whole safety
+ * argument.** It clears the 1.7 m hit sphere by 0.7 m, so at any range worth
+ * shooting across, a level sightline from a 1.55 m eye passes UNDER the hem —
+ * the veil frames the shot instead of standing in it. That is what lets this be
+ * non-blocking without repeating the fern's mistake: the fern rule is that
+ * anything soft AT CHEST HEIGHT must be genuinely solid or genuinely absent,
+ * and the way to obey it is to not be at chest height. So this prop carries no
+ * collider, no `WorldBox` and nothing any ray in the game can find, which is
+ * also why it can be placed at a density cover never could.
+ *
+ * The 2.4 m is a floor over the SCATTERED prop, not over this geometry, so it
+ * is a contract with the layout as well as with the builder: see the derivation
+ * on `drop` below, and do not scatter this below `scale` 0.9.
+ *
+ * The bough is not decoration either: scatter puts a veil wherever it fits,
+ * which is not always under a canopy, and a curtain hanging out of clear air
+ * has nothing holding it up. Kept short (2.4 m, so 1.2 m of reach) because
+ * `findSpot` only guarantees the veil's CENTRE has clearance — a longer one
+ * would swing through the trunk it was placed beside.
+ *
+ * The hem is deliberately uneven. Strands cut to one length read as a curtain
+ * rail; the whole silhouette is in the raggedness, which is the same lesson
+ * `buildJungleTree` states about its fronds needing two segments.
+ */
+export function buildLianaVeil(
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number = Math.random,
+): Mesh {
+  const bark = mats.get(JUNGLE_BARK);
+  const vineMat = mats.get(VINE);
+  // What hangs in the canopy's own light gets the canopy's own translucency, so
+  // a veil between you and the sky glows the way the fronds above it do.
+  const leafMat = mats.getTranslucent(
+    LEAF,
+    CONFIG.graphics.translucency.canopy,
+  );
+  const leafLitMat = mats.getTranslucent(
+    LEAF_LIT,
+    CONFIG.graphics.translucency.canopy,
+  );
+
+  // The bough, and the root of the hierarchy. Sits just under the lowest frond
+  // so that where there IS a canopy overhead this disappears into it.
+  const bough = MeshBuilder.CreateBox(
+    "liana-bough",
+    { width: 2.4, height: 0.26, depth: 0.3 },
+    scene,
+  );
+  bough.position.y = 8.5;
+  bough.rotation.z = (rng() - 0.5) * 0.14;
+  bough.material = bark;
+
+  const strands = 5;
+  for (let i = 0; i < strands; i++) {
+    // Spread along the bough rather than drawn at random, so no two strands
+    // grow out of the same point and none hangs off the end of it.
+    const along = ((i + 0.5) / strands - 0.5) * 2.1;
+    // Local to the bough's centre: -0.13 is its underside.
+    const top = -0.13;
+    // The hem, and the one number in here that is DERIVED rather than picked.
+    // The prop's floor is 2.4 m and the bough's underside is at 8.37, so the
+    // longest strand may fall 5.97 — but the veil is placed with a scale
+    // multiplier, and it multiplies the bough's height as well as the drop, so
+    // the hem lands at `(8.37 - drop) * scale`. At the layout's minimum 0.9
+    // that has to stay over 2.4, which caps the drop at 5.70. Anything here
+    // over that, or a region scattered below 0.9, and the veil's whole safety
+    // argument is gone with no error to say so.
+    const drop = 3.4 + rng() * 2.2;
+    const hem = top - drop;
+    // A slight swing outward, so the curtain is a volume rather than a plane.
+    const swing = (rng() - 0.5) * 0.9;
+    const lean = (rng() - 0.5) * 0.5;
+
+    // Two segments per strand, the lower one leaning harder — a rope hanging
+    // under its own weight is never straight, and the break is where a vine
+    // stops reading as a wire.
+    const upper = MeshBuilder.CreateBox(
+      "liana-strand",
+      { width: 0.11, height: drop * 0.55, depth: 0.11 },
+      scene,
+    );
+    upper.parent = bough;
+    upper.position.set(along, top - (drop * 0.55) / 2, swing * 0.3);
+    upper.rotation.z = lean * 0.4;
+    upper.material = vineMat;
+
+    const lower = MeshBuilder.CreateBox(
+      "liana-strand-low",
+      { width: 0.09, height: drop * 0.45, depth: 0.09 },
+      scene,
+    );
+    lower.parent = bough;
+    lower.position.set(
+      along + lean * 0.4 * drop * 0.3,
+      top - drop * 0.55 - (drop * 0.45) / 2,
+      swing,
+    );
+    lower.rotation.z = lean;
+    lower.material = vineMat;
+
+    // Leaves down the strand. The lowest sits a clear margin above the hem so
+    // the bottom of the veil is vine rather than foliage — a leaf is the widest
+    // thing here and the hem is the one edge that must not creep downward.
+    const leaves = 3;
+    for (let j = 0; j < leaves; j++) {
+      const t = 0.25 + (j / leaves) * 0.6;
+      const blade = MeshBuilder.CreateBox(
+        "liana-leaf",
+        { width: 0.62 + rng() * 0.24, height: 0.09, depth: 0.34 },
+        scene,
+      );
+      blade.parent = bough;
+      blade.position.set(
+        along + lean * t * drop * 0.4,
+        top - drop * t,
+        swing * t,
+      );
+      blade.rotation.y = rng() * Math.PI;
+      // Drooping, never level: a horizontal blade at this size reads as a shelf.
+      blade.rotation.z = 0.5 + rng() * 0.5;
+      blade.material = j === 0 ? leafLitMat : leafMat;
+    }
+
+    // A tangle at the hem on some strands — the knot of old growth a liana
+    // gathers where it has been hanging longest.
+    if (rng() < 0.55) {
+      const knot = MeshBuilder.CreateCylinder(
+        "liana-knot",
+        { height: 0.4, diameterTop: 0.3, diameterBottom: 0.22, tessellation: 5 },
+        scene,
+      );
+      knot.parent = bough;
+      knot.position.set(along + lean * 0.45 * drop, hem + 0.2, swing);
+      knot.rotation.y = rng() * Math.PI;
+      knot.material = vineMat;
+    }
+  }
+  return bough;
 }
 
 /**
