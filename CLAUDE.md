@@ -503,7 +503,10 @@ unaffected:
 
 **The shipped maps are Hollowmere** (a night village), **Greyfen** (a jungle
 valley two hours after sunrise, with shafts coming down through the canopy)
-**and Coldharbour** (a city's business district an hour before dusk).
+**and Coldharbour** (a city's business district an hour before dusk). Greyfen
+is the map that pushed on how much SCATTER a map may be: it is ~1,390 canopy
+trees rather than five belts of forty, which is what the two rules above exist
+to make affordable.
 Coldharbour is the map the first three overrides exist for: 320 m, no fog wall,
 and buildings with three walked floors in them. The fourth is Greyfen's as well
 as its, and both state it for the same reason: a sun came down.
@@ -600,6 +603,22 @@ Hollowmere's fences: 161 loose post-and-rail boxes cost *every* ray in the game
 than either — one bounding box around every fence in the village. Both flags
 must reach the SERVER, so they ride in the collision bake, struts still grouped
 per mesh — see `docs/multiplayer.md`.
+
+**Every BLOCKING SCATTER collider is merged the same way, by LOCALITY rather
+than by placement** (`MapBuilder.clusterColliders`), because a scattered field
+has no placement to merge by: one mesh per 12 m square, over the whole scatter
+pass at once rather than region by region — the regions overlap. Greyfen's
+jungle is ~1,412 blocking props in ~180 meshes, so the map has fewer solid
+meshes than it did with a fifth of the trees. The boxes stay in `colliderBoxes`
+one per prop, so nothing derived from geometry can tell; only plain `solid`
+boxes may be grouped, and the grouping rides to the server as
+`MapCollision.boxGroups` for `rayGroups`' reason.
+
+**A blocking scatter prop may not stand on a control point or a spawn**, and
+`MapBuilder.keepClear` refuses it rather than the layout dodging by hand — a
+flag inside a collider cannot be captured and sinks its own flow field, and the
+odds of that are the density times the footprint once a map's forest covers the
+valley. Non-blocking props are exempt: a fern over a capture point is dressing.
 
 **The floor is the one documented exception**, and it proves the rule rather than
 bending it: the heightfield has no box that could stand in for it, so each block's

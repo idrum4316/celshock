@@ -4,8 +4,8 @@
  * Owns: the collider meshes the server's rays pick against, the terrain floor's
  * collider clones, and the nav/cover/obstacle structures built from them.
  * Invariants: this is the collider half of `MapBuilder.build` and nothing else
- * — no visuals, no materials, no textures, no AO bake, and the one merge here
- * is `strutMesh`, which merges COLLIDERS and draws nothing. It must produce
+ * — no visuals, no materials, no textures, no AO bake, and the two merges here
+ * (`strutMesh`, `clusterMesh`) merge COLLIDERS and draw nothing. It must produce
  * geometry that lines up with the client's exactly, or a shot that lands on a
  * wall here passes through it there.
  *
@@ -99,6 +99,50 @@ function colliderBox(scene: Scene, box: WorldBox, i: number): Mesh {
  * and the obstacle field never see one either — which is what keeps this world
  * identical to the one `npm run parity` compares.
  */
+/**
+ * One group of a scatter region's boxes as the single collider mesh the client
+ * merged them into — a dozen tree trunks in a 12 m square.
+ *
+ * **The second merge on the server, and it exists for the same reason as the
+ * first**: a pick costs per mesh before it costs per triangle, and this process
+ * resolves every shot in every match it is running. Greyfen's jungle is ~950
+ * one-metre trunks; unmerged they would be more collider meshes than the rest
+ * of the map put together, and every rewound shot would pay a bounding test for
+ * each. Group by group exactly as baked, never all in one — see `strutMesh`,
+ * whose bounding-box warning is the same one.
+ *
+ * Unlike a strut, every box in here IS in `colliderBoxes`, so the nav grid, the
+ * cover bake and the obstacle field still see individual trunks. The merge is
+ * about nothing but what a ray meets. `MapBuilder.clusterColliders` is the
+ * client's half, and both refuse to group anything but plain `solid` boxes —
+ * one mesh cannot carry two answers about porosity, and glass has to stay
+ * addressable a sheet at a time.
+ */
+function clusterMesh(scene: Scene, group: WorldBox[], i: number): Mesh {
+  const parts = group.map((box, j) => {
+    const part = MeshBuilder.CreateBox(
+      `clump${i}-${j}`,
+      { width: box.w, height: box.h, depth: box.d },
+      scene,
+    );
+    part.position.set(box.cx, box.cy, box.cz);
+    part.rotation.set(box.rotX, box.rotY, 0);
+    return part;
+  });
+  const merged =
+    parts.length === 1
+      ? parts[0]
+      : Mesh.MergeMeshes(parts, true, true, undefined, false, false);
+  if (!merged) throw new Error(`cluster ${i} failed to merge`);
+  merged.name = `clump${i}`;
+  merged.isVisible = false;
+  merged.isPickable = true;
+  merged.checkCollisions = true;
+  merged.metadata = { solid: true };
+  merged.freezeWorldMatrix();
+  return merged;
+}
+
 function strutMesh(scene: Scene, group: WorldBox[], i: number): Mesh {
   const parts = group.map((box, j) => {
     const part = MeshBuilder.CreateBox(
@@ -167,15 +211,30 @@ export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameM
   const terrain = new TerrainField(def.layout.terrain);
   const boxes = toWorldBoxes(collision);
 
-  const colliders = boxes.map((box, i) => colliderBox(scene, box, i));
+  // A box gets one mesh, unless the client merged it with its neighbours into a
+  // cluster — see `MapCollision.boxGroups`. `byBox` is what keeps the pane
+  // wiring below able to name a box's mesh either way; a clustered box has
+  // none of its own and never is a pane.
+  const byBox: (Mesh | null)[] = boxes.map(() => null);
+  const grouped = new Set<number>();
+  const colliders: Mesh[] = [];
+  for (const [i, group] of (collision.boxGroups ?? []).entries()) {
+    for (const b of group) grouped.add(b);
+    colliders.push(clusterMesh(scene, group.map((b) => boxes[b]), i));
+  }
+  for (const [i, box] of boxes.entries()) {
+    if (grouped.has(i)) continue;
+    byBox[i] = colliderBox(scene, box, i);
+    colliders.push(byBox[i]!);
+  }
   // A pane's collider carries the pane index back, exactly as
   // `MapBuilder.paneGroup` stamps it on the client — so `GlassSystem` finds the
   // same mesh on both sides and a broken pane leaves the pick predicates here
-  // too. The index is direct because `colliders` is `boxes` mapped one for one,
-  // which is the same property that makes `WorldPane.box` a bake-able number.
+  // too. A pane is never clustered (glass has to stay addressable one sheet at
+  // a time, and the client refuses to group it), so `byBox` always has its mesh.
   const panes = toWorldPanes(collision);
   for (const [i, p] of panes.entries()) {
-    if (p.box < 0 || !colliders[p.box]) continue;
+    if (p.box < 0 || !byBox[p.box]) continue;
     // Two marks, in the two places the client's `MapBuilder` puts them. The
     // mesh carries the pane index back, so `GlassSystem` finds the same mesh on
     // both sides. The BOX carries `glass`, which is what `clearCollider` reads
@@ -187,7 +246,7 @@ export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameM
     // list already says which boxes are glass, and two sources for one fact is
     // one that can go stale. `porous` IS baked, because it is a property of the
     // box independent of any pane.
-    colliders[p.box].metadata.pane = i;
+    byBox[p.box]!.metadata.pane = i;
     boxes[p.box].glass = true;
   }
   const rayGroups = toRayGroups(collision);
@@ -223,6 +282,7 @@ export async function buildServerWorld(scene: Scene, def: MapDef): Promise<GameM
     colliders,
     colliderBoxes: boxes,
     rayGroups,
+    boxGroups: (collision.boxGroups ?? []).map((g) => [...g]),
     // Panes come off the bake with the boxes, and `paneGroups` deliberately
     // stays empty: a group is the MERGED MESH a pane's vertices live in, and
     // there is nothing to draw here. The authority needs a pane's rect to know

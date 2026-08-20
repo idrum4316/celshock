@@ -100,6 +100,29 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   trusted on.
 - `Game.updateGameplay` pushes HUD state every frame, so `hud.setScoreboard(...)`
   by hand is overwritten next tick. Drive the input (`page.keyboard.down("Tab")`).
+- **`moveWithCollisions` is inert headless, so a "does this stop a body" test
+  cannot be written that way.** Set `scene.collisionsEnabled`, give the mover an
+  `ellipsoid` and push it 10 m into a `checkCollisions` box and it travels the
+  full 10 — and it does so for a plain `MeshBuilder.CreateBox` as readily as for
+  anything the map built, which is the tell that the harness is what is missing
+  rather than the geometry. What that costs is real: the merged scatter
+  colliders (`MapBuilder.clusterColliders`) were verified for RAYS directly (200
+  shots fired at trunks from 6 m, 200 stopped) and for BODIES only by
+  equivalence — a merged mesh and a loose one behave identically in the same
+  harness, and so do the same map before and after the merge. Prefer a
+  `pickWithRay` assertion, which works, and say plainly when the body half rests
+  on equivalence.
+- **A canopy is checked by firing rays at the sky, not by looking at a
+  screenshot.** Make the visual meshes pickable (they are `isPickable = false`
+  by default), sample a grid of ground points inside the stand, cast straight up
+  with a predicate that rejects `metadata.solid`, and the hit fraction is the
+  closure. Pair it with the local stem density off `map.colliderBoxes` and the
+  two give the crown's effective area: for randomly placed crowns
+  `closure = 1 - exp(-rho * Aeff)`, so `Aeff = -ln(1 - closure) / rho` — which is
+  what makes "is a bigger crown worth more than another frond" a measurement
+  instead of an argument. Greyfen's canopy tree reads ~60-100 m2. A picture
+  cannot tell you any of this: 24% closure and 90% closure both photograph as
+  "trees with sky behind them" depending on where you stand.
 - Free a stuck vite port by PID from `ss -tlnp`. Never `pkill -f vite` — it
   matches the calling shell.
 - **Do not edit anything under `src/` while a script is driving the page.** Vite

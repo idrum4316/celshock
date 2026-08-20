@@ -5,8 +5,10 @@
  * here is code to special-case.
  * Gotchas that have already cost time: collider top faces within
  * CONFIG.nav.stepHeight of adjacent ground or bots treat decks as walls;
- * a control point's pos must NOT sit inside a collider (surfaceAt returns -1);
- * scatter clearance values must match prop collider extents; terrain steeper
+ * a control point's pos must NOT sit inside a PLACEMENT's collider (surfaceAt
+ * returns -1 — scatter is held off flags and spawns by `MapBuilder.keepClear`,
+ * placements are not); scatter regions must dodge the roads by hand, because a
+ * road is visual-only and rejects nothing; terrain steeper
  * than a 0.4 gradient severs its own nav links. A second map is one new file
  * shaped like this plus an EnvironmentSpec.
  */
@@ -95,16 +97,24 @@ const TERRACE_H = 2;
  * **B — the west bank.** The most exposed flag on the map: flat, treeless, and
  * with the nearest cover 25 m away across the river. It gets a ruin for corners
  * and two huts on the bank, one of which is the stilt hut doing what it was
- * built for — see `buildStiltHut`, whose worked example is this placement.
+ * built for — see `buildStiltHut`, whose worked example is this placement. It
+ * stayed treeless when the rest of the valley became forest, and that took
+ * authoring rather than luck: the scatter regions stop short of it on three
+ * sides and the fourth is the water. It is the one flag on the map you cross
+ * open ground to reach.
  *
- * **D — the temple.** A stepped platform on 70 x 70 m of empty quadrant: the
+ * **D — the temple.** A stepped platform on the raised north-east quadrant: the
  * only high ground east of the manor, visible from it, and the one flag you
  * have to climb for. Its control point carries the summit height for that
- * reason.
+ * reason. The forest around it is thinner than the south's on purpose — a flag
+ * you climb for wants its approach readable — and the platform itself is the
+ * one place with open sky and no water under it.
  *
- * **E — the canopy camp.** Inside a tree belt, so it is dark and close. Two huts
- * on a walk, and a ruin standing between the deploy point and the flag so the
- * approach is a fight rather than a stroll.
+ * **E — the canopy camp.** The deepest forest on the map stands over it — the
+ * southern floor plus a thicket of its own — so it is dark and close, which the
+ * layout claimed long before it was true. Two huts on a walk, and a ruin
+ * standing between the deploy point and the flag so the approach is a fight
+ * rather than a stroll.
  *
  * **The trestle** crosses the east branch where the straight line from C to D
  * meets it — the manor's own approach, and far enough from both flags (25 m and
@@ -169,86 +179,144 @@ const placements: Placement[] = [
 ];
 
 /**
- * The jungle: five belts of buttressed hardwoods. Three close the north and
- * south ends of the valley, where the rim would otherwise be the only thing
- * saying the map stops; the other two thicken the southern half, which is
- * where the fighting between C and E happens.
+ * THE JUNGLE. Not belts any more — the valley is forest, and the clearings are
+ * what is authored into it.
  *
- * The canopy starts nine metres up, so a belt is cover in the sense that
- * TRUNKS are cover — sight lines under it stay open and the ground beneath
- * reads as shaded rather than blocked. That is what lets a belt sit across a
- * home spawn's approach without walling a team in, and it is why two belts
- * deliberately cover objectives: belt 2 contains flag E itself and belt 5
- * contains E's deploy point. Trunks make that ground a fight rather than a
- * clearing; a belt of anything with foliage at chest height would instead make
- * it unplayable.
+ * ## What was wrong with belts
  *
- * Each belt runs most of the map's width, which is well past the 78 m fog
- * wall: a region is merged into one mesh and filed under the block its CENTRE
- * falls in, so both cull as a unit and neither can be frustum-rejected while
- * any of it is on screen. Splitting each into three rectangles is the fix if
- * they start costing anything — see CLAUDE.md on scatter regions.
+ * This shipped as five rectangles of hardwood laid across an otherwise empty
+ * valley, 368 trees over 57,600 m2. Measured rather than argued: that is one
+ * trunk per 12.5 m of ground, and inside the THICKEST belt it was still one per
+ * 10.8 m, with a median nearest neighbour of 6.6 m. A ray fired straight up
+ * from head height inside that belt found leaf 24% of the time. Both halves of
+ * that are the same fact — a stand thin enough to walk through without noticing
+ * is a stand thin enough to see the sky through — and neither is jungle. Dense
+ * tropical forest is a stem every 3-5 m with a roof you cannot find a hole in.
  *
- * The understory (ferns, fallen logs, stelae) is appended after the belts and
- * is deliberately in small regions near the flags rather than spread over the
- * valley: it is dressing you fight around rather than terrain.
+ * ## What is here instead
  *
- * **A BLOCKING understory region must not be able to reach a flag's centre.**
- * Ferns are non-blocking and may sit anywhere, including straight over a
- * capture point; logs and stelae carry colliders, and a control point whose
- * centre is inside one makes `surfaceAt` return -1 there — the Flag-C-on-the-
- * well error, which `validate.ts` reports and which reads in play as a flag
- * that cannot be captured. Measured on the first pass here: a log region
- * centred 4.5 m off flag A dropped a 5.2 m trunk 0.53 m from the flag and did
- * exactly that. So each blocking region is now placed so that its own radius
- * plus the prop's half-length still clears the nearest flag — which is also
- * why they sit off to one side of a district rather than on top of it.
+ * The forest is the default state of the ground and covers most of the map, at
+ * roughly one trunk per 38-42 m2 in the deep parts (a median nearest neighbour
+ * near 3.7 m) and one per 125 in the clearings — which are the second half of
+ * the idea. **A clearing is authored as a SPARSE REGION rather than as a gap**,
+ * because a rectangle with no region over it is bald and reads as a hole in
+ * the level rather than as a place the forest thins. Bravo's bank, Alpha's
+ * clearing and the manor's north lawn are all trees at a tenth the density,
+ * not an absence of them.
  *
- * The exception that proves it is the stele ring on D: it is centred ON the
- * flag, and it is safe by construction rather than by margin, because the
- * temple's colliders fill that whole footprint and `MapBuilder.findSpot`
- * rejects any spot buried in one. The steles can only land on the ground
- * around the platform, which is what they are for.
+ * Density varies the way the grass rects vary it, and for the same reason:
+ * **overlap is the density control.** A thicket is a disc of a few more trees
+ * laid OVER the floor region it sits in, so Echo's camp is the southern floor's
+ * count plus its own. Authoring a second, higher number for the same ground
+ * would be a third thing to keep in step.
  *
- * **The MID-STORY is the third layer, and it is not in this array at all.**
- * A belt promises a canopy nine metres up and open sight lines under it, and
- * the understory tops out at 1.2 m, so between them sat eight metres of clear
- * air — which is exactly what made a belt read as columns in a park. The liana
- * veils fill it from ABOVE, which is the one direction that costs the promise
- * nothing: nothing they draw is below 2.4 m, so no round and no sightline
- * meets one, and they carry no collider at all.
+ * The canopy starts nine metres up and the trunk is the whole collider (see
+ * `PROP_BODIES`), so a stand is still cover in the sense that TRUNKS are cover.
+ * What has changed is how much of it there is: at this spacing a level
+ * sightline through deep forest runs about 30 m before a trunk is in it,
+ * against 100 m before. That is the fight this map now has, and it is why the
+ * clearings, the river and the roads are the only long lanes left.
  *
- * They shipped as fifteen `lianaVeil` regions here, each mirroring a tree
- * region's footprint on the reasoning that a region over a belt puts a veil
- * under a canopy. **It put them in the GAPS instead, and the mechanism was the
- * opposite of incidental**: `findSpot` rejects a spot buried in an existing
- * collider, a jungle tree is `blocking` with an 11.2 m box, and the tree
- * regions all build first — so the burial test pushed the mid-story away from
- * every trunk on the map. Measured before the fix: 179 veils, a median 4.62 m
- * from the nearest trunk against a canopy that reaches 4.4, a hundred of them
- * outside any canopy at all and thirty-nine past six metres, hanging in open
- * sky with a bough visibly holding nothing. No region could have fixed it.
- * `buildJungleTree` hangs the veil off its own crown now, so the layer is
- * wherever the trees are and cannot be anywhere else.
+ * ## What a region may not do
+ *
+ * **It may not put a trunk on a flag or a spawn, and that is no longer the
+ * author's problem.** A control point whose centre is inside a collider cannot
+ * be captured and sinks its own flow field (`surfaceAt` returns -1 — the
+ * Flag-C-on-the-well error), and a spawn inside one deploys a player into a
+ * tree. The old layout answered that by placing every blocking region far
+ * enough to one side that its radius plus the prop's half-length cleared the
+ * nearest flag. That cannot survive a forest that covers the valley on
+ * purpose, so `MapBuilder.keepClear` now refuses the spot outright — every
+ * control point and every spawn, blocking props only. Ferns stay exempt and
+ * may sit straight over a capture point.
+ *
+ * **It must dodge the two roads by hand.** Roads are visual-only, so no
+ * collider rejects a trunk standing in one. The west road runs
+ * x -106.4..-98.4 over z -5.2..72.9 and the north one runs z 56.7..64.7 over
+ * x -102.2..-2.2; every region below clears both, and the margins are tight
+ * enough (W4 stops at x -106.5) to be worth re-checking after a nudge.
+ *
+ * **A BLOCKING understory region still must not reach a flag's centre**, and
+ * now cannot: it is the same `keepClear` rule. What is still the author's is
+ * everything about the SHAPE — Bravo is a bare bank because the layout says
+ * so, not because anything enforces it.
+ *
+ * The exception that proves the old rule is still here: the stele ring on D is
+ * centred ON the flag and is safe by construction, because the temple's
+ * colliders fill that footprint and `MapBuilder.findSpot` rejects any spot
+ * buried in one. The steles can only land on the ground around the platform.
+ *
+ * **The MID-STORY is not in this array at all.** The liana veils hang off the
+ * trees' own crowns — see `buildJungleTree`, which also carries why the share
+ * of trees wearing one FELL when this forest thickened.
  *
  * Note that ADDING A PLACEMENT REROLLS ALL OF THIS. `findSpot` draws from the
  * shared stream once per attempt, accepted or rejected, and placements build
- * before scatter — so a new building anywhere moves every belt and every
- * understory region on the map. Re-walk the flags after touching either array.
+ * before scatter — so a new building anywhere moves every tree on the map.
+ * Re-walk the flags after touching either array. **APPENDING a region does
+ * not**, and neither does removing one from the end.
  *
- * **APPENDING a region does not**, and neither does removing one from the end
- * — which is what retiring the fifteen veil regions cost: nothing. Regions are
- * built in array order off one stream, so everything before an entry draws
- * exactly what it drew whatever happens after it. The veils that hang here now
- * draw from a stream of their own for the same reason (see `propSeed`), which
- * is what let a mid-story be added to every belt without moving one trunk.
+ * The counts are REQUESTS, not placements: `findSpot` gives up after fourteen
+ * attempts and the prop is dropped, which at this density is how roughly a
+ * fifth of them end. That is deliberate — a count tuned so nothing is ever
+ * refused is a count that stops short of the packing the clearance describes.
  */
 const scatter: ScatterSpec[] = [
-  { prop: "jungleTree", x: -25.5, z: 96, width: 78, depth: 40, count: 30, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: 54.68, z: -97.112, width: 78, depth: 40, count: 30, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: -32, z: -96.5, width: 78, depth: 40, count: 30, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: -4.348, z: -43.465, width: 78, depth: 60, count: 40, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: 75.268, z: -60.696, width: 78, depth: 24, count: 20, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
+  // THE SOUTHERN FLOOR — the deepest forest on the map, because the fight
+  // between C and E crosses it and the two southern home spawns feed into it.
+  { prop: "jungleTree", x: -58, z: -98, width: 108, depth: 44, count: 146, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: 58, z: -100, width: 104, depth: 40, count: 128, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: 0, z: -46, width: 118, depth: 56, count: 187, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: 86, z: -44, width: 58, depth: 60, count: 90, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // Echo's camp: a thicket over the southern floor rather than instead of it,
+  // so this district is the densest ground in the valley. The layout has always
+  // called it dark and close; between this and the closed canopy it now is.
+  { prop: "jungleTree", x: 40, z: -80, radius: 26, count: 35, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: -30, z: -62, radius: 18, count: 14, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: 24, z: -30, radius: 16, count: 12, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // THE WEST FLANK — B's district. The bank itself stays the most exposed flag
+  // on the map, so the forest stops short of it on three sides and the fourth
+  // is the river.
+  { prop: "jungleTree", x: -86, z: -62, width: 62, depth: 40, count: 70, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // The cover the layout note calls "25 m away across the river". It is the
+  // same 25 m; what it has now is depth behind it.
+  { prop: "jungleTree", x: -50, z: -26, width: 46, depth: 66, count: 93, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: -76, z: 14, width: 42, depth: 40, count: 47, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // West of the west road, which this stops 0.1 m short of.
+  { prop: "jungleTree", x: -112, z: 30, width: 11, depth: 62, count: 16, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // Bravo's bank: a handful of trees over 40 m of open ground, which is what
+  // makes it read as a clearing rather than as a hole in the forest.
+  { prop: "jungleTree", x: -97, z: -28, radius: 20, count: 6, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // THE MANOR — forest crowding both flanks of the hall, and a thin lawn on
+  // its north front so the approach from the causeway stays a lane.
+  { prop: "jungleTree", x: -34, z: -4, width: 30, depth: 44, count: 38, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: 36, z: -4, width: 34, depth: 44, count: 42, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: 0, z: 14, width: 44, depth: 18, count: 10, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // THE NORTH-WEST — A's district. Both roads are cleared by hand here.
+  { prop: "jungleTree", x: -94, z: 89, width: 44, depth: 30, count: 38, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: -22, z: 85, width: 44, depth: 38, count: 47, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: -56, z: 110, width: 124, depth: 20, count: 70, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // Alpha's clearing: the ground the hamlet's walks overlook. Sparse rather
+  // than empty, and the huts reject whatever lands on them.
+  { prop: "jungleTree", x: -60, z: 79, width: 36, depth: 26, count: 9, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // Between the two roads.
+  { prop: "jungleTree", x: -51, z: 44, width: 90, depth: 22, count: 47, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // THE NORTH-EAST SHELF — D's quadrant, the raised ground. Sparser than the
+  // south on purpose: this is the flag you climb for and its approach is meant
+  // to stay readable.
+  { prop: "jungleTree", x: 84, z: 92, width: 66, depth: 52, count: 97, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: 84, z: 40, width: 66, depth: 48, count: 82, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: 96, z: 62, radius: 18, count: 14, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: 110, z: 8, width: 16, depth: 42, count: 16, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // The wedge of bank between the north-east channel and the confluence. Thin,
+  // because the marsh and the causeway along it are a landmark and want sky.
+  { prop: "jungleTree", x: 14, z: 80, width: 26, depth: 44, count: 21, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  { prop: "jungleTree", x: 46, z: 48, radius: 18, count: 21, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
+  // THE UNDERSTORY — ferns, fallen logs and stelae. Small regions near the
+  // districts rather than spread over the valley: this is dressing you fight
+  // around rather than terrain. Ferns are non-blocking and may sit anywhere;
+  // the logs and stelae carry colliders and are held off the flags by
+  // `keepClear` like everything else that does.
   { prop: "fernClump", x: -62, z: 84, width: 34, depth: 30, count: 26, scale: [0.8, 1.4] },
   { prop: "buttressLog", x: -76, z: 92, radius: 12, count: 4, scale: [0.85, 1.2], blocking: true, clearance: 1.6 },
   { prop: "carvedStele", x: 80, z: 34, radius: 20, count: 6, scale: [0.85, 1.25], blocking: true, clearance: 0.7 },
@@ -257,26 +325,17 @@ const scatter: ScatterSpec[] = [
   { prop: "buttressLog", x: 22, z: -72, radius: 12, count: 5, scale: [0.85, 1.2], blocking: true, clearance: 1.6 },
   { prop: "fernClump", x: -95, z: -30, radius: 16, count: 20, scale: [0.8, 1.4] },
   { prop: "carvedStele", x: -104, z: -42, radius: 9, count: 3, scale: [0.85, 1.25], blocking: true, clearance: 0.7 },
-  { prop: "jungleTree", x: -73.164, z: 30.772, radius: 24, count: 22, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
   { prop: "fernClump", x: -49.664, z: 40.272, radius: 15, count: 20, scale: [0.8, 1.4] },
   { prop: "fernClump", x: -29.664, z: 46.772, radius: 12, count: 14, scale: [0.8, 1.4] },
-  { prop: "jungleTree", x: -31.044, z: -5.637, radius: 12.5, count: 7, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: 86.192, z: 82.522, width: 65, depth: 65, count: 44, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: 108.037, z: 16.596, width: 15, depth: 65, count: 22, y: 0.134, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: 84.037, z: -4.404, radius: 18, count: 15, y: 0.15, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: 46.937, z: 48.216, radius: 18, count: 14, y: 0.15, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: 44.262, z: 75.759, radius: 10, count: 6, y: -0.047, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: -56.772, z: -64.972, radius: 15, count: 10, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: -85.486, z: -98.394, radius: 18, count: 22, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: -82.817, z: 1.08, radius: 12, count: 10, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: 27.324, z: -6.801, radius: 7, count: 4, y: 0.153, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: 43.455, z: -35.528, radius: 12, count: 6, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: -111.879, z: 41.52, width: 10, depth: 78, count: 16, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: -103.264, z: -52.347, radius: 9, count: 5, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "jungleTree", x: -48.184, z: -38.259, radius: 10, count: 5, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  { prop: "fernClump", x: 62.009, z: 5.057, radius: 12, count: 10, y: 0.001, scale: [0.8, 1.4] },
+  { prop: "fernClump", x: 62.009, z: 5.057, radius: 12, count: 10, scale: [0.8, 1.4] },
   { prop: "fernClump", x: 49.92, z: 30.36, radius: 12, count: 9, scale: [0.8, 1.4] },
-  { prop: "jungleTree", x: -17.469, z: 70.51, width: 10, depth: 50, rotY: Math.PI / 2, count: 10, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
+  // Two more where the forest is deepest, so the shaded floor has something on
+  // it besides grass and litter.
+  { prop: "fernClump", x: -20, z: -50, radius: 18, count: 22, scale: [0.8, 1.4] },
+  { prop: "fernClump", x: 30, z: -104, radius: 18, count: 20, scale: [0.8, 1.4] },
+  { prop: "fernClump", x: -66, z: -68, radius: 16, count: 18, scale: [0.8, 1.4] },
+  { prop: "buttressLog", x: -46, z: -30, radius: 14, count: 5, scale: [0.85, 1.2], blocking: true, clearance: 1.6 },
+  { prop: "buttressLog", x: 70, z: -52, radius: 14, count: 5, scale: [0.85, 1.2], blocking: true, clearance: 1.6 },
 ];
 
 const controlPoints: ControlPointDef[] = [
@@ -348,25 +407,39 @@ const water: WaterRect[] = [
 ];
 
 /**
- * Ground cover: the understory, and the largest single thing that decides
- * whether this valley reads as jungle or as a plantation.
+ * Ground cover — and the thing about it that INVERTED when the canopy closed.
  *
- * It shipped EMPTY, and the belts above are why that was wrong. A jungle-tree
- * belt is a promise about the canopy — foliage nine metres up and clear sight
- * lines beneath it — which is a good rule for a fight and, on its own, a floor
- * of bare soil under evenly spaced columns. The trees cannot fix that without
- * breaking the promise; the grass can, because it is visual only and stops
- * nothing. So the rule this array follows is the mirror of the belts': the
- * belts own everything above nine metres and refuse to touch the fight, and
- * this owns everything under a knee and refuses to touch it either.
+ * It shipped empty, and the belts were why that was wrong: a jungle-tree belt
+ * is a promise about foliage nine metres up and clear sight lines beneath it,
+ * which on its own is a floor of bare soil under evenly spaced columns. So the
+ * densest rects went where the belts were, and the note here read: the belts
+ * own everything above nine metres and this owns everything under a knee.
+ *
+ * **That was right about the layer and wrong about where to spend it, and the
+ * forest above is what proves it.** A closed canopy is not a roof over an
+ * unchanged floor — it is the reason the floor is bare. Under 90% closure
+ * almost no light reaches the ground, and what grows there is litter, roots and
+ * the odd fern; the deep undergrowth of a jungle is at the EDGES, in the gaps,
+ * and along the water, which is exactly where the light is. So the densities
+ * below now run the other way round from how they shipped: the southern floor
+ * and Echo's camp, which were the thickest ground on the map at 0.75 and 1.3,
+ * are the thinnest at 0.28 and 0.35, and what stayed rich is Bravo's bank,
+ * Alpha's clearing, the manor's north lawn and the reed beds — every one of
+ * them somewhere the sky is still open.
+ *
+ * It is also the cheapest triangle this map has to give back, and it was worth
+ * about 7,600 tufts. The field is one mesh of thin instances with a single
+ * bounding box over the valley, so there is no culling inside it and the cost
+ * is the tuft COUNT and nothing else — 15 triangles each, every frame, wherever
+ * the camera is. The forest costs what it costs; this is where the budget for
+ * it came from, and the change makes the picture better rather than worse,
+ * which is the only kind of saving worth taking.
  *
  * Placement rules: rects dodge roads (roads are visual-only, so no collider
  * rejects a blade poking through them — that check is on the author), while
  * structures, props and the rim's boundary boxes are cleared automatically by
  * the GrassSystem's collider rejection. **Overlap is a density control, not a
- * mistake** — two rects over one patch grow both their fields, which is how
- * the ground under E is thicker than the ground around it without a third
- * density number for the difference.
+ * mistake** — two rects over one patch grow both their fields.
  *
  * The two roads are the only hand-checked exclusions: the west road runs
  * x -106.4..-98.4 over z -5.2..72.9, and the north one runs z 56.7..64.7 over
@@ -377,60 +450,49 @@ const water: WaterRect[] = [
  * the deepest water stands 0.82 m in it and just breaks the surface. That is
  * the look the low-density bank rects are for; at field density the same rect
  * is a lawn growing underwater.
- *
- * **The densities are a BUDGET, and it is the reason none of them reads as a
- * lawn.** The whole field is one mesh of thin instances — one draw call, but
- * one vertex shader invocation per instance per vertex, and there is no
- * frustum culling inside it because it is a single bounding box over the
- * valley. So the cost is the tuft COUNT and nothing else, and the map is 240 m
- * on a side with 57% of it under a rect: at the density that would read as
- * continuous undergrowth this array is 90,000 tufts and 1.3 M vertices a frame,
- * which is the whole vertex budget of the phone this game installs onto.
- * These numbers hold it near 25,000 — twice Hollowmere, which is what a map
- * whose floor is fully lit can justify against one where the fog hides it.
- * Coverage is spent before density: everywhere thin beats somewhere thick when
- * the complaint being answered is bare ground. Where it has to READ, the rects
- * OVERLAP rather than carry a bigger number — E is the southern floor's 0.75
- * plus its own 1.3 — which also keeps the far field at the thinness deep shade
- * genuinely produces.
  */
 const grass: GrassRect[] = [
-  // THE SOUTHERN FLOOR — belts 2, 3, 4 and 5, and the ground the fight between
-  // C and E crosses. Broad and even: this is the understory the canopy has been
-  // standing over on its own.
-  { x: -34, z: -96, width: 74, depth: 44, density: 0.75 },
-  { x: 54, z: -96, width: 76, depth: 44, density: 0.75 },
-  { x: -4, z: -44, width: 78, depth: 58, density: 0.7 },
-  { x: 76, z: -60, width: 76, depth: 24, density: 0.6 },
-  // E, the canopy camp. Thickest ground on the map, laid over the southern
-  // floor rather than instead of it: the layout calls this district dark and
-  // close, and the undergrowth is the only half of that the belt can't supply.
-  { x: 40, z: -82, width: 34, depth: 26, density: 1.3 },
-  // C, the manor: a colonial lawn nobody has cut in a decade, on the flanks and
-  // the north front. The hall itself is left to the builder's colliders.
-  { x: -28, z: -6, width: 24, depth: 42, density: 1.0 },
-  { x: 30, z: -6, width: 26, depth: 42, density: 1.0 },
-  { x: 0, z: 10, width: 40, depth: 14, density: 0.9 },
-  // B, the west bank — the flag the note above calls the most exposed on the
-  // map. Knee-high grass gives it CONCEALMENT without giving it cover, which is
-  // the one thing this layer can offer a flag with nothing on it, and it does
-  // not move the 25 m of open ground that makes B what it is.
-  { x: -97, z: -30, width: 40, depth: 44, density: 1.2 },
+  // THE FOREST FLOOR — the southern half, under 85-95% canopy closure. Thin on
+  // purpose: this is litter and root, not undergrowth, and the ferns scattered
+  // through it are what the eye reads at ankle height.
+  { x: -34, z: -96, width: 74, depth: 44, density: 0.28 },
+  { x: 54, z: -96, width: 76, depth: 44, density: 0.28 },
+  { x: -4, z: -44, width: 78, depth: 58, density: 0.28 },
+  { x: 76, z: -60, width: 76, depth: 24, density: 0.3 },
+  // E, the canopy camp — the darkest ground on the map now, so the thinnest.
+  // It was the thickest, back when the belt over it was forty trees.
+  { x: 40, z: -82, width: 34, depth: 26, density: 0.35 },
+  // C, the manor. The flanks are crowded by forest; the north front is a lawn
+  // nobody has cut in a decade and still has sky over it, so it keeps its
+  // density and the flanks give theirs up.
+  { x: -28, z: -6, width: 24, depth: 42, density: 0.5 },
+  { x: 30, z: -6, width: 26, depth: 42, density: 0.5 },
+  { x: 0, z: 10, width: 40, depth: 14, density: 1.0 },
+  // B, the west bank — the flag the layout note calls the most exposed on the
+  // map, and now the clearing the forest stops short of. Knee-high grass gives
+  // it CONCEALMENT without giving it cover, which is the one thing this layer
+  // can offer a flag with nothing on it, and it does not move the 25 m of open
+  // ground that makes B what it is.
+  { x: -97, z: -30, width: 40, depth: 44, density: 1.3 },
   { x: -104, z: -46, width: 26, depth: 24, density: 0.9 },
-  // A, the treeline hamlet: the clearing the stilts stand in, the open ground
-  // south of it that the walks overlook, and the western approach. All three
-  // clear both roads.
-  { x: -62, z: 88, width: 46, depth: 40, density: 1.1 },
-  { x: -58, z: 74, width: 54, depth: 16, density: 1.0 },
-  { x: -74, z: 36, width: 40, depth: 36, density: 0.7 },
-  // D, the temple, on the raised north-east quadrant. Sparser on purpose: this
-  // is the one flag you climb for, and its approach is meant to stay readable.
-  { x: 80, z: 34, width: 52, depth: 48, density: 0.55 },
-  { x: 96, z: 76, width: 44, depth: 44, density: 0.6 },
-  { x: 58, z: 12, width: 30, depth: 44, density: 0.7 },
-  // THE BANKS — reeds, at the thin densities the note above explains. The first
-  // is the marsh bar itself, which puts them either side of the causeway.
-  { x: 2, z: 36, width: 22, depth: 34, density: 0.6 },
+  // A, the treeline hamlet: the clearing the stilts stand in and the open
+  // ground south of it that the walks overlook. Both are gaps in the canopy, so
+  // both stay rich. The western approach is forest now and thins with it.
+  { x: -62, z: 88, width: 46, depth: 40, density: 1.2 },
+  { x: -58, z: 74, width: 54, depth: 16, density: 1.1 },
+  { x: -74, z: 36, width: 40, depth: 36, density: 0.4 },
+  // D, the temple, on the raised north-east quadrant. The platform itself is
+  // the one place on this map with open sky and no water, so it keeps a real
+  // field; the woods either side of it do not.
+  { x: 80, z: 34, width: 52, depth: 48, density: 0.6 },
+  { x: 96, z: 76, width: 44, depth: 44, density: 0.3 },
+  { x: 58, z: 12, width: 30, depth: 44, density: 0.4 },
+  // THE BANKS — reeds, at the thin densities the note above explains, and the
+  // one place the old array and this one agree. A river is a hole in the
+  // canopy: the light comes down it, so the water's edge is the richest ground
+  // in a real jungle and the only reason these are thin is that they are IN the
+  // water. The first is the marsh bar itself, either side of the causeway.
+  { x: 2, z: 36, width: 22, depth: 34, density: 0.7 },
   { x: -40, z: 26, width: 26, depth: 30, density: 0.5 },
   { x: -58, z: -10, width: 30, depth: 56, density: 0.45 },
   { x: 66, z: -32, width: 44, depth: 22, density: 0.45 },

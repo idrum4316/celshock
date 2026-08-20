@@ -97,6 +97,26 @@ export interface MapCollision {
    */
   rayGroups: readonly (readonly CollisionBox[])[];
   /**
+   * Which `boxes` the client merged into one collider mesh each, as indices
+   * into that array — a scatter region's props, grouped by locality.
+   *
+   * The mirror of `rayGroups` and not its twin: these boxes ARE the solid
+   * world and ARE in `boxes`, so the nav grid, the cover bake and the obstacle
+   * field see every one of them separately. The grouping says nothing about
+   * the world and everything about what a RAY meets — a pick costs per mesh
+   * before it costs per triangle, and a jungle belt is hundreds of one-metre
+   * trunks that no structure builder would ever have made separately.
+   *
+   * Every index that appears here is left out of the one-mesh-per-box pass, so
+   * a box belongs to exactly one mesh either way. Boxes named by no group are
+   * their own mesh, which is every collider a structure builds.
+   *
+   * Optional so a map baked before clustering existed still loads: absent
+   * reads as a map whose every box is its own mesh, which is what the bake
+   * always produced.
+   */
+  boxGroups?: readonly (readonly number[])[];
+  /**
    * Every pane of glass a round can take away, in the client's build order —
    * which is what makes the index into this array a name both processes agree
    * on, and therefore what a `glass` event on the wire is allowed to carry.

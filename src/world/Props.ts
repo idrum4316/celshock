@@ -183,7 +183,7 @@ export interface LianaHang {
  *
  * Three things about the shape are load-bearing rather than decorative:
  *
- * - **The lowest frond hangs at ~9 m**, five times clear of the 1.7 m hit
+ * - **The lowest leaf hangs at ~9 m**, five times clear of the 1.7 m hit
  *   sphere. The collider is the trunk and its buttress core only (see
  *   `PROP_BODIES`), so anything at chest height would be foliage rounds pass
  *   straight through — the pine's rule, and a canopy tree has far more leaf to
@@ -195,6 +195,9 @@ export interface LianaHang {
  * - **The fronds are two segments, not one**, and the outer one droops harder.
  *   A single straight blade reads as a plank at any distance the fog leaves
  *   visible; the break is where the whole silhouette comes from.
+ * - **The shade is the PLATES' and the silhouette is the FRONDS'**, and the
+ *   split is what makes a closed canopy affordable at all. See the crown
+ *   below, which carries the measurement that forced it.
  *
  * **Some of them carry the belt's mid-story, and it is a CHILD of the trunk
  * rather than a prop placed near one.** `buildLianaVeil` is the curtain and
@@ -257,40 +260,91 @@ export function buildJungleTree(
     fin.material = bark;
   }
 
-  // The crown's own mass, filling the middle the fronds radiate out of.
-  const crown = MeshBuilder.CreateCylinder(
-    "jungle-crown",
-    { height: 1.1, diameterTop: 0.7, diameterBottom: 2.3, tessellation: 6 },
-    scene,
-  );
-  crown.parent = trunk;
-  crown.position.y = 4.5;
-  crown.rotation.y = rng() * Math.PI * 2;
-  crown.material = mats.getTranslucent(
-    LEAF,
-    CONFIG.graphics.translucency.canopy,
-  );
+  // The crown's MASS, and the one thing on this tree that decides whether a
+  // belt of them reads as jungle at all.
+  //
+  // It was a single cylinder 2.3 m across — "filling the middle the fronds
+  // radiate out of" — and the middle was never what was open. Measured over
+  // the shipped valley, a ray fired straight up from head height inside the
+  // THICKEST belt found leaf 24% of the time; the other three quarters of the
+  // sky came down between the crowns, which is what made five belts of
+  // hardwoods read as columns in a park.
+  //
+  // The fix is not more fronds, and the arithmetic is why. A frond is a
+  // 12-triangle box whose blade is 1.5 m wide, so it covers ~4 m2 of sky; the
+  // same twelve triangles as a plate 6 m across cover ~15. Closing a canopy
+  // out of fronds costs four times what closing it out of leaf mass does, and
+  // that ratio is the whole reason the old crown could not afford to close.
+  // So the mass is broad overlapping plates and the fronds are what break its
+  // edge — the silhouette stays theirs, the shade becomes the plates'.
+  //
+  // Two tiers, because one rosette of plates is a parasol: the upper tier sits
+  // 0.8 m higher and is turned off the lower one's spokes, so the gaps in each
+  // sit over the other's leaf and the mass has depth when you stand under it.
+  const plates: [number, number, number, number][] = [
+    // count, height on the trunk, width, depth
+    [4, 4.35, 7.6, 3.0],
+    [3, 5.15, 5.6, 2.5],
+  ];
+  plates.forEach(([count, y, width, depth], tier) => {
+    const turn = rng() * Math.PI * 2;
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + turn + rng() * 0.3;
+      const plate = MeshBuilder.CreateBox(
+        `jungle-leaf${tier}-${i}`,
+        { width, height: tier === 0 ? 0.55 : 0.45, depth },
+        scene,
+      );
+      plate.parent = trunk;
+      // Centred ON the axis rather than out from it: a plate is a slab of
+      // canopy the trunk holds up through its middle, so four of them at
+      // 90 degrees are a rosette with no hole in it. Fronds are what sit out
+      // at a radius, below.
+      plate.position.y = y;
+      plate.rotation.y = a;
+      // Relief, so the mass is not a flat lid. `rotation.z` rolls the plate
+      // about its own long axis and `rotation.x` tips it along its depth —
+      // both after the yaw, so both are in the plate's own frame.
+      plate.rotation.z = (rng() - 0.5) * 0.26;
+      plate.rotation.x = (rng() - 0.5) * 0.18;
+      // The lit green goes up, the shaded green goes down: what a canopy shows
+      // the sky is never what it shows the ground beneath it.
+      plate.material = mats.getTranslucent(
+        tier === 0 ? LEAF : LEAF_LIT,
+        CONFIG.graphics.translucency.canopy,
+      );
+    }
+  });
 
   // Two rings of fronds, offset from each other so the gaps in one sit over the
-  // blades of the other. Inner blade out from the crown, outer blade drooping
-  // off its tip.
-  const rings: [number, number, number, number][] = [
-    // count, height on the trunk, blade length, droop
-    [6, 4.2, 2.4, 0.34],
-    [5, 5.1, 2.0, 0.18],
+  // blades of the other. Inner blade out from the plates, outer blade drooping
+  // off its tip. FEWER and BIGGER than they were (six and five 0.95 m blades,
+  // against four and three at 1.7 and 1.5): the plates took over the shading, so
+  // what is left for a frond is the EDGE of the crown, and an edge is drawn
+  // better by long blades with sky between them than by short ones packed.
+  //
+  // The count is a budget as much as a shape. A canopy tree is the most-drawn
+  // object on this map by a wide margin — there are around fourteen hundred of
+  // them — so a frond costs 1,400 boxes wherever it is added, and the ring
+  // counts were cut to the point where taking one more measurably opened the
+  // sky (see the closure figures in `greyfen/layout.ts`).
+  const rings: [number, number, number, number, number][] = [
+    // count, height on the trunk, blade length, blade width, droop
+    [4, 4.15, 3.6, 1.7, 0.34],
+    [3, 5.0, 3.0, 1.5, 0.18],
   ];
   // Where the lowest ring's blades ended up. A liana hangs from foliage that
   // EXISTS rather than from a radius that hopes to be under some — see the
   // hang points below, and `buildLianaVeil` for why that matters.
   const boughs: { a: number; tilt: number }[] = [];
-  rings.forEach(([count, y, len, droop], ring) => {
+  rings.forEach(([count, y, len, width, droop], ring) => {
     const turn = rng() * Math.PI * 2;
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2 + turn + rng() * 0.25;
       const tilt = droop + rng() * 0.16;
       const blade = MeshBuilder.CreateBox(
         `jungle-frond${ring}-${i}`,
-        { width: 0.95, height: 0.14, depth: len },
+        { width, height: 0.14, depth: len },
         scene,
       );
       blade.parent = trunk;
@@ -301,8 +355,8 @@ export function buildJungleTree(
       );
       blade.rotation.y = a;
       blade.rotation.x = tilt;
-      // The lit green goes on the upper ring: what a canopy shows the sky is
-      // never what it shows the ground beneath it.
+      // The lit green goes on the upper ring, for the reason the plates split
+      // the same way.
       blade.material = mats.getTranslucent(
         ring === 0 ? LEAF : LEAF_LIT,
         CONFIG.graphics.translucency.canopy,
@@ -312,33 +366,57 @@ export function buildJungleTree(
       // parent's yaw and tilt. Its centre is derived from its own break angle
       // rather than authored: a fixed offset leaves the joint open at one
       // angle and the two segments overlapping at another.
-      const brk = 0.5 + rng() * 0.3;
-      const tipLen = len * 0.8;
-      const tip = MeshBuilder.CreateBox(
-        `jungle-tip${ring}-${i}`,
-        { width: 0.7, height: 0.12, depth: tipLen },
-        scene,
-      );
-      tip.parent = blade;
-      tip.rotation.x = brk;
-      tip.position.set(
-        0,
-        (-Math.sin(brk) * tipLen) / 2,
-        len / 2 + (Math.cos(brk) * tipLen) / 2,
-      );
-      tip.material = blade.material;
-      if (ring === 0) boughs.push({ a, tilt });
+      //
+      // **Only on the LOWER ring**, which is the one break in the "two
+      // segments, not one" rule and is a fact about where the ring sits rather
+      // than a saving taken off it. The upper ring is 0.85 m higher and its
+      // blades are shorter, so its tip breaks over INSIDE the mass the lower
+      // ring and the plates already make: it is drawn against leaf from below
+      // and against leaf from above, and the only silhouette it was ever in is
+      // the lower ring's. Fourteen hundred trees, so that is 1,400 boxes drawn
+      // for an edge nothing can see.
+      if (ring === 0) {
+        const brk = 0.5 + rng() * 0.3;
+        const tipLen = len * 0.8;
+        const tip = MeshBuilder.CreateBox(
+          `jungle-tip${ring}-${i}`,
+          { width: width * 0.72, height: 0.12, depth: tipLen },
+          scene,
+        );
+        tip.parent = blade;
+        tip.rotation.x = brk;
+        tip.position.set(
+          0,
+          (-Math.sin(brk) * tipLen) / 2,
+          len / 2 + (Math.cos(brk) * tipLen) / 2,
+        );
+        tip.material = blade.material;
+        boughs.push({ a, tilt });
+      }
     }
   });
 
   // The mid-story. Not every tree: a belt where every trunk wore the same
   // curtain would read as a manufactured screen, and the gaps are what let the
   // layer scatter through the stand rather than ring each trunk in it.
-  if (sub() < 0.45) {
+  //
+  // **The share is stated per TREE and tuned against the STAND**, which is why
+  // it fell from 0.45 to 0.16 when Greyfen's forest thickened. The veil was
+  // added to fill eight metres of empty air between a fern and the lowest
+  // frond, and at a trunk every ten metres it took nearly half of them to do
+  // it. At a trunk every four that air is full of trunks, and the same share
+  // would hang three times the curtain in the same volume — a screen, which is
+  // the thing this fraction exists to avoid. Sixteen per cent of the denser
+  // valley is about a hundred and sixty veils, which is what the sparse one
+  // had: the layer keeps its absolute weight while the forest around it
+  // triples. It is also the most expensive thing this builder can draw (a veil
+  // is more triangles than the tree it hangs on), so the number is worth
+  // getting right twice over.
+  if (sub() < 0.16) {
     // The collar hangs at 4.05 above the trunk's own centre — 9.65 m up a
-    // scale-1 tree, which is inside the crown cylinder (9.55 to 10.65), so it
-    // emerges from the foliage rather than floating under it. Every hang below
-    // is stated relative to that line.
+    // scale-1 tree, which is just under the lower plate tier (4.07 to 4.63 in
+    // the same frame), so it emerges from the foliage rather than floating
+    // under it. Every hang below is stated relative to that line.
     const hangs: LianaHang[] = [];
     // One on the bole, so the collar is visibly holding something. Everything
     // else is out under a blade.
@@ -350,13 +428,19 @@ export function buildJungleTree(
     const first = Math.floor(sub() * boughs.length);
     for (let i = 0; i < 4; i++) {
       const b = boughs[(first + i) % boughs.length];
-      const r = 1.3 + sub() * 1.45;
+      // Out under the blade, and BOUNDED there rather than run to its tip:
+      // the ring's blades are 3.4 m now, and a hang taken from the drooping
+      // far end starts lower, which comes straight off the clearance
+      // `buildLianaVeil` derives its hem against. 3.1 m keeps the worst case
+      // at the 2.85 m it was measured at before the blades grew.
+      const r = 1.5 + sub() * 1.6;
       hangs.push({
         a: b.a + (sub() - 0.5) * 0.3,
         r,
-        // 4.2 is the ring's height on the trunk and 0.07 is half a blade's
-        // thickness; the sine is how far the blade has drooped by `r`.
-        y: 4.2 - Math.sin(b.tilt) * (r - 1.7) - 0.07 - 4.05,
+        // 4.15 is the ring's height on the trunk, 2.2 is where along it the
+        // blade's own centre sits, and 0.07 is half a blade's thickness; the
+        // sine is how far the blade has drooped by `r`.
+        y: 4.15 - Math.sin(b.tilt) * (r - 2.2) - 0.07 - 4.05,
       });
     }
     const veil = buildLianaVeil(scene, mats, sub, hangs);
@@ -413,17 +497,17 @@ export function buildJungleTree(
  * over a band that starts higher.
  *
  * **Where each strand starts is the CALLER's to say, and that is what makes the
- * layer worth having.** The obvious anchor is the crown cylinder — 2.3 m across
- * at its underside, so anything within ~1.05 m of the axis is hidden by it from
- * every angle. Built that way it is genuinely attached and nearly useless: five
- * strands inside a 2 m circle sit within the trunk's own silhouette, so at the
- * twenty metres a belt is read across they thicken the column instead of
- * filling the gap between columns, and the eight metres of clear air the veil
- * exists to close is still clear. The blades of the lowest frond ring reach
- * 2.9 m and the ring is already built, so `buildJungleTree` hands over the
- * blades it actually made and a strand hangs UNDER one — out where the curtain
- * is between the trunks rather than on them, and under leaf rather than beside
- * it. That is the whole reason this takes `hangs` instead of picking a radius.
+ * layer worth having.** The obvious anchor is the bole, so anything within a
+ * metre or so of the axis is under leaf from every angle. Built that way it is
+ * genuinely attached and nearly useless: five strands inside a 2 m circle sit
+ * within the trunk's own silhouette, so at the twenty metres a belt is read
+ * across they thicken the column instead of filling the gap between columns,
+ * and the eight metres of clear air the veil exists to close is still clear.
+ * The blades of the lowest frond ring reach 3.9 m and the ring is already
+ * built, so `buildJungleTree` hands over the blades it actually made and a
+ * strand hangs UNDER one — out where the curtain is between the trunks rather
+ * than on them, and under leaf rather than beside it. That is the whole reason
+ * this takes `hangs` instead of picking a radius.
  *
  * The collar is the one part meant to be seen at the top — the woody mass a
  * liana gathers where it meets the bole, sitting half inside the crown so it
@@ -481,7 +565,7 @@ export function buildLianaVeil(
     const { a, r: r0, y: top } = hang;
     // The hem, and the one number in here that is DERIVED rather than picked.
     // The floor is 2.4 m and the collar stands 9.65 m up the trunk, so a hang
-    // is at `9.65 + top` — and the lowest a drooping blade offers is 9.23. The
+    // is at `9.65 + top` — and the lowest a drooping blade offers is 9.25. The
     // veil rides the TREE's scale, so the hem lands at
     // `(9.65 + top - drop) * scale` and `jungleTree`'s minimum of 0.85 caps
     // the drop at 6.40. Anything here over that, or a `jungleTree` region

@@ -894,7 +894,23 @@ would wrap a single bounding box around every fence in the village and charge
 every ray for all of them; not merged at all it costs ~17% on every ray in the
 process.
 
-**The bake carries a third list, and it is the one with an ORDER that matters.**
+**The bake carries a third list, and it is a third VIEW of `boxes` rather than
+new geometry.** `boxGroups` is which of them the client merged into one collider
+mesh each — indices, not boxes, because these ARE the solid world and are
+already in `boxes`, so the nav grid, the cover bake and the obstacle field on
+both sides still read every one of them separately. What the grouping decides is
+only how many bounding tests a ray pays to meet them, and `clusterMesh` is the
+second merge in `server/world.ts` for exactly the reason `strutMesh` is the
+first: this process resolves every shot in every match it is running. Greyfen's
+jungle is ~1,390 one-metre trunks and its scatter comes to ~180 cluster meshes;
+unmerged that would be more collider meshes than the rest of the map put
+together, and the authority would pay a bounding test for each on every rewound
+round. Anything named in a group is left out of the one-mesh-per-box pass, so a
+box belongs to exactly one mesh either way — and nothing porous or glass is ever
+grouped, because one mesh cannot carry two answers about porosity and a pane has
+to stay addressable a sheet at a time.
+
+**The bake carries a fourth list, and it is the one with an ORDER that matters.**
 `panes` is the glass a round can take AWAY — seven numbers and an index each,
 the index being the pane's own position in `boxes`. Not the map's glazing, which
 is most of the glass drawn and none of it breakable: a sheet with something
@@ -913,11 +929,14 @@ in the order its builder declared them — and a disagreement means two sides
 breaking different windows while every other check passes.
 
 `worldFingerprint` carries `porousBoxes`, `rayGroups`, `rayBoxes`, a hash over
-the ray geometry, and `panes`/`paneHash`, because **the nav graph is blind to
-all of it** — every other field in that comparison would match while the two
+the ray geometry, `boxGroups`/`boxGroupHash`, and `panes`/`paneHash`, because
+**the nav graph is blind to all of it** — every other field in that comparison would match while the two
 sides resolved different shots. The pane hash includes each pane's `box`,
 because a pane pointing at a different collider is two sides agreeing about the
-window and not about the wall. Note also that the bake's `sourceHash` covers a map's
+window and not about the wall. The box-group hash is the extreme case of the
+same argument: a server that ignored `boxGroups` would agree with the client
+about every box on the map and quietly do a hundred times the picking work per
+shot, with nothing visible on either side to say so. Note also that the bake's `sourceHash` covers a map's
 `layout.ts` and `heights.ts` — **a `porous` flag, a `strut` and a `pane` all live
 in a BUILDER, so changing one is a bake the staleness guard will not notice.
 Re-run `npm run collision` by hand after touching a collider's flags, a

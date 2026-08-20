@@ -340,7 +340,11 @@ export const SCATTER_DEFAULTS: Record<ScatterProp, ScatterDefaults> = {
   // `(9.75 - drop) * scale` — so the 2.4 m the whole design rests on survives
   // only above that floor. A region dragged lower in the editor hangs vines
   // through the hit sphere and nothing throws. See `buildLianaVeil`.
-  jungleTree: { radius: 18, count: 22, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
+  // Forest density rather than belt density: `clearance` 0.95 is what puts
+  // trunks 3 m apart, and a count of 60 over a 18 m disc is roughly what
+  // Greyfen's deep forest runs at. Both were 2.2 and 22 when a tree region was
+  // a belt of columns — see that map's layout for why they moved.
+  jungleTree: { radius: 18, count: 60, scale: [0.85, 1.3], blocking: true, clearance: 0.95 },
   // The understory. A fern is NON-BLOCKING for the same reason a bramble is,
   // and here it is load-bearing rather than incidental: a canopy belt's whole
   // promise is that the foliage starts nine metres up and the sight lines under

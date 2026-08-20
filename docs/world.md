@@ -28,8 +28,13 @@ reads both halves off it. Nothing outside `maps.ts` may import a map's own modul
 The shipped maps are **Hollowmere** (night), **Greyfen** (a jungle morning, sun
 through the canopy) and **Coldharbour** (a city before dusk). Greyfen
 was forked from Hollowmere's layout, cleared back to a blank valley, and is
-now being rebuilt as a jungle one: what stands is the **manor** on flag C and
-nothing else, so it is the map being built rather than a second finished one.
+now being rebuilt as a jungle one: what stands is the **manor** on flag C, the
+districts around the other four flags, and the forest itself — ~1,390 canopy
+trees over the valley at a nearest-neighbour median of 3.8 m, closing 85-97% of
+the sky where it is deep. It shipped as five belts of forty trees in an
+otherwise empty valley, which measured out at one trunk per 12.5 m of map and a
+canopy that stopped 24% of a ray fired straight up; the layout file carries what
+changed and why.
 Coldharbour was written from nothing and is the one that pushed on what a map is
 allowed to be — see the next section. No two share a module in any direction.
 
@@ -395,6 +400,44 @@ placement attempt, so the shipped map's dressing is bit-identical to what the
 circle-only sampler produced. A region is filed under the map block its **centre**
 falls in, so break a belt longer than the 78 m fog wall into a few rectangles.
 
+**Regions OVERLAP, and that is the density control.** `findSpot`'s
+minimum-separation test is per region — it rejects against the props *this*
+region has already placed and against existing colliders, and knows nothing
+about a second region standing over the same ground. So two regions over one
+patch grow both their fields, which is how Greyfen's forest varies without a
+second density number for the difference: a thicket is a disc of a few more
+trees laid over the floor region it sits in. The cost is that overlapping
+regions can put two props closer than either one's clearance allows — measured
+on that forest, a nearest-neighbour median of 3.8 m with a floor of 1.45, where
+one region alone could not go below 2.8. At tree scale that reads as a
+multi-stemmed clump; at prop scale it would read as clipping.
+
+**A count is a REQUEST, not a placement.** `findSpot` gives up after fourteen
+attempts and the prop is dropped, silently, so a region authored near the
+packing its clearance describes places fewer than it asks for. That is the
+intended way to author a dense field: a count tuned so nothing is ever refused
+is a count that stops short.
+
+**Blocking scatter colliders are MERGED BY LOCALITY, not one mesh per prop**
+(`MapBuilder.clusterColliders`), and it is the fence lesson at forest scale. A
+`pickWithRay` costs per mesh before it costs per triangle — a predicate call, a
+world-matrix inverse and a bounding test each — and `Player.probeGround` fires
+one such ray every frame against every solid mesh on the map, which is the
+largest single cost in the game's own JS (FINDINGS #6). So every blocking prop
+on the map, across all regions, is gathered into one mesh per 12 m square after
+the scatter pass. Greyfen's 1,412 blocking props come to ~180 meshes; unmerged
+they would be more collider meshes than the rest of the map put together. The
+grouping is deliberately done ONCE for the whole pass rather than per region,
+because the regions overlap and per-region grouping left the same square with
+one mesh per region standing over it (~500 meshes for the same props).
+
+The boxes themselves stay in `colliderBoxes`, one per prop: the nav grid, the
+cover bake, the obstacle field and the AO all still see individual trunks, and
+the merge is about nothing but what a ray meets. The grouping is carried to the
+server on `MapCollision.boxGroups` — see `docs/multiplayer.md`. The editor gets
+them unmerged, for the reason it also skips `BlockMerge` and the strut merge:
+`repositionItem` walks colliders, local specs and boxes in step.
+
 Builders assemble geometry **at the origin, unrotated**, and return three parallel
 lists (`meshes`, `colliders`, `lights`) in local space; `MapBuilder` merges the
 meshes per colour and then transforms all three into place. Building at identity is
@@ -613,13 +656,20 @@ Layout gotchas that have already cost time:
   beside it, or the nav flood fill never reaches it and bots treat it as a wall. The
   boathouse and jetty decks both failed this at 0.62–0.73 m.
 - A control point's `pos` must not be inside a collider, or `surfaceAt` returns -1
-  there. Flag C was originally centred on the well. **A BLOCKING SCATTER REGION
-  reaches a flag the same way and is much easier to miss**, because nothing in the
-  layout says where its props will land: size and place one so its own radius plus
-  the prop's half-length still clears the nearest flag centre. Measured on Greyfen —
-  a log region centred 4.5 m off flag A dropped a 5.2 m trunk 0.53 m from the flag
-  and made it uncapturable. Non-blocking props (ferns, brambles) carry no collider
-  and may sit straight over a capture point.
+  there — the flag cannot be captured and `buildField` sinks its flow field's goal
+  into a cell nothing can reach. Flag C was originally centred on the well, which is
+  a PLACEMENT and still entirely the author's to get right. **A blocking SCATTER
+  region used to reach a flag the same way and is no longer able to**: `MapBuilder`
+  keeps a list of discs — every control point at 3.5 m and every spawn at 3 m — and
+  `findSpot` refuses a blocking prop that lands in one. It used to be an authoring
+  rule (size and place a region so its own radius plus the prop's half-length clears
+  the nearest flag), and that rule works while a region is five headstones beside a
+  district. It does not survive a map whose forest covers the valley on purpose:
+  the odds of a trunk landing on a given point are just the density times the
+  footprint, which at Greyfen's is about one flag in seven. A spawn is the same
+  failure one step quieter — nothing reports it, and a player deploys inside a tree.
+  Non-blocking props (ferns, brambles) are exempt and may sit straight over a
+  capture point.
 - **Adding a placement rerolls every scatter region on the map.** `findSpot` draws
   from the shared stream once per *attempt*, accepted or rejected, and placements
   build before scatter — so a new building anywhere moves every belt and every

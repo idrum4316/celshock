@@ -684,3 +684,72 @@ to zero over a band and branching the fetch out below a threshold is the shape.
 "which of three console A/Bs moved the FPS readout". A paired harness — park the
 camera, alternate the config every frame, take the median ratio — is what
 settled the equivalent questions headless and would settle these properly.
+
+---
+
+## 13. Greyfen's jungle costs 67% more geometry per frame, and nobody has costed it on real hardware
+
+**Status:** measured headless, both sides of the change. The ranking is
+trustworthy and the milliseconds do not exist.
+
+### What changed
+
+The map shipped as five belts of forty canopy trees over an otherwise empty
+valley: 354 trees placed, one trunk per 12.5 m of map, a median nearest
+neighbour of 6.6 m, and a canopy that stopped **24%** of a ray fired straight up
+from head height inside the thickest belt. It is now a forest — ~1,390 trees,
+nearest-neighbour median 3.8 m, **85-97%** closure where it is deep — with a
+crown rebuilt around broad leaf plates rather than fronds (see
+`buildJungleTree`) and the grass budget moved out of the shade and into the
+clearings.
+
+### What it costs
+
+Same 30-sample sweep as finding 12 (five control points, six bearings, bots
+frozen), headless:
+
+| | before | after |
+| --- | --- | --- |
+| scene triangles | 411k | 728k |
+| scene vertices | 631k | 1,246k |
+| active triangles / frame, mean | 831k | 1,386k |
+| active triangles / frame, max | 1,372k | 2,425k |
+| solid collider meshes | 696 | **672** |
+| whole-scene ray (`SOLID_ONLY`, 80 m) | 246 µs | **214 µs** |
+| map build | 4.0 s | 6.4 s |
+
+Two of those go the RIGHT way and are the reason the rest is affordable at all:
+`MapBuilder.clusterColliders` merges the scatter's colliders per 12 m square, so
+1,412 blocking props are ~180 meshes and the map has fewer solid meshes than it
+did with a fifth of the trees. `Player.probeGround` — the largest single cost in
+the game's own JS, finding 6 — therefore got *cheaper*.
+
+For scale, the same sweep reads 337k active triangles on Hollowmere and 339k on
+Coldharbour. Greyfen was already 2.5x either of them before this (the grass
+field is one mesh with a single bounding box over the valley, so all ~25k tufts
+are active every frame whatever the camera does) and is now 4.1x.
+
+### What is open
+
+**Whether 1.4M active triangles a frame matters, and on what.** Finding 12
+settled that this renderer is FILL-bound rather than draw-call bound on real
+hardware, and disproved triangles as the differentiator *between three maps at
+similar counts* — which is not the same question as whether doubling one map's
+count costs anything. SwiftShader cannot answer it: it ranks draw calls where a
+GPU ranks pixels, and it is the wrong instrument twice over here. What would
+settle it is finding 12's own unbuilt harness — park the camera, alternate the
+config every frame, take the median ratio — on the phone this game installs
+onto.
+
+Three levers exist if it does matter, in the order they should be reached for.
+**The counts in `greyfen/layout.ts`** are the direct one and are authored per
+region, so density can be dialled without touching a builder. **The grass** is
+the cheapest triangle on the map to give back and 7,600 tufts of it have already
+gone; the field is still ~17k tufts and ~260k triangles a frame, none of it
+culled. **The canopy tree itself** is near its floor at 351 triangles — the
+plates are 3.5x more sky per triangle than a frond and the ring counts were cut
+until removing one more measurably opened the sky — so there is little left
+there without a second, cheaper tree species, which is the one thing this change
+deliberately did not add.
+
+---

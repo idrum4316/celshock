@@ -305,6 +305,21 @@ export interface GameMap {
    */
   rayGroups: WorldBox[][];
   /**
+   * The `colliderBoxes` indices that were merged into one collider mesh each,
+   * one entry per merged mesh — a scatter region's props, grouped by locality.
+   *
+   * Unlike `rayGroups` these boxes ARE in `colliderBoxes` and everything
+   * derived from geometry still sees them one at a time; the grouping is about
+   * nothing but what a ray meets. Boxes named by no group are their own mesh,
+   * which is every collider a structure builder makes.
+   *
+   * Carried rather than recomputed for the same reason `rayGroups` is: the
+   * server rebuilds these meshes from the bake, and the grouping is a decision
+   * the client made rather than a property of the boxes.
+   * See `MapBuilder.clusterColliders`.
+   */
+  boxGroups: number[][];
+  /**
    * Every pane of glass on the map that can BREAK, in build order — and the
    * index into this list is the pane's identity everywhere, including on the
    * wire.
@@ -396,6 +411,15 @@ const SCATTER_BUILDERS: Record<ScatterSpec["prop"], ScatterBuilder> = {
   trafficCone: buildTrafficCone,
   litter: buildLitter,
 };
+
+/**
+ * The side of the square a scatter region's colliders are merged over, metres.
+ *
+ * Sized like a fence rather than like a map: a few props across, so a cluster's
+ * bounding box is small enough that most rays miss it outright and the ones
+ * that hit have a handful of boxes to test. See `MapBuilder.clusterColliders`.
+ */
+const CLUSTER = 12;
 
 /** Lights carried by scatter props. Kept sparse — every one costs a shader slot. */
 const SCATTER_LIGHTS: Partial<
@@ -563,6 +587,34 @@ export class MapBuilder {
    * (nav, cover, obstacles, AO, scatter) may see them. See `struts()`.
    */
   private rayGroups: WorldBox[][] = [];
+  private boxGroups: number[][] = [];
+  /** Scatter boxes recorded but not yet given geometry — see `build`. */
+  private pendingCluster: number[] = [];
+  /**
+   * Ground a BLOCKING scatter prop may not stand on, as discs — every control
+   * point and every spawn on the layout. Rebuilt per `build`.
+   *
+   * **This is a rule rather than an authoring habit, and the difference is
+   * what density costs.** A flag whose centre is inside a collider reports no
+   * surface at all (`surfaceAt` returns -1): it cannot be captured, and
+   * `buildField` sinks its flow field's goal into a cell nothing can reach, so
+   * every bot on the map stops going there. That is the Flag-C-on-the-well
+   * error, and the layout used to answer it by placing each blocking region
+   * far enough off to one side that its own radius plus the prop's half-length
+   * still cleared the nearest flag. That works while a region is a disc of
+   * five headstones beside a district. It does not survive a jungle: Greyfen's
+   * forest is rectangles that cover the valley, the flags are inside them on
+   * purpose, and the odds of a trunk landing on any given point are simply the
+   * density times the footprint — about one flag in seven at the density this
+   * map now runs.
+   *
+   * A spawn is the same failure one step quieter: nothing reports it, and a
+   * player deploys standing inside a tree.
+   *
+   * Non-blocking props are exempt and stay exempt. A fern over a capture point
+   * is dressing, which is exactly what the layout's own note says.
+   */
+  private keepClear: { x: number; z: number; r: number }[] = [];
 
   /**
    * Every pane, in build order, and the merged meshes their vertices live in.
@@ -628,6 +680,16 @@ export class MapBuilder {
     const terrainColliders: Mesh[] = [];
     this.boxes = [];
     this.rayGroups = [];
+    this.boxGroups = [];
+    this.pendingCluster = [];
+    // A body's standing room plus a trunk's own half-width, which is all this
+    // has to guarantee: the SHAPE of a flag's surroundings is the layout's to
+    // decide (Bravo is a bare bank and Echo is a thicket), and what cannot be
+    // left to authoring is whether the point itself is solid.
+    this.keepClear = [
+      ...layout.controlPoints.map((cp) => ({ x: cp.pos.x, z: cp.pos.z, r: 3.5 })),
+      ...layout.spawns.map((sp) => ({ x: sp.pos.x, z: sp.pos.z, r: 3 })),
+    ];
     this.panes = [];
     this.paneGroups = [];
     // Sized to the widest burial test this layout will run. `findSpot` asks
@@ -780,6 +842,13 @@ export class MapBuilder {
       if (item) for (const m of item.visuals) visuals.push(m);
     }
     this.item = null;
+    // Every region's blocking props at once, and deliberately not region by
+    // region: the regions OVERLAP (that is how the layout varies density), so
+    // clustering each on its own would hand the same 12 m square one mesh per
+    // region standing over it. Measured on Greyfen's forest, per-region
+    // grouping left 1,412 props in ~500 meshes; all together it is ~180.
+    colliders.push(...this.clusterColliders("scatter", this.pendingCluster));
+    this.pendingCluster = [];
 
     // One more merge across neighbouring structures — see BlockMerge.
     for (const merged of blocks.finish()) {
@@ -864,6 +933,7 @@ export class MapBuilder {
       colliders,
       colliderBoxes: this.boxes,
       rayGroups: this.rayGroups,
+      boxGroups: this.boxGroups,
       panes: this.panes,
       paneGroups: this.paneGroups,
       terrainColliders,
@@ -1072,10 +1142,18 @@ export class MapBuilder {
           z: spot.lz,
           rotY: yaw,
         };
-        const mesh = this.collider(`${spec.prop}-col`, box, origin, rot);
         // The region's own frame, so the editor can turn the field as a unit.
         if (item) item.localBoxes.push(box);
-        colliders.push(mesh);
+        if (item) {
+          colliders.push(this.collider(`${spec.prop}-col`, box, origin, rot));
+        } else {
+          // Recorded now and given geometry at the end of the region: the
+          // burial test the NEXT prop runs reads `boxIndex`, so the box cannot
+          // wait, and a mesh per box is what `clusterColliders` exists to
+          // avoid. Nothing between here and there touches meshes.
+          this.pendingCluster.push(this.boxes.length);
+          this.recordBox(box, origin, rot);
+        }
       }
     }
 
@@ -1138,6 +1216,19 @@ export class MapBuilder {
         }
       }
       if (ok && this.insideCollider(spec, x, z, clearance)) ok = false;
+      // Only what a body would meet — see `keepClear`. A prop's own clearance
+      // is in the test because the disc is about the ground being FREE, and a
+      // trunk half a metre outside it still leans over the flag.
+      if (ok && spec.blocking) {
+        for (const c of this.keepClear) {
+          const dx = c.x - x;
+          const dz = c.z - z;
+          if (dx * dx + dz * dz < (c.r + clearance) ** 2) {
+            ok = false;
+            break;
+          }
+        }
+      }
       if (ok) return { x, z, lx, lz };
     }
     return null;
@@ -1307,15 +1398,9 @@ export class MapBuilder {
     origin?: Vector3,
     parentRotY = 0,
   ): Mesh {
-    const world = this.worldBoxOf(box, origin, parentRotY);
+    const world = this.recordBox(box, origin, parentRotY);
     const mesh = this.boxMesh(name, world);
-    this.item?.boxes.push(this.boxes.length);
     this.item?.colliders.push(mesh);
-    this.boxes.push(world);
-    // The scatter index rides along here because this is the only place a
-    // collider is ever made — the same property that makes `boxes` complete.
-    // Feeding it anywhere else would leave the two able to disagree.
-    insertBox(this.boxIndex, world);
     mesh.checkCollisions = true;
     // `porous` rides in the metadata rather than being answered by leaving
     // `solid` off, because the two questions have different answers and both
@@ -1336,6 +1421,101 @@ export class MapBuilder {
         : { solid: true };
     mesh.freezeWorldMatrix();
     return mesh;
+  }
+
+  /**
+   * Records one collider box in `boxes` and in the build-time index, and hands
+   * back its world form — everything `collider()` does except mint the mesh.
+   *
+   * **Split out so a mesh can be made LATER, or made once for many boxes**, and
+   * the order matters: `findSpot`'s burial test reads `boxIndex` as it places,
+   * so a prop's box has to be indexed before the next prop is sampled, whatever
+   * happens to its geometry afterwards. See `clusterColliders`.
+   *
+   * `collider()` is still the only place a collider MESH is made from a single
+   * box, and this is still the only place a `WorldBox` enters `boxes` — which
+   * is the property the bake, the nav grid and the AO all rest on.
+   */
+  private recordBox(box: BoxSpec, origin?: Vector3, parentRotY = 0): WorldBox {
+    const world = this.worldBoxOf(box, origin, parentRotY);
+    this.item?.boxes.push(this.boxes.length);
+    this.boxes.push(world);
+    // The scatter index rides along here because this is the only place a box
+    // is ever recorded — the same property that makes `boxes` complete.
+    // Feeding it anywhere else would leave the two able to disagree.
+    insertBox(this.boxIndex, world);
+    return world;
+  }
+
+  /**
+   * Turns already-recorded boxes into collider meshes MERGED BY LOCALITY —
+   * one mesh per `CLUSTER` square of ground rather than one per box.
+   *
+   * **This is the fence lesson at forest scale, and the numbers are the same
+   * ones.** A `pickWithRay` costs per MESH before it costs per triangle: a
+   * predicate call, a world-matrix inverse and a bounding test each, and
+   * `Player.probeGround` fires one such ray every frame against every solid
+   * mesh on the map (see FINDINGS #6, where it is the largest single cost in
+   * the game's own JS). Greyfen's five belts were 354 loose tree boxes out of
+   * 696 solid meshes, so half of every ray in the game was already being spent
+   * on trees — and a jungle dense enough to be worth the name needs three
+   * times that. Merged per 12 m square the same 950 trees are ~120 meshes, so
+   * the map gets a forest and the ray budget gets *cheaper* than it was.
+   *
+   * **Locality is the whole of it.** `struts()` merges per fence for the
+   * reason this merges per square: one mesh around every tree on the map would
+   * wrap one bounding box around the whole valley, and then every ray fired
+   * anywhere would test every trunk. A square is what a region has instead of a
+   * placement — a belt is 78 x 40 m of scattered props with no natural unit
+   * inside it — and 12 m is a few trees across, which is the same handful a
+   * fence holds.
+   *
+   * The boxes stay in `boxes`, one per prop, because everything derived from
+   * geometry reads that list and a cluster is not a shape: the nav grid, the
+   * cover bake, the obstacle field and the AO all still see individual trunks.
+   * What is merged is only what a ray meets. The grouping is carried on
+   * `boxGroups` so the SERVER can rebuild the same meshes from the bake — a
+   * flat list cannot say which boxes were one cluster, exactly as with
+   * `rayGroups`.
+   *
+   * The editor never gets here: it needs one mesh per box so `repositionItem`
+   * can walk colliders and boxes in step, which is the same reason it skips the
+   * visual `BlockMerge` and the strut merge.
+   */
+  private clusterColliders(name: string, indices: readonly number[]): Mesh[] {
+    const buckets = new Map<string, number[]>();
+    for (const i of indices) {
+      const box = this.boxes[i];
+      const key = `${Math.floor(box.cx / CLUSTER)},${Math.floor(box.cz / CLUSTER)}`;
+      const bucket = buckets.get(key);
+      if (bucket) bucket.push(i);
+      else buckets.set(key, [i]);
+    }
+    const out: Mesh[] = [];
+    for (const [key, group] of buckets) {
+      const parts = group.map((i, j) =>
+        this.boxMesh(`${name}-col${key}-${j}`, this.boxes[i]),
+      );
+      // A single box is a merge of one: cheaper to keep the mesh than to run
+      // it through `MergeMeshes` for nothing.
+      const mesh =
+        parts.length === 1
+          ? parts[0]
+          : Mesh.MergeMeshes(parts, true, true, undefined, false, false);
+      if (!mesh) continue;
+      mesh.name = `${name}-cluster${key}`;
+      mesh.isVisible = false;
+      mesh.isPickable = true;
+      mesh.checkCollisions = true;
+      // Nothing clustered is porous or glass — see the caller, which refuses to
+      // group anything whose metadata is not plain `solid`. One mesh cannot
+      // carry two answers, and glass has to stay addressable one pane at a time.
+      mesh.metadata = { solid: true };
+      mesh.freezeWorldMatrix();
+      this.boxGroups.push(group);
+      out.push(mesh);
+    }
+    return out;
   }
 
   /**

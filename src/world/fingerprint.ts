@@ -67,6 +67,19 @@ export interface WorldFingerprint {
   rayBoxes: number;
   rayHash: string;
   /**
+   * The clustering of the SOLID boxes — how many merged collider meshes a
+   * scatter region's props were gathered into, and which boxes went into each.
+   *
+   * The nav graph is blind to this one too, and completely: a cluster changes
+   * nothing about the world, only how many bounding tests a ray pays to meet
+   * it. That is precisely why it belongs here — a server that ignored
+   * `boxGroups` would agree with the client about every box on the map and
+   * quietly do hundreds of times the picking work per shot, with nothing
+   * visible on either side to say so.
+   */
+  boxGroups: number;
+  boxGroupHash: string;
+  /**
    * The glazing that can BREAK: how many panes, and where they all are.
    *
    * Not how much glass is drawn — a sheet with something solid behind it is
@@ -119,6 +132,14 @@ export function worldFingerprint(map: GameMap): WorldFingerprint {
     for (const b of group) ray.push(b.w, b.h, b.d, b.cx, b.cy, b.cz, b.rotX, b.rotY);
   }
 
+  // The grouping alone: the boxes themselves are already covered by the nav
+  // graph and the volume, so what is left to disagree about is which of them
+  // share a mesh.
+  const groups: number[] = [];
+  for (const group of map.boxGroups) {
+    groups.push(group.length, ...group);
+  }
+
   // Order-dependent for a sharper reason than the timber's: a pane's position
   // in this list is what a `glass` event on the wire names it by. `box` is in
   // the hash because it is the collider a break has to clear, and two sides
@@ -134,6 +155,8 @@ export function worldFingerprint(map: GameMap): WorldFingerprint {
     rayGroups: map.rayGroups.length,
     rayBoxes: (ray.length - map.rayGroups.length) / 8,
     rayHash: hashNumbers(ray),
+    boxGroups: map.boxGroups.length,
+    boxGroupHash: hashNumbers(groups),
     panes: map.panes.length,
     paneHash: hashNumbers(panes),
     surfaces: map.nav.surfaceCount,
