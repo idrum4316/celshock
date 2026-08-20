@@ -244,7 +244,9 @@ src/
                         #   every merge: AO in the ALPHA, the world mark in the
                         #   GREEN, the wind's sway weight in the RED
     sway.ts             # Which foliage the wind moves and how much of it moves
-                        #   at a given height. Marks, layers, the weight ramp
+                        #   at a given height. Marks, layers, the weight ramp.
+                        #   A marked group leaves Babylon's outline pass and
+                        #   gets an ink twin (MapBuilder.inkTwin) instead
     BuildingKit.ts      # Facade: shared types + BUILDERS registry
     kit/core.ts         #   Build accumulator (box/wall/guard/flight/...),
                         #   palette, builder contract

@@ -909,6 +909,25 @@ export class MapBuilder {
       );
     }
 
+    // The ink for everything that sways, and it is built HERE — after the bake
+    // and before the freeze — for two reasons that are both about the twin
+    // SHARING its source's geometry rather than copying it.
+    //
+    // After the bake, because a shared `Geometry` means the colour buffer the
+    // bake just wrote is already on the twin: it reads the same weights, sways
+    // by the same amount, and cannot drift from the surface it wraps. Baking
+    // afterwards would walk the same vertices a second time to write them the
+    // same values.
+    //
+    // Before `markVisual`, because the twin needs the same freeze, the same
+    // `isPickable = false` and the same disposal as every other visual — and
+    // pushing it into `visuals` is what gets it all three. It is a VISUAL in
+    // every sense the rest of this file means: no collider, no box, no pick.
+    for (const m of [...visuals]) {
+      const twin = inkTwin(m, this.mats);
+      if (twin) visuals.push(twin);
+    }
+
     for (const m of visuals) this.markVisual(m);
 
     // Navigation is derived from the finished collider set, then a flow field
@@ -2155,19 +2174,18 @@ function mergeByMaterial(meshes: Mesh[], tag: string): Mesh[] {
       for (const flag of flags) {
         merged.metadata = { ...(merged.metadata ?? {}), [flag]: true };
       }
-      // **A swaying group carries the mark forward, and it is given `noOutline`
-      // with it — which is a mechanical consequence, not a preference.**
-      // Babylon draws ink as an inverted hull through its OWN shader, whose
-      // uniform list is hardcoded and takes no clock; there is nowhere to put
-      // the wind, and the hull has no colour attribute to weight it by even if
-      // there were. So an outlined leaf would lean out from under a shell left
-      // standing at the rest pose, and a third of a metre against a five
-      // centimetre line is a dark ghost of the still canopy hanging behind the
-      // moving one. Glass is the same argument with a stencil buffer in place
-      // of a clock, and it loses as little: what draws a crown is the sky
-      // between its leaves and the hard band across each plate, both of which
-      // are still there. Measured on Greyfen's canopy, the two frames are
-      // nearly indistinguishable.
+      // **A swaying group carries the mark forward, and it is taken out of
+      // BABYLON's outline pass — which is a mechanical consequence, not a
+      // preference, and not the same thing as losing its ink.**
+      // `OutlineRenderer.isReady` builds its hull's effect with a hardcoded
+      // attribute list of position and normal (`const color = false`,
+      // literally) and a hardcoded uniform list with no clock in it, so that
+      // hull can see neither the wind nor the per-vertex weight. An outlined
+      // leaf would lean out from under a shell left standing at the rest pose,
+      // and a third of a metre against a five centimetre line is a dark ghost
+      // of the still canopy hanging behind the moving one. What draws the line
+      // instead is `inkTwin`, below: the same hull through the cel shader,
+      // which has the wind and the weight already.
       if (sway) {
         markSwayMerged(merged as Mesh, sway);
       }
@@ -2181,13 +2199,48 @@ function mergeByMaterial(meshes: Mesh[], tag: string): Mesh[] {
 type Group = { flags: Exemption[]; sway: SwayLayer | null; meshes: Mesh[] };
 
 /**
- * Carries a merged group's sway mark onto the mesh, with the ink taken off.
+ * Carries a merged group's sway mark onto the mesh, and takes Babylon's ink off
+ * it.
  *
  * Both writes in one place because the second is a consequence of the first and
- * nothing must ever do one without the other — see the caller for the whole of
- * why the ink cannot follow.
+ * nothing must ever do one without the other — see the caller for why that
+ * hull cannot follow a moving surface. What replaces it is `inkTwin`, below;
+ * the mark is what both of them key on.
  */
 function markSwayMerged(mesh: Mesh, layer: SwayLayer): void {
   marksSway(mesh, layer);
   mesh.metadata = { ...(mesh.metadata ?? {}), noOutline: true };
+}
+
+/**
+ * The ink for one swaying mesh: an inverted hull sharing its geometry, drawn
+ * through the cel shader's `CEL_INK` variant so it leans with the leaf.
+ *
+ * Returns null for everything that does not sway, which is the whole map bar
+ * the foliage — Babylon's outline pass is still what draws the other 600-odd
+ * meshes, and this is not a replacement for it.
+ *
+ * **The twin SHARES its source's `Geometry` rather than copying it**
+ * (`Mesh.clone` hands the same instance to both), so eighty-odd of these cost
+ * no vertex memory, no upload, and no second bake — and cannot fall out of step
+ * with the surface, because there is only one buffer to fall out of step with.
+ * What they do cost is one draw call each, which is still half of what the
+ * outline pass was charging for the same meshes: Babylon renders an opaque
+ * mesh's hull TWICE, once before it with depth-write off and once after with
+ * colour-write off to repair the depth buffer.
+ *
+ * The three exemptions are not a precaution. A hull that cast a shadow would
+ * lay a fattened copy of the canopy on the floor; one in the glow layer would
+ * bloom the line; and one carrying an outline of its own is the start of an
+ * infinite regress.
+ */
+function inkTwin(mesh: Mesh, mats: CelMaterialFactory): Mesh | null {
+  if (!swayLayerOf(mesh)) return null;
+  const source = mesh.material;
+  if (!source) return null;
+  const twin = mesh.clone(`${mesh.name}-ink`, mesh.parent, true);
+  if (!twin) return null;
+  twin.material = mats.getInk(source.name);
+  twin.metadata = { noOutline: true, noGlow: true, noShadowCaster: true };
+  return twin;
 }

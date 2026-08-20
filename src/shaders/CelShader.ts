@@ -272,6 +272,16 @@ uniform float windTime;
 uniform vec2 windDir;
 uniform vec3 windParams;
 
+#ifdef CEL_INK
+// The ink hull's own expansion, and the eye it thins against. Declared here
+// rather than shared with the fragment stage because only this variant expands:
+// x = full width (m), y = the distance it holds it to, z = the distance it has
+// reached its floor (w) by. Same four numbers as CONFIG.graphics.outlines,
+// spent per VERTEX rather than per mesh — see getInk in this file.
+uniform vec3 camPos;
+uniform vec4 inkParams;
+#endif
+
 varying vec3 vNormalW;
 varying vec3 vPosW;
 varying vec4 vBaked;
@@ -310,8 +320,28 @@ void main() {
     worldPos.xz += windDir * (gust * windParams.x * color.r);
   }
 
-  vPosW = worldPos.xyz;
   vNormalW = normalize(mat3(finalWorld) * normal);
+
+  #ifdef CEL_INK
+  // The inverted hull, expanded along the world normal AFTER the sway — which
+  // is the whole reason this variant exists. Babylon's own outline pass cannot
+  // do it: OutlineRenderer.isReady builds its effect with a hardcoded attribute
+  // list of position and normal ("const color = false", literally) and a
+  // hardcoded uniform list with no clock in it, so its hull can see neither the
+  // wind nor the weight and stays at the rest pose while the leaf leaves it.
+  //
+  // Thinned per VERTEX against the eye rather than per mesh, which is a
+  // correction as well as a convenience: updateOutlineScales measures one
+  // distance per mesh, and BlockMerge hands it meshes that span the whole fog
+  // band (measured: 50 of 687). The colour fade was moved per pixel for exactly
+  // that reason; this is the width catching up.
+  float inkDist = distance(worldPos.xyz, camPos);
+  float inkT = clamp(
+    (inkDist - inkParams.y) / max(inkParams.z - inkParams.y, 0.001), 0.0, 1.0);
+  worldPos.xyz += vNormalW * (inkParams.x * mix(1.0, inkParams.w, inkT));
+  #endif
+
+  vPosW = worldPos.xyz;
   vBaked = color;
   #ifdef CEL_TEXTURED
   vUv = uv;
@@ -365,6 +395,9 @@ uniform vec3 baseColor;
 #endif
 uniform vec3 fogColor;
 uniform vec2 fogParams;  // x = start, y = end
+#ifdef CEL_INK
+uniform vec3 inkColor;
+#endif
 uniform vec3 mistColor;
 uniform vec2 mistParams; // x = height falloff, y = strength
 uniform vec3 camPos;
@@ -560,6 +593,16 @@ vec3 reflectBoxDir(vec3 dir, vec3 pos) {
 #endif
 
 void main() {
+  #ifdef CEL_INK
+  // The ink is a flat colour and nothing else — no lighting, no shadow, no rim,
+  // no occlusion. It falls through to the shared atmosphere block at the bottom
+  // so the line over a wall dissolves on exactly the curve the wall does, which
+  // is what OutlineFog has to bake literals into Babylon's shader to achieve
+  // and what this variant gets for free. It picks up the ground MIST as well,
+  // which that one cannot do at all.
+  vec3 col = inkColor;
+  float alpha = 1.0;
+  #else
   vec3 n = facetNormal();
 
   // How level this facet is, read off the TRUE geometry before any bump map
@@ -839,6 +882,8 @@ void main() {
 #endif
 #endif
 
+  #endif // CEL_INK — everything above is the lit path the ink skips
+
   // --- atmosphere ---
   float dist = length(vPosW - camPos);
 
@@ -998,6 +1043,12 @@ export class CelMaterialFactory {
     "windTime",
     "windDir",
     "windParams",
+    // Spent only under CEL_INK. On every other variant the compiler drops them
+    // and the `setVector*` finds no location, which is the same no-op the
+    // glazing uniforms already are on a matte material — one list is worth more
+    // than a second one that has to be kept in step with this.
+    "inkColor",
+    "inkParams",
   ];
   /**
    * Every cel material's vertex attributes.
@@ -1198,6 +1249,79 @@ export class CelMaterialFactory {
       this.applyShadow(mat);
       this.applySpec(mat, spec);
       this.applyTranslucency(mat, null);
+      this.cache.set(cacheKey, mat);
+    }
+    return mat;
+  }
+
+  /**
+   * The INK for a surface that moves — an inverted hull drawn through this
+   * shader instead of through Babylon's outline pass.
+   *
+   * **It exists because Babylon's hull cannot follow a vertex-animated
+   * surface, and that is a fact about its renderer rather than a taste.**
+   * `OutlineRenderer.isReady` builds its effect with a hardcoded attribute list
+   * of position and normal — `const color = false`, literally — and a hardcoded
+   * `uniformsNames` with no clock in it. So the hull can see neither the wind
+   * nor the per-vertex weight, and a swaying leaf leans out from under a shell
+   * left standing at the rest pose: a third of a metre against a five
+   * centimetre line, which reads as a dark ghost of the still canopy hanging
+   * behind the moving one. Everything the hull needs is already in THIS shader,
+   * so the answer is to draw it here.
+   *
+   * Three things fall out of that which are worth having on their own:
+   *
+   * - **The width is thinned per VERTEX**, against the same eye the fog uses,
+   *   rather than per mesh by `updateOutlineScales`. That is a correction:
+   *   `BlockMerge` hands out meshes that span the whole fog band (measured: 50
+   *   of 687), and the ink's COLOUR fade was already moved per pixel for
+   *   exactly that reason. This is the width catching up.
+   * - **The fade is the surface's own**, computed from the same `fogParams`
+   *   and `mistParams` in the same block, so the line over a wall dissolves on
+   *   the curve the wall dissolves on. `OutlineFog` has to bake literals into
+   *   Babylon's shader and drop compiled programs to get half of this, and
+   *   cannot get the ground mist at all.
+   * - **It is ONE draw rather than two.** Babylon renders an opaque mesh's
+   *   outline twice — once before with depth-write off, once after with
+   *   colour-write off to repair the depth buffer. An inverted hull with
+   *   `cullBackFaces = false` and ordinary depth state needs neither pass.
+   *
+   * Keyed on the SOURCE material's name rather than on a hex, so `inkColorFor`
+   * resolves exactly the colour `outlineInkFor` would have given the same
+   * surface, and a matte and a translucent green get their own entries the way
+   * they already do everywhere else in this cache.
+   */
+  getInk(sourceName: string): ShaderMaterial {
+    const cacheKey = `\0ink-${sourceName}`;
+    let mat = this.cache.get(cacheKey);
+    if (!mat) {
+      mat = new ShaderMaterial(
+        `cel-ink-${sourceName}`,
+        this.scene,
+        { vertex: "cel", fragment: "cel" },
+        {
+          attributes: [...CelMaterialFactory.ATTRIBUTES],
+          uniforms: [...CelMaterialFactory.UNIFORMS],
+          samplers: [...CelMaterialFactory.SAMPLERS],
+          defines: ["#define CEL_INK"],
+        },
+      );
+      // Culling is ON and it is the FRONT faces that go: an inverted hull is
+      // the back of an expanded copy, which is why this needs no ordering
+      // against the surface it wraps. Inside the silhouette the back faces are
+      // behind the real surface and lose the depth test; outside it they are
+      // the nearest thing there is, and that ring is the line.
+      mat.backFaceCulling = true;
+      mat.cullBackFaces = false;
+      mat.setColor3("inkColor", inkColorFor(sourceName));
+      const o = CONFIG.graphics.outlines;
+      mat.setVector4(
+        "inkParams",
+        new Vector4(INK_WIDTH, o.fullDistance, o.farDistance, o.minScale),
+      );
+      this.applyCamera(mat);
+      this.applyWind(mat);
+      this.applyEnvironment(mat);
       this.cache.set(cacheKey, mat);
     }
     return mat;
@@ -1991,6 +2115,18 @@ const fogState = { color: new Color3(0.05, 0.06, 0.08), start: 24, end: 78 };
  * normalises the same pair for its own material — two readers of one bearing,
  * which is exactly what moving it out of `CONFIG.grass` bought.
  */
+/**
+ * The ink hull's width in metres, matching what `MapBuilder` hands
+ * `addOutline` for the same world geometry — 0.05, the world's line weight.
+ *
+ * Not in `CONFIG.graphics.outlines` beside the four numbers it is spent with,
+ * because those four are about the FADE and this is the one thing the callers
+ * of `addOutline` already state per call site (the viewmodel's is 0.004 and a
+ * grenade's is 0.02). The swaying geometry is all world geometry, so there is
+ * one value and it is that one.
+ */
+const INK_WIDTH = 0.05;
+
 const windBearing = new Vector2(
   CONFIG.wind.dir[0],
   CONFIG.wind.dir[1],
@@ -2030,9 +2166,21 @@ const outlineEntries: { mesh: Mesh; width: number }[] = [];
  * here; textured/skinned materials get the palette-neutral fallback ink.
  */
 function outlineInkFor(mesh: Mesh): Color3 {
+  return inkColorFor(mesh.material?.name ?? "");
+}
+
+/**
+ * The same ink, resolved from a material NAME rather than from a mesh.
+ *
+ * Split out because the ink is now drawn two ways and both must arrive at the
+ * same colour: Babylon's outline pass takes it per mesh through
+ * `outlineInkFor`, and `getInk` takes it per material for the geometry that
+ * sways — where Babylon's hull cannot follow. A second darkening rule would
+ * put two different lines on one map.
+ */
+export function inkColorFor(materialName: string): Color3 {
   const o = CONFIG.graphics.outlines;
-  const name = mesh.material?.name ?? "";
-  const m = /^cel-(?:gloss-|trans-)?(#(?:[0-9a-fA-F]{6}))$/.exec(name);
+  const m = /^cel-(?:gloss-|trans-)?(#(?:[0-9a-fA-F]{6}))$/.exec(materialName);
   if (m) {
     return Color3.FromHexString(m[1]).scale(o.tintFactor);
   }

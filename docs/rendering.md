@@ -250,19 +250,46 @@ is left out, because it is a thickening on the bole and the bole does not move.
 
 Two consequences are worth stating plainly, because both look like bugs:
 
-- **A swaying merge group is drawn without ink, and that is mechanical rather
-  than a preference.** Babylon draws an outline as an inverted hull through its
-  own shader, whose uniform list is hardcoded (`OutlineRenderer` builds the
-  effect with a fixed `uniformsNames`) and whose attributes are position and
-  normal — there is nowhere to put a clock and no colour attribute to weight a
-  displacement by. So an outlined leaf leans out from under a shell left
-  standing at the rest pose, and a third of a metre against a five centimetre
-  line is a dark ghost of the still canopy hanging behind the moving one.
-  `mergeByMaterial` sets `noOutline` with the mark so the two can never be
-  separated. It is the glass argument with a hardcoded uniform list in place of
-  a stencil buffer, and it loses as little: what draws a crown is the sky
-  between its leaves and the hard band across each plate. Compared frame for
-  frame on Greyfen's canopy from below, the two are nearly indistinguishable.
+- **A swaying merge group leaves BABYLON's outline pass and draws its own ink
+  instead**, and the first half of that is mechanical rather than a preference.
+  `OutlineRenderer.isReady` builds the hull's effect with a hardcoded attribute
+  list of position and normal — `const color = false`, literally — and a
+  hardcoded `uniformsNames` with no clock in it. Patching the shader source, as
+  `OutlineFog` does, cannot reach either list. So that hull can see neither the
+  wind nor the per-vertex weight: an outlined leaf leans out from under a shell
+  left standing at the rest pose, and a third of a metre against a five
+  centimetre line is a dark ghost of the still canopy hanging behind the moving
+  one. `mergeByMaterial` sets `noOutline` with the mark so the two can never be
+  separated.
+
+  What draws the line instead is `MapBuilder.inkTwin`: one inverted hull per
+  swaying mesh, through this shader's `CEL_INK` variant, which has the wind, the
+  weight, the eye and the fog already. Three things fall out of that which are
+  better than what Babylon was doing, not merely equal:
+
+  - **The twin SHARES its source's `Geometry`** — `Mesh.clone` hands the same
+    instance to both — so eighty-odd of them cost no vertex memory, no upload
+    and no second bake, and the ink cannot drift from the leaf because there is
+    only one buffer to drift from.
+  - **The width thins per VERTEX** against the same eye the fog uses, rather
+    than per mesh in `updateOutlineScales`. That is a correction, not a
+    convenience: `BlockMerge` hands out meshes spanning the whole fog band
+    (measured: 50 of 687), which is exactly why the ink's *colour* fade was
+    moved per pixel. This is the width catching up.
+  - **It is one draw rather than two.** Babylon renders an opaque mesh's
+    outline twice — once before it with depth-write off, once after with
+    colour-write off to repair the depth buffer. An inverted hull with
+    `cullBackFaces = false` and ordinary depth state needs neither pass, and
+    needs no ordering against the surface it wraps: inside the silhouette its
+    back faces lose the depth test, outside it they are the nearest thing there
+    is, and that ring is the line.
+
+  The fade is the surface's own, out of the same `fogParams` and `mistParams` in
+  the same block, so a line over a wall dissolves on the curve the wall
+  dissolves on — and picks up the ground mist, which `OutlineFog`'s baked
+  literals cannot do at all. Verified on Greyfen: 81 swaying meshes, 81 twins,
+  every one of them carrying a non-zero weight, and none of them in Babylon's
+  pass or in the shadow map.
 - **The shadow it casts is the REST pose's, always.** The depth map is rendered
   from Babylon's own shadow shader, which never sees the displacement, so the
   dapple does not move — and, more importantly, does not *stutter*: the map
@@ -305,7 +332,12 @@ can only be judged from under the thing, moonward.
 ## The glazing: the one thing here that is not opaque
 
 `getGlass` is the fourth variant and the odd one out three times over, and each
-difference is forced by what a window is.
+difference is forced by what a window is. (`getInk` is a fifth, added for the
+wind — see the outline note above. It is cheap to add to this roster because it
+takes the albedo path away rather than adding one: it writes a flat colour and
+falls straight through to the atmosphere block, so it needs no spec, no
+translucency and no `outlineInkFor` name of its own — nothing outlines an
+outline.)
 
 **It is a DEFINE (`CEL_GLASS`) rather than a uniform**, unlike the two above. The
 trick that makes those free is that a black colour multiplies the term out — but

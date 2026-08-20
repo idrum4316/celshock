@@ -529,6 +529,15 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   drawn, read the buffer instead of the pixels:
   `m.getVerticesData("color")` on a mesh with `m.metadata.sway` should hold a
   non-zero red on the vertices high off the ground and near zero at its foot.
+- **The swaying foliage's ink is a MESH, not `renderOutline`, so counting the
+  one will not find the other.** Every mesh with `metadata.sway` has
+  `renderOutline` false and a twin beside it whose material name starts
+  `cel-ink-`; the pair that proves the wiring is `swayMeshes === inkTwins`, plus
+  every twin's colour buffer holding a non-zero RED (otherwise the twin is
+  there and standing still while its leaf moves, which no still screenshot
+  shows). Check `metadata.noShadowCaster` on them in the same pass — a hull in
+  the shadow map lays a fattened copy of the canopy on the floor, and it is a
+  quiet enough artefact to survive a review.
 - **A source edit reloads the page and destroys the handle mid-run.** The dev
   server hot-reloads on any file in the module graph, and the symptom is
   `page.evaluate: Execution context was destroyed` or a bare `undefined` where

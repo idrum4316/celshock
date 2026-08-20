@@ -411,9 +411,11 @@ stage, weighted by the red channel above and clocked by
 `CelMaterialFactory.updateWind`, which is advanced beside the field's rather
 than beside the shader's eye — a pause holds the world, so it must hold the
 canopy too. **Anything a collider stands in for may never sway** (the box does
-not move with it), and **a swaying merge group is drawn without ink**, because
-Babylon's outline hull has neither a clock nor a weight and would hang a still
-ghost behind a moving leaf. `world/sway.ts` is where the mark and the ramp live.
+not move with it), and **a swaying merge group draws its own ink** — Babylon's
+outline hull has neither a clock nor a weight and would hang a still ghost
+behind a moving leaf, so `MapBuilder.inkTwin` gives it an inverted hull through
+the cel shader instead, sharing the geometry so the two cannot drift.
+`world/sway.ts` is where the mark and the ramp live.
 
 **The world is OPAQUE with exactly one exception, and it is glazing you can see
 THROUGH.** `getGlass` (`#define CEL_GLASS`) writes a Fresnel alpha per pixel: a
