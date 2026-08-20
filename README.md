@@ -276,8 +276,8 @@ the top.
   own where it stacks floors (Coldharbour's offices are three deep). Unusually
   deep stacks still need that number raised, and overflow is silent.
 - Three maps: **Hollowmere**, a fog-drowned village at night; **Greyfen**, a
-  jungle valley at first light, still being built; and **Coldharbour**, a city's
-  business district on a clear afternoon — larger than the other two, with no
+  jungle valley two hours after sunrise, with the sun coming down through the
+  canopy in shafts; and **Coldharbour**, a city's business district before dusk — larger than the other two, with no
   fog wall, and with buildings you can fight through on three floors. The system
   supports more; a fourth is one layout file plus an environment.
 - **Multiplayer is one server process, and the lobby lists only that one.**

@@ -25,8 +25,8 @@ import {
  *
  * - the directional key light is quantized into hard bands, and its glint is a
  *   `smoothstep`ped Blinn lobe — a hard-edged sparkle, not a gradient — scaled
- *   by the map's own `WaterEnvSpec.glint`, because a moon and an overcast sky
- *   are reflections of very different sizes;
+ *   by the map's own `WaterEnvSpec.glint`, because a moon on a creek and a sun
+ *   on a flooded valley are reflections of very different sizes;
  * - point lights contribute mostly specular glints, so a muzzle flash over
  *   the creek snaps across the surface the way it does across the village;
  * - body colour is a fresnel between deep and shallow palette colours, both
@@ -188,8 +188,8 @@ void main() {
   vec3 col = base * light;
 
   // --- key-light glint: hard-edged banded sparkle, scaled by the map's own
-  // WaterEnvSpec.glint — a moon on a creek and an overcast sky on a flood are
-  // not the same reflection. ---
+  // WaterEnvSpec.glint — a moon on a creek and a sun on a flood are not the
+  // same reflection. ---
   vec3 h = normalize(-lightDir + viewDir);
   float spec = pow(max(dot(n, h), 0.0), waveB.y);
   col += lightColor * waveB.z * smoothstep(0.25, 0.6, spec) * mix(0.6, 1.0, chop);

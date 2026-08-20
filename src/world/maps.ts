@@ -62,7 +62,8 @@ export const HOLLOWMERE: MapDef = {
 };
 
 /**
- * Greyfen: the same valley at first light. Its layout was forked from
+ * Greyfen: the same valley on a jungle morning, two hours after sunrise, with
+ * the sun coming down through the canopy in shafts. Its layout was forked from
  * Hollowmere's and is diverging; the two share no module and must not.
  */
 export const GREYFEN: MapDef = {

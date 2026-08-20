@@ -297,7 +297,8 @@ src/
                               #   the other flags, and the trestle over the river
     greyfen/heights.ts        # GENERATED floor heights — a Y-shaped river,
                               #   wadeable everywhere (banks grade at 0.22)
-    greyfen/environment.ts    # Palette, fog, sun, sky — overcast dawn
+    greyfen/environment.ts    # Palette, fog, sun, sky, shafts — a jungle
+                              #   morning two hours after sunrise
     greyfen/collision.ts      # GENERATED collider boxes (`npm run collision`)
     coldharbour/layout.ts     # The third map: a city's business district. The
                               #   first that is not 240 m (`size: 320`) and the

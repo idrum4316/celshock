@@ -495,11 +495,18 @@ unaffected:
   ground where the shadows stop. It costs texel density (`window / mapSize`)
   and there is a ceiling past which it buys nothing, because along the sun's
   own azimuth the DEPTH volume binds first — see `ShadowSystem.setShadowWindow`.
+  **Greyfen states 140 for the same reason at a quarter the scale, and what
+  raised it was a CANOPY rather than a tower**: its fronds hang 10 m up, so
+  dropping its sun from 52 degrees to 28 moved their shadows from 8 m off each
+  trunk to 19, and the dapple stopping in a straight line at 55 m is what a
+  110 m window then draws across the forest floor.
 
 **The shipped maps are Hollowmere** (a night village), **Greyfen** (a jungle
-valley at first light) **and Coldharbour** (a city's business district on a clear
-afternoon). Coldharbour is the map all three overrides exist for: 320 m, no fog
-wall, and buildings with three walked floors in them.
+valley two hours after sunrise, with shafts coming down through the canopy)
+**and Coldharbour** (a city's business district an hour before dusk).
+Coldharbour is the map the first three overrides exist for: 320 m, no fog wall,
+and buildings with three walked floors in them. The fourth is Greyfen's as well
+as its, and both state it for the same reason: a sun came down.
 
 → **[`docs/world.md`](docs/world.md)** — the per-map environment overrides and
 floor surfaces, the per-map extent and surface stack and what each owes, the

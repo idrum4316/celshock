@@ -84,10 +84,17 @@ export interface SkySpec {
    * it.** `Sky` hands `GodRays` the direction the light hangs in, and a zero
    * vector there already means "nothing to converge on" — the contract
    * `Sky.clear()` documents. So a sky with no disc is a sky with no shafts,
-   * through the path that already existed, which is what an overcast day
-   * wants on both counts: there is no sun to see, and `CONFIG.godRays`'
-   * luminance threshold IS the whole occlusion test and is set to sit above a
-   * night street. Under a bright sky it would fire on everything.
+   * through the path that already existed.
+   *
+   * **No shipped map takes it any more, and what retired it is `rays` below.**
+   * Greyfen was the one that did, on an overcast premise, and half the argument
+   * for that premise was a rendering constraint rather than a look:
+   * `CONFIG.godRays`' luminance threshold IS the whole occlusion test and the
+   * shipped value sits above a night street, so under a lit sky it fired on
+   * everything and the only way to be rid of it was to be rid of the disc.
+   * Giving that number to the MAP answers it without giving up either. What is
+   * left here is for a sky that genuinely has no source to see, and it still
+   * works.
    */
   discRadius?: number;
   /**
@@ -136,12 +143,21 @@ export interface WaterEnvSpec {
    * Scales `CONFIG.water.specStrength`, which is Hollowmere's. Defaults to 1.
    *
    * **The glint is a light source's reflection, so it belongs to the map's
-   * hour rather than to water in general.** A moon over a six-metre creek is a
-   * point: a hard, near-white sparkle is exactly right, and the creek is too
-   * narrow for the lobe to cover much of it. An overcast dawn over a flooded
-   * valley is neither — the sky is the source, the reflection is a sheen the
-   * width of the water, and the same number blows a white sheet across a
-   * quarter of the screen. Turn it DOWN for a bright map, not up.
+   * hour rather than to water in general**, and the shipped flood turns it
+   * DOWN twice over. A moon on a six-metre creek is a point: a hard, near-white
+   * sparkle is exactly right, and the creek is too narrow for the lobe to cover
+   * much of it. A flooded valley is not — the water is most of the floor, so
+   * the same lobe covers a quarter of the screen whatever is reflected in it.
+   *
+   * **The second reason is the SHAFTS, and it is the one with a number
+   * attached.** This term is added past the cel shader's soft shoulder, so
+   * unlike the diffuse world it is not compressed toward 0.75 — and
+   * `SkySpec.rays.threshold` is an occlusion test done in luminance with no
+   * depth pass. A sheet of water bright enough to cross that threshold stops
+   * being an occluder and starts radiating shafts of its own, from below the
+   * horizon. So a map with a disc in its sky wants this LOWER than one without,
+   * which is the opposite of the obvious move; see Greyfen's own note, where
+   * the peak is measured either side.
    */
   glint?: number;
 }

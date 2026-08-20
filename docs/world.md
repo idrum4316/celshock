@@ -25,8 +25,8 @@ touches.** A `MapDef` is `{ id, name, layout, environment, collision }`; `MAPS` 
 the registry
 and `DEFAULT_MAP` is the fallback. `Game` holds one `mapDef` field (`Game.mapDef`) and
 reads both halves off it. Nothing outside `maps.ts` may import a map's own modules.
-The shipped maps are **Hollowmere** (night), **Greyfen** (overcast dawn) and
-**Coldharbour** (a city at clear afternoon). Greyfen
+The shipped maps are **Hollowmere** (night), **Greyfen** (a jungle morning, sun
+through the canopy) and **Coldharbour** (a city before dusk). Greyfen
 was forked from Hollowmere's layout, cleared back to a blank valley, and is
 now being rebuilt as a jungle one: what stands is the **manor** on flag C and
 nothing else, so it is the map being built rather than a second finished one.
