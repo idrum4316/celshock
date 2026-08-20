@@ -231,8 +231,55 @@ draw — so panes are sorted rather than z-buffered, which is why the glazing
 merges per map block (`MapBuilder.paneGroup`) and why a transparent mesh costs
 more than its triangle count says.
 
-**It is also the one material in the renderer with a depth BIAS, and that is
-not about transparency at all.** A pane hangs a few centimetres off the wall
+### The second half of it does not write an alpha, and that is where the frame went
+
+**`CEL_GLASS_BACKED` is the same shader over a KNOWN backdrop.** Most glazing on
+a city map is not seen through at all: a tower's curtain wall hangs 0.04 m off a
+solid shaft, a shophouse's sash is drawn on its own wall, a clerestory sits on
+brick. For those the layer behind the pane is not the framebuffer — it is that
+mass, on a parallel face a hand away, under the light term the pane has already
+computed. `Build.pane({ backed })` names its palette colour, and the composite
+folds:
+
+```
+  C*alpha + B*(1-alpha),  C = (sky*fres + col*tint*(1-fres))/alpha
+                          alpha = fres + tint*(1-fres)
+    ==  mix(mix(B, col, tint), sky, fres)          since 1-alpha = (1-fres)(1-tint)
+```
+
+**That is exact, not an approximation** — the only thing assumed is `B`, and the
+builder is the one thing that knows it. What it buys is not the divide it saves
+but the ALPHA it no longer needs: the sheet writes depth like any other opaque
+surface, so the mass behind it is rejected before it is shaded. Measured on
+Coldharbour, where glazing covers **16–45% of the screen** depending on where
+you stand: that third of the frame was being shaded twice, once for the shaft
+and once for the pane, with the more expensive of the two shaders on top. 98% of
+the map's glazing triangles are `backed`.
+
+**It pays only if the pane is drawn FIRST**, and Babylon will not do that on its
+own: its default opaque sort is `PainterSortCompare`, which groups by material
+id and leaves depth to chance. `Game`'s constructor installs a front-to-back
+comparator with `scene.setRenderingOrder(0, …)` — its own rather than
+`RenderingGroup.frontToBackSortCompare`, which reads a `_distanceToCamera` that
+Babylon fills in only on the transparent path. The sort is a visual no-op by
+construction (opaque draws are order-independent through the depth buffer) and
+worth having on its own: a street of towers occludes most of itself.
+
+**What stays blended is what something is meant to be legible behind**: the
+breakable shopfronts, where `tint: 0.4` exists precisely so a lit interior reads
+from the pavement, and a car's greenhouse, which `buildCar` models a dash and
+seat backs into for the same reason. **`backed` is a claim about the WORLD and
+nothing throws when it is false** — the geometry is legal either way and the
+result is a flat sheet where a room should be. The test is what a ROUND does: if
+one stops on something solid within centimetres, the eye stops there too.
+
+The two are separate MATERIALS, and that is what makes the split cost nothing
+anywhere else: both of `MapBuilder`'s merges already group by material, so a
+building that glazes in both kinds falls into two merged meshes without either
+merge being told glazing now comes in two. The one thing that had to learn is
+the probe count — see below.
+
+**Both kinds carry a depth BIAS, and it is the only one in the renderer.** A pane hangs a few centimetres off the wall
 behind it — `kit/city.ts`'s `glaze` stands 0.04 m of glass over the shaft, with
 the collars proud of that again — and the depth buffer loses that gap with
 distance. The near plane is 5 cm because the viewmodel's optics sit inside 5 cm
@@ -246,6 +293,11 @@ millimetres up close and metres at the far end, exactly where the error is; the
 near plane is spoken for and `maxZ` is worth nothing here (measured). What it
 costs is the fins and collars standing 0.1–0.2 m proud of the glass, which the
 bias overdraws past ~100 m where they are a pixel or two of trim.
+
+On a `backed` sheet the same bias earns a second job it was not written for:
+now that the pane writes depth, it has to WIN against the mass it hangs on
+rather than merely be seen over it, and biased toward the eye it does — at
+every distance, for the same reason it was needed at all.
 
 **The reflection is built in two goes: an analytic sky, and the city over the
 top of it out of a cube.** The sky half is the older one and is unchanged — it
@@ -271,13 +323,27 @@ mirrored direction, and a bake taken 150 m away has the right city in it seen
 from the wrong place: the tower across the street lands in the pane at the
 angle it subtends from the middle of the map. A cube per PANE is the other end
 and is not on offer, because Coldharbour draws 6,139 sheets. What makes a
-middle affordable is that the glazing is **already merged into one mesh per map
-block** (`MapBuilder.paneGroup`) — 37 of them — so one probe per merged mesh
-costs 40 cubes and **not one extra draw call**. Each block's mesh gets a
-material of its own, which is the one place `CelMaterialFactory`'s per-colour
-cache is deliberately widened: a cube is not shared state, it is one probe's
-picture of one place. The probe stands within ~25 m of every pane it serves
-rather than ~150.
+middle affordable is that the glazing is **already merged per map block**
+(`MapBuilder.paneGroup`) — 37 blocks of it — so one probe per block costs 40
+cubes and **not one extra draw call**. Each block's mesh gets a material of its
+own, which is the one place `CelMaterialFactory`'s per-colour cache is
+deliberately widened: a cube is not shared state, it is one probe's picture of
+one place. The probe stands within ~25 m of every pane it serves rather than
+~150.
+
+**Per BLOCK, not per merged mesh, and the distinction started mattering when
+`backed` glazing arrived.** A block glazed in more than one material is more
+than one mesh — a shophouse terrace is its shopfronts blended and its sashes
+opaque — and all of them want the same picture of the same street. So
+`ReflectionSystem` keys its slots on `PaneGroup.block`, the merge's own key,
+and the second group on a block reuses the first's probe. Coldharbour is 71
+glazing groups over **40 probes**, which is exactly what it was before the
+split: the bake stays a function of how many blocks are glazed rather than of
+how many kinds of glazing a builder happened to reach for. The key is asked for
+rather than inferred because "the same building" is a thing `PaneBlocks`
+already decided — a distance test between two centres has to guess, and the two
+centres are not comparable anyway (a tower's is the middle of its shaft, a
+shopfront's is out on the pavement).
 
 Faces are 128 rather than 256, because the resolution is now a per-probe cost
 (~520 KB each, ~19 MB for Coldharbour) and it buys detail a Fresnel-weighted,

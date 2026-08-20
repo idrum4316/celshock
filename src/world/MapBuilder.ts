@@ -220,6 +220,24 @@ export interface PaneGroup {
   mesh: Mesh;
   /** Indices into `GameMap.panes`. */
   panes: number[];
+  /**
+   * Which map block this glazing was merged under — the key `PaneBlocks` filed
+   * it against, opaque to everyone but useful for one thing: telling two groups
+   * that are the SAME BUILDING apart from two that merely stand near each
+   * other.
+   *
+   * There is more than one group per block whenever a building glazes in more
+   * than one material, which `backed` glazing made ordinary rather than
+   * hypothetical (see `Build.pane`). `ReflectionSystem` bakes one cube per
+   * block and not per group, because a cube is a picture of the street rather
+   * than of the sheet — this is what lets it do that without measuring
+   * distances and guessing.
+   *
+   * **Written by `PaneBlocks.finish` and empty before it**, exactly as
+   * `WorldPane.group` is -1 until the same pass fills it: the per-placement
+   * groups `paneGroup` returns have no block yet and never reach `GameMap`.
+   */
+  block: string;
 }
 
 /**
@@ -1424,7 +1442,11 @@ export class MapBuilder {
         }
         colliders.push(mesh);
       }
-      visuals.push({ mesh: merged as Mesh, panes: paneIndices });
+      // `block` is empty here and filled by `PaneBlocks.finish`, the same way
+      // this method leaves `WorldPane.group` at -1 for it: a placement does not
+      // know which block it will be merged under, and these per-placement
+      // groups never reach `GameMap` — only `finish`'s output does.
+      visuals.push({ mesh: merged as Mesh, panes: paneIndices, block: "" });
     }
     return { visuals, colliders };
   }
@@ -1759,7 +1781,7 @@ class PaneBlocks {
         }
         const groupIndex = out.length;
         for (const p of indices) panes[p].group = groupIndex;
-        out.push({ mesh: merged as Mesh, panes: indices });
+        out.push({ mesh: merged as Mesh, panes: indices, block: key });
         meshes.push(merged as Mesh);
         // Editor builds only, and AFTER the merge rather than before it: a
         // merge of two or more disposes its sources, and `Node.dispose` nulls

@@ -56,6 +56,7 @@ import {
   Mesh,
   Scene,
   StandardMaterial,
+  type SubMesh,
   Vector3,
 } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -136,6 +137,25 @@ import { Sfx } from "./Sfx";
 
 /** Grass bends around combatants; in the editor there are none. */
 const EMPTY_PUSHERS: readonly Combatant[] = [];
+
+/**
+ * Squared eye distance to a submesh's bounding-sphere centre, for the
+ * front-to-back opaque sort installed in the constructor.
+ *
+ * Squared because a sort only needs the ORDER, and the centre rather than the
+ * near point because this is picking a drawing order rather than measuring
+ * anything: a merged block's near point would order two overlapping blocks
+ * more correctly and cost a radius lookup per comparison to do it, and getting
+ * that pair the wrong way round costs one block's early rejection rather than
+ * a wrong picture.
+ */
+function eyeDistanceSq(sub: SubMesh, eye: Vector3): number {
+  const c = sub.getBoundingInfo().boundingSphere.centerWorld;
+  const dx = c.x - eye.x;
+  const dy = c.y - eye.y;
+  const dz = c.z - eye.z;
+  return dx * dx + dy * dy + dz * dz;
+}
 
 /**
  * The carried-light id for one of the kit screen's bench lamps. A function so
@@ -464,6 +484,30 @@ export class Game {
     this.shadows = new ShadowSystem(this.scene, this.mats);
     this.input = new InputManager(canvas);
     this.cameraSys = new CameraSystem(this.scene);
+
+    // **Draw the opaque queue front to back**, which Babylon does not do on its
+    // own: its default is `PainterSortCompare`, grouping by material id and
+    // leaving depth to chance. That is the right default for a scene whose cost
+    // is state changes and the wrong one for this scene, whose cost is PIXELS —
+    // a street of towers occludes most of itself, and a fragment is only
+    // rejected before it shades if whatever stands in front of it was drawn
+    // first. Ordering is the whole of the win; nothing about the picture moves,
+    // because opaque draws are order-independent through the depth buffer.
+    //
+    // It is also what makes `backed` glazing pay (see `CelMaterialFactory
+    // .getGlass`): a curtain wall only saves the shading of the shaft behind it
+    // if the pane is down first, and by material id it would be a coin toss.
+    //
+    // The comparator is ours rather than `RenderingGroup.frontToBackSortCompare`
+    // because that one reads `subMesh._distanceToCamera`, which Babylon fills in
+    // only on the transparent path. Cost is two bounding-sphere reads per
+    // comparison over a couple of hundred submeshes — microseconds, against the
+    // fill it is buying back.
+    this.scene.setRenderingOrder(0, (a, b) => {
+      const eye = this.scene.activeCamera?.globalPosition;
+      if (!eye) return 0;
+      return eyeDistanceSq(a, eye) - eyeDistanceSq(b, eye);
+    });
 
     // Post-processing: FXAA smooths the hard cel/outline edges. Glow comes
     // from a GlowLayer rather than threshold bloom — it keys off material

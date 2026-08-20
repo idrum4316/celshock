@@ -499,11 +499,11 @@ export function buildTower(
       const cy = y0 + 0.3 + band * (r + 0.5);
       for (const sx of [-1, 1]) {
         const x = (sx * (mw + t)) / 2 - sx * 0.04;
-        cut(md, nz, (cz, w) => b.pane(t, h, w, x, cy, cz));
+        cut(md, nz, (cz, w) => b.pane(t, h, w, x, cy, cz, { backed: skin }));
       }
       for (const sz of [-1, 1]) {
         const z = (sz * (md + t)) / 2 - sz * 0.04;
-        cut(mw, nx, (cx, w) => b.pane(w, h, t, cx, cy, z));
+        cut(mw, nx, (cx, w) => b.pane(w, h, t, cx, cy, z, { backed: skin }));
       }
     }
     const mid = (y0 + y1) / 2;
@@ -534,7 +534,7 @@ export function buildTower(
         const x = -w / 2 + ((c + 0.5) / cols) * w;
         const y = 1.5 + r * STOREY;
         for (const sz of [-1, 1]) {
-          b.pane(1.3, 1.5, 0.14, x, y, (sz * d) / 2);
+          b.pane(1.3, 1.5, 0.14, x, y, (sz * d) / 2, { backed: skin });
         }
       }
     }
@@ -1135,7 +1135,7 @@ export function buildShophouse(
   const sash = (x: number, y: number, z: number, sz: -1 | 1, ww: number): void => {
     const h = 1.6;
     const cy = y + 0.9 + h / 2;
-    b.pane(ww, h, 0.12, x, cy, z);
+    b.pane(ww, h, 0.12, x, cy, z, { backed: skin });
     b.box(ww + 0.36, 0.16, 0.26, x, y + 0.82, z + sz * 0.1, CONCRETE);
     b.box(ww + 0.36, 0.2, 0.22, x, y + 2.6, z + sz * 0.1, CONCRETE);
     for (const s of [-1, 1]) {
@@ -1681,7 +1681,7 @@ export function buildDepot(
     const oz = zBack + MEZZ_D / 2;
     b.wall(5.0, 2.7, 3.2, ox, GROUND + 1.35, oz, ENAMEL);
     b.box(5.2, 0.16, 3.4, ox, GROUND + 2.78, oz, DARK_CONCRETE);
-    b.pane(3.0, 1.1, 0.1, ox - 0.6, GROUND + 1.9, oz + 1.6);
+    b.pane(3.0, 1.1, 0.1, ox - 0.6, GROUND + 1.9, oz + 1.6, { backed: ENAMEL });
     b.box(1.0, 2.2, 0.12, ox + 1.8, GROUND + 1.1, oz + 1.6, TEAK);
   }
 
@@ -1728,7 +1728,7 @@ export function buildDepot(
     const n = Math.max(3, Math.round(w / 4.5));
     for (let i = 0; i < n; i++) {
       const x = -w / 2 + ((i + 0.5) / n) * w;
-      b.pane(w / n - 0.7, clerH, 0.12, x, clerY, -d / 2);
+      b.pane(w / n - 0.7, clerH, 0.12, x, clerY, -d / 2, { backed: CITY_BRICK });
       for (const sx of [-1, 1]) {
         b.box(0.16, clerH + 0.24, 0.26, x + (sx * (w / n - 0.5)) / 2, clerY, -d / 2 - 0.06, DARK_CONCRETE);
       }
@@ -1737,7 +1737,7 @@ export function buildDepot(
     for (const sx of [-1, 1]) {
       for (let i = 0; i < m; i++) {
         const z = -d / 2 + ((i + 0.5) / m) * d;
-        b.pane(0.12, clerH, d / m - 0.7, (sx * w) / 2, clerY, z);
+        b.pane(0.12, clerH, d / m - 0.7, (sx * w) / 2, clerY, z, { backed: CITY_BRICK });
         for (const sz of [-1, 1]) {
           b.box(0.26, clerH + 0.24, 0.16, (sx * (w + 0.12)) / 2, clerY, z + (sz * (d / m - 0.5)) / 2, DARK_CONCRETE);
         }

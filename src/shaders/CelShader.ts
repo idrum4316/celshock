@@ -365,6 +365,14 @@ uniform vec4 glassParams;
 // close to — the one place that requirement is load-bearing rather than
 // cosmetic.
 uniform vec3 skyZenithColor;
+#ifdef CEL_GLASS_BACKED
+// The ALBEDO of the mass this sheet hangs on, named by the builder that hung
+// it (the backed argument of Build.pane). Unlit, because it is shaded here by
+// the same light the pane is: they are parallel faces a hand apart, so one
+// light term is right for both. See the composite below for why this is exact rather
+// than an approximation of the blend it replaces.
+uniform vec3 glassBackdrop;
+#endif
 // The world as glass sees it: one cube baked per map install from the map's
 // own geometry (systems/ReflectionSystem.ts). Alpha 1 where the bake drew
 // something and 0 where it saw nothing at all, which is what lets the sky
@@ -760,6 +768,30 @@ void main() {
   float fres = glassParams.x + (1.0 - glassParams.x)
     * pow(1.0 - max(dot(viewDir, n), 0.0), glassParams.y);
 
+#ifdef CEL_GLASS_BACKED
+  // Glazing hung on a solid mass, and the whole saving is that the layer behind
+  // it is KNOWN — it is that mass, a hand away, on a parallel face under the
+  // same key light, so the light term this sheet already computed is the one
+  // that shades it too. Knowing it turns the blend into arithmetic. What the
+  // rasterizer would have produced over a backdrop B is
+  //
+  //   C*alpha + B*(1-alpha),  C = (sky*fres + col*tint*(1-fres))/alpha
+  //                           alpha = fres + tint*(1-fres)
+  //
+  // and since 1-alpha is exactly (1-fres)(1-tint), that whole expression folds
+  // to
+  //
+  //   mix(mix(B, col, tint), sky, fres)
+  //
+  // which is what is written below. It is EXACT and not an approximation of
+  // the blend: the only thing assumed is B, and the builder is the one thing
+  // that knows it. No divide, and no alpha handed to a blender — alpha stays 1
+  // so this sheet writes DEPTH, which is the point, because the mass behind it
+  // is then rejected before it is ever shaded. See getGlass's backed argument
+  // in this file, and Build.pane for who may claim it and what it costs to
+  // claim it wrongly.
+  col = mix(mix(glassBackdrop * light, col, glassParams.w), sky, fres);
+#else
   // Composite the two layers into one colour and one alpha. The reflection
   // covers the tint, the tint covers what is behind the pane, and dividing by
   // the total is what keeps the blend from darkening the result twice — the
@@ -768,6 +800,7 @@ void main() {
   float tint = glassParams.w;
   alpha = fres + tint * (1.0 - fres);
   col = (sky * fres + col * tint * (1.0 - fres)) / max(alpha, 0.001);
+#endif
 #endif
 
   // --- atmosphere ---
@@ -1046,7 +1079,7 @@ export class CelMaterialFactory {
    */
   private glassRecipes = new Map<
     ShaderMaterial,
-    { hex: string; glass: GlassSpec }
+    { hex: string; glass: GlassSpec; backed: string | null }
   >();
   /**
    * The cube a glazing material is BORN holding, before any probe has claimed
@@ -1166,30 +1199,59 @@ export class CelMaterialFactory {
    * The glazing material: the same flat cel colour as get(), composited over
    * what is behind it and carrying a reflection of the sky.
    *
-   * **This is the one ALPHA-BLENDED material in the world layer**, and it is
-   * the only one that has any business being one. Everything else here is a
-   * flat opaque cel colour, the water fakes its depth with a fresnel between
-   * two opaque colours rather than showing the bed through itself, and the only
-   * other transparent thing in the scene at all is the capture zone's skirt,
-   * which is annotation rather than world. What it costs is the two things
-   * transparency always costs and they are paid for below in `MapBuilder`: a
+   * **It comes in two, and which one is a statement about what stands BEHIND
+   * the sheet rather than about how it should look.** `backed` glazing has a
+   * solid mass a hand behind it — a tower's curtain wall on its shaft, a
+   * shophouse's drawn sash, a clerestory on brick — so nothing is ever seen
+   * through it and it is drawn OPAQUE: one shading of that pixel instead of
+   * two, and the mass behind it rejected on depth before it is shaded at all.
+   * Everything else is blended, and it is blended because something back there
+   * is meant to be legible: the twenty-four shopfronts with a room behind them
+   * (`tint` exists so a lit interior reads from the pavement) and a car's
+   * greenhouse, which `buildCar` models a dash and seat backs into for exactly
+   * that reason. `Build.pane` is where the claim is made; see it for why a
+   * `backed` sheet can never also be `breakable`.
+   *
+   * **The blended one is the only ALPHA-BLENDED material in the world layer**,
+   * and it is the only thing that has any business being one. Everything else
+   * here is a flat opaque cel colour, the water fakes its depth with a fresnel
+   * between two opaque colours rather than showing the bed through itself, and
+   * the only other transparent thing in the scene at all is the capture zone's
+   * skirt, which is annotation rather than world. What blending costs is the
+   * two things it always costs and they are paid for below in `MapBuilder`: a
    * pane writes no depth and so is sorted rather than z-buffered, and it must
-   * be neither an outline nor a shadow caster.
+   * be neither an outline nor a shadow caster. A `backed` pane wants the last
+   * two anyway — the mass it hangs on already casts the shadow and carries the
+   * ink — so both flags stay on both kinds and only the depth changes.
    *
-   * **It is also the one material with a depth BIAS**, and that is not about
-   * transparency at all: a pane hangs centimetres off the wall behind it, which
-   * is a gap the depth buffer loses with distance. See `GLASS_DEPTH_UNITS`.
+   * **Both carry the depth BIAS**, and that is not about transparency at all:
+   * a pane hangs centimetres off the wall behind it, which is a gap the depth
+   * buffer loses with distance. See `GLASS_DEPTH_UNITS`. On a `backed` sheet it
+   * earns a second job — biased toward the eye, the pane wins the depth test
+   * against its own mass rather than z-fighting it at range.
    *
-   * Cached under its own key and named `cel-glass-#rrggbb`, like the glossy and
-   * translucent variants — though unlike them nothing recovers ink from it,
-   * because glass is not outlined.
+   * Cached under its own key and named `cel-glass-#rrggbb` (`-backed` for the
+   * opaque twin), like the glossy and translucent variants — though unlike them
+   * nothing recovers ink from it, because glass is not outlined. **The key
+   * matters beyond the cache**: both of `MapBuilder`'s merges group by
+   * MATERIAL, so two variants in one placement fall into two merged meshes
+   * without either merge being told that glazing now comes in two kinds.
    */
-  getGlass(hex: string, glass: GlassSpec, slot = 0): ShaderMaterial {
-    const cacheKey = slot === 0 ? `\0glass-${hex}` : `\0glass-${hex}#${slot}`;
+  getGlass(
+    hex: string,
+    glass: GlassSpec,
+    slot = 0,
+    backed: string | null = null,
+  ): ShaderMaterial {
+    const kind = backed ? `glass-backed-${backed}` : "glass";
+    const cacheKey = slot === 0 ? `\0${kind}-${hex}` : `\0${kind}-${hex}#${slot}`;
+    const name =
+      (backed ? `cel-glass-${hex}-on-${backed}` : `cel-glass-${hex}`) +
+      (slot === 0 ? "" : `#${slot}`);
     let mat = this.cache.get(cacheKey);
     if (!mat) {
       mat = new ShaderMaterial(
-        slot === 0 ? `cel-glass-${hex}` : `cel-glass-${hex}#${slot}`,
+        name,
         this.scene,
         { vertex: "cel", fragment: "cel" },
         {
@@ -1201,20 +1263,31 @@ export class CelMaterialFactory {
             "reflectBoxMin",
             "reflectBoxMax",
             "reflectProbe",
+            ...(backed ? ["glassBackdrop"] : []),
           ],
           samplers: [...CelMaterialFactory.SAMPLERS, "reflectionCube"],
-          defines: ["#define CEL_GLASS"],
+          defines: backed
+            ? ["#define CEL_GLASS", "#define CEL_GLASS_BACKED"]
+            : ["#define CEL_GLASS"],
           // What puts these subMeshes in the transparent pass at all. The
           // material's own `alpha` stays 1: the alpha that matters is written
           // per pixel by the shader, and a material-wide one would fade the
           // reflection along with everything else.
-          needAlphaBlending: true,
+          //
+          // A `backed` sheet writes 1 for every pixel and belongs in the
+          // OPAQUE queue, which is where its saving comes from — see the
+          // header, and `CEL_GLASS_BACKED` in the fragment shader for why its
+          // colour needs nothing from the framebuffer to be right.
+          needAlphaBlending: !backed,
         },
       );
       // Biased toward the eye by the depth buffer's own step, which is what
       // keeps a distant window a window — see GLASS_DEPTH_UNITS.
       mat.zOffsetUnits = CelMaterialFactory.GLASS_DEPTH_UNITS;
       mat.setColor3("baseColor", Color3.FromHexString(hex));
+      if (backed) {
+        mat.setColor3("glassBackdrop", Color3.FromHexString(backed));
+      }
       this.applyCamera(mat);
       this.applyEnvironment(mat);
       this.applyPointLights(mat);
@@ -1223,7 +1296,7 @@ export class CelMaterialFactory {
       this.applyTranslucency(mat, null);
       this.applyGlass(mat, glass);
       this.applyReflection(mat);
-      this.glassRecipes.set(mat, { hex, glass });
+      this.glassRecipes.set(mat, { hex, glass, backed });
       this.cache.set(cacheKey, mat);
     }
     return mat;
@@ -1604,7 +1677,11 @@ export class CelMaterialFactory {
       }
       return base;
     }
-    const mat = this.getGlass(recipe.hex, recipe.glass, slot);
+    // `backed` travels with the recipe rather than being re-derived: it is the
+    // difference between the opaque twin and the blended one, and a probe twin
+    // that dropped it would put a tower's curtain wall back in the transparent
+    // pass the moment `ReflectionSystem` claimed a slot for it.
+    const mat = this.getGlass(recipe.hex, recipe.glass, slot, recipe.backed);
     mat.setTexture("reflectionCube", refl.cube);
     // **Cloned, and that is not defensive tidiness.** `ShaderMaterial` keeps
     // the Vector3 it is handed BY REFERENCE and reads it again on every bind —

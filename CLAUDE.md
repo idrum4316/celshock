@@ -400,24 +400,43 @@ nothing. The bake runs **after every merge**, and cannot be moved earlier:
 `VertexData.merge` throws outright when one mesh in a group has `colors` and
 another does not.
 
-**The world is OPAQUE with exactly one exception, and it is glazing.**
-`getGlass` (`#define CEL_GLASS`, `needAlphaBlending`) writes a Fresnel alpha per
-pixel: a reflection over the tint of whatever stands behind the pane. That
-reflection is an analytic sky with the CITY composited into it out of a cube
+**The world is OPAQUE with exactly one exception, and it is glazing you can see
+THROUGH.** `getGlass` (`#define CEL_GLASS`) writes a Fresnel alpha per pixel: a
+reflection over the tint of whatever stands behind the pane. That reflection is
+an analytic sky with the CITY composited into it out of a cube
 `ReflectionSystem` bakes from the map's own geometry, once per `installMap` —
 the only render target here besides the shadow map, and the only thing that
 draws the world again. It is affordable for the reason the world layer is
 merged and frozen at all: the world is static, so a bake is a build step rather
-than a pass. **There is one probe per GLAZED BLOCK, not one for the map**,
-because a cube baked 150 m away has the right city in it seen from the wrong
-place and cannot show the building opposite; the glazing is already merged one
-mesh per block, so a probe each costs 40 cubes and no extra draw call, and each
-bake leaves out whatever ENCLOSES its probe.
+than a pass. **There is one probe per GLAZED BLOCK, not one for the map and not
+one per glazing MATERIAL**, because a cube baked 150 m away has the right city
+in it seen from the wrong place and cannot show the building opposite; the
+glazing is already merged per block, so a probe each costs 40 cubes and no
+extra draw call, and each bake leaves out whatever ENCLOSES its probe.
+
+**Most glazing is not seen through, and that half is drawn OPAQUE.** A sheet
+with a solid mass a hand behind it — a curtain wall on its shaft, a sash drawn
+on a wall, a clerestory on brick — is `Build.pane({ backed })`, where the value
+is that mass's own palette colour. Knowing the backdrop turns the blend into
+arithmetic: `mix(mix(backdrop, col, tint), sky, fres)` is exactly what the
+rasterizer would have produced, so the sheet needs nothing from the framebuffer
+and writes DEPTH — which is the point, because the mass behind it is then
+rejected before it is ever shaded. On Coldharbour that is 98% of the glazing
+triangles, and it is the largest per-pixel saving on the map: a third of that
+screen was being shaded twice. **It pays only if the pane is drawn first**,
+which is why `Game`'s constructor sorts the opaque queue FRONT TO BACK —
+Babylon's default groups by material id and leaves depth to chance. What stays
+blended is what something is meant to be legible behind: the breakable
+shopfronts, and a car's greenhouse. **`backed` is a claim about the WORLD and
+nothing throws when it is wrong** — the test is what a ROUND does.
+
 Everything else here is a flat opaque colour — the water fakes its depth rather
 than showing the bed through itself, and the capture zone's skirt is annotation
-rather than world. Blended draws write no depth, so a pane is sorted rather than
-z-buffered, and **a pane is neither outlined nor a shadow caster** (`MapBuilder`
-marks both, and the ink one is not a preference — see the contract).
+rather than world. Blended draws write no depth, so a see-through pane is
+sorted rather than z-buffered, and **no pane of either kind is outlined or a
+shadow caster** (`MapBuilder` marks both, and the ink one is not a preference —
+see the contract; a `backed` sheet wants neither anyway, because the mass it
+hangs on already casts the shadow and carries the ink).
 
 → **[`docs/rendering.md`](docs/rendering.md)** — the four light terms and the
 baked occlusion that modifies two of them (and the three further rules that

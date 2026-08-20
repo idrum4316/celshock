@@ -164,13 +164,35 @@ export class ReflectionSystem {
 
     const started = performance.now();
     let enclosing = 0;
-    for (const [slot, group] of map.paneGroups.entries()) {
+    // **One probe per BLOCK, not per group.** A block's glazing arrives here as
+    // one merged mesh per MATERIAL — two of them for any building that glazes
+    // in more than one, which `backed` glazing (see `Build.pane`) made ordinary
+    // — and a cube is a picture of the STREET rather than of the sheet, so
+    // every group on a block wants the same one. Baking a second would spend
+    // six more face renders on the same view from a few metres over, and it
+    // would make what a map install costs a function of how many kinds of
+    // glazing a builder reached for.
+    //
+    // `PaneGroup.block` is the merge's own key rather than a distance test:
+    // "the same building" is a thing `PaneBlocks` already decided, and asking
+    // it is exact where measuring between two centres — a tower's is the middle
+    // of its shaft, a shopfront's is on the pavement — has to guess.
+    const slots = new Map<string, number>();
+    for (const group of map.paneGroups) {
+      let slot = slots.get(group.block);
+      const fresh = slot === undefined;
+      if (slot === undefined) {
+        slot = slots.size;
+        slots.set(group.block, slot);
+      }
       const probe = this.probeAt(slot);
-      centreOf(group.mesh, probe.position);
-      const list = opaque.filter((m) => !encloses(m, probe.position));
-      enclosing += opaque.length - list.length;
-      probe.cubeTexture.renderList = list;
-      probe.cubeTexture.resetRefreshCounter();
+      if (fresh) {
+        centreOf(group.mesh, probe.position);
+        const list = opaque.filter((m) => !encloses(m, probe.position));
+        enclosing += opaque.length - list.length;
+        probe.cubeTexture.renderList = list;
+        probe.cubeTexture.resetRefreshCounter();
+      }
 
       const floor = map.terrain.surfaceAt(
         probe.position.x,
@@ -193,11 +215,12 @@ export class ReflectionSystem {
     }
 
     if (import.meta.env.DEV) {
-      const n = map.paneGroups.length;
+      const n = slots.size;
       console.info(
-        `[reflection] ${n} probes over ${opaque.length} meshes ` +
-          `(${(enclosing / n).toFixed(1)} enclosing each) queued in ` +
-          `${(performance.now() - started).toFixed(1)} ms`,
+        `[reflection] ${n} probes for ${map.paneGroups.length} glazing groups ` +
+          `over ${opaque.length} meshes ` +
+          `(${(enclosing / Math.max(n, 1)).toFixed(1)} enclosing each) queued ` +
+          `in ${(performance.now() - started).toFixed(1)} ms`,
       );
     }
   }

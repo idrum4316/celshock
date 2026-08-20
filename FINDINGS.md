@@ -609,3 +609,78 @@ lands under ~600 ms there, this is a headless artefact and the entry should be
 deleted. If it stays several times Hollowmere's, the cheap probe before any
 incremental work is to skip the AO bake and the cover bake on editor builds the
 way the reflections and the physics world already are, and measure what is left.
+
+---
+
+## 12. Coldharbour is FILL-bound, and most of the glass has been taken out of the blend
+
+**Status:** cause measured and located, half of it acted on. The remaining gap
+is real and unattributed.
+
+### What was measured
+
+Coldharbour ran ~25% below Hollowmere and Greyfen on real hardware. Structural
+counts over the same 30-sample sweep (five control points, six bearings, bots
+frozen), headless:
+
+| per frame | Hollowmere | Greyfen | Coldharbour |
+| --- | --- | --- | --- |
+| draw calls | 546 | 331 | 635 |
+| — main pass | 351 | 221 | 411 |
+| — glow layer | 124 | 76 | 158 |
+| — shadow depth | 71 | 35 | 65 |
+| active meshes | 134 | 85 | 169 |
+| triangles | 361k | 353k | 319k |
+| alpha-blended meshes | 6.8 | 7.2 | 20.2 |
+
+Two candidates are DISPROVED by that table and should not be re-run: triangles
+(Coldharbour has the fewest of the three) and the shadow window (200 m against
+110, but `cullToWindow` admits 65 casters against Hollowmere's 71, and emptying
+the depth pass moved the frame 4.3% — inside the noise).
+
+**Glazing covers 16-45% of the screen**, measured by pixel-diffing a frame
+against the same frame with `paneGroups` hidden. Every one of those pixels was
+shaded twice: the opaque mass, then the pane blended on top running the same cel
+shader plus the glass block.
+
+### What the hardware said, which inverted the ranking
+
+Three changes were A/B'd in the console on a real GPU. **Only hiding the glass
+moved the needle.** Dropping distant outline shells (-35.5% of draw calls) and
+excluding the world from the glow layer (-26.4%, FINDINGS #3) were both
+*negligible* — so this frame is not draw-call bound, and #3's saving is not
+worth reaching for on that argument alone. Headless had ranked them the other
+way round, which is the sharpest reminder in this file that SwiftShader ranks
+draw calls and a real GPU ranks pixels.
+
+### What was done
+
+`Build.pane({ backed })` and `CEL_GLASS_BACKED`: glazing with a solid mass a
+hand behind it is drawn OPAQUE over a backdrop the builder names, so the mass
+behind it is rejected before it is shaded. 98% of Coldharbour's glazing
+triangles. Paired with a front-to-back opaque sort in `Game`'s constructor,
+without which the pane is only drawn first by luck. See CLAUDE.md and
+[`docs/rendering.md`](docs/rendering.md).
+
+The picture is not identical and the difference is small: against a run-to-run
+noise floor of 0.02/255, a street view differs by a mean of 0.63/255 (4.97% of
+pixels) and a curtain wall filling the frame at 2 m by 1.72/255 (15.87%, worst
+72). The residual is believed to be the soft shoulder — `col` goes through it
+and `glassBackdrop * light` does not — plus geometry that was faintly visible
+through the glass and is now occluded. Neither has been confirmed.
+
+### What is still open
+
+**The gap did not close.** A console A/B of the same two ideas before this
+change was "a step towards it, not all of the way", and that was measured with
+the blanket version rather than the shipped per-site one, so the first thing to
+do is re-measure. If a gap remains, the next lever in line is the glass
+FRAGMENT, which this change does not cheapen at all: the parallax-corrected
+`textureCube` in `reflectBoxDir` is its most expensive term, and past ~100 m the
+reflection is motion and colour rather than a picture. Fading the cube's weight
+to zero over a band and branching the fetch out below a threshold is the shape.
+
+**Nobody has measured any of this in milliseconds on real hardware**, only as
+"which of three console A/Bs moved the FPS readout". A paired harness — park the
+camera, alternate the config every frame, take the median ratio — is what
+settled the equivalent questions headless and would settle these properly.

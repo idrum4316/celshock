@@ -661,6 +661,40 @@ export class Build implements Structure {
    * plane it assumes is upright. All three would silently stand a raked sheet
    * back up, so the two are mutually exclusive and the guard is a throw rather
    * than a comment. Glazing may lean; glass that BREAKS is a sheet in a wall.
+   *
+   * **A sheet may also be `backed`, which is a claim about the WORLD and the
+   * one thing here a builder can get wrong invisibly.** It says there is an
+   * opaque surface a hand behind this glass, so nothing is ever seen through
+   * it — a curtain wall on its shaft, a sash drawn on a solid wall, a
+   * clerestory on brick. What it buys is that the sheet is drawn OPAQUE
+   * (`CelMaterialFactory.getGlass`), which is one shading of that pixel
+   * instead of two and lets the mass behind it be rejected on depth before it
+   * is shaded at all; on a map whose elevations are mostly glass that is the
+   * largest per-pixel saving there is.
+   *
+   * **The value is that mass's own palette colour, not a flag**, and that is
+   * what makes the drawing exact rather than merely close: the shader folds
+   * the blend it is replacing into one expression over the backdrop (see
+   * `CEL_GLASS_BACKED` in `CelShader.ts`), so naming the wall reproduces what
+   * you would have seen through the glass instead of guessing at it. Pass what
+   * the wall behind is actually built from — `b.box(..., CONCRETE)` behind it
+   * means `{ backed: CONCRETE }` — and the two move together when a builder
+   * repaints.
+   *
+   * What it costs if the claim is FALSE is a window with a flat sheet where the
+   * room should be, and nothing throws, because the geometry is legal either
+   * way. So it is opt-in, it is never inferred, and the test is what a ROUND
+   * does: if a round stops on something solid within centimetres, the eye stops
+   * there too.
+   *
+   * `backed` and `breakable` are opposites rather than merely exclusive —
+   * `PaneSpec.breakable` means enterable space behind, which is the one thing
+   * `backed` swears there is not — so claiming both is a contradiction and
+   * throws rather than picking one.
+   *
+   * Like `rotZ` and unlike `breakable`, this stops at the material and is NOT
+   * a field on `PaneSpec`: nothing downstream of the spec has heard of it,
+   * because a `backed` sheet by construction never becomes a `WorldPane`.
    */
   pane(
     w: number,
@@ -669,13 +703,27 @@ export class Build implements Structure {
     x: number,
     y: number,
     z: number,
-    opts?: { color?: string; rotY?: number; rotZ?: number; breakable?: true },
+    opts?: {
+      color?: string;
+      rotY?: number;
+      rotZ?: number;
+      breakable?: true;
+      /** The palette colour of the mass behind the sheet. See the header. */
+      backed?: string;
+    },
   ): Mesh {
     if (import.meta.env.DEV && opts?.rotZ !== undefined && opts.breakable) {
       throw new Error(
         "pane: a raked sheet cannot be breakable — a PaneSpec carries no " +
           "pitch, so the collider, the wire and GlassSystem would all stand " +
           "it back up. See Build.pane.",
+      );
+    }
+    if (import.meta.env.DEV && opts?.backed && opts.breakable) {
+      throw new Error(
+        "pane: a sheet cannot be both backed and breakable — `backed` swears " +
+          "there is a solid mass behind it and `breakable` swears there is a " +
+          "room. See Build.pane.",
       );
     }
     const m = MeshBuilder.CreateBox(
@@ -692,6 +740,8 @@ export class Build implements Structure {
     m.material = this.mats.getGlass(
       opts?.color ?? GLASS,
       CONFIG.graphics.glass,
+      0,
+      opts?.backed ?? null,
     );
     this.paneMeshes.push(m);
     this.panes.push({ w, h, d, x, y, z, rotY: opts?.rotY, breakable: opts?.breakable });

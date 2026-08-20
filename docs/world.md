@@ -466,7 +466,10 @@ would be 6,139 meshes against ~150 for the whole map — and worse than the coun
 says, because glazing is alpha-blended and a transparent mesh is sorted and
 drawn on its own rather than batched. Instead it merges per placement
 (`MapBuilder.paneGroup`) and then again per 48 m block (`PaneBlocks`), which on
-Coldharbour is **82 glazed placements into 40 meshes**. A breakable pane's
+Coldharbour is **82 glazed placements into 71 meshes across 40 blocks** — both
+passes group by MATERIAL, so a block glazed in more than one kind is more than
+one mesh, and since `backed` glazing (below) is a material of its own that is
+now the ordinary case rather than a hypothetical one. A breakable pane's
 positions are a known range in the result: breaking one collapses that range
 onto its own first vertex, every triangle in it becomes degenerate and
 rasterizes nothing, and the cost is one `updateVerticesData` on one small
@@ -483,18 +486,43 @@ casts no shadow (below), so there is no second registration anywhere to revoke.
 And `bakeVertexAo` writes the COLOUR buffer, so it is untouched by a later
 position rewrite and the bake may still run last.
 
-**A pane is CLEAR, and that is a rule about the world and not only a look.**
-`Build.pane` is the only builder call that reaches `CelMaterialFactory.getGlass`
-— the world's one alpha-blended material, which composites a reflection of the
-sky over the tint of whatever is behind the glass (see
-[`docs/rendering.md`](rendering.md) for the shader). Two consequences belong
-here rather than there:
+**A pane is CLEAR where there is anything to see, and a DRAWING of glass where
+there is not.** `Build.pane` is the only builder call that reaches
+`CelMaterialFactory.getGlass`, which composites a reflection of the sky over the
+tint of whatever is behind the glass (see [`docs/rendering.md`](rendering.md) for
+the shader) — and it comes in two, keyed on what actually stands behind the
+sheet:
+
+- **`backed`** takes the palette colour of a solid mass a hand behind the glass
+  and is drawn OPAQUE. The backdrop is then known rather than sampled, the
+  composite folds to one `mix` of two (exactly — see the rendering contract),
+  and the sheet writes depth, so the mass behind it is rejected before it is
+  ever shaded. This is most of a city: curtain walls on their shafts, punched
+  windows drawn on the same shaft, a shophouse's sashes, a clerestory on brick.
+  On Coldharbour it is 98% of the glazing triangles.
+- **Everything else** is blended, and it is blended because something behind it
+  is meant to be legible: the breakable shopfronts, and a car's greenhouse.
+
+**`backed` is a claim about the WORLD, it is never inferred, and nothing throws
+when it is wrong** — the geometry is legal either way and the failure is a flat
+sheet where a room should be. The test is what a ROUND does: if one stops on
+something solid within centimetres of the glass, so does the eye. It is also the
+one thing here that is a per-CALL-SITE judgement rather than a property of the
+builder, which is why every site that claims it sits next to the box it is
+claiming (`skin`, `CITY_BRICK`, `ENAMEL`) rather than naming a colour of its own.
+
+Three consequences belong here rather than in the rendering contract:
 
 - **The merged pane meshes are marked `noOutline` and `noShadowCaster`**, in the
   `paneBlocks.finish` loop in `MapBuilder.build`. Ink on a transparent mesh
   needs a stencil buffer this engine does not have and lands as a dark plate
   behind the pane; a clear sheet laying a hard shadow on the pavement is simply
   wrong. A window's frame is drawn by the mullion, the collar and the reveal.
+  **Both flags stay on `backed` glazing too**, and the argument changes rather
+  than lapsing: an opaque sheet could carry ink and cast a shadow, but the mass
+  it hangs on is 4 cm behind it doing both already, so what it would add is a
+  second outline on the same silhouette and a second shadow in the same place —
+  paid on the map's largest surface.
 - **It settles a fairness question that was open while glass was opaque.** A
   pane is `porous`, so `OPAQUE_ONLY` already lets a bot's line of sight through
   one — a shopfront the player could not see through was one the AI could see
