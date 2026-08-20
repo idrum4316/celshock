@@ -22,17 +22,31 @@ import type { EnvironmentSpec } from "../environment";
  */
 export const GreyfenEnvironment: EnvironmentSpec = {
   /**
-   * Wet jungle loam: a warm red-brown, well down from the grey-green stone
-   * this map started on. The sky term lifts albedo, so a floor much brighter
-   * than this comes back chalky on every up-facing surface once the ambient is
-   * raised too — which is the ceiling a bright soil runs into, and why this one
-   * is dark for a brown.
+   * Shaded leaf litter: a dark olive-brown, well down from the grey-green stone
+   * this map started on and down again from the warm red-brown that replaced
+   * it. The sky term lifts albedo, so a floor much brighter than this comes
+   * back chalky on every up-facing surface once the ambient is raised too —
+   * which is the ceiling a bright soil runs into, and why this one is dark for
+   * a brown.
+   *
+   * **It was 0x4a3928, and what moved it was the grass rather than the soil.**
+   * That value is authored in display space and then multiplied by the key, the
+   * ambient and the sky fill all landing on one up-facing surface at once, so a
+   * floor picked as loam in the swatch renders about 2.5x brighter and arrives
+   * as bright tan — savannah earth, on a map whose whole argument is that it is
+   * wet. It read as a floor with nothing on it, and every tuft the layout now
+   * grows sat ON it as a bright green mark rather than IN it. What fixed the
+   * undergrowth was not more undergrowth: at the density the layout can afford
+   * (see its note — the field is already half of this map's triangles) the
+   * tufts are always going to be discrete, so what decides whether they read as
+   * ground cover or as scattered weeds is how far the gaps between them are
+   * from the green. Dropping the floor closes that gap from both ends.
    *
    * It is also the only colour the surface below is painted in: every tone
    * `dirt` puts on the ground is derived from this, so re-tinting the valley
    * is this one line.
    */
-  floorColor: "#4a3928",
+  floorColor: "#352f20",
   /**
    * Clods and grit rather than the flat colour Hollowmere's floor is. A jungle
    * valley is soil underfoot, and at 4 m a tile the grain is still legible at
@@ -42,7 +56,7 @@ export const GreyfenEnvironment: EnvironmentSpec = {
   ridgeColor: "#5c6360",
   // Moved with the floor: this band's whole job is melting the rim's foot into
   // `floorColor`, so it follows the soil rather than the rock above it.
-  ridgeScreeColor: "#6a5a46",
+  ridgeScreeColor: "#55503c",
   accentColor: "#7fe0a0",
   skyColor: "#b9c6cf",
   /**
@@ -159,8 +173,26 @@ export const GreyfenEnvironment: EnvironmentSpec = {
     // covers a quarter of the frame in flat white.
     glint: 0.3,
   },
+  /**
+   * Wet understory: dark at the root, fresh green at the tip. These were
+   * Hollowmere's dead straw for as long as the layout carried no rect for them
+   * to colour — a pale grey-olive stalk under a bone tip, which is a dead
+   * valley's crop and not a jungle's.
+   *
+   * The root does NOT sit under `floorColor` the way Hollowmere's does. That
+   * rule is for a field the valley floor continues into; this is undergrowth
+   * standing ON soil, and matching the root to the soil is what would make it
+   * read as more soil. What it matches instead is the shaded underside of the
+   * canopy above it (`graphics.translucency.canopy`), so the two green layers
+   * the eye has to stack are the same green seen at two depths.
+   *
+   * Both are darker and more saturated than they look like they should be, for
+   * the reason the ambient note above gives: the key, the ambient and the sky
+   * fill all land on an up-facing blade at once, and a tip authored at the
+   * colour wanted on screen comes back chalky.
+   */
   grass: {
-    rootColor: "#5d6449",
-    tipColor: "#a9ac7e",
+    rootColor: "#2f4326",
+    tipColor: "#7d9c42",
   },
 };

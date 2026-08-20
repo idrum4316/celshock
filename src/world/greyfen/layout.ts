@@ -320,13 +320,92 @@ const water: WaterRect[] = [
 ];
 
 /**
- * Grass fields. Pale, dead, knee-high — the valley's one crop that still
- * grows. Placement rules: rects dodge roads (roads are visual-only, so no
- * collider rejects a blade poking through the cobbles — that check is on the
- * author), while structures, fences, and props are cleared automatically by
- * the GrassSystem's collider rejection.
+ * Ground cover: the understory, and the largest single thing that decides
+ * whether this valley reads as jungle or as a plantation.
+ *
+ * It shipped EMPTY, and the belts above are why that was wrong. A jungle-tree
+ * belt is a promise about the canopy — foliage nine metres up and clear sight
+ * lines beneath it — which is a good rule for a fight and, on its own, a floor
+ * of bare soil under evenly spaced columns. The trees cannot fix that without
+ * breaking the promise; the grass can, because it is visual only and stops
+ * nothing. So the rule this array follows is the mirror of the belts': the
+ * belts own everything above nine metres and refuse to touch the fight, and
+ * this owns everything under a knee and refuses to touch it either.
+ *
+ * Placement rules: rects dodge roads (roads are visual-only, so no collider
+ * rejects a blade poking through them — that check is on the author), while
+ * structures, props and the rim's boundary boxes are cleared automatically by
+ * the GrassSystem's collider rejection. **Overlap is a density control, not a
+ * mistake** — two rects over one patch grow both their fields, which is how
+ * the ground under E is thicker than the ground around it without a third
+ * density number for the difference.
+ *
+ * The two roads are the only hand-checked exclusions: the west road runs
+ * x -106.4..-98.4 over z -5.2..72.9, and the north one runs z 56.7..64.7 over
+ * x -102.2..-2.2. Nothing here may enter either.
+ *
+ * **A rect over a channel is a REED BED and is deliberately thin.** The water
+ * surface is a flat plane at -0.52 and the beds bottom at -1.34, so a blade in
+ * the deepest water stands 0.82 m in it and just breaks the surface. That is
+ * the look the low-density bank rects are for; at field density the same rect
+ * is a lawn growing underwater.
+ *
+ * **The densities are a BUDGET, and it is the reason none of them reads as a
+ * lawn.** The whole field is one mesh of thin instances — one draw call, but
+ * one vertex shader invocation per instance per vertex, and there is no
+ * frustum culling inside it because it is a single bounding box over the
+ * valley. So the cost is the tuft COUNT and nothing else, and the map is 240 m
+ * on a side with 57% of it under a rect: at the density that would read as
+ * continuous undergrowth this array is 90,000 tufts and 1.3 M vertices a frame,
+ * which is the whole vertex budget of the phone this game installs onto.
+ * These numbers hold it near 25,000 — twice Hollowmere, which is what a map
+ * whose floor is fully lit can justify against one where the fog hides it.
+ * Coverage is spent before density: everywhere thin beats somewhere thick when
+ * the complaint being answered is bare ground. Where it has to READ, the rects
+ * OVERLAP rather than carry a bigger number — E is the southern floor's 0.75
+ * plus its own 1.3 — which also keeps the far field at the thinness deep shade
+ * genuinely produces.
  */
 const grass: GrassRect[] = [
+  // THE SOUTHERN FLOOR — belts 2, 3, 4 and 5, and the ground the fight between
+  // C and E crosses. Broad and even: this is the understory the canopy has been
+  // standing over on its own.
+  { x: -34, z: -96, width: 74, depth: 44, density: 0.75 },
+  { x: 54, z: -96, width: 76, depth: 44, density: 0.75 },
+  { x: -4, z: -44, width: 78, depth: 58, density: 0.7 },
+  { x: 76, z: -60, width: 76, depth: 24, density: 0.6 },
+  // E, the canopy camp. Thickest ground on the map, laid over the southern
+  // floor rather than instead of it: the layout calls this district dark and
+  // close, and the undergrowth is the only half of that the belt can't supply.
+  { x: 40, z: -82, width: 34, depth: 26, density: 1.3 },
+  // C, the manor: a colonial lawn nobody has cut in a decade, on the flanks and
+  // the north front. The hall itself is left to the builder's colliders.
+  { x: -28, z: -6, width: 24, depth: 42, density: 1.0 },
+  { x: 30, z: -6, width: 26, depth: 42, density: 1.0 },
+  { x: 0, z: 10, width: 40, depth: 14, density: 0.9 },
+  // B, the west bank — the flag the note above calls the most exposed on the
+  // map. Knee-high grass gives it CONCEALMENT without giving it cover, which is
+  // the one thing this layer can offer a flag with nothing on it, and it does
+  // not move the 25 m of open ground that makes B what it is.
+  { x: -97, z: -30, width: 40, depth: 44, density: 1.2 },
+  { x: -104, z: -46, width: 26, depth: 24, density: 0.9 },
+  // A, the treeline hamlet: the clearing the stilts stand in, the open ground
+  // south of it that the walks overlook, and the western approach. All three
+  // clear both roads.
+  { x: -62, z: 88, width: 46, depth: 40, density: 1.1 },
+  { x: -58, z: 74, width: 54, depth: 16, density: 1.0 },
+  { x: -74, z: 36, width: 40, depth: 36, density: 0.7 },
+  // D, the temple, on the raised north-east quadrant. Sparser on purpose: this
+  // is the one flag you climb for, and its approach is meant to stay readable.
+  { x: 80, z: 34, width: 52, depth: 48, density: 0.55 },
+  { x: 96, z: 76, width: 44, depth: 44, density: 0.6 },
+  { x: 58, z: 12, width: 30, depth: 44, density: 0.7 },
+  // THE BANKS — reeds, at the thin densities the note above explains. The first
+  // is the marsh bar itself, which puts them either side of the causeway.
+  { x: 2, z: 36, width: 22, depth: 34, density: 0.6 },
+  { x: -40, z: 26, width: 26, depth: 30, density: 0.5 },
+  { x: -58, z: -10, width: 30, depth: 56, density: 0.45 },
+  { x: 66, z: -32, width: 44, depth: 22, density: 0.45 },
 ];
 
 export const GreyfenLayout: MapLayout = {
