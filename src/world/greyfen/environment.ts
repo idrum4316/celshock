@@ -1,6 +1,6 @@
 /**
  * greyfen/environment.ts — Greyfen's EnvironmentSpec: palette, fog, sun light,
- * sky, water, no particles. Pure data — consumed by applyEnvironment/Sky/
+ * sky, water, drifting spores. Pure data — consumed by applyEnvironment/Sky/
  * WaterSystem/Atmosphere. Fixture light POSITIONS live in layout.ts, not here.
  */
 import type { EnvironmentSpec } from "../environment";
@@ -58,18 +58,46 @@ export const GreyfenEnvironment: EnvironmentSpec = {
   // `floorColor`, so it follows the soil rather than the rock above it.
   ridgeScreeColor: "#55503c",
   accentColor: "#7fe0a0",
-  skyColor: "#b9c6cf",
+  // Moved with the fog. Only the clear colour, so it shows where the dome
+  // does not — but a blue backdrop behind a green wall is a seam waiting to
+  // be found.
+  skyColor: "#b3c1a6",
   /**
    * The haze is the light here, the same way the fog was the moonlight on
    * Hollowmere — but it is a bright wall rather than a dark one, so a
    * silhouette at 60 m reads as a dark shape against pale air instead of a
    * pale shape against dark. `fogStart` is pushed out because a bright fog
    * that begins too near flattens the middle distance into nothing.
+   *
+   * **It is GREEN, and that is doing a job the geometry cannot.** It was a
+   * cold blue-grey, which is honest about what air is and wrong about what a
+   * jungle looks like. What actually makes a rainforest read green at distance
+   * is not the air — it is that every sight line past thirty metres passes
+   * through several layers of leaf, so each plane arrives greener and hazier
+   * than the last. This engine cannot give that away: fog is one flat colour
+   * per pixel, resolved against distance, and the world beyond the near belt is
+   * spaced trunks with sky between them. A neutral fog therefore washed every
+   * far tree to white and threw away the one depth cue the setting owns. Tinting
+   * the wall itself is the cheap reconstruction of it, and at this range it is
+   * indistinguishable from the real thing.
+   *
+   * Held to a green-GREY. A saturated green here stops reading as distance and
+   * starts reading as gas, and the luminance stays near what the blue-grey had
+   * (188 against 202) because the note above is still the governing one: this
+   * fog is the light, and a silhouette at 60 m has to stay a dark shape on a
+   * pale field. It comes down slightly rather than not at all, which is worth
+   * a little body in the middle distance.
+   *
+   * `SkySpec.horizonColor` moves with it — see its own contract, which requires
+   * it to sit near this or the dome cuts a line against the fogged ridge — and
+   * so does `skyColor`, which is what shows where the dome does not.
    */
-  fogColor: "#c2ccd4",
+  fogColor: "#b5c4a4",
   fogStart: 34,
   fogEnd: 78,
-  mistColor: "#c8d2d8",
+  // Follows the fog, and stays the paler of the two: this is the layer nearest
+  // the ground, where the light has the least depth of air to cross.
+  mistColor: "#c4cfb4",
   mistHeight: 2.4,
   // Ground mist survives the sunrise — it is the one bit of Hollowmere's
   // weather that belongs to a wet dawn as much as to a night.
@@ -159,7 +187,10 @@ export const GreyfenEnvironment: EnvironmentSpec = {
    */
   sky: {
     zenithColor: "#8ea6bd",
-    horizonColor: "#d3d9d8",
+    // Required to sit near `fogColor` (see `SkySpec`), so it moved with it —
+    // and kept the ~17 of luminance it had over the fog, which is what makes
+    // the band read as the brightest part of the sky rather than as more wall.
+    horizonColor: "#c6d3b6",
     starColor: "#ffffff",
     starCount: 0,
     starBrightness: 0,
