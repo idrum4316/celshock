@@ -1,20 +1,32 @@
 /**
  * CoverMap.ts — Baked directional cover over the nav graph, and nothing else.
- * Owns: two per-surface direction masks (hard = stops bullets, soft = steering
- * preference only) and the queries over them.
+ * Owns: three per-surface direction masks (hard = stops a round at a standing
+ * body, crouch = stops one at a ducked body, soft = steering preference only)
+ * and the queries over them.
  * Invariants: built ONCE at map load from the finished collider set and the
  * finished NavGrid; read-only and allocation-free thereafter. NEVER raycasts —
- * that is the entire point (see the class comment). The hard-cover height is
- * the hit sphere's top, NOT the eye height: cover that hides a bot from LOS but
- * not from bullets is worse than no cover at all — and for that same reason a
- * `porous` box is not baked as cover of either kind. Soft cover is a hint about
- * where to walk and must never be treated as a safety claim.
+ * that is the entire point (see the class comment). Each cover height is a hit
+ * SPHERE's top and never an eye height: cover that hides a bot from LOS but not
+ * from bullets is worse than no cover at all — and for that same reason a
+ * `porous` box is not baked as cover of any kind. The masks nest by
+ * construction (hard implies crouch implies soft), which is what lets a query
+ * answer with a KIND rather than a boolean. Soft cover is a hint about where to
+ * walk and must never be treated as a safety claim.
  */
 import { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import { segmentHitsBox } from "./boxGeometry";
 import type { WorldBox } from "./MapBuilder";
 import type { NavGrid } from "./NavGrid";
+
+/**
+ * What a spot offers against a given bearing.
+ *
+ * An ordered answer, not a flag set: `"hard"` is stand-and-shoot cover,
+ * `"crouch"` is cover you have to duck behind, `"none"` is open ground. The
+ * masks nest, so a spot never offers crouch cover *instead* of hard.
+ */
+export type CoverKind = "none" | "crouch" | "hard";
 
 /**
  * Cover, as an answer to one question: *if the threat is over there, does this
@@ -47,14 +59,31 @@ import type { NavGrid } from "./NavGrid";
  * probe. Both failure modes are benign — the second one correctly refuses to
  * let a bot hide behind a wall from someone standing on the other side of it.
  *
- * ## Two masks
+ * ## Three masks, and why a query answers with a KIND
  *
  * `hard` is geometry tall enough to stop a round aimed at a standing body.
- * `soft` is anything above knee height. Soft cover exists *only* to bias
- * movement toward walls and away from open squares — the bot rig has seven
- * joints and no knees, so there is no crouch, and a bot behind a waist-high
- * wall is exactly as shootable as one standing in the open. Treating soft cover
- * as protection would be a lie the animation cannot tell.
+ * `crouch` is tall enough to stop one aimed at a ducked body — the same test
+ * against the lower sphere the stance actually produces. `soft` is anything
+ * above knee height.
+ *
+ * The three nest: `hardHeight` (1.7) > `crouchHeight` (1.15) > `softHeight`
+ * (0.9), so anything hard is crouch cover too and anything crouch is soft. That
+ * is what makes `kindAt` a two-bit test rather than three queries a caller has
+ * to reconcile, and it is why the bake sets the shorter masks whenever it sets
+ * a taller one.
+ *
+ * The distinction between the first two is a whole behaviour: hard cover is
+ * somewhere a bot can stand and shoot from, and crouch cover is somewhere it
+ * has to get DOWN behind and stand up out of to fire. A caller that treats them
+ * alike puts a bot behind a waist-high wall in a standing pose and hands the
+ * player a free head — which is exactly what the wrong height buys at the other
+ * end of the scale (see `hardHeight`).
+ *
+ * Soft cover is still not protection of any kind. It exists *only* to bias
+ * movement toward walls and away from open squares, and a bot behind something
+ * between knee and crouch height is exactly as shootable as one standing in
+ * the open, whatever it does with its knees. Treating soft cover as safety
+ * would be a lie the geometry cannot tell.
  */
 
 /**
@@ -68,6 +97,8 @@ const DIR_STEP = (Math.PI * 2) / COVER_DIRECTIONS;
 export class CoverMap {
   /** Blocks a shot at a standing body. One bit per direction, per surface. */
   private readonly hard: Uint16Array;
+  /** Blocks a shot at a CROUCHED body. Implied by `hard`, never the reverse. */
+  private readonly crouch: Uint16Array;
   /** Above knee height: a steering preference, never a safety claim. */
   private readonly soft: Uint16Array;
 
@@ -98,6 +129,7 @@ export class CoverMap {
 
     const surfaces = this.dim * this.dim * this.maxSurfaces;
     this.hard = new Uint16Array(surfaces);
+    this.crouch = new Uint16Array(surfaces);
     this.soft = new Uint16Array(surfaces);
 
     this.bake(boxes);
@@ -127,7 +159,7 @@ export class CoverMap {
       // plane and the boundary ridge are not cover.
       if (box.w > 200 || box.d > 200) continue;
       // A porous box stops a body and nothing else, so it is not cover of
-      // either kind. Not `hard` for the reason at the top of this file — cover
+      // any kind. Not `hard` for the reason at the top of this file — cover
       // that hides a bot from LOS but not from bullets is worse than no cover
       // at all, and this one does not even hide it. Not `soft` either: soft
       // exists to bias movement toward walls and away from open ground, and a
@@ -170,13 +202,19 @@ export class CoverMap {
             // lintel the round passes under.
             if (bottom > standing + c.footTolerance) continue;
             const hard = top >= standing + c.hardHeight;
+            const crouch = top >= standing + c.crouchHeight;
             const soft = top >= standing + c.softHeight;
             if (!soft) continue;
 
             for (let d = 0; d < COVER_DIRECTIONS; d++) {
               const bit = 1 << d;
-              // Nothing to learn if both masks already know about this bearing.
-              if (this.soft[surface] & bit && (!hard || this.hard[surface] & bit)) {
+              // Nothing to learn if every mask this box could set already
+              // knows about this bearing.
+              if (
+                this.soft[surface] & bit &&
+                (!crouch || this.crouch[surface] & bit) &&
+                (!hard || this.hard[surface] & bit)
+              ) {
                 continue;
               }
               if (
@@ -190,8 +228,31 @@ export class CoverMap {
               ) {
                 continue;
               }
+              // The masks nest, so a taller box sets the shorter masks too —
+              // that is the invariant `kindAt` and `findCover` read.
               this.soft[surface] |= bit;
-              if (hard) this.hard[surface] |= bit;
+              if (hard) {
+                this.hard[surface] |= bit;
+                this.crouch[surface] |= bit;
+              } else if (
+                crouch &&
+                // Crouch cover is CLOSE cover: a low wall protects a ducked
+                // body only while the body is up against it, because the
+                // shooter's eye is above the wall and the round comes down over
+                // it — see `cover.crouchProbe`, where the arithmetic is. Hard
+                // cover needs no such test: the wall stands over the shooter's
+                // eye as well as the target's, so no line between them clears
+                // it at any distance inside the probe.
+                segmentHitsBox(
+                  box,
+                  wx,
+                  wz,
+                  wx + dirX[d] * c.crouchProbe,
+                  wz + dirZ[d] * c.crouchProbe,
+                )
+              ) {
+                this.crouch[surface] |= bit;
+              }
             }
           }
         }
@@ -232,6 +293,22 @@ export class CoverMap {
     return (this.hard[surface] & this.bitToward(x, z, tx, tz)) !== 0;
   }
 
+  /**
+   * What `surface` offers against a threat at `(tx, tz)`: stand-and-shoot
+   * cover, cover that has to be crouched behind, or nothing.
+   *
+   * One bearing, two bit tests, and the masks nest — so this is the query every
+   * caller wants and `coverAt` is the special case of it that asks only whether
+   * a standing body is safe.
+   */
+  kindAt(surface: number, x: number, z: number, tx: number, tz: number): CoverKind {
+    if (surface < 0) return "none";
+    const bit = this.bitToward(x, z, tx, tz);
+    if (this.hard[surface] & bit) return "hard";
+    if (this.crouch[surface] & bit) return "crouch";
+    return "none";
+  }
+
   /** Same, for the knee-height mask. Steering only — never a safety claim. */
   softCoverAt(surface: number, x: number, z: number, tx: number, tz: number): boolean {
     if (surface < 0) return false;
@@ -255,19 +332,35 @@ export class CoverMap {
   }
 
   /**
-   * The best nearby spot with hard cover from `(tx, tz)`, written into `into`.
+   * The best nearby spot with cover from `(tx, tz)`, written into `into`, and
+   * what kind of cover it is.
    *
    * Walks the precomputed ring nearest-first and takes the first surface that
    * is walkable, covered from the threat, and not *closer* to the threat than
    * where the bot already is — running toward the shooter to reach a wall is
-   * worse than staying put. Returns false when there is nothing better.
+   * worse than staying put. `"none"` means there is nothing better than where
+   * the bot already stands.
+   *
+   * **Nearest wins, and a nearer crouch spot beats a further hard one.** The
+   * ring's ordering is the whole design here, and the question a bot under fire
+   * is asking is which cover it can reach before the next burst lands — a low
+   * wall at its feet answers that and a corner six metres away does not. Within
+   * one surface the kinds are still ordered, because the masks nest: a spot
+   * that is hard cover is reported as hard rather than as something to duck
+   * behind.
+   *
+   * `taken` is how squadmates keep out of each other's cover. It is asked about
+   * every candidate CELL before its surfaces are looked at, so a corner one bot
+   * is already anchored on is skipped rather than handed to a second — see
+   * `cover.claimRadius`. Omitted, every spot is free.
    */
   findCover(
     from: Vector3,
     tx: number,
     tz: number,
     into: Vector3,
-  ): boolean {
+    taken?: (x: number, z: number) => boolean,
+  ): CoverKind {
     const cx = this.clampCell(this.toCell(from.x));
     const cz = this.clampCell(this.toCell(from.z));
     const here2 = (from.x - tx) ** 2 + (from.z - tz) ** 2;
@@ -281,6 +374,10 @@ export class CoverMap {
       const wz = this.toWorld(gz);
       // Never break contact by charging the shooter.
       if ((wx - tx) ** 2 + (wz - tz) ** 2 < here2 * 0.64) continue;
+      // Somebody is already behind this. Asked per cell rather than per
+      // surface: a claim is a position on the floor and the storeys over it
+      // are not what a squadmate is standing on.
+      if (taken?.(wx, wz)) continue;
 
       const n = this.counts[cell];
       for (let s = 0; s < n; s++) {
@@ -290,12 +387,13 @@ export class CoverMap {
         if (Math.abs(this.heights[surface] - from.y) > CONFIG.nav.stepHeight) {
           continue;
         }
-        if (!this.coverAt(surface, wx, wz, tx, tz)) continue;
+        const kind = this.kindAt(surface, wx, wz, tx, tz);
+        if (kind === "none") continue;
         into.set(wx, this.heights[surface], wz);
-        return true;
+        return kind;
       }
     }
-    return false;
+    return "none";
   }
 
   // --- internals -----------------------------------------------------------

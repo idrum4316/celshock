@@ -132,11 +132,13 @@ Two consequences to preserve:
   a bare `1` instead, which is what it did, makes a killed player VANISH on the
   tick they die, and takes the ragdoll with them because the rig is gone before
   the pool is offered it.
-- **The one thing only a person does is crouch**, and the rig they share can
-  pose it: `animateSoldier` takes a stance blend and nothing in the AI ever
-  passes one, so a bot's legs stay straight without a second rig or a second
-  code path. See below for why the stance is a number rather than the boolean
-  the client sends up.
+- **A stance is a stance whoever is in it.** `animateSoldier` takes a blend and
+  three things pass one — a person's key, a bot behind cover (`Bot.stance`), and
+  the death cam's stand-in — so one rig and one code path draw all of them, and
+  `Match` puts a bot's on the wire in the same field as a person's. See below for
+  why the stance is a number rather than the boolean the client sends up; every
+  word of it applies to the bot, whose blend the authority is likewise the only
+  thing that eases.
 
 ## A stance is drawn where the authority has it, or it is worse than not drawn
 
@@ -145,8 +147,10 @@ The client sends `crouching` as a boolean, the authority eases it into
 boolean, and not nothing.
 
 Not nothing, because a drawn body that does not crouch is an invisible
-advantage. The authority drops a crouching player's eye to `crouchEyeHeight` and
-their hit sphere to `crouchCenterHeight`, half a metre each; an observer drawing
+advantage. The authority drops a crouching body's eye to `crouchEyeHeight` and
+its hit sphere to `crouchCenterHeight`, half a metre each — a player's in
+`NetPlayer`, a bot's in `Bot.syncTransform`, and the two run the same
+arithmetic; an observer drawing
 them upright aims at a helmet the sphere no longer reaches, and the round the
 shooter watched land is a miss the server never saw a reason for. The same body
 is also drawn head-up over a wall it is genuinely hidden behind. Both are the
@@ -173,8 +177,9 @@ drawing follows; author the pose by hand instead and the two drift apart the
 first time anybody does.
 
 `EntityState.crouch` is optional and absent means standing, so it is additive in
-the same way `fired` and `present` are and needs no `PROTOCOL_VERSION` bump.
-Every bot omits it.
+the same way `fired` and `present` are and needs no `PROTOCOL_VERSION` bump. It
+is omitted while a body is standing, which is most bodies most of the time and
+was every bot in the game before one could take the stance.
 
 ## Coming into the world is an ASK, and it is the only one
 

@@ -148,6 +148,8 @@ src/
     Bot.ts              # Bot FSM (advance/hunt/engage/takeCover/suppressed/
                         #   retreat/capture) + movement, aim, magazine, peek
     BotMemory.ts        # One bot's decaying picture of the fight
+    SquadRadio.ts       # One TEAM's board: its squads' contact calls and the
+                        #   marks its own deaths leave. Cues, never targets
     BotSkill.ts         # skill scalar -> BotProfile; difficulty tiers
     SoldierModel.ts     # Merged bot rig + the per-team kit it is painted and
                         #   shaped in + procedural animation (walk, aim, twist,

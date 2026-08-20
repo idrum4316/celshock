@@ -1,9 +1,10 @@
 # Bots: navigation, scaling, perception and squads
 
 The nav graph and its silent caps, the three things carrying the frame budget,
-what a bot notices without a ray, and how squads choose. Split out of
-[`CLAUDE.md`](../CLAUDE.md), which keeps the summary; this file is the contract
-for `NavGrid`, `ObstacleField`, `CoverMap`, `Bot` and `BattleSystem`.
+what a bot notices without a ray, what a squad tells itself, and how squads
+choose. Split out of [`CLAUDE.md`](../CLAUDE.md), which keeps the summary; this
+file is the contract for `NavGrid`, `ObstacleField`, `CoverMap`, `SquadRadio`,
+`Bot` and `BattleSystem`.
 
 ## Navigation
 
@@ -212,17 +213,88 @@ would make every accurate bot shot a headshot. Because the gate is
 on their path: sixteen shooters pay nothing for a feature they do not have.
 
 **Cover is baked, never probed** (`world/CoverMap.ts`): one bit per direction per
-surface, 16 directions, two masks — the same reasoning that makes `NavGrid` bake seven
-flow fields. A cover query costs a bit test.
+surface, 16 directions, three masks — the same reasoning that makes `NavGrid` bake
+seven flow fields. A cover query costs a bit test, and because the masks NEST it
+answers with a `CoverKind` (`hard` / `crouch` / `none`) rather than a boolean.
 
 - **Hard cover is 1.7 m — the hit sphere's top, not the 1.55 m eye height.** LOS is
   tested from the eyes but hits are tested against the sphere (`center.y + hitRadius`
   = 1.65). Bake at eye height and a bot behind a 1.6 m wall is *visible but
   unhittable*, which reads as broken netcode.
-- **Soft cover (0.9 m) is a steering preference and nothing else.** The rig grew knees
-  and ankles for a remote human's stance, but nothing in the AI passes a crouch, so a
-  bot never bends them: a bot behind a waist-high wall is exactly as shootable as one
-  in the open. **Cover here means corners.**
+- **Crouch cover is 1.3 m, and it is 1.15 plus a measured margin.** 1.15 is the
+  same derivation one stance down — `player.crouchCenterHeight` (0.4) plus
+  `hitRadius` — and on its own it is a lie. A shooter's eye stands at 1.55,
+  *above* a waist-high wall, so the round comes DOWN over it and can still find
+  a ducked body behind it; hard cover escapes this because the wall stands over
+  the shooter's eye as well, and no line between two points below it clears it.
+  Ray-tested against real geometry with the game's own `OPAQUE_ONLY` predicate,
+  a 1.15 m bake left the crouched sphere exposed on **20% of Hollowmere's
+  crouch-only bearings and 48% of Coldharbour's**; at 1.3 m with the short probe
+  below, **182 of 182 sampled bearings on Hollowmere block the crouched sphere
+  and 135 of them leave the standing one exposed** — which is the whole claim
+  the stance makes, measured.
+- **Crouch cover is CLOSE cover** (`cover.crouchProbe`, 2 m, against
+  `probeDistance`'s 4.5 for the other two). The margin above is proportional to
+  how far the wall stands from the body — a low wall you are pressed against
+  covers you and the same wall four metres back is one the round clears on the
+  way in. Stretching the probe to 4.5 would need 1.45 m of wall to stay honest
+  at `minEngageRange`, which is most of the way to hard cover and would leave
+  the mask nearly empty. It also matches what a bot does with the spot: it hugs
+  it and peeks UP, rather than stepping out.
+- **Soft cover (0.9 m) is a steering preference and nothing else**, and it is now
+  the only one of the three that is: it biases movement toward walls and away
+  from open ground, and a bot behind something between 0.9 and 1.3 is exactly as
+  shootable as one in the open however low it gets. Never treat it as protection.
+- **The three nest by construction** — 1.7 > 1.3 > 0.9, and the bake sets the
+  shorter masks whenever it sets a taller one. That is what lets `kindAt` be two
+  bit tests, and it is why `hard` never has to be checked as "hard but not
+  crouch".
+- What it buys, measured on Hollowmere: 23,817 walkable surfaces × 16 bearings,
+  of which 35,310 pairs are hard cover and **4,516 more are crouch-only** — a
+  ~13% increase in the ground that offers a bot real protection, and a `findCover`
+  that answers `crouch` on ~8% of searches. Greyfen has almost none (its trees
+  are hard cover and its ferns are nothing); the band is thin on purpose, because
+  everything in it had to earn the 1.3 m line.
+
+**The stance itself is `Bot.crouchBlend`, and every consequence rides the BLEND
+rather than the decision.** `wantCrouch` is re-decided from scratch every frame —
+standing is what a state gets by saying nothing — and the ease is
+`player.crouchBlendSpeed`, the player's own number, because it is how fast a body
+folds rather than a property of whoever asked. Off the blend come the eye, the hit
+sphere, the pose, the speed (`cover.crouchMoveMult`) and the spread
+(`cover.crouchSpreadMult`), so a stance caught halfway is as correct as one at
+rest. **The eye and the hit sphere must come down together** — `syncTransform`
+runs the same arithmetic `NetSoldier` runs for a remote body — or crouching makes
+a bot easier to kill rather than harder, every incoming round aimed at the middle
+of an unmoved sphere instead of grazing its top.
+
+Four things take it, and nothing else may:
+
+- **The tucked-in half of a peek at crouch cover.** What a peek IS depends on the
+  kind, and the two are the same cycle on the same clock because they are the same
+  decision — be shootable for a moment, then not. Round a corner the bot steps out
+  sideways and stays standing; behind a low wall there is nowhere to step to, so
+  the peek is standing UP in place and the stance is the whole of the exposure.
+- **A reload behind cover**, of either kind.
+- **`suppressed`**, unconditionally: it is the one state where the bot is not
+  trying to do anything else with its body, and a corner does not stop a burst
+  already walking along the wall. This is also the state that finally has
+  something to *show* — "hunkered down" used to have to read as "not moving".
+- **A defender holding a covered vantage on its own flag**, while alerted.
+
+**Losing sight of the enemy from behind your own cover is what cover DOES, and it
+must not drop the anchor.** The old `think` dropped it on the first tick with no
+visible target and fell through to the search cue, so a bot that took cover forgot
+why, stood up out of it and walked off to look for whoever had been shooting at
+it — which is also why a crouch could not have worked at all, since the stance
+breaks the sightline by construction and the ducking bot was always the one that
+lost its target. A bot at its anchor with `memory.lastAimed` still live stays in
+`engage` (or `suppressed`, which that branch is what made reachable — the whole
+decision tree above it needs a visible target), and the peek cycle runs on the
+remembered bearing until it stands the bot back up. Measured over three rounds a
+side: the fraction of the roster in `engage` went 0.093 → 0.204 on Hollowmere,
+0.089 → 0.154 on Greyfen and 0.365 → 0.421 on Coldharbour, with `hunt` falling
+to match. Bots hold a fight instead of losing it and going looking.
 - **A `porous` box is neither mask, and a `strut` is in no mask at all.** The
   bake skips the porous box outright: rounds go through it (that is what the
   flag means), so it cannot be hard cover for the reason above — and it cannot
@@ -239,7 +311,7 @@ flow fields. A cover query costs a bit test.
   the tucked-in half of the peek cycle holds fire. Without both, bots walked into walls
   holding fire for the whole round.
 
-## Squads and movement texture
+## Squads and objectives
 
 **Squad orders are planned as a group** (`ConquestSystem.planSquads`), on their own
 2 Hz timer rather than per bot per think. What it replaced was `ranked[squad %
@@ -258,6 +330,99 @@ second to do it.
   what move the meter, while `hold` takes a covered vantage and watches. **`hold` is
   checked before the search cue** — a defender that hears a shot and walks off to
   investigate has abandoned the only thing it was there to do.
+
+## What a team tells itself, and what it remembers
+
+`SquadRadio` is one board per team, held by `BattleSystem`, cleared on
+`reset` — a team's memory is a ROUND's memory, and last round's marks would
+float over geometry that no longer exists. Bots reach it only through
+`BattleCtx`. It carries two things and both are **cues, never knowledge**:
+neither is allowed into `BotMemory`, because everything in there feeds `hasCue`
+and would turn a cue into a SEARCH.
+
+**A contact call is a LOOK.** A bot with eyes on an enemy calls it to its own
+squad — the squad and not the team, since a team-wide broadcast turns one
+sighting into sixteen bots converging on one grid reference, which is the herd
+rather than the fix for it. A squadmate acts on it only when it has nothing of
+its own to look at and only inside `engageRange`, and what it does is turn its
+head and widen its cone. Against a directional acquisition cone that is most of
+what being warned is worth: the enemy who walked past an unaware bot is now
+walking into one that is pointed at them. **Making it a destination instead was
+measured and rejected** — it put Greyfen's roster in `hunt` 63% of the time
+against 39%, halved the time spent fighting, and cost the flags the difference.
+Where to walk is the squad's objective, and a SHOT is what changes it, which
+`hearGunshot` already does.
+
+**A hazard mark is where this team keeps dying.** `Bot.onDied` — a callback,
+because there are three kill paths and exactly one death — puts the body's
+position and the bearing it fell to (`deathFrom`, which the ragdoll already
+needs) on the board. Deaths inside `hazardMerge` reinforce the existing mark
+instead of adding one, which is what turns four bodies on a street corner into
+one strong mark and keeps `hazardMax` from being spent by a single firefight;
+marks fade over `hazardMemory`. Inside `hazardRadius` a bot does three things
+at once, and they are one behaviour: it drops the sprint to a walk
+(`hazardCaution`), it looks at the bearing the fire came from, and
+`smoothHeading` bends its route AROUND the mark rather than through it
+(`hazardSwerve`, a lateral push exactly like `wallHug`, never a retreat — a bot
+pushed straight back would stop advancing).
+
+**That swerve is the whole of "come in a different way".** There is one route
+graph and no second one to pick, so the alternative is made by bending the only
+route there is: a squad cut down crossing the square comes round the edge of it
+next time, slower, looking at whatever did the cutting.
+
+Both are ray-free and allocation-free, like the rest of perception, and every
+position on the board is jittered per LISTENER rather than per call — the same
+fix `hearGunshot`'s jitter needed, and for the same reason.
+
+## Squads walk as a line, not a column
+
+**Herding is made in three places and each needed its own answer.** Measured as
+the fraction of living bots with a friendly inside 3 m, averaged over 240 s
+rounds:
+
+| map | before | after |
+| --- | --- | --- |
+| Hollowmere | 0.321 | 0.130 |
+| Greyfen | 0.251 | 0.082 |
+| Coldharbour | 0.334 | 0.150 |
+
+Three 240 s rounds a side per map at `Regular`, through `HeadlessGame` — the
+harness `npm run simulate` drives. Read it beside the engage fractions above
+rather than on its own: the point is a squad that spreads without fighting less.
+
+- **`movement.spacing` (5 m) is the formation, and it is the dominant term** —
+  ablating it alone puts Coldharbour back to 0.385 and Hollowmere to 0.288.
+  It is NOT `bots.separation` (1.5), which is de-penetration: two bodies' width,
+  all this used to be, and the reason four bots on one flow field marched down a
+  single line two metres apart. Both fall out of the same pairwise pass, the wide
+  one is deliberately the weaker (`spacingWeight`), and a corridor narrower than
+  the spacing simply wins once `tryMove` slides the push along the wall.
+  De-penetration is owed to everybody; the formation is owed only to our own
+  side, because an enemy at four metres is a fight and not a queue.
+- **`spawnJitter` (1.5 s) breaks up the wave.** `conquest.respawnDelay` is one
+  number for everybody, so a squad wiped together walked out of the gatehouse
+  together. It only ever ADDS, which keeps the corpse's sink margin intact.
+- **The hazard swerve stops a team re-forming on the same line into the same
+  killing ground**, which is a different thing from spacing and does not show up
+  in the 3 m metric — it shows up in where the route goes.
+- **Cover anchors are claimed.** The bake is a lookup over a static map, so four
+  bots under fire from one bearing were handed the same corner. `findCover` skips
+  any cell within `cover.claimRadius` of a squadmate's anchor, and the claim IS
+  the anchor rather than a reservation kept beside it — so nothing has to be
+  released and nothing can go stale.
+
+## Movement texture and skill
+
+**None of this moved the AI's frame cost anywhere it matters.** `battle.update`
+for the whole roster, timed inside the same rounds: Hollowmere 0.282 → 0.317 ms,
+Coldharbour 0.276 → 0.341 ms, Greyfen 0.476 → 0.458 ms. The new per-frame work
+is the wider separation term and the radio's decay; everything else — the claim
+scan, the hazard and contact lookups — is on the think tick, which is budgeted.
+What the remaining delta mostly buys is fighting: a roster that holds contact
+fires more rays than one that keeps losing it, which is why the engage fraction
+belongs beside any timing taken here. Judge a change against the pair, or the AI
+getting BETTER reads as the AI getting slower.
 
 **Movement texture is heading, speed and facing only.** Two measured results worth
 keeping: `NavGrid.steerAhead` plus heading smoothing cut mean path curvature by ~27%
@@ -279,8 +444,8 @@ rules: the twist is **clamped** to `CONFIG.bots.movement.maxTorsoTwist` and past
 the hips come round with it, or the shoulders end up on backwards; a **stationary**
 bot's feet converge on its look direction; and **perception reads `yaw`, never
 `bodyYaw`** — `BattleSystem.inView` keys off `Bot.facing`, and where a bot points its
-feet must not change what it can see. This is still not a lean or a crouch — the rig
-has no joint that could sell either.
+feet must not change what it can see. This is still not a lean — the crouch is a stance
+of its own and lives with the cover it is taken behind, above.
 
 **Skill is one scalar per bot** (`BotSkill.profileFor`), resolved into a `BotProfile`
 once at assignment and never per frame — `CONFIG` is `as const`, so lerping at each

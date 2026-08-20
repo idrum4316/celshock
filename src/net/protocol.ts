@@ -190,7 +190,8 @@ export interface EntityState {
   fired?: boolean;
   /**
    * Stance, 0 standing .. 1 fully crouched. Absent means standing, which is
-   * every bot in the game — nothing in the AI crouches.
+   * most bodies most of the time — people and bots alike take the stance, and
+   * both are sent the same way.
    *
    * **The authority's own blend, not the key a client is holding**, and that is
    * the point of sending a number rather than the boolean the client already

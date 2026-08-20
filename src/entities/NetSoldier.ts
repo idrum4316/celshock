@@ -239,9 +239,10 @@ export class NetSoldier implements Combatant, RagdollSubject {
     // the authority derived ITS pair from (`NetPlayer.apply`), so the sphere a
     // shooter's own hitmarker is guessed against is the sphere the server will
     // rewind. It is the `player` numbers on both sides even though this body
-    // may be a bot, and that is not an inconsistency: a bot's `crouch` is
-    // always 0, so a bot resolves to `centerHeight` and `eyeHeight` exactly as
-    // it always has, and nothing but a person ever leaves them.
+    // may be a bot, and that is not an inconsistency: the crouch is one stance
+    // with one geometry, and a bot that takes it is the same shape as a person
+    // who does. A body that is standing resolves to `centerHeight` and
+    // `eyeHeight` exactly as it always has.
     //
     // The ROOT does not move. The crouch lives inside the rig — `animateSoldier`
     // drops the body node and folds the legs under it — so the rig still hangs

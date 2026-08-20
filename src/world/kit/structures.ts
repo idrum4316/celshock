@@ -5,10 +5,16 @@
  * the contract in kit/core.ts (origin-local geometry, no
  * solid/pickable/collisions metadata).
  *
- * Cover vocabulary, so a layout can pick the right height deliberately:
- * fence and trough are *low* (step over with the eyes, not the body), cart,
- * crates, woodpile and haystack are *waist/chest* high cover you crouch
- * behind, and stone wall, shed, silo and kiln break sightlines outright. The
+ * Cover vocabulary, so a layout can pick the right height deliberately. A
+ * prop's COLLIDER height is the whole of it, and `CONFIG.bots.cover` draws
+ * three lines through the range: 0.9 (`softHeight` — a steering hint and
+ * nothing more), 1.3 (`crouchHeight` — stops a round at a body that gets DOWN
+ * behind it, and only within `crouchProbe` of it), and 1.7 (`hardHeight` —
+ * stops one at a body standing up). Trough (1.0) and the fence's run (1.4, and
+ * `porous`, so in no mask at all) are *low*: a step over with the eyes, not
+ * the body. Cart (1.7), woodpile (1.9), haystack (2.2) and crates (2.3) are
+ * all at or over the hard line — cover you stand and shoot from, not cover you
+ * duck behind. Stone wall, shed, silo and kiln break sightlines outright. The
  * fence is the one thing here that is cover from nothing but its own timber —
  * its coarse box is `porous` and its posts and rails are `strut`s, so it turns
  * a route without turning a sightline, and stops only what actually hits wood.

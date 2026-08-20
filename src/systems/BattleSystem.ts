@@ -8,9 +8,12 @@
  * the first visible one, and is capped at CONFIG.bots.acquireRayBudget — the
  * view cone (Bot.facing) rejects most candidates before any ray is fired.
  * Hearing, damage direction and near-miss suppression are all RAY-FREE by
- * construction; keep them that way. LOS rays filter OPAQUE_ONLY, so a bot sees
- * through what it could shoot through (fence rails) and not through what it
- * could not.
+ * construction; keep them that way — as is everything a team tells itself
+ * (SquadRadio: one per team, held here, cleared on reset, and reached by bots
+ * only through BattleCtx). A call and a hazard mark are CUES: they seed
+ * BotMemory and may never hand anybody a target.
+ * LOS rays filter OPAQUE_ONLY, so a bot sees through what it could shoot
+ * through (fence rails) and not through what it could not.
  * Cover is a baked lookup (world/CoverMap), never a probe. Bot muzzle flashes are
  * NOT pulsed from here — this system only records flash positions and Game
  * spends CONFIG.lighting.muzzleBudgetPerFrame on the nearest few (16 shader
@@ -42,6 +45,7 @@ import type { GameMap } from "../world/MapBuilder";
 import type { ObstacleField } from "../world/ObstacleField";
 import { OPAQUE_ONLY } from "../world/solid";
 import type { CombatSystem, Hittable, ShotOptions } from "./CombatSystem";
+import { SquadRadio } from "../entities/SquadRadio";
 import type { SquadOrder } from "./ConquestSystem";
 
 /**
@@ -156,6 +160,22 @@ export class BattleSystem {
   throwGrenadeFor: (bot: Bot, from: Vector3, at: Vector3) => boolean = () =>
     false;
 
+  /**
+   * One board per team: the contact calls its squads have made and the marks
+   * its own deaths have left. Built with the system and cleared on `reset`, so
+   * a new round starts with a team that remembers nothing.
+   */
+  private readonly radios = [new SquadRadio(), new SquadRadio()] as const;
+  /**
+   * The bot currently asking for cover, so `spotFree` can skip its own anchor.
+   *
+   * A field and a bound predicate rather than a closure per call: the predicate
+   * is handed to `CoverMap.findCover` and the search runs several times a
+   * second across the roster, in a file whose `BOT_SHOT` constant exists to
+   * avoid exactly this kind of per-call garbage.
+   */
+  private claimant: Bot | null = null;
+
   private nav: NavGrid | null = null;
   private cover: CoverMap | null = null;
   private obstacles: ObstacleField | null = null;
@@ -222,6 +242,19 @@ export class BattleSystem {
         bot.seedRandom(CONFIG.bots.skill.seed + team * 131 + i * 17);
         bot.onReload = () => this.onBotReloaded(bot);
         bot.onStep = () => this.onBotStepped(bot);
+        // Where this team's bodies fall, on this team's own board. Taken here
+        // rather than off the kill path because there are three kill paths
+        // (a round, a blast, and whichever side of the wire it happened on)
+        // and exactly one death.
+        bot.onDied = () =>
+          this.radios[bot.team].markHazard(
+            bot.position.x,
+            bot.position.y,
+            bot.position.z,
+            bot.deathFrom.x,
+            bot.deathFrom.y,
+            bot.deathFrom.z,
+          );
         this.bots.push(bot);
       }
     }
@@ -239,13 +272,47 @@ export class BattleSystem {
       fire: (bot, aimAt, spread) => this.botFire(bot, aimAt, spread),
       fieldFor: (bot) => this.fieldFor(bot),
       homeFieldFor: (bot) => this.homeFieldFor(bot),
-      hasCover: (bot, tx, tz) => {
-        if (!this.cover || !this.nav) return false;
+      coverKind: (bot, tx, tz) => {
+        if (!this.cover || !this.nav) return "none";
         const s = this.nav.surfaceAt(bot.position.x, bot.position.y, bot.position.z);
-        return this.cover.coverAt(s, bot.position.x, bot.position.z, tx, tz);
+        return this.cover.kindAt(s, bot.position.x, bot.position.z, tx, tz);
       },
-      findCover: (bot, tx, tz, into) =>
-        this.cover ? this.cover.findCover(bot.position, tx, tz, into) : false,
+      findCover: (bot, tx, tz, into) => {
+        if (!this.cover) return "none";
+        // The claim test is asked per candidate CELL, so it is worth knowing
+        // up front that there is nothing to test against: most of the roster
+        // is walking at a flag, and a search with no anchored squadmate should
+        // not pay a roster scan per cell to find that out.
+        this.claimant = this.anchored(bot) ? bot : null;
+        const kind = this.cover.findCover(
+          bot.position,
+          tx,
+          tz,
+          into,
+          this.claimant ? this.spotFree : undefined,
+        );
+        this.claimant = null;
+        return kind;
+      },
+      callContact: (bot, at) =>
+        this.radios[bot.team].callContact(bot.squad, at.x, at.y, at.z),
+      contactCall: (bot, into) => {
+        const call = this.radios[bot.team].contactFor(bot.squad);
+        if (!call) return false;
+        into.set(call.x, call.y, call.z);
+        return true;
+      },
+      hazardNear: (bot, into, from) => {
+        const h = this.radios[bot.team].hazardNear(
+          bot.position.x,
+          bot.position.z,
+          CONFIG.bots.radio.hazardRadius,
+        );
+        if (!h) return 0;
+        into.set(h.x, h.y, h.z);
+        from.set(h.fromX, h.fromY, h.fromZ);
+        return h.weight;
+      },
       openness: (bot) => {
         if (!this.cover || !this.nav) return 1;
         const s = this.nav.surfaceAt(bot.position.x, bot.position.y, bot.position.z);
@@ -408,6 +475,10 @@ export class BattleSystem {
 
   /** Kills everyone and hides every rig, without disposing the pool. */
   reset(): void {
+    // A team's memory is a ROUND's memory: where the last round's bodies fell
+    // says nothing about this one, and a map change would leave the marks
+    // floating over geometry that no longer exists.
+    for (const radio of this.radios) radio.clear();
     for (const bot of this.bots) {
       bot.alive = false;
       bot.state = "dead";
@@ -442,6 +513,10 @@ export class BattleSystem {
     this.muzzleFlashes.length = 0;
     this.flashCount = 0;
     const b = CONFIG.bots;
+    // Calls go stale and marks fade. Per frame rather than per think, for the
+    // reason `BotMemory.decay` runs per frame: a cue that stepped at 5 Hz would
+    // put a step in the cone width and the approach speed that read it.
+    for (const radio of this.radios) radio.decay(dt);
 
     // --- respawn ---
     for (const bot of this.bots) {
@@ -724,21 +799,79 @@ export class BattleSystem {
   }
 
   /**
+   * Is `(x, z)` clear of every friendly's cover anchor?
+   *
+   * Handed to `CoverMap.findCover` so squadmates stop being given the same
+   * corner: the bake is a lookup over a static map, so four bots under fire
+   * from one bearing get four identical answers unless something tells them
+   * apart. The claim is the other bot's ANCHOR rather than a reservation kept
+   * beside it, so nothing has to be released and nothing can go stale.
+   *
+   * Bound once, and it reads `claimant` rather than taking the asking bot as an
+   * argument, because `findCover`'s predicate takes a position and nothing
+   * else — see the field.
+   */
+  /** Has anybody on this bot's side latched a cover spot? */
+  private anchored(bot: Bot): boolean {
+    for (const other of this.bots) {
+      if (other === bot || other.team !== bot.team) continue;
+      if (!other.alive || this.benched.has(other)) continue;
+      if (other.coverAnchor) return true;
+    }
+    return false;
+  }
+
+  private readonly spotFree = (x: number, z: number): boolean => {
+    const asking = this.claimant;
+    if (!asking) return false;
+    const r = CONFIG.bots.cover.claimRadius;
+    const r2 = r * r;
+    for (const other of this.bots) {
+      if (other === asking || other.team !== asking.team) continue;
+      if (!other.alive || this.benched.has(other)) continue;
+      const anchor = other.coverAnchor;
+      if (!anchor) continue;
+      const dx = anchor.x - x;
+      const dz = anchor.z - z;
+      if (dx * dx + dz * dz < r2) return true;
+    }
+    return false;
+  };
+
+  /**
    * Push-apart from nearby friendlies so a squad spreads out instead of walking
    * as one body. O(n^2) over the roster and cheap at this size.
+   *
+   * Two radii out of one pass, because "do not stand inside each other" and "do
+   * not walk as a herd" are different distances. `separation` (1.5 m) is
+   * de-penetration — two bodies' width, and all this used to be, which is why
+   * four bots on one flow field marched down a single line two metres apart.
+   * `movement.spacing` (5 m) is the formation: a weak push that only has to
+   * beat the flow field's own agreement by a little, spread over a distance
+   * where the result reads as a line abreast rather than a column. Both fall
+   * off linearly, and the wide one is deliberately the weaker — the field still
+   * decides where the squad is going, and a corridor narrower than the spacing
+   * simply wins once `tryMove` slides the push along the wall.
    */
   private separation(bot: Bot, out: Vector3): void {
     out.setAll(0);
+    const m = CONFIG.bots.movement;
     const min = CONFIG.bots.separation;
-    const min2 = min * min;
+    const spacing = m.spacing;
     for (const other of this.bots) {
       if (other === bot || !other.alive || this.benched.has(other)) continue;
+      // De-penetration is owed to everybody — two bodies may not stand inside
+      // each other whichever side they are on — but the formation is only
+      // owed to our own: an enemy at four metres is a fight, not a queue.
+      const mine = other.team === bot.team;
+      const reach = mine ? spacing : min;
       const dx = bot.position.x - other.position.x;
       const dz = bot.position.z - other.position.z;
       const d2 = dx * dx + dz * dz;
-      if (d2 > min2 || d2 < 1e-6) continue;
+      if (d2 > reach * reach || d2 < 1e-6) continue;
       const d = Math.sqrt(d2);
-      const push = (min - d) / min;
+      let push = d < min ? (min - d) / min : 0;
+      if (mine) push += ((spacing - d) / spacing) * m.spacingWeight;
       out.x += (dx / d) * push;
       out.z += (dz / d) * push;
     }

@@ -123,6 +123,20 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   instead of an argument. Greyfen's canopy tree reads ~60-100 m2. A picture
   cannot tell you any of this: 24% closure and 90% closure both photograph as
   "trees with sky behind them" depending on where you stand.
+- **Bot BEHAVIOUR is measured in the headless simulation, not in the browser.**
+  At ~2 fps nothing crosses a map, so anything about squads, spacing, cover or
+  state occupancy wants `HeadlessGame` instead: build a throwaway entry against
+  it with `vite build` (copy `vite.server.config.ts`, point `input` at a
+  scratchpad file, and either write the bundle inside the repo or set
+  `ssr: { noExternal: true }` — a bundle outside the tree cannot resolve
+  `@babylonjs/core`), then step `game.step(1/TICK_HZ)` and sample
+  `game.battle.bots`. Two things make it a comparison rather than a number:
+  `CONFIG` is `as const` to the typechecker and a plain object at runtime, so a
+  probe can override any tunable from an env var and ablate one change at a
+  time; and `git worktree add <tmp> HEAD` with `node_modules` symlinked in gives
+  a BEFORE build to run against the same probe. **Rounds are not deterministic**
+  — `ConquestSystem.spawnFor` picks with `Math.random()` — so take three rounds
+  a side and compare means; single rounds move by half the effect size.
 - Free a stuck vite port by PID from `ss -tlnp`. Never `pkill -f vite` — it
   matches the calling shell.
 - **Do not edit anything under `src/` while a script is driving the page.** Vite

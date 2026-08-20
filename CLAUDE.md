@@ -707,10 +707,43 @@ merged meshes, and AI is staggered round-robin at `CONFIG.bots.thinkRate`.
 LOS budget is the one thing here that does not scale — and cover is baked, never
 probed. Skill is one scalar per bot, drawn **per squad** from a seeded generator.
 
+**Cover is baked as three nested masks and a query answers with a KIND**, because
+a spot you can stand and shoot from and a spot you have to get DOWN behind are
+different orders. Each height is a hit SPHERE's top and never an eye height:
+1.7 standing, 1.3 crouched, and 0.9 for the soft mask that steers and protects
+nothing. The crouched line is 1.15 (the ducked sphere) plus a measured margin,
+because a shooter's eye at 1.55 looks *down over* a low wall — so crouch cover is
+also CLOSE cover, probed at 2 m against the other two's 4.5. **A bot's crouch is
+one decision re-made every frame and one eased blend read by everything else**,
+and the eye and the hit sphere come down together or the stance makes a body
+easier to kill. Bots take it behind crouch cover, while reloading behind any
+cover, while suppressed, and while holding a covered vantage — never while
+moving to one.
+
+**A team's bots tell each other two things, and both are CUES that may never
+enter `BotMemory`** (`entities/SquadRadio.ts`, one board per team, held by
+`BattleSystem` and cleared on reset): a squad-only contact CALL, which turns a
+squadmate's head and widens its cone and is deliberately not a destination, and a
+HAZARD mark where the team's own bodies have been falling, which slows an
+approach, points its eyes at the bearing that killed the last one, and bends its
+route around the spot. Everything in `BotMemory` feeds `hasCue`, which is why
+neither may live there: a cue in there is a SEARCH, and a squad that investigates
+every sighting never arrives anywhere.
+
+**A squad walks as a line, not a column.** `movement.spacing` (5 m) is the
+formation and `bots.separation` (1.5 m) is de-penetration; both come out of the
+one pairwise pass, the wide one is owed only to your own side, and it is the
+term that carries the anti-herding. Beside it: reinforcements are scattered by
+`spawnJitter` so a wiped squad does not come back as one body, and a cover
+anchor is CLAIMED, so a baked lookup cannot hand four bots the same corner.
+
 → **[`docs/bots.md`](docs/bots.md)** — surface and link rules (including why
 `clearBlocked` runs before `link`, and what a ramp owes), the acquisition cone and
-target hysteresis, the two cover heights and why they are what they are, squad
-planning and postures, and the yaw/bodyYaw split.
+target hysteresis, the three cover heights and the ray tests that set the crouched
+one, the four states that take the stance and why losing sight from behind your
+own cover must not drop the anchor, the radio's two cues and the measurement that
+made a call a look rather than a search, the three sources of herding and what
+each was worth, squad planning and postures, and the yaw/bodyYaw split.
 
 ### Deaths, glass, and the one physics engine
 
@@ -952,7 +985,10 @@ the authority's would disagree with it, by that same half metre, for the whole
 quarter-second the stance takes. The drawn pose is derived from the same config
 the sphere is (`SoldierModel`'s `CROUCH_DROP`, folded into the legs by inverse
 kinematics with the boots planted), so retuning the crouch moves the drawing
-with it. Bots never crouch and omit the field.
+with it. A BOT takes the same stance behind the same cover (see the bots
+section) and travels the same way — `Bot.stance` is the authority's own blend,
+put on the wire by `Match` exactly as a person's is, and omitted while a body is
+standing, which is what the field's absence has always meant.
 
 **`decode` proves only that a frame is JSON with a `t` on it, so a
 `ClientMessage` is a CLAIM about a well-behaved client and never a fact.**

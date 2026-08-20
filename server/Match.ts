@@ -950,7 +950,7 @@ export class Match {
         continue;
       }
       const bot = bots[i];
-      this.entityScratch.push({
+      const state: EntityState = {
         i,
         p: [bot.position.x, bot.position.y, bot.position.z],
         yaw: bot.lookYaw,
@@ -959,7 +959,15 @@ export class Match {
         moving: bot.moveAmount,
         alive: bot.alive,
         dead: bot.deathProgress,
-      });
+      };
+      // A bot takes a stance now, and it travels for exactly the reasons a
+      // person's does: the authority dropped this body's eye and hit sphere
+      // along this blend, and an observer drawing it standing would be aiming
+      // at a helmet half a metre above the sphere that is actually there.
+      // Omitted while standing, which is most of the time and what the field's
+      // absence has always meant.
+      if (bot.stance > 0.001) state.crouch = bot.stance;
+      this.entityScratch.push(state);
     }
 
     const points: PointState[] = this.game.conquest.points.map((p) => ({

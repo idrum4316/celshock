@@ -1190,10 +1190,11 @@ export function buildShophouse(
   }
 
   // What is in the rooms: a table in the front one and a bed in the back. Two
-  // colliders a storey, and both of them are COVER first — 0.95 m and 0.6 m are
-  // under `CoverMap`'s 1.7 m hard-cover line, so a bot reads either as
-  // something to crouch behind, which is the only move there is in a room this
-  // size. An unfurnished flat is a box with a doorway in it and plays like one.
+  // colliders a storey, and both of them are COVER first — 0.95 m and 0.6 m sit
+  // under both of `CoverMap`'s protecting lines (1.3 crouched, 1.7 standing),
+  // so what a bot reads is `soft`: something to fight from beside rather than
+  // across, which is the only move there is in a room this size. An
+  // unfurnished flat is a box with a doorway in it and plays like one.
   //
   // Nothing here is `strut`: a chair a round goes through would be the fence's
   // trick used on a thing that is not mostly air. The chairs themselves are
@@ -1417,8 +1418,11 @@ export function buildParkade(
   // --- cover and enclosure --------------------------------------------------
 
   // The upstand around every raised deck: the whole elevation of the building,
-  // and the only cover on it. 0.95 m is crouch cover and under `CoverMap`'s
-  // 1.7 m line, so bots use it as low cover the way the player does.
+  // and the only cover on it. At 0.95 m it is under both of `CoverMap`'s
+  // protecting lines (1.3 crouched, 1.7 standing), so what it buys a bot is
+  // `soft` — the steering preference that walks it along the edge rather than
+  // across the open middle — and what it buys anybody is the low half of a
+  // body. Raise it past 1.3 and it becomes something to genuinely duck behind.
   for (let s = 1; s < decks; s++) {
     const y = deckY(s);
     for (const sz of [-1, 1]) {
@@ -1919,8 +1923,9 @@ export function buildBarrier(
  * A parked car, along its own local X, nose at +X.
  *
  * Its collider is the BODY and not the silhouette: one box a metre high, and
- * 1.0 m of steel is cover you crouch behind while the cabin above it is glass
- * a round goes through. That is the gravestone's lesson — a box squared off to
+ * 1.0 m of steel is something to fight from beside — under `cover.crouchHeight`
+ * (1.3), so it steers a bot without protecting one — while the cabin above it
+ * is glass a round goes through. That is the gravestone's lesson — a box squared off to
  * the silhouette stops rounds through the parts of it that are not there — and
  * the box here is EXACTLY the one this model replaced, which is what makes all
  * of the below a drawing change: the cover, the nav graph, the cover bake and

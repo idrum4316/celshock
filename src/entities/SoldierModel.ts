@@ -452,11 +452,12 @@ export interface SoldierRig {
   hipL: TransformNode;
   hipR: TransformNode;
   /**
-   * Knees and ankles. They exist for the crouch — a bot never bends them, and a
-   * standing body holds them all at zero — and the ankle is what keeps a boot
-   * flat on the ground while the shin folds under a squat; without it the sole
-   * tips up with the shin and the toe goes through the floor. Both are ragdoll
-   * bones as well, which is what lets a body die crouched: see `RAGDOLL_BONES`.
+   * Knees and ankles. They exist for the crouch — every body that takes one is
+   * posed through them and a standing body holds them all at zero — and the
+   * ankle is what keeps a boot flat on the ground while the shin folds under a
+   * squat; without it the sole tips up with the shin and the toe goes through
+   * the floor. Both are ragdoll bones as well, which is what lets a body die
+   * crouched: see `RAGDOLL_BONES`.
    */
   kneeL: TransformNode;
   kneeR: TransformNode;
@@ -849,11 +850,11 @@ export function resetSoldierPose(rig: SoldierRig): void {
  * @param dead   collapse blend, 0 alive .. 1 fully down
  * @param crouch 0..1 stance blend, 0 standing .. 1 fully crouched
  *
- * `crouch` defaults to zero, and that default is the whole of a bot's stance:
- * nothing in the AI passes it, so a bot stands whatever it is doing, and the
- * only thing in the game that bends these knees is a remote human's stance
- * arriving from the authority (`EntityState.crouch`). The local player has no
- * body to pose — the camera is inside the head.
+ * `crouch` defaults to zero, so a caller with no stance to pass gets a body
+ * standing. Three things pass one, and they are the same stance with the same
+ * geometry: a bot behind cover (`Bot.crouchBlend`), a remote body arriving from
+ * the authority (`EntityState.crouch`), and the stand-in the death cam poses.
+ * The local player has no body to pose — the camera is inside the head.
  *
  * `twist` is the only parameter that is not a pitch or a blend, and it is worth
  * saying why it exists. The rig's `root` carries one yaw, so before it a bot

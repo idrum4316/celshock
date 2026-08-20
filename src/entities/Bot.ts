@@ -13,16 +13,27 @@
  * position: that is what makes strafing work. Obstacle push-out is a
  * preference, not a veto: squeezeT drops it when wedged. Bots are pooled by
  * BattleSystem — death hides the rig, respawn re-poses it; never allocate a new
- * Bot per respawn. Animation is procedural and NOTHING here passes a stance:
- * `animateSoldier`'s crouch exists for a remote human and its default is
- * standing, so a bot has no crouch, lean or flinch pose and its reactions are
- * expressed in speed, heading and facing only — and "cover" therefore means
- * corners, never ducking. `yaw` is where the bot LOOKS (and is what the view cone reads);
+ * Bot per respawn. Animation is procedural and the ONE stance an AI decides is
+ * the crouch: `wantCrouch` is the decision, `crouchBlend` the eased result, and
+ * everything downstream — the eye, the hit sphere, the pose, the speed and the
+ * spread — reads the BLEND, so a stance caught halfway is as correct as one at
+ * rest. The eye and the hit sphere come down TOGETHER (see `syncTransform`) or
+ * crouching makes a body easier to kill rather than harder. There is still no
+ * lean and no flinch pose. Cover is a KIND and not a flag: `hard` is stood
+ * behind and stepped out of, `crouch` is ducked behind and stood up out of, and
+ * the peek cycle is the same clock either way.
+ * `yaw` is where the bot LOOKS (and is what the view cone reads);
  * `bodyYaw` is where its feet point. Keeping them apart is what stops a
  * strafing bot walking sideways, and the twist between them is clamped. Cover is a PREFERENCE: a spot that cannot be reached inside
  * cover.abandonTime is dropped (with a cooldown, or the search instantly
  * re-picks it) and the bot fights from where it stands. A bot moving to cover
  * still shoots; only the tucked-in half of the peek cycle holds fire.
+ * What a bot hears from its own side is a CUE and never knowledge. Both live on
+ * the team's `SquadRadio` and are reached only through `BattleCtx`, and neither
+ * is allowed into `BotMemory`, because everything in there feeds `hasCue` and
+ * would turn a cue into a SEARCH: a contact call is a LOOK (the cone and the
+ * head, nothing else) and a hazard mark is where this team keeps dying, which
+ * bends an approach and never aims a rifle.
  * Grenades are two a life, considered on the ordinary think tick against a
  * target the bot already has, and never thrown inside `grenade.bot.minRange` —
  * that band IS the self-preservation, since there is no self-damage to teach
@@ -32,6 +43,7 @@
 import { Scene, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { CelMaterialFactory } from "../shaders/CelShader";
+import type { CoverKind } from "../world/CoverMap";
 import type { FlowField, NavGrid } from "../world/NavGrid";
 import {
   animateSoldier,
@@ -110,15 +122,19 @@ export interface BattleCtx {
    */
   homeFieldFor(bot: Bot): FlowField | null;
   /**
-   * Does the bot's current spot have hard cover from `(tx, tz)`? A baked bit
-   * test — no rays, no allocation.
+   * What the bot's current spot offers against `(tx, tz)`: cover it can stand
+   * and shoot from, cover it has to duck behind, or nothing. A baked bit test —
+   * no rays, no allocation.
    */
-  hasCover(bot: Bot, tx: number, tz: number): boolean;
+  coverKind(bot: Bot, tx: number, tz: number): CoverKind;
   /**
-   * Nearest reachable spot with hard cover from `(tx, tz)`, written into `into`.
-   * False when there is nothing better than standing where the bot already is.
+   * Nearest reachable spot with cover from `(tx, tz)`, written into `into`, and
+   * what kind it is. `"none"` when there is nothing better than standing where
+   * the bot already is. Spots a squadmate has already anchored on are skipped,
+   * so a squad under fire spreads along a wall instead of stacking on one
+   * corner.
    */
-  findCover(bot: Bot, tx: number, tz: number, into: Vector3): boolean;
+  findCover(bot: Bot, tx: number, tz: number, into: Vector3): CoverKind;
   /** 0 (walled in) .. 1 (open ground) at the bot's current spot. */
   openness(bot: Bot): number;
   /** Push-apart from nearby friendlies, written into `out`. */
@@ -133,6 +149,31 @@ export interface BattleCtx {
    * it wants to shoot and lets `fire` resolve the round.
    */
   throwGrenade(bot: Bot, at: Vector3): boolean;
+  /**
+   * Tells this bot's SQUAD that it can see an enemy at `at`.
+   *
+   * The squad and not the team: a team-wide broadcast turns one sighting into
+   * sixteen bots converging on one grid reference, which is the herd rather
+   * than the fix for it.
+   */
+  callContact(bot: Bot, at: Vector3): void;
+  /**
+   * The squad's freshest contact call, written into `into`. False when there is
+   * none, or when it has gone stale.
+   *
+   * Raw: the LISTENER puts its own error on it (`radio.contactJitter`), which
+   * is what sends a squad toward a fight rather than stacking it on a point.
+   */
+  contactCall(bot: Bot, into: Vector3): boolean;
+  /**
+   * The nearest place this bot's own TEAM has been dying, if it is near enough
+   * to matter: the spot into `into`, the bearing the fire came from into
+   * `from`, and how much the mark is worth as the return (0 = no such place).
+   *
+   * A fact about where this team's bodies fell, never about where the enemy is
+   * — see `SquadRadio`.
+   */
+  hazardNear(bot: Bot, into: Vector3, from: Vector3): number;
   /**
    * Pushes a body at `(x, y, z)` out of any collider it overlaps, writing the
    * result into `out`. Returns false, leaving `out` set to the input, when the
@@ -243,6 +284,33 @@ export class Bot implements Combatant {
   }
 
   /**
+   * 0..1 stance blend, 0 standing .. 1 fully crouched — the authority's own
+   * eased value, and the one the eye and the hit sphere were derived from this
+   * tick.
+   *
+   * On the wire as `EntityState.crouch`, exactly as a person's is. A client
+   * draws the body from this number and puts its local copy of those spheres in
+   * the same place, so what an observer aims at and what the server rewinds are
+   * the same shape at the same instant — including halfway through the
+   * quarter-second the stance takes.
+   */
+  get stance(): number {
+    return this.crouchBlend;
+  }
+
+  /**
+   * The cover spot this bot has latched, or null.
+   *
+   * Read by `BattleSystem` so a squadmate's cover search can skip it. The claim
+   * IS the anchor rather than a reservation kept beside it, which is what makes
+   * it impossible for one to go stale: a bot that drops its cover has released
+   * it by the same line.
+   */
+  get coverAnchor(): Vector3 | null {
+    return this.hasCoverSpot ? this.coverSpot : null;
+  }
+
+  /**
    * How far through a death this body is: 0 while alive, 1 once it is done.
    *
    * Only netplay reads it — the authority puts it on the wire as
@@ -263,6 +331,22 @@ export class Bot implements Combatant {
   /** The cover spot latched on entering `takeCover`; valid while `hasCoverSpot`. */
   private readonly coverSpot = new Vector3();
   private hasCoverSpot = false;
+  /**
+   * What that spot is: cover to stand behind, or cover to duck behind.
+   *
+   * Re-read against the CURRENT bearing on every think while the bot is at the
+   * spot, because a corner that was stand-up cover when the fight started stops
+   * being one when the shooter walks round it — and the answer to that is to
+   * get down, not to keep standing behind a wall that no longer covers you.
+   */
+  private coverKind: CoverKind = "none";
+  /**
+   * The stance. `wantCrouch` is this frame's decision and `crouchBlend` is the
+   * eased result; nothing but the ease reads the first, and everything else
+   * reads the second — see the file header.
+   */
+  private wantCrouch = false;
+  private crouchBlend = 0;
   /** While positive, the bot will not go looking for cover again. */
   private coverCooldownT = 0;
   /**
@@ -273,6 +357,29 @@ export class Bot implements Combatant {
   private peekedOut = false;
   /** Which kind of objective the bot is standing on; drives `capture`. */
   private zone: BotZone = "none";
+  /**
+   * The nearest place this team has been dying, refreshed on the think tick:
+   * where it is, which way the fire came from, and how much the mark is worth
+   * (0 = nowhere near one).
+   *
+   * Held rather than queried per frame because it is used by three things that
+   * run every frame — the approach's speed, the heading swerve and where the
+   * bot is looking — and it changes at walking pace.
+   */
+  private readonly hazard = new Vector3();
+  private readonly hazardFrom = new Vector3();
+  private hazardW = 0;
+  /**
+   * Where the squad last said it had contact, and whether that is worth
+   * looking at (0 = nothing to look at).
+   *
+   * Held here rather than in `BotMemory` on purpose: everything in there feeds
+   * `hasCue`, and a bearing that put a bot into `hunt` would turn every
+   * sighting anywhere in the squad into a search — see `think`. This one only
+   * widens the cone and turns the head.
+   */
+  private readonly call = new Vector3();
+  private callW = 0;
   /**
    * This bot's own random stream. Seeded rather than `Math.random()` so a round
    * plays out the same way twice — with seven stages of new movement to tune,
@@ -382,6 +489,11 @@ export class Bot implements Combatant {
     this.cornerT = 0;
     this.zone = "none";
     this.hasCoverSpot = false;
+    this.coverKind = "none";
+    this.wantCrouch = false;
+    this.crouchBlend = 0;
+    this.hazardW = 0;
+    this.callW = 0;
     this.coverCooldownT = 0;
     this.peekT = 0;
     this.peekedOut = false;
@@ -460,16 +572,30 @@ export class Bot implements Combatant {
       else this.deathFrom.copyFrom(this.center);
       this.deathDamage = amount;
       // Reinforcements are not instant: the delay is what makes losing a
-      // firefight cost the team ground as well as a ticket.
-      this.respawnT = CONFIG.conquest.respawnDelay;
+      // firefight cost the team ground as well as a ticket. The scatter on top
+      // is what stops a squad that was wiped together coming back together —
+      // four bodies on one respawn clock walk out of the gatehouse as one.
+      this.respawnT =
+        CONFIG.conquest.respawnDelay + this.rand() * CONFIG.bots.spawnJitter;
+      // Told before the corpse is anything else: the team keeps a mark where
+      // its own bodies fall, and the only place that has both the body and the
+      // bearing it fell to is right here.
+      this.onDied();
       return true;
     }
     return false;
   }
 
-  /** True while a threat cue is live; widens the view cone and drives facing. */
+  /**
+   * True while a threat cue is live; widens the view cone and drives facing.
+   *
+   * Ground the team has been dying on counts. A soldier walking into somewhere
+   * his squad was cut down is looking harder than one on a quiet street, which
+   * is the same claim `combat.alertFovBonus` already makes about being shot at
+   * — and it is the half of the hazard memory that costs nothing to act on.
+   */
   get alerted(): boolean {
-    return this.memory.alerted;
+    return this.memory.alerted || this.callW > 0 || this.hazardW > 0;
   }
 
   /** Which way the bot is looking. Read by BattleSystem's view-cone test. */
@@ -524,6 +650,10 @@ export class Bot implements Combatant {
 
     let speed: number = b.moveSpeed;
     _dir.setAll(0);
+    // The stance is re-decided from scratch every frame, by whichever state the
+    // bot is in. Standing is what you get by saying nothing, so a state that
+    // has no opinion about the crouch cannot leave a bot in one.
+    this.wantCrouch = false;
 
     switch (this.state) {
       case "advance": {
@@ -532,7 +662,13 @@ export class Bot implements Combatant {
           ctx.nav.steerAhead(field, this.position, b.movement.lookaheadCells, _dir);
           this.smoothHeading(ctx, dt, _dir);
         }
-        speed *= b.advanceSprintMult;
+        // A sprint across ground the team has been dying on is how it went on
+        // being ground the team dies on. Inside a mark the approach drops to a
+        // walk — and `smoothHeading` bends it round the spot while the facing
+        // code puts the bot's eyes on the bearing the fire came from, so the
+        // three together are one behaviour: come in slower, wider and looking
+        // the right way.
+        speed *= this.hazardW > 0 ? b.radio.hazardCaution : b.advanceSprintMult;
         break;
       }
       case "capture": {
@@ -543,8 +679,15 @@ export class Bot implements Combatant {
           // Cover here is scored against the *threat bearing* rather than a
           // target, since by definition there is nobody visible.
           if (!this.hasCoverSpot && this.coverCooldownT <= 0 && this.alerted) {
-            if (ctx.findCover(this, this.memory.threat.x, this.memory.threat.z, this.coverSpot)) {
+            const found = ctx.findCover(
+              this,
+              this.memory.threat.x,
+              this.memory.threat.z,
+              this.coverSpot,
+            );
+            if (found !== "none") {
               this.hasCoverSpot = true;
+              this.coverKind = found;
             } else {
               this.coverCooldownT = CONFIG.bots.cover.retryDelay;
             }
@@ -555,6 +698,11 @@ export class Bot implements Combatant {
             const away = _to.length();
             if (away > 1e-3) _dir.copyFrom(_to).scaleInPlace(1 / away);
             speed *= 0.8;
+          } else if (this.hasCoverSpot && this.alerted) {
+            // Arrived, with something to watch for: get down behind it. A
+            // sentry standing over his own cover is a sentry with a head
+            // showing, and there is nothing to move for from here.
+            this.wantCrouch = true;
           }
           break;
         }
@@ -590,27 +738,50 @@ export class Bot implements Combatant {
       }
       case "engage": {
         const t = this.target;
-        if (t) {
-          _to.copyFrom(t.position).subtractInPlace(this.position);
-          _to.y = 0;
+        // The bearing being fought along: the target while there is one, and
+        // the last thing to shoot at this bot while there is not.
+        //
+        // The second case is not an edge case, it is what cover DOES: a bot
+        // tucked in behind its own wall cannot see the enemy, so a peek cycle
+        // that only ran while a target was visible would stop dead on the half
+        // of itself that matters. `think` keeps the bot here on `lastAimed`,
+        // and this is the half that keeps moving.
+        const covering = this.hasCoverSpot && !t && this.memory.lastAimedT > 0;
+        if (t || covering) {
+          const bx = t ? t.position.x : this.memory.threat.x;
+          const bz = t ? t.position.z : this.memory.threat.z;
+          _to.set(bx - this.position.x, 0, bz - this.position.z);
           const dist = _to.length();
           if (dist > 1e-3) _to.scaleInPlace(1 / dist);
           // Hold the sweet spot: close if far, back off if crowded, otherwise
           // strafe so the bot isn't a stationary target.
           if (this.hasCoverSpot) {
             // Anchored at cover: run the peek cycle instead of circling. Out to
-            // the side of the anchor to shoot, back behind it to reload and
-            // wait. `shoot()` reads `peekedOut` and holds fire while tucked in.
+            // shoot, back to reload and wait. `shoot()` reads `peekedOut` and
+            // holds fire while tucked in.
             this.peekT -= dt;
             if (this.peekT <= 0) {
               this.peekedOut = !this.peekedOut;
               const c = CONFIG.bots.cover;
               this.peekT = this.peekedOut ? this.profile.peekOutTime : c.peekInTime;
             }
+            // What a peek IS depends on the cover, and the two kinds are the
+            // same cycle on the same clock because they are the same decision:
+            // be shootable for a moment, then not. Round a corner the bot steps
+            // out sideways and stays standing. Behind a low wall there is
+            // nowhere to step to — the wall only covers a body that is DOWN
+            // behind it — so the peek is standing up in place and the stance is
+            // the whole of the exposure. A reload is a moment to be down for
+            // either kind.
+            this.wantCrouch =
+              !this.peekedOut && (this.coverKind === "crouch" || this.reloadT > 0);
             // Lean out along the tangent to the target: (-dz, dx) rotated by
             // which side this bot favours. Read into locals first — `_to` is
             // about to be overwritten with the result.
-            const off = this.peekedOut ? CONFIG.bots.cover.peekOffset : 0;
+            const off =
+              this.peekedOut && this.coverKind === "hard"
+                ? CONFIG.bots.cover.peekOffset
+                : 0;
             const tanX = -_to.z * this.strafe * off;
             const tanZ = _to.x * this.strafe * off;
             _to.set(
@@ -623,8 +794,12 @@ export class Bot implements Combatant {
             speed *= 0.9;
             break;
           }
-          // Hold the sweet spot: close if far, back off if crowded, otherwise
-          // strafe so the bot isn't a stationary target.
+          // No cover, so hold the sweet spot instead: close if far, back off if
+          // crowded, otherwise strafe so the bot isn't a stationary target.
+          // Only ever with a target — closing on a remembered bearing is what
+          // `hunt` is for, and doing it here would walk a bot out of the fight
+          // it is standing in.
+          if (!t) break;
           if (dist > b.engageRange * 0.7) _dir.copyFrom(_to);
           else if (dist < b.minEngageRange) _dir.copyFrom(_to).scaleInPlace(-1);
           else _dir.set(-_to.z * this.strafe, 0, _to.x * this.strafe);
@@ -645,9 +820,12 @@ export class Bot implements Combatant {
         break;
       }
       case "suppressed": {
-        // Pinned. Standing still behind cover is the correct answer to heavy
-        // fire, and it is also the one the rig can actually show — there is no
-        // crouch, so "hunkered down" reads as "not moving".
+        // Pinned. Not moving is the correct answer to heavy fire, and getting
+        // down is the other half of it — this is the one state where the stance
+        // is unconditional, because the bot is not trying to do anything else
+        // with its body. It is taken whatever the cover is: a corner does not
+        // stop a burst that is already walking along the wall.
+        this.wantCrouch = true;
         break;
       }
       case "retreat": {
@@ -664,6 +842,17 @@ export class Bot implements Combatant {
         break;
       }
     }
+
+    // The stance itself, eased on `player.crouchBlendSpeed` — the player's
+    // number because it is how fast a BODY folds rather than a property of
+    // whoever asked for it, and because a remote copy of this bot eases the
+    // authority's blend with the same constant (`NetSoldier`). Everything
+    // downstream reads the blend: the speed here, the spread in `shoot`, the
+    // eye and the hit sphere in `syncTransform`, the pose in `animateSoldier`.
+    this.crouchBlend +=
+      ((this.wantCrouch ? 1 : 0) - this.crouchBlend) *
+      Math.min(1, dt * CONFIG.player.crouchBlendSpeed);
+    speed *= 1 - (1 - b.cover.crouchMoveMult) * this.crouchBlend;
 
     // A bot that has just been hit stumbles rather than jogging on serenely.
     if (this.flinchT > 0) speed *= 0.6;
@@ -753,9 +942,26 @@ export class Bot implements Combatant {
       const swing = Math.sin(this.sweepT * 2.2) * 1.1;
       faceX = Math.sin(this.yaw + swing);
       faceZ = Math.cos(this.yaw + swing);
-    } else if (this.alerted) {
+    } else if (this.memory.alerted) {
       faceX = this.memory.threat.x - this.position.x;
       faceZ = this.memory.threat.z - this.position.z;
+    } else if (this.callW > 0) {
+      // The squad has called contact and this bot has nothing of its own to
+      // look at: look where it was told. Against an acquisition cone that
+      // gates on facing, this is most of what a warning is worth — the enemy
+      // who walked past an unaware bot is now walking into a bot that is
+      // pointed at them.
+      faceX = this.call.x - this.position.x;
+      faceZ = this.call.z - this.position.z;
+    } else if (this.hazardW > 0) {
+      // Nothing live and nothing called, but this is where the team keeps
+      // dying: walk it watching whatever has been doing the killing.
+      //
+      // `memory.alerted` is tested above rather than `this.alerted`, which now
+      // covers this branch and the one before it — a bearing the memory does
+      // not hold must never be read out of it.
+      faceX = this.hazardFrom.x - this.position.x;
+      faceZ = this.hazardFrom.z - this.position.z;
     } else {
       faceX = _dir.x;
       faceZ = _dir.z;
@@ -806,6 +1012,7 @@ export class Bot implements Combatant {
         this.moveBlend,
         this.aimPitch(),
         this.torsoTwist,
+        this.crouchBlend,
       );
     }
   }
@@ -972,6 +1179,9 @@ export class Bot implements Combatant {
     // cone, and a recent hit opens it further.
     const k = Math.min(1, dist / b.engageRange);
     let spread = (b.spreadNear + (b.spreadFar - b.spreadNear) * k) * this.profile.spreadMult;
+    // Crouching steadies the shot by the same modest amount it does for the
+    // player: the stance is bought for the cover, and is not a second ADS.
+    spread *= 1 - (1 - b.cover.crouchSpreadMult) * this.crouchBlend;
     if (this.flinchT > 0) spread += b.combat.flinchKick / Math.max(dist, 1);
 
     const blocked = ctx.fire(this, this.aimPoint, spread);
@@ -1003,6 +1213,16 @@ export class Bot implements Combatant {
 
   /** Wired by BattleSystem so Game can play the sound. */
   onReload: () => void = () => {};
+
+  /**
+   * Wired by BattleSystem: this bot has just been killed, with `position` and
+   * `deathFrom` both already written.
+   *
+   * A callback rather than the kill path telling the radio, because the kill
+   * path is `Game`'s and `Match`'s and there are three of them; this is the one
+   * place every death goes through, whichever side of the wire it is on.
+   */
+  onDied: () => void = () => {};
 
   /**
    * Wired by BattleSystem so Game can play the sound: a foot went down. Fires
@@ -1054,7 +1274,48 @@ export class Bot implements Combatant {
       this.aimLocked = false;
       this.blockedStreak = 0;
     }
-    if (this.target) m.sawEnemy(this.target.position);
+    this.callW = 0;
+    if (this.target) {
+      m.sawEnemy(this.target.position);
+      // Tell the squad. One line of traffic per think while a bot has eyes on
+      // somebody, which is the one thing hearing cannot report: an enemy who
+      // has not fired yet.
+      ctx.callContact(this, this.target.position);
+    } else if (!m.alerted && ctx.contactCall(this, _to)) {
+      // **A call is a LOOK, not a search.** Where to walk is the squad's
+      // objective and a shot is what changes it (`hearGunshot` seeds a hunt);
+      // what a call buys is that the rest of the squad is FACING the right way
+      // when it matters, which against a directional acquisition cone is most
+      // of what being warned is worth. Making it a destination instead was
+      // measured and rejected: it put Greyfen's roster in `hunt` 63% of the
+      // time against 39%, halved the time spent fighting, and cost the flags
+      // the difference — a squad that investigates every sighting is a squad
+      // that never arrives anywhere.
+      //
+      // Only when there is nothing of the bot's OWN to look at: something this
+      // body saw or was shot by outranks something it was told.
+      const d = Math.hypot(_to.x - this.position.x, _to.z - this.position.z);
+      if (d < b.engageRange) {
+        // Close enough that it could become this bot's fight. Further off, a
+        // whole squad turning to stare at a point none of them could shoot at
+        // is a tell with nothing behind it.
+        //
+        // The error is drawn HERE and not at the caller, so four bots take one
+        // call four slightly different ways — the same reason `hearGunshot`
+        // jitters per listener.
+        const j = CONFIG.bots.radio.contactJitter;
+        this.call.set(
+          _to.x + (this.rand() * 2 - 1) * j,
+          _to.y,
+          _to.z + (this.rand() * 2 - 1) * j,
+        );
+        this.callW = 1;
+      }
+    }
+    // Where the team has been dying, refreshed at think rate for the three
+    // per-frame consumers: the approach speed, the heading swerve and the
+    // facing. See `hazard`.
+    this.hazardW = ctx.hazardNear(this, this.hazard, this.hazardFrom);
     this.considerGrenade(ctx);
 
     let want: BotState;
@@ -1062,11 +1323,19 @@ export class Bot implements Combatant {
       const c = b.cover;
       const tx = this.target.position.x;
       const tz = this.target.position.z;
+      // What the ground the bot is standing on is worth against THIS bearing.
+      // Read once: the re-validation below, the decision to look for something
+      // better and the stance all turn on it.
+      const hereKind = ctx.coverKind(this, tx, tz);
       // A spot picked against one bearing stops being cover the moment the
       // shooter walks round it. Re-validating here is what stops a bot hugging
-      // a wall that no longer has anything behind it.
-      if (this.hasCoverSpot && this.atCoverSpot() && !ctx.hasCover(this, tx, tz)) {
-        this.dropCover();
+      // a wall that no longer has anything behind it — and re-reading the KIND
+      // is the softer half of the same rule: a corner that has become something
+      // you can only duck behind is still cover, and the answer to it is the
+      // stance rather than the search.
+      if (this.hasCoverSpot && this.atCoverSpot()) {
+        this.coverKind = hereKind;
+        if (hereKind === "none") this.dropCover();
       }
       // Cover is a preference, not a commitment. A bot that has not reached the
       // corner within `abandonTime` is walking into something the direct
@@ -1112,14 +1381,34 @@ export class Bot implements Combatant {
         // Only once rounds are actually coming this way. Breaking for a wall
         // the instant an enemy is merely *visible* had every bot in every fight
         // sprinting for the nearest corner, which is neither human nor fun.
-        (this.memory.suppression > 0 || this.pressure > 0) &&
-        !ctx.hasCover(this, tx, tz) &&
-        ctx.findCover(this, tx, tz, this.coverSpot)
+        (this.memory.suppression > 0 || this.pressure > 0)
       ) {
-        // Under fire in the open, with somewhere better within a few metres.
-        // One baked lookup, no rays.
-        this.hasCoverSpot = true;
-        want = "takeCover";
+        if (hereKind === "crouch") {
+          // Under fire, already standing behind something a ducked body is safe
+          // behind. Anchor here: that is the whole of what crouch cover buys —
+          // the wall is at the bot's feet, and taking it costs a stance instead
+          // of a trip across open ground to a corner. The peek cycle starts
+          // itself on the next frame, up over the wall rather than round it.
+          this.coverSpot.copyFrom(this.position);
+          this.coverKind = "crouch";
+          this.hasCoverSpot = true;
+          want = "engage";
+        } else if (hereKind === "hard") {
+          // Stand-up cover where it stands: nothing to move to and no stance to
+          // take, which is exactly what this branch did before there was one.
+          want = "engage";
+        } else {
+          // In the open, with somewhere better within a few metres. One baked
+          // lookup, no rays.
+          const found = ctx.findCover(this, tx, tz, this.coverSpot);
+          if (found !== "none") {
+            this.hasCoverSpot = true;
+            this.coverKind = found;
+            want = "takeCover";
+          } else {
+            want = "engage";
+          }
+        }
       } else {
         want = "engage";
       }
@@ -1133,6 +1422,31 @@ export class Bot implements Combatant {
       // here it must not drop one.
       this.zone = zone;
       want = "capture";
+    } else if (this.hasCoverSpot && this.atCoverSpot() && m.lastAimedT > 0) {
+      // No line of sight from behind this bot's own cover — which is what the
+      // cover is DOING, and is the ordinary state of the tucked-in half of a
+      // peek. Hold the anchor: the cycle stands the bot up again in a moment,
+      // and `lastAimed` outliving the sightline is what lets it pick the same
+      // enemy back up part-way through the wind-up.
+      //
+      // Falling through to the search cue below is what used to happen, and it
+      // dropped the anchor on the first think after ducking: a bot that took
+      // cover forgot why it had, stood up out of it and walked off to look for
+      // whoever was shooting at it. It is also why crouching behind a low wall
+      // could not work at all — the stance breaks the sightline by
+      // construction, so the ducking bot was the one that always lost its
+      // target.
+      //
+      // Heavy fire while down there is `suppressed` and not `engage`, which is
+      // the one state that never peeks out: pinned by rounds you cannot see the
+      // source of is exactly what that state is for, and it is the one this
+      // branch made reachable — the whole decision tree above it needs a
+      // visible target.
+      // Two thresholds, for the reason the visible-target branch above has
+      // two: a bot sitting on one flickers between the states every think.
+      const pin =
+        this.state === "suppressed" ? b.cover.suppressExit : b.cover.suppressEnter;
+      want = m.suppression > pin ? "suppressed" : "engage";
     } else if (m.hasCue) {
       // Something happened and nobody is in sight: go and look.
       this.dropCover();
@@ -1245,6 +1559,28 @@ export class Bot implements Combatant {
       wantZ += dir.x * this.strafe * pull;
     }
 
+    // Ground the team has been dying on. There is one route graph and no second
+    // one to pick, so "a different way in" is made by bending the only way
+    // there is: push the heading round the mark rather than through it, on
+    // whichever side the bot is already passing. Lateral and never a retreat —
+    // a bot pushed straight back would stop advancing and stand there instead.
+    // What it buys is a squad that got cut down crossing the square coming
+    // round the edge of it next time.
+    if (this.hazardW > 0) {
+      const awayX = this.position.x - this.hazard.x;
+      const awayZ = this.position.z - this.hazard.z;
+      const awayLen = Math.hypot(awayX, awayZ);
+      if (awayLen > 1e-3) {
+        // Which side of the route the mark is on: the component of "away from
+        // it" along the heading's left normal.
+        const lat = (-dir.z * awayX + dir.x * awayZ) / awayLen;
+        const side = lat >= 0 ? 1 : -1;
+        const pull = this.hazardW * CONFIG.bots.radio.hazardSwerve;
+        wantX += -dir.z * side * pull;
+        wantZ += dir.x * side * pull;
+      }
+    }
+
     const len = Math.hypot(wantX, wantZ);
     if (len < 1e-4) return;
     wantX /= len;
@@ -1289,14 +1625,20 @@ export class Bot implements Combatant {
     const probe = CONFIG.bots.cover.probeDistance;
     // A body's step along each tangent, scored by whether it has cover from
     // where the target is standing.
-    const leftCovered = ctx.hasCover(this, t.position.x, t.position.z);
+    const leftCovered = ctx.coverKind(this, t.position.x, t.position.z) !== "none";
     if (leftCovered) return this.strafe;
     const nx = -dz / len;
     const nz = dx / len;
     // Cheap proxy for "is there more to hide behind that way": the cover mask
-    // is per-surface, so sample the bearing rather than moving the bot.
-    const a = ctx.hasCover(this, this.position.x + nx * probe, this.position.z + nz * probe);
-    const b = ctx.hasCover(this, this.position.x - nx * probe, this.position.z - nz * probe);
+    // is per-surface, so sample the bearing rather than moving the bot. Either
+    // kind counts — this only picks which way to circle, and something to duck
+    // behind is a better place to end up than open ground.
+    const a =
+      ctx.coverKind(this, this.position.x + nx * probe, this.position.z + nz * probe) !==
+      "none";
+    const b =
+      ctx.coverKind(this, this.position.x - nx * probe, this.position.z - nz * probe) !==
+      "none";
     if (a !== b) return a ? 1 : -1;
     return this.rand() < 0.5 ? -1 : 1;
   }
@@ -1317,6 +1659,7 @@ export class Bot implements Combatant {
    */
   private dropCover(): void {
     this.hasCoverSpot = false;
+    this.coverKind = "none";
     this.peekedOut = false;
     this.peekT = 0;
   }
@@ -1334,9 +1677,26 @@ export class Bot implements Combatant {
 
   private syncTransform(): void {
     const c = this.rig.centerHeight;
+    const p = CONFIG.player;
+    // The ROOT does not move with the crouch. The stance lives inside the rig —
+    // `animateSoldier` drops the body node and folds the legs with the boots
+    // planted — so a root pulled down with it would put the feet through the
+    // floor. The same split `NetSoldier` and `DeathCam` draw for a body they do
+    // not own.
     this.rig.root.position.set(this.position.x, this.position.y + c, this.position.z);
     this.rig.root.rotation.y = this.bodyYaw;
-    this.center.set(this.position.x, this.position.y + c, this.position.z);
+    // What DOES come down is the pair the fight is fought with, and they must
+    // come down TOGETHER. `eyePos` is what every shooter aims at and what line
+    // of sight is tested to; `center` is the sphere their rounds are tested
+    // against. Drop the eye alone and crouching makes this bot easier to kill,
+    // not harder — every incoming round aimed at the middle of an unmoved
+    // sphere instead of grazing its top. The arithmetic is `NetSoldier`'s,
+    // because a remote copy of this body has to land in the same place.
+    this.center.set(
+      this.position.x,
+      this.position.y + c + (p.crouchCenterHeight - c) * this.crouchBlend,
+      this.position.z,
+    );
     // `camera.eyeHeight`, not a literal repeat of it. This is the point the
     // player's own camera sits at, the point bots test line of sight against,
     // and the point `combat.headRadius` centres the head zone on — one number
@@ -1345,7 +1705,9 @@ export class Bot implements Combatant {
     // any of the three comments reasoning about its value.
     this.eyePos.set(
       this.position.x,
-      this.position.y + CONFIG.camera.eyeHeight,
+      this.position.y +
+        CONFIG.camera.eyeHeight +
+        (p.crouchEyeHeight - CONFIG.camera.eyeHeight) * this.crouchBlend,
       this.position.z,
     );
   }

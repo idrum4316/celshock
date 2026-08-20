@@ -103,6 +103,21 @@ export const bots = {
   /** Separation distance for the crowd-avoidance pass. */
   separation: 1.5,
   /**
+   * Seconds of scatter added to a reinforcement, so a squad that was wiped
+   * together does not come back together.
+   *
+   * `conquest.respawnDelay` is one number for everybody, and four bots killed
+   * inside a second of each other therefore walked out of the gatehouse as one
+   * body, on one flow field, for the whole trip back — which is where a good
+   * half of the herding a player actually sees is made. Drawn from the bot's
+   * own seeded stream, so a round still replays identically.
+   *
+   * It only ever ADDS, which is what keeps `death.sinkStart + sinkTime` (6 s)
+   * clear of the respawn: the margin the corpse needs grows rather than
+   * shrinking.
+   */
+  spawnJitter: 1.5,
+  /**
    * Unstick watchdog. A bot that wants to move but covers less than
    * `stuckFraction` of its intended step for `stuckTime` seconds is grinding
    * on something its flow field cannot see — a scattered tree, a squadmate
@@ -230,10 +245,10 @@ export const bots = {
 
   /**
    * Movement texture. All of this is heading, speed and facing only — there is
-   * no lean or vault to reach for, and the crouch the rig CAN pose belongs to a
-   * remote human's stance rather than to anything an AI decides. What is
-   * achievable is *where* and *how fast*, and that turns out to carry most of
-   * it.
+   * no lean or vault to reach for, and the one stance an AI does decide is the
+   * crouch, which lives with the cover it is taken behind (`cover` below)
+   * rather than here. What is achievable is *where* and *how fast*, and that
+   * turns out to carry most of it.
    */
   movement: {
     /**
@@ -269,6 +284,28 @@ export const bots = {
     lanePeriod: 11,
     /** Per-bot speed variation, as a fraction. Nobody marches in lockstep. */
     speedJitter: 0.12,
+    /**
+     * How much air a bot tries to keep between itself and the nearest
+     * friendly, and how hard it steers to keep it.
+     *
+     * This is NOT `bots.separation` (1.5), which is a de-penetration radius —
+     * roughly two bodies' width, enough to stop squadmates walking through
+     * each other and nothing more. Four bots on one flow field therefore
+     * marched down a single line two metres apart, which is the herd a player
+     * sees. Spacing is the same pairwise pass at a distance where a formation
+     * is legible instead: it spreads a squad across a street rather than
+     * queueing it down the middle of one.
+     *
+     * Weak on purpose, and weakest of the three steering preferences here —
+     * the flow field still decides where the squad is going, and a corridor
+     * narrower than the spacing simply wins, because `tryMove`'s axis sliding
+     * resolves the push against the wall. Team-wide rather than per squad:
+     * two squads stacking on the flag that decides the round is correct
+     * (see `squad.claimPenalty`), and they should still arrive as a line
+     * rather than a column.
+     */
+    spacing: 5,
+    spacingWeight: 0.7,
     /**
      * A heading swing larger than this (radians, per think) means the route
      * just turned a corner — so pause and look before committing to it.
@@ -335,6 +372,79 @@ export const bots = {
      * how you lose it; holding it from the doorway across the street is not.
      */
     defendStandoff: 6,
+  },
+
+  /**
+   * The squad radio: the short list of things a team's bots tell each other,
+   * and the one thing a team remembers between lives.
+   *
+   * Everything here is a CUE and never knowledge, and neither of the two is
+   * allowed into `BotMemory` — a bearing in there feeds `hasCue` and would make
+   * every sighting anywhere in a squad into a search. A called contact is a
+   * LOOK: it widens the listener's cone and turns its head, which against a
+   * directional acquisition cone is most of what being warned is worth, and it
+   * can never put a target in anybody's hands. The hazard marks are a memory of
+   * where this team has been dying, which is a fact about the team's own bodies
+   * rather than about where the enemy is.
+   *
+   * All of it is ray-free and allocation-free, like the rest of perception:
+   * two small structures per team, read on the ordinary think tick.
+   */
+  radio: {
+    /**
+     * Seconds a contact call stays worth acting on.
+     *
+     * A call is overwritten rather than queued and is only ever a heading for
+     * the head, so this is how long a squadmate keeps watching a bearing
+     * nothing has come down. Long enough to cover the walk out of a doorway,
+     * short enough that a squad is not still staring at where somebody was
+     * standing ten seconds ago.
+     *
+     * A listener acts on a call only when it has nothing of its OWN to look at
+     * and only inside `engageRange` — see `Bot.think`.
+     */
+    contactMemory: 5,
+    /**
+     * Metres of error each LISTENER puts on a called position.
+     *
+     * Per listener and not per call, which is the whole difference between a
+     * squad converging on a fight and a squad stacking on one grid reference.
+     * It is the same fix `hearGunshot`'s jitter needed for the same reason —
+     * see `BattleSystem.hearGunshot`.
+     */
+    contactJitter: 5,
+    /** How many places a team remembers dying at once. */
+    hazardMax: 6,
+    /** Seconds one death's mark takes to fade to nothing. */
+    hazardMemory: 60,
+    /**
+     * Deaths inside this reinforce the mark that is already there instead of
+     * adding another. That is what turns four bodies on one street corner
+     * into one strong mark rather than four weak ones, and it is what keeps
+     * `hazardMax` from being spent by a single firefight.
+     */
+    hazardMerge: 10,
+    /**
+     * How far from a mark ground counts as hot.
+     *
+     * Wide enough that a bot has somewhere to go by the time it matters:
+     * inside it the approach slows to a walk, the bot looks at the bearing
+     * the marks were made from, and the route is bent around the spot rather
+     * than through it.
+     */
+    hazardRadius: 16,
+    /**
+     * How hard a hot spot pushes an approach off its line, and what the walk
+     * across one costs in speed.
+     *
+     * The swerve is a lateral preference exactly like `movement.wallHug` —
+     * the flow field still owns where the bot is going, this decides which
+     * way round the place its squad died it gets there. That is the whole of
+     * "a different way in": there is one route graph and no second one to
+     * pick, so the alternative is made by bending the only route there is.
+     */
+    hazardSwerve: 0.9,
+    hazardCaution: 0.8,
   },
 
   /**
@@ -510,11 +620,78 @@ export const bots = {
      */
     hardHeight: 1.7,
     /**
+     * What stops a round aimed at a CROUCHED body, and the reason waist-high
+     * geometry is now worth something.
+     *
+     * It starts where `hardHeight` does, off the stance the body actually
+     * takes: `player.crouchCenterHeight` (0.4) + `hitRadius` (0.75) = 1.15 m is
+     * the top of a crouched bot's hit sphere. **But 1.15 is not enough, and
+     * measuring is what said so.** A shooter's eye stands at 1.55, which is
+     * ABOVE a waist-high wall — so the round comes DOWN over it and can still
+     * reach a crouched body behind it, where hard cover works because both eye
+     * and target sit below the wall's top and no line between them clears it.
+     * Ray-tested against the map's real geometry at 1.15: cover the mask
+     * claimed left the crouched sphere exposed on 20% of Hollowmere's bearings
+     * and 48% of Coldharbour's, against ~0% for `hardHeight`.
+     *
+     * The margin is the sightline's own arithmetic, not a fudge. Over
+     * `crouchProbe`, that descending line drops by
+     * `(eyeHeight - 1.15) * crouchProbe / range`, and the worst case is the
+     * closest shot a bot takes (`minEngageRange`, 6 m): 0.4 * 2 / 6 = 0.13 m.
+     * 1.3 clears it, and therefore clears every longer shot as well.
+     *
+     * It is a THIRD mask rather than a re-reading of `softHeight`, because knee
+     * height and crouch height are two different claims: 0.9 m says "walk along
+     * this", 1.3 m says "you are safe behind this if you get down". Baking the
+     * second at the first would put bots behind low walls a round goes straight
+     * over — the `visible but unhittable` failure `hardHeight` exists to avoid,
+     * pointed at the bot instead.
+     */
+    crouchHeight: 1.3,
+    /**
+     * How far along a bearing the CROUCH bake looks, against `probeDistance`
+     * (4.5) for the other two.
+     *
+     * **Crouch cover is close cover, and that is geometry rather than
+     * taste.** The margin above is proportional to how far the covering wall
+     * stands from the body: a low wall you are pressed against covers you, and
+     * the same wall four metres back is one the round clears on its way in.
+     * Two metres keeps the required margin small enough that ordinary
+     * waist-high geometry qualifies; stretching it to `probeDistance` would
+     * need 1.45 m of wall to be honest at 6 m, which is most of the way to
+     * hard cover and would leave almost nothing in this mask.
+     *
+     * It also matches what a bot does with it: `findCover` sends it to the
+     * cell, and the peek cycle then keeps it there rather than stepping out —
+     * a crouched bot is hugging the thing it is behind.
+     */
+    crouchProbe: 2,
+    /**
+     * Speed and spread while crouched. The stance costs mobility and buys
+     * steadiness, exactly as it does for the player — a bot that ducks behind
+     * a wall shoots a little tighter and can barely reposition, which is what
+     * makes taking the stance a decision rather than a free upgrade.
+     */
+    crouchMoveMult: 0.55,
+    crouchSpreadMult: 0.8,
+    /**
+     * How close two bots' cover anchors may be before the second one is made
+     * to look elsewhere.
+     *
+     * The cover bake is a lookup over a static map, so every bot under fire
+     * from the same bearing gets handed the SAME corner — four of them stacked
+     * behind one wall, which is both a herd and a grenade waiting to happen.
+     * A spot inside this radius of a squadmate's anchor is skipped by
+     * `findCover`; the claim is the anchor itself rather than a reservation,
+     * so it cannot go stale and nothing has to be released.
+     */
+    claimRadius: 2.5,
+    /**
      * Knee height. Marks geometry worth walking along rather than across open
-     * ground — and nothing more. No bot ever crouches — the rig can, for a
-     * remote human, but nothing here asks it to — so a bot behind a waist-high
-     * wall is exactly as shootable as one in the open. Never treat this as
-     * protection.
+     * ground — and nothing more. It is NOT the crouch line: `crouchHeight`
+     * above is what protects a ducked body, and a bot behind something between
+     * the two heights is exactly as shootable as one in the open however low
+     * it gets. Never treat this as protection.
      */
     softHeight: 0.9,
     /**
