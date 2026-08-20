@@ -1,7 +1,7 @@
 /**
  * Props.ts — Scatter prop factories (trees, gravestones, lanterns, fungus,
- * logs, fire drums, rubble, boulders, brambles, barrels, jungle trees, liana
- * veils). Pure mesh builders: each assembles at the origin and returns a
+ * logs, fire drums, rubble, boulders, brambles, barrels, jungle trees). Pure
+ * mesh builders: each assembles at the origin and returns a
  * hierarchy; placement/merging/colliders are the caller's job.
  * Invariants: emissive parts (lantern glow, fire, fungus) MUST set
  * metadata.noOutline (and noGlow where they shouldn't feed the GlowLayer).
@@ -9,6 +9,10 @@
  * Never call rng() here — the per-prop jitter that makes a stand of
  * trees look like a stand of trees comes from the caller's seeded `rng`, so the
  * same layout builds the same world on every boot (see world/rng.ts).
+ * One builder here is NOT a scatter prop and may not become one: the liana
+ * veil is built by `buildJungleTree` and parented to its trunk, because a
+ * curtain has to hang from a crown and scatter placement is what pushed it
+ * away from every crown on the map. Its own header carries the measurement.
  */
 import { Mesh, MeshBuilder, Scene } from "@babylonjs/core";
 import { CONFIG } from "../config";
@@ -158,6 +162,19 @@ export function buildPine(
 }
 
 /**
+ * Where one liana strand takes hold, in the trunk's own frame relative to the
+ * veil's collar: `a` around the axis, `r` out from it, `y` up or down from the
+ * collar's centre. Built by `buildJungleTree` out of the frond ring it has just
+ * made and consumed by `buildLianaVeil` — see both for why the tree is what
+ * decides this.
+ */
+export interface LianaHang {
+  a: number;
+  r: number;
+  y: number;
+}
+
+/**
  * Jungle hardwood: a buttressed trunk running bare for two storeys and then
  * spreading into a canopy of broad fronds. The tall counterpart to the pine —
  * where a pine is a cone you see the whole of, this is a column with the
@@ -179,6 +196,26 @@ export function buildPine(
  *   A single straight blade reads as a plank at any distance the fog leaves
  *   visible; the break is where the whole silhouette comes from.
  *
+ * **Some of them carry the belt's mid-story, and it is a CHILD of the trunk
+ * rather than a prop placed near one.** `buildLianaVeil` is the curtain and
+ * carries the argument for why the layer exists at all; what belongs here is
+ * why it is built from inside a tree. A veil has to hang from a crown, and a
+ * scattered prop cannot find one — `findSpot`'s burial test pushes anything
+ * non-blocking out of a `blocking` tree's box, so a mid-story sampled as its
+ * own region lands in the GAPS between the trunks, and neither the anchor's
+ * height nor the tree's scale is known to the other. Hung here, all three
+ * answer themselves: the veil is parented to the trunk, rides its scale, and
+ * hangs at a fixed point on it.
+ *
+ * **`sub` is why that costs the map nothing, and it is load-bearing.** Every
+ * draw the veil makes comes from a stream of its own, so the shared scatter
+ * stream sees exactly the draws it saw before this existed and not one more —
+ * which is what leaves all 354 trees, all 149 fern clumps and all five flag
+ * walks on Greyfen where they already were. Drawing the veil from `rng` would
+ * reroll the entire dressing field of any map with a jungle belt on it. It
+ * defaults to `rng` so a one-off caller stays a two- or three-argument call;
+ * `MapBuilder.scatterRegion` is what mints the real one.
+ *
  * Nothing here is scaled non-uniformly — `renderOutline` extrudes along vertex
  * normals and `VertexData.transform` does not re-normalise them, so a squashed
  * part grows a lopsided ink shell.
@@ -187,6 +224,7 @@ export function buildJungleTree(
   scene: Scene,
   mats: CelMaterialFactory,
   rng: () => number = Math.random,
+  sub: () => number = rng,
 ): Mesh {
   const bark = mats.get(JUNGLE_BARK);
   const trunk = MeshBuilder.CreateCylinder(
@@ -241,6 +279,10 @@ export function buildJungleTree(
     [6, 4.2, 2.4, 0.34],
     [5, 5.1, 2.0, 0.18],
   ];
+  // Where the lowest ring's blades ended up. A liana hangs from foliage that
+  // EXISTS rather than from a radius that hopes to be under some — see the
+  // hang points below, and `buildLianaVeil` for why that matters.
+  const boughs: { a: number; tilt: number }[] = [];
   rings.forEach(([count, y, len, droop], ring) => {
     const turn = rng() * Math.PI * 2;
     for (let i = 0; i < count; i++) {
@@ -285,14 +327,48 @@ export function buildJungleTree(
         len / 2 + (Math.cos(brk) * tipLen) / 2,
       );
       tip.material = blade.material;
+      if (ring === 0) boughs.push({ a, tilt });
     }
   });
+
+  // The mid-story. Not every tree: a belt where every trunk wore the same
+  // curtain would read as a manufactured screen, and the gaps are what let the
+  // layer scatter through the stand rather than ring each trunk in it.
+  if (sub() < 0.45) {
+    // The collar hangs at 4.05 above the trunk's own centre — 9.65 m up a
+    // scale-1 tree, which is inside the crown cylinder (9.55 to 10.65), so it
+    // emerges from the foliage rather than floating under it. Every hang below
+    // is stated relative to that line.
+    const hangs: LianaHang[] = [];
+    // One on the bole, so the collar is visibly holding something. Everything
+    // else is out under a blade.
+    hangs.push({ a: sub() * Math.PI * 2, r: 0.55, y: 0.02 });
+    // The rest, each under a blade of the lowest ring, taken in turn from a
+    // random start so no two trees drape the same way. `r` is where along the
+    // blade the vine took hold and `y` follows the blade's own droop down to
+    // it, which is what puts the strand's top under leaf instead of beside it.
+    const first = Math.floor(sub() * boughs.length);
+    for (let i = 0; i < 4; i++) {
+      const b = boughs[(first + i) % boughs.length];
+      const r = 1.3 + sub() * 1.45;
+      hangs.push({
+        a: b.a + (sub() - 0.5) * 0.3,
+        r,
+        // 4.2 is the ring's height on the trunk and 0.07 is half a blade's
+        // thickness; the sine is how far the blade has drooped by `r`.
+        y: 4.2 - Math.sin(b.tilt) * (r - 1.7) - 0.07 - 4.05,
+      });
+    }
+    const veil = buildLianaVeil(scene, mats, sub, hangs);
+    veil.parent = trunk;
+    veil.position.y = 4.05;
+  }
   return trunk;
 }
 
 /**
- * Liana veil: a bough with a curtain of vines and aerial roots hanging off it,
- * leafed along its length and ragged along its hem.
+ * Liana veil: a curtain of vines hung from a canopy tree's own crown, leafed
+ * along its length and ragged along its hem.
  *
  * **This exists to fill a band, and the band is the argument for it.** A fern
  * tops out at 1.2 m and a canopy tree's lowest frond hangs at 9, so a jungle
@@ -304,25 +380,55 @@ export function buildJungleTree(
  * is the thing `buildFernClump` explains at length must never exist. Hanging
  * the layer from ABOVE is the one direction that is free.
  *
+ * **It is part of the TREE and not a prop of its own, and that is the whole of
+ * why it hangs off anything.** It shipped as a `lianaVeil` scatter region
+ * mirroring each tree region's footprint, on the reasoning that a region over a
+ * belt puts a veil under a canopy. It does not, and the mechanism is the
+ * opposite of incidental: `findSpot` rejects a spot buried in an existing
+ * collider, a jungle tree is `blocking` with an 11.2 m box, and every tree
+ * region builds before the veils — so the burial test pushed the mid-story into
+ * the GAPS between the trunks by construction. Measured over the shipped
+ * Greyfen: 179 veils, nearest trunk a median 4.62 m away against a canopy that
+ * reaches 4.4 m, a hundred of them outside any canopy at all and thirty-nine
+ * past six metres, hanging in open sky. No number could have fixed it, because
+ * the anchor's height and the tree's scale were drawn independently and neither
+ * knew the other. Hung from the crown there is nothing to keep in step: the
+ * veil is a child of the trunk, rides its scale, and cannot be anywhere a tree
+ * is not. See `buildJungleTree`, which is the only caller.
+ *
  * **Nothing it draws is below 2.4 m, and that number is the whole safety
  * argument.** It clears the 1.7 m hit sphere by 0.7 m, so at any range worth
  * shooting across, a level sightline from a 1.55 m eye passes UNDER the hem —
  * the veil frames the shot instead of standing in it. That is what lets this be
  * non-blocking without repeating the fern's mistake: the fern rule is that
  * anything soft AT CHEST HEIGHT must be genuinely solid or genuinely absent,
- * and the way to obey it is to not be at chest height. So this prop carries no
+ * and the way to obey it is to not be at chest height. So this carries no
  * collider, no `WorldBox` and nothing any ray in the game can find, which is
- * also why it can be placed at a density cover never could.
+ * also why it can be hung at a density cover never could.
  *
- * The 2.4 m is a floor over the SCATTERED prop, not over this geometry, so it
- * is a contract with the layout as well as with the builder: see the derivation
- * on `drop` below, and do not scatter this below `scale` 0.9.
+ * The hem is DERIVED from that floor and the derivation now runs through the
+ * TREE's scale rather than a scatter region's — see `drop` below. The tree is
+ * the looser of the two (0.85 against the veil region's old 0.9) and the anchor
+ * is a metre higher, which nets out as more rope: 6.4 m of fall against 5.6,
+ * over a band that starts higher.
  *
- * The bough is not decoration either: scatter puts a veil wherever it fits,
- * which is not always under a canopy, and a curtain hanging out of clear air
- * has nothing holding it up. Kept short (2.4 m, so 1.2 m of reach) because
- * `findSpot` only guarantees the veil's CENTRE has clearance — a longer one
- * would swing through the trunk it was placed beside.
+ * **Where each strand starts is the CALLER's to say, and that is what makes the
+ * layer worth having.** The obvious anchor is the crown cylinder — 2.3 m across
+ * at its underside, so anything within ~1.05 m of the axis is hidden by it from
+ * every angle. Built that way it is genuinely attached and nearly useless: five
+ * strands inside a 2 m circle sit within the trunk's own silhouette, so at the
+ * twenty metres a belt is read across they thicken the column instead of
+ * filling the gap between columns, and the eight metres of clear air the veil
+ * exists to close is still clear. The blades of the lowest frond ring reach
+ * 2.9 m and the ring is already built, so `buildJungleTree` hands over the
+ * blades it actually made and a strand hangs UNDER one — out where the curtain
+ * is between the trunks rather than on them, and under leaf rather than beside
+ * it. That is the whole reason this takes `hangs` instead of picking a radius.
+ *
+ * The collar is the one part meant to be seen at the top — the woody mass a
+ * liana gathers where it meets the bole, sitting half inside the crown so it
+ * emerges from the foliage, with one strand of its own so it is visibly
+ * holding something.
  *
  * The hem is deliberately uneven. Strands cut to one length read as a curtain
  * rail; the whole silhouette is in the raggedness, which is the same lesson
@@ -331,7 +437,8 @@ export function buildJungleTree(
 export function buildLianaVeil(
   scene: Scene,
   mats: CelMaterialFactory,
-  rng: () => number = Math.random,
+  rng: () => number,
+  hangs: readonly LianaHang[],
 ): Mesh {
   const bark = mats.get(JUNGLE_BARK);
   const vineMat = mats.get(VINE);
@@ -346,82 +453,105 @@ export function buildLianaVeil(
     CONFIG.graphics.translucency.canopy,
   );
 
-  // The bough, and the root of the hierarchy. Sits just under the lowest frond
-  // so that where there IS a canopy overhead this disappears into it.
-  const bough = MeshBuilder.CreateBox(
-    "liana-bough",
-    { width: 2.4, height: 0.26, depth: 0.3 },
+  // The collar, and the root of the hierarchy. Assembled at the ORIGIN like
+  // every builder in this file, so its centre is the hang line and every Y
+  // below is relative to that; `buildJungleTree` is what lifts it to the
+  // crown, and it writes this mesh's own `position`.
+  //
+  // Proud of the bole by ~8 cm at the height it is hung (the trunk tapers to
+  // 0.52 there), which is what makes it a thickening on the trunk rather than
+  // a band painted round it. Half of it is inside the crown and half below,
+  // so it emerges from the foliage instead of sitting under it.
+  const collar = MeshBuilder.CreateCylinder(
+    "liana-collar",
+    { height: 0.55, diameterTop: 0.58, diameterBottom: 0.7, tessellation: 6 },
     scene,
   );
-  bough.position.y = 8.5;
-  bough.rotation.z = (rng() - 0.5) * 0.14;
-  bough.material = bark;
+  // **Deliberately unrotated.** A hexagon's facet alignment is invisible at
+  // this size, and turning the root would turn every strand with it — off the
+  // blade whose azimuth the caller computed it against, which is the one thing
+  // this whole arrangement exists to get right. The tree carries a yaw of its
+  // own from `scatterRegion`, and the collar rides that.
+  collar.material = bark;
 
-  const strands = 5;
-  for (let i = 0; i < strands; i++) {
-    // Spread along the bough rather than drawn at random, so no two strands
-    // grow out of the same point and none hangs off the end of it.
-    const along = ((i + 0.5) / strands - 0.5) * 2.1;
-    // Local to the bough's centre: -0.13 is its underside.
-    const top = -0.13;
+  for (const hang of hangs) {
+    // Where the strand takes hold: `a` around the trunk, `r0` out from it, and
+    // `top` up or down from the collar — the underside of the blade the caller
+    // picked, in the collar's own frame.
+    const { a, r: r0, y: top } = hang;
     // The hem, and the one number in here that is DERIVED rather than picked.
-    // The prop's floor is 2.4 m and the bough's underside is at 8.37, so the
-    // longest strand may fall 5.97 — but the veil is placed with a scale
-    // multiplier, and it multiplies the bough's height as well as the drop, so
-    // the hem lands at `(8.37 - drop) * scale`. At the layout's minimum 0.9
-    // that has to stay over 2.4, which caps the drop at 5.70. Anything here
-    // over that, or a region scattered below 0.9, and the veil's whole safety
-    // argument is gone with no error to say so.
-    const drop = 3.4 + rng() * 2.2;
+    // The floor is 2.4 m and the collar stands 9.65 m up the trunk, so a hang
+    // is at `9.65 + top` — and the lowest a drooping blade offers is 9.23. The
+    // veil rides the TREE's scale, so the hem lands at
+    // `(9.65 + top - drop) * scale` and `jungleTree`'s minimum of 0.85 caps
+    // the drop at 6.40. Anything here over that, or a `jungleTree` region
+    // scattered below 0.85, and the veil's whole safety argument is gone with
+    // no error to say so. Measured over 400 seeds at that worst case the
+    // lowest thing any veil draws sits at 2.90 m.
+    const drop = 3.6 + rng() * 2.3;
     const hem = top - drop;
-    // A slight swing outward, so the curtain is a volume rather than a plane.
-    const swing = (rng() - 0.5) * 0.9;
-    const lean = (rng() - 0.5) * 0.5;
+    // How far the curtain swings out as it falls. A vine hangs plumb only if
+    // nothing grew it outward, and a plumb one reads as a wire dropped down
+    // the trunk. Modest, because `r0` is already out under a blade — the width
+    // here is the ring's, not the swing's.
+    const flare = 0.1 + rng() * 0.45;
+    const sway = (rng() - 0.5) * 0.5;
 
     // Two segments per strand, the lower one leaning harder — a rope hanging
     // under its own weight is never straight, and the break is where a vine
-    // stops reading as a wire.
+    // stops reading as a wire. Each is positioned and turned so the pair
+    // tracks the same outward line, which is what `radial` is for.
+    const radial = (t: number, out: number) => ({
+      x: Math.sin(a) * (r0 + flare * out) + Math.cos(a) * sway * t,
+      z: Math.cos(a) * (r0 + flare * out) - Math.sin(a) * sway * t,
+    });
+
+    const upperLen = drop * 0.55;
+    const upperAt = radial(0.28, 0.22);
     const upper = MeshBuilder.CreateBox(
       "liana-strand",
-      { width: 0.11, height: drop * 0.55, depth: 0.11 },
+      { width: 0.13, height: upperLen, depth: 0.13 },
       scene,
     );
-    upper.parent = bough;
-    upper.position.set(along, top - (drop * 0.55) / 2, swing * 0.3);
-    upper.rotation.z = lean * 0.4;
+    upper.parent = collar;
+    upper.position.set(upperAt.x, top - upperLen / 2, upperAt.z);
+    upper.rotation.y = a;
+    upper.rotation.x = -flare * 0.22;
     upper.material = vineMat;
 
+    const lowerLen = drop * 0.45;
+    const lowerAt = radial(0.78, 0.78);
     const lower = MeshBuilder.CreateBox(
       "liana-strand-low",
-      { width: 0.09, height: drop * 0.45, depth: 0.09 },
+      { width: 0.11, height: lowerLen, depth: 0.11 },
       scene,
     );
-    lower.parent = bough;
-    lower.position.set(
-      along + lean * 0.4 * drop * 0.3,
-      top - drop * 0.55 - (drop * 0.45) / 2,
-      swing,
-    );
-    lower.rotation.z = lean;
+    lower.parent = collar;
+    lower.position.set(lowerAt.x, top - upperLen - lowerLen / 2, lowerAt.z);
+    lower.rotation.y = a;
+    lower.rotation.x = -flare * 0.1;
     lower.material = vineMat;
 
-    // Leaves down the strand. The lowest sits a clear margin above the hem so
-    // the bottom of the veil is vine rather than foliage — a leaf is the widest
-    // thing here and the hem is the one edge that must not creep downward.
-    const leaves = 3;
+    // Leaves down the strand, and they are what the layer is actually SEEN by:
+    // a 13 cm vine is under a pixel at the range a belt is read across, so the
+    // foliage on it is the mid-story as far as the eye is concerned. Narrower
+    // and longer than they were hung off a bough — a wide flat blade at this
+    // size reads as a plank nailed to the trunk rather than as leaf.
+    //
+    // The lowest sits a clear margin above the hem so the bottom of the veil is
+    // vine rather than foliage: a leaf is the widest thing here and the hem is
+    // the one edge that must not creep downward.
+    const leaves = 4;
     for (let j = 0; j < leaves; j++) {
-      const t = 0.25 + (j / leaves) * 0.6;
+      const t = 0.22 + (j / leaves) * 0.62;
+      const at = radial(t, t);
       const blade = MeshBuilder.CreateBox(
         "liana-leaf",
-        { width: 0.62 + rng() * 0.24, height: 0.09, depth: 0.34 },
+        { width: 0.5 + rng() * 0.28, height: 0.09, depth: 0.4 },
         scene,
       );
-      blade.parent = bough;
-      blade.position.set(
-        along + lean * t * drop * 0.4,
-        top - drop * t,
-        swing * t,
-      );
+      blade.parent = collar;
+      blade.position.set(at.x, top - drop * t, at.z);
       blade.rotation.y = rng() * Math.PI;
       // Drooping, never level: a horizontal blade at this size reads as a shelf.
       blade.rotation.z = 0.5 + rng() * 0.5;
@@ -431,18 +561,19 @@ export function buildLianaVeil(
     // A tangle at the hem on some strands — the knot of old growth a liana
     // gathers where it has been hanging longest.
     if (rng() < 0.55) {
+      const at = radial(1, 1);
       const knot = MeshBuilder.CreateCylinder(
         "liana-knot",
         { height: 0.4, diameterTop: 0.3, diameterBottom: 0.22, tessellation: 5 },
         scene,
       );
-      knot.parent = bough;
-      knot.position.set(along + lean * 0.45 * drop, hem + 0.2, swing);
+      knot.parent = collar;
+      knot.position.set(at.x, hem + 0.2, at.z);
       knot.rotation.y = rng() * Math.PI;
       knot.material = vineMat;
     }
   }
-  return bough;
+  return collar;
 }
 
 /**

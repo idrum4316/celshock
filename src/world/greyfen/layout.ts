@@ -210,27 +210,38 @@ const placements: Placement[] = [
  * rejects any spot buried in one. The steles can only land on the ground
  * around the platform, which is what they are for.
  *
- * **The MID-STORY is the third layer, and it is appended rather than woven in.**
+ * **The MID-STORY is the third layer, and it is not in this array at all.**
  * A belt promises a canopy nine metres up and open sight lines under it, and
  * the understory tops out at 1.2 m, so between them sat eight metres of clear
- * air — which is exactly what made a belt read as columns in a park. The
- * `lianaVeil` regions at the end of this array fill it from ABOVE, which is the
- * one direction that costs the promise nothing: nothing they draw is below
- * 2.4 m, so no round and no sightline meets one, and they carry no collider at
- * all. See `buildLianaVeil` for why that height is a contract and not a taste,
- * and note the `scale` floor of 0.9 on every region here is part of it.
+ * air — which is exactly what made a belt read as columns in a park. The liana
+ * veils fill it from ABOVE, which is the one direction that costs the promise
+ * nothing: nothing they draw is below 2.4 m, so no round and no sightline
+ * meets one, and they carry no collider at all.
+ *
+ * They shipped as fifteen `lianaVeil` regions here, each mirroring a tree
+ * region's footprint on the reasoning that a region over a belt puts a veil
+ * under a canopy. **It put them in the GAPS instead, and the mechanism was the
+ * opposite of incidental**: `findSpot` rejects a spot buried in an existing
+ * collider, a jungle tree is `blocking` with an 11.2 m box, and the tree
+ * regions all build first — so the burial test pushed the mid-story away from
+ * every trunk on the map. Measured before the fix: 179 veils, a median 4.62 m
+ * from the nearest trunk against a canopy that reaches 4.4, a hundred of them
+ * outside any canopy at all and thirty-nine past six metres, hanging in open
+ * sky with a bough visibly holding nothing. No region could have fixed it.
+ * `buildJungleTree` hangs the veil off its own crown now, so the layer is
+ * wherever the trees are and cannot be anywhere else.
  *
  * Note that ADDING A PLACEMENT REROLLS ALL OF THIS. `findSpot` draws from the
  * shared stream once per attempt, accepted or rejected, and placements build
  * before scatter — so a new building anywhere moves every belt and every
  * understory region on the map. Re-walk the flags after touching either array.
  *
- * **APPENDING a region does not**, and that is why the veils are at the bottom
- * rather than beside the belts they mirror. Regions are built in array order
- * off one stream, so everything before a new entry draws exactly what it drew
- * before and only the new entry is new. Inserting the same fifteen regions in
- * the middle, where they would read better, would have moved all 368 trees and
- * 149 fern clumps on the map and owed a re-walk of all five flags for nothing.
+ * **APPENDING a region does not**, and neither does removing one from the end
+ * — which is what retiring the fifteen veil regions cost: nothing. Regions are
+ * built in array order off one stream, so everything before an entry draws
+ * exactly what it drew whatever happens after it. The veils that hang here now
+ * draw from a stream of their own for the same reason (see `propSeed`), which
+ * is what let a mid-story be added to every belt without moving one trunk.
  */
 const scatter: ScatterSpec[] = [
   { prop: "jungleTree", x: -25.5, z: 96, width: 78, depth: 40, count: 30, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
@@ -266,33 +277,6 @@ const scatter: ScatterSpec[] = [
   { prop: "fernClump", x: 62.009, z: 5.057, radius: 12, count: 10, y: 0.001, scale: [0.8, 1.4] },
   { prop: "fernClump", x: 49.92, z: 30.36, radius: 12, count: 9, scale: [0.8, 1.4] },
   { prop: "jungleTree", x: -17.469, z: 70.51, width: 10, depth: 50, rotY: Math.PI / 2, count: 10, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  // THE MID-STORY — see the note above. Every region below mirrors the
-  // footprint of a tree region already in this array, because a veil wants a
-  // canopy to hang under; the counts are roughly half the trees' so the layer
-  // reads as a scatter through the belt rather than as a second belt.
-  { prop: "lianaVeil", x: -25.5, z: 96, width: 78, depth: 40, count: 16, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: 54.68, z: -97.112, width: 78, depth: 40, count: 16, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: -32, z: -96.5, width: 78, depth: 40, count: 16, scale: [0.9, 1.25], clearance: 1.9 },
-  // The C-to-E ground, and the thickest of them: this is the belt the fight
-  // between the two crosses, so it is where the layer is worth the most.
-  { prop: "lianaVeil", x: -4.348, z: -43.465, width: 78, depth: 60, count: 30, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: 75.268, z: -60.696, width: 78, depth: 24, count: 12, scale: [0.9, 1.25], clearance: 1.9 },
-  // E, the canopy camp. The layout calls this district dark and close and the
-  // belt alone never made it either; with the undergrowth below and this above
-  // it finally has both a floor and a ceiling.
-  { prop: "lianaVeil", x: 40, z: -80, radius: 20, count: 12, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: -73.164, z: 30.772, radius: 22, count: 12, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: 86.192, z: 82.522, width: 65, depth: 65, count: 16, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: 84.037, z: -4.404, radius: 18, count: 10, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: 46.937, z: 48.216, radius: 18, count: 9, scale: [0.9, 1.25], clearance: 1.9 },
-  // The two small stands flanking the manor — the one place on the map where
-  // the veils are what the jungle is doing TO a building rather than dressing
-  // for a belt.
-  { prop: "lianaVeil", x: -31.044, z: -5.637, radius: 13, count: 7, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: 27.324, z: -6.801, radius: 9, count: 5, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: -85.486, z: -98.394, radius: 18, count: 8, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: -56.772, z: -64.972, radius: 15, count: 7, scale: [0.9, 1.25], clearance: 1.9 },
-  { prop: "lianaVeil", x: -17.469, z: 70.51, width: 10, depth: 50, rotY: Math.PI / 2, count: 6, scale: [0.9, 1.25], clearance: 1.9 },
 ];
 
 const controlPoints: ControlPointDef[] = [

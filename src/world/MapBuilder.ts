@@ -74,7 +74,6 @@ import {
   buildFungus,
   buildGravestone,
   buildJungleTree,
-  buildLianaVeil,
   buildLitter,
   buildLog,
   buildPalletStack,
@@ -358,12 +357,28 @@ export interface GameMap {
   dispose(): void;
 }
 
+/**
+ * One scatter prop's factory.
+ *
+ * **Typed rather than inferred, and the fourth argument is why.** Only
+ * `buildJungleTree` reads `sub`, and a `Record` of the builders as written
+ * would be a UNION of their signatures — which a four-argument call cannot
+ * satisfy, because most members declare three. Widening the whole table
+ * instead is free: a builder that ignores the stream is assignable to a type
+ * that offers it, and a builder that wants one now has a place to say so.
+ */
+type ScatterBuilder = (
+  scene: Scene,
+  mats: CelMaterialFactory,
+  rng: () => number,
+  sub: () => number,
+) => Mesh;
+
 /** Scatter props, keyed by the name the layout data uses. */
-const SCATTER_BUILDERS = {
+const SCATTER_BUILDERS: Record<ScatterSpec["prop"], ScatterBuilder> = {
   deadTree: buildDeadTree,
   pine: buildPine,
   jungleTree: buildJungleTree,
-  lianaVeil: buildLianaVeil,
   fernClump: buildFernClump,
   buttressLog: buildButtressLog,
   carvedStele: buildCarvedStele,
@@ -380,7 +395,7 @@ const SCATTER_BUILDERS = {
   palletStack: buildPalletStack,
   trafficCone: buildTrafficCone,
   litter: buildLitter,
-} as const;
+};
 
 /** Lights carried by scatter props. Kept sparse — every one costs a shader slot. */
 const SCATTER_LIGHTS: Partial<
@@ -443,15 +458,6 @@ const PROP_BODIES: Record<ScatterSpec["prop"], PropBody> = {
   // rounds through open air across the whole stand. Full trunk height, so a
   // jungle tree bakes as hard cover (CoverMap's 1.7 m) the way a wall does.
   jungleTree: { w: 1.0, d: 1.0, h: 11.2, visualTop: 11.6 },
-  // Never blocking, and never able to be: the whole design is a curtain that
-  // hangs ABOVE the hit sphere so nothing at body height is soft (see
-  // `buildLianaVeil`), and a collider would be a box in clear air where a round
-  // has to pass. So w/d/h are the honest hanging volume rather than anything a
-  // shot may find. `visualTop` is the bough, and it is the field that matters —
-  // findSpot's burial check runs for every prop, and at nearly nine metres this
-  // is the tallest non-blocking thing in the table, which is what keeps a veil
-  // out of the roof it would otherwise hang inside.
-  lianaVeil: { w: 2.4, d: 1.0, h: 6.1, visualTop: 8.7 },
   // Never blocking, so w/d/h are never read — filled honestly anyway, because
   // this is a Record and a lie here would be believed the day someone sets
   // `blocking` on a fern. `visualTop` IS read: findSpot's burial check runs for
@@ -591,6 +597,22 @@ export class MapBuilder {
   private item: EditorItem | null = null;
 
   /**
+   * The layout's own seed, kept so `scatterRegion` can mint a SECOND stream
+   * per placed prop. Set at the top of every `build`.
+   *
+   * The shared stream is why a scatter field is reproducible and also why it
+   * is brittle: it is consumed in authored order, so one extra draw anywhere
+   * moves every prop after it. That is a real cost — on Greyfen it is 354
+   * trees, 149 fern clumps and a re-walk of all five flags — and it is what a
+   * builder pays the moment it wants to randomise something new. A stream
+   * keyed to (region, index) buys that back: it is just as reproducible, it is
+   * independent of what any other prop drew, and adding one leaves the shared
+   * stream untouched down to the draw. Today the jungle tree's liana veil is
+   * the only thing that takes it.
+   */
+  private propSeed = 0;
+
+  /**
    * Builds a map. The layout and environment are arguments, not imports: a
    * second map is a second layout file and nothing here changes.
    */
@@ -616,7 +638,9 @@ export class MapBuilder {
     // One stream for the whole build, so scatter regions stay reproducible in
     // authored order. Seeding per region would be stabler under editing but
     // would let two regions with the same seed sample identically.
-    const rng = mulberry32(layout.seed ?? 0x484c);
+    const seed = layout.seed ?? 0x484c;
+    const rng = mulberry32(seed);
+    this.propSeed = seed;
     const forEditor = opts?.editor === true;
     const index: EditorIndex | undefined = forEditor
       ? { placements: [], scatter: [] }
@@ -1004,7 +1028,12 @@ export class MapBuilder {
       // below adds back.
       const base = (spec.y ?? 0) + terrain.heightAt(spot.x, spot.z) - origin.y;
 
-      const prop = build(this.scene, this.mats, rng);
+      // The prop's own stream, keyed to where it sits in the layout rather
+      // than to how much has been drawn before it — see `propSeed`. Minted
+      // per prop and not per region so that changing a region's `count`
+      // leaves the props it still places drawing what they drew.
+      const sub = mulberry32(this.propSeed ^ (index * 7919 + i));
+      const prop = build(this.scene, this.mats, rng, sub);
       prop.scaling.setAll(scale);
       prop.position.x = spot.lx;
       prop.position.z = spot.lz;

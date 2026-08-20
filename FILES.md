@@ -272,8 +272,10 @@ src/
     Props.ts            # Scatter props: trees, graves, rubble, braziers,
                         #   boulders, brambles, barrels, and the understory —
                         #   ferns, fallen buttress logs, carved stelae — plus
-                        #   the one mid-story prop, the liana veil, which hangs
-                        #   from above so it can be dense without being cover
+                        #   the mid-story, the liana veil, which is NOT a
+                        #   scatter prop: the jungle tree hangs it off its own
+                        #   fronds, because scatter placement is what pushed it
+                        #   away from every crown on the map
     textures.ts         # Generated canvas textures: the cobbles, and the floor
                         #   surfaces — noise fields posterized onto a ramp of
                         #   the map's floorColor, albedo and height in one pass

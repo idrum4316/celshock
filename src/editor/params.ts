@@ -334,18 +334,13 @@ export const SCATTER_DEFAULTS: Record<ScatterProp, ScatterDefaults> = {
   // puts the trunks 5.6 m apart, where the frond tips interlock and the trunks
   // are still a stand you can walk and shoot between. Tighter and it merges
   // into one green ceiling with no reason to be a scatter field at all.
-  jungleTree: { radius: 18, count: 22, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
-  // The mid-story, hung from above. Non-blocking, and unlike the fern that is
-  // not a judgement call about chest height — a veil has nothing at chest
-  // height at all, which is what `buildLianaVeil` is built around.
   //
-  // **The scale floor is 0.9 and it is a CONTRACT, not a taste.** The prop's
-  // hem lands at `(8.37 - drop) * scale`, so the 2.4 m the whole design rests
-  // on survives only above that; a region dragged lower in the editor hangs
-  // vines through the hit sphere and nothing throws. Clearance is the tree's
-  // 2.2 less a little, since a veil has no trunk to keep out of another's way —
-  // only its own 1.2 m of bough.
-  lianaVeil: { radius: 16, count: 12, scale: [0.9, 1.25], clearance: 1.9 },
+  // **The scale floor is 0.85 and it is a CONTRACT, not a taste.** Some of
+  // these trees carry the belt's mid-story, and a liana veil's hem lands at
+  // `(9.75 - drop) * scale` — so the 2.4 m the whole design rests on survives
+  // only above that floor. A region dragged lower in the editor hangs vines
+  // through the hit sphere and nothing throws. See `buildLianaVeil`.
+  jungleTree: { radius: 18, count: 22, scale: [0.85, 1.25], blocking: true, clearance: 2.2 },
   // The understory. A fern is NON-BLOCKING for the same reason a bramble is,
   // and here it is load-bearing rather than incidental: a canopy belt's whole
   // promise is that the foliage starts nine metres up and the sight lines under
