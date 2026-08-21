@@ -946,8 +946,24 @@ screen keeps the `start_url` it installed with. The service worker is a
 **template, not a module**: never imported, never typechecked, substituted into
 `dist/sw.js` at `writeBundle`.
 
+**How a deploy REACHES a player is two rules, and both were bugs first.** The
+NAVIGATION is network-first and everything else is cache-first: every one of the
+eleven megabytes is content-hashed, so a cached asset can never be the wrong
+bytes, and `index.html` is the one unhashed file — eight kilobytes that name
+which build is which. Fetching those decides the version and the cache fills
+itself, so a launch is the deployed build; offline the fetch rejects at once and
+the precached shell answers, which is the flight-mode promise intact. And
+`registration.update()` in `register.ts` is **the only thing that ever checks
+for a new build** — a `register()` call for an already-registered script returns
+without checking and a navigation's soft update is throttled, so measured, a
+full reload asked for `/sw.js` zero times and the precache never moved. It looks
+redundant beside `register()`; deleting it puts the game back to needing five to
+ten refreshes.
+
 → **[`docs/pwa.md`](docs/pwa.md)** — the version hash over names *and* contents,
-the `no-cache` requirement, cache-first and what it costs a returning player, the
+the `no-cache` requirement, the network-first shell and the two assumptions that
+made a deploy take five launches, the two numbers bounding the shell request and
+the socket starvation that set the second, the
 phone-shaped details (fullscreen on the document element, `--ov-scale`, why
 `#loadout` is excluded from it), and the controls a phone plays with: when they
 are drawn, the two ways a synthesized mouse event is disbelieved, and why the

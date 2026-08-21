@@ -420,10 +420,14 @@ src/
                       #   Draws nothing and stores nothing — choose()/note()
                       #   hand back the row for Game to light up
   pwa/
-    register.ts         # SW registration + the touch fullscreen gesture.
+    register.ts         # SW registration, the update check that is the only
+                        #   thing that ever looks for a new build, and the
+                        #   touch fullscreen gesture.
                         #   Knows nothing about the game
     sw.js               # The service worker, as a TEMPLATE — not typechecked,
-                        #   never imported; vite.config.ts emits dist/sw.js
+                        #   never imported; vite.config.ts emits dist/sw.js.
+                        #   Network-first for the navigation, cache-first for
+                        #   the content-hashed rest
   shaders/
     CelShader.ts        # Custom cel ShaderMaterial + outline helper
     OutlineFog.ts       # Bakes the map's fog into Babylon's outline pass, so

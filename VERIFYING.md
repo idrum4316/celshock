@@ -707,6 +707,35 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   and so does a rate limit. Order them after a passing hit, or they are
   measuring silence.
 
+- **A service-worker update cannot be tested from one build.** It takes two
+  `dist/`s and a server you can point at either one: build, copy `dist/` aside,
+  change something, build again, and swap which directory is served. Serve it
+  with the cache headers `docker/default.conf.template` sets — `no-cache` on
+  `/`, `/index.html`, `/sw.js`, a year on `/assets/` — because getting those
+  wrong moves the bug to the HTTP layer and you will debug the wrong file. A
+  marker that survives minification is worth planting: a `<meta name="build">`
+  in `index.html` says which shell rendered, and the hashed entry `<script src>`
+  says which bundle it pulled.
+- **A page reload does NOT make the browser check for a new worker.** Measured
+  in headless Chromium: reloading across a deploy asked for `/sw.js` zero times
+  and the precache stayed on the previous build indefinitely, because
+  `register()` on an already-registered script resolves without checking and the
+  navigation's soft update is throttled. Calling `registration.update()` by hand
+  installs, activates and prunes within a second. If a worker change appears to
+  do nothing, this is why — check whether `/sw.js` was even requested before
+  suspecting the worker.
+- **To prove a cache actually holds what it promised**, read it rather than
+  trusting install to have finished: `caches.keys()`, then `cache.keys()` mapped
+  to pathnames, compared against the `PRECACHE` manifest baked into that build's
+  `dist/sw.js`. An install that half-succeeded and a complete one look identical
+  from the page.
+- **Simulating a bad network needs a server that ACCEPTS and then says nothing**
+  — a handler that returns without writing a response. `setOffline(true)` is the
+  easy case and the one that already worked: an offline fetch rejects at once, so
+  it never exercises a timeout. The stall is what found the socket leak, and it
+  is also a trap of its own: those sockets are never released, so anything
+  measured after a stall is measured through a starved connection pool.
+
 To inspect a model in isolation, drop a throwaway `modelviewer.html` + `.ts` at
 the repo root (Vite serves it as a second page) with an `ArcRotateCamera` driven
 by `camera.setPosition`.

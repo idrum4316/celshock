@@ -171,6 +171,23 @@ function layoutWriter(): Plugin {
  * stylesheet inside it. A change there would otherwise leave the worker's
  * bytes identical, and a byte-identical worker is one the browser never
  * updates: the old HUD would be served from cache forever.
+ *
+ * **The manifest is split in TWO, and the split is what the worker's install is
+ * built on.** `immutable` is everything Vite content-hashed into `/assets/`, so
+ * a URL there names its own bytes and a copy already sitting in any cache — the
+ * standing build's, or an interrupted install's — is by construction the right
+ * one and is copied rather than downloaded. `mutable` is the handful of files
+ * whose URL is a contract with something outside the build and says nothing
+ * about their contents (`index.html`, the manifest, the icons), which are
+ * always refetched. Emitting the two lists here rather than testing the prefix
+ * in `sw.js` keeps the knowledge of where Vite puts hashed output in the file
+ * that configures Vite. See the install handler in `src/pwa/sw.js`.
+ *
+ * `regions.json` is emitted by the build and deliberately NOT precached: the
+ * worker's fetch handler is network-only for it (a deployer edits it on the box
+ * to drain a region), so a precached copy is an entry nothing can ever read. It
+ * still counts toward the version hash, which is a claim about the build's
+ * output rather than about the precache.
  */
 function serviceWorker(): Plugin {
   const walk = (dir: string, root: string) =>
@@ -198,13 +215,21 @@ function serviceWorker(): Plugin {
         hash.update(readFileSync(join(outDir, file)));
       }
 
+      // Vite's own `build.assetsDir`, which is where the content hashes are.
+      const HASHED = "assets/";
+      const cached = files.filter((f) => f !== "regions.json");
+
       const manifest = {
         version: hash.digest("hex").slice(0, 12),
+        immutable: cached.filter((f) => f.startsWith(HASHED)).map((f) => `/${f}`),
         // "/" is the URL a launch actually asks for; index.html is the same
         // bytes under the name the deploy wrote. The worker's navigation
         // handler looks up "/", so it has to be a precached key in its own
         // right rather than a redirect the cache knows nothing about.
-        urls: ["/", ...files.map((f) => `/${f}`)],
+        mutable: [
+          "/",
+          ...cached.filter((f) => !f.startsWith(HASHED)).map((f) => `/${f}`),
+        ],
       };
 
       const template = readFileSync(

@@ -31,12 +31,16 @@ manifest of what was actually written to `dist/`, and emits `dist/sw.js`.
 - **The substitution anchors on the declaration, not on the placeholder.** The file's
   header comment names `__PRECACHE__` twice; a plain string replace puts the manifest in
   the prose and leaves the code undefined.
-- **`sw.js` must be served `no-cache`** (`docker/default.conf.template`). It is the
-  update mechanism: a cached copy is a client that can never learn a new build exists.
-- **Caching is cache-first over that precache**, because the bundle is a few
-  megabytes of Babylon and every byte is needed before the first frame. The cost is that
-  a returning player gets the previous build and the new one installs behind them, so a
-  deploy takes effect on the launch *after* next.
+- **`sw.js` must be served `no-cache`** (`docker/default.conf.template`). A cached
+  copy is a client that can never learn a new build exists.
+- **The two lists are `immutable` and `mutable`, and the split is what install is
+  built on.** Everything Vite content-hashed into `/assets/` is its own bytes, so a
+  copy already in any cache is by construction the right one and is copied rather
+  than downloaded; the handful of files whose URL is a contract with something
+  outside the build (`index.html`, the manifest, the icons) say nothing about their
+  contents and are always refetched. `regions.json` is emitted and deliberately
+  **not** precached — the fetch handler is network-only for it, so a precached copy
+  is an entry nothing can ever read.
 - **The match server's endpoints are exempt from all of it, by path.** The fetch
   handler is cache-first over *everything* same-origin and fills the cache with what
   comes back, and in a deployed build `/matches` is same-origin — nginx proxies it onto
@@ -48,10 +52,73 @@ manifest of what was actually written to `dist/`, and emits `dist/sw.js`.
   there is no worker in dev and none on a first load — which is what makes it worth
   stating here rather than leaving to whoever reads `sw.js`.
 
+## How a deploy reaches the player
+
+**The navigation is network-first and everything else is cache-first**, and that is
+not a compromise between two strategies — it is the shape of the build. All eleven
+megabytes are content-hashed, so cache-first there can never be wrong. `index.html`
+is the one unhashed file, the only thing that says which build is which, and it is
+eight kilobytes. Fetch those eight kilobytes and the asset URLs inside them decide
+the version: a hit is the build you already have, a miss is the one you do not, and
+the cache fills itself either way. Offline the fetch rejects at once and the
+precached shell answers, so the flight-mode promise is untouched.
+
+**It used to be cache-first for the navigation too, and the comment claiming that
+cost "the launch after next" was wrong by a factor of five.** Two assumptions
+underneath it do not hold, and both had to be fixed — either one alone still leaves
+a player refreshing:
+
+- **The browser does not notice.** A `register()` call for an already-registered
+  script resolves against the existing registration without checking anything, and
+  the soft update a navigation is supposed to trigger is throttled on a schedule of
+  the browser's own. Measured against a local deploy: a full reload asked for
+  `/sw.js` **zero** times and the precache sat on the previous build indefinitely,
+  until `registration.update()` was called explicitly — at which point the new
+  worker installed, activated and pruned the old cache within a second. That call in
+  `register.ts` is the only thing that ever checks. It reads like belt and braces
+  next to `register()` and it is not; do not tidy it away.
+- **The install did not finish.** `cache.addAll` over the whole 11 MB was
+  all-or-nothing, so a home-screen app closed mid-download discarded every byte and
+  began again from zero on the next launch — which is how "open and close it five to
+  ten times" could genuinely never converge. Install is per-URL now, and because a
+  content-hashed URL already in a cache is copied instead of refetched, an
+  interrupted install RESUMES.
+
+**Measured, on the same pair of builds** (a deploy in which 43 of 52 asset names
+re-hashed): the old worker spent 9.88 MB and was *still showing the old build* after
+one reload; the new one spends 7.28 MB and shows the new build. The saving is not
+mainly the copying — it is that the running page's own download of the 7.4 MB entry
+IS the precache's copy, instead of the two fetching it separately. What reliably
+survives a deploy is only the assets that import nothing (Havok's wasm, the water
+textures, the collision chunks — about 2.7 MB); Babylon's lazy shader chunks import
+from the entry, so its new name is in their bytes and re-hashes them. Two deploys
+measured, one kept 50 of 52 asset names and the next kept 9.
+
+**Two numbers bound the shell request, and they are not the same number.** A launch
+waits `SHELL_TIMEOUT_MS` (3 s) before drawing the shell it already has — the budget
+for a network that is present but not answering, since an offline fetch rejects
+immediately. The request itself is given `SHELL_GIVE_UP_MS` (12 s) and is then
+abandoned, and it is deliberately **not** wrapped in `waitUntil`. Measured against a
+server that accepts a connection and answers nothing: pinned open, every stalled
+launch leaked a socket, a browser allows six per host, and after a handful of
+launches the app could not fetch anything at all — not the shell, not the bundle,
+not the match list. Once the network recovered it stayed stuck on the old build with
+*zero* requests reaching the server. A stale shell is a bad launch; a starved socket
+pool is no launch.
+
+**Nothing reloads a running page.** A round in progress must not be swapped out from
+under the player, and it does not need to be — the navigation handler makes the next
+*launch* current whether an update check fired or not.
+
 Registration happens in `main.ts` **before** the `Game` is constructed and is
 `import.meta.env.PROD`-gated: it must survive a Game that throws on a machine
 without WebGL2, and a worker caching a dev server's module graph would be actively
-harmful.
+harmful. It registers with `updateViaCache: "none"`, which is the app's half of the
+`no-cache` header the deployment owes `/sw.js` — the same failure guarded twice,
+because one of the two costs nothing to state. The update check it then makes by
+hand runs again whenever the page becomes visible, throttled to a minute: that is
+what a home-screen app resumed from the switcher does instead of navigating, and
+nothing else here would fire for it.
 
 Details about the phone, each of which was a visible bug first:
 
