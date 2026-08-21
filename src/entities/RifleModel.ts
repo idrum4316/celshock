@@ -24,8 +24,17 @@ import {
 /** Top face of the receiver's rail — what every sight base stands on. */
 const RAIL_TOP = 0.084;
 
-/** The magazine's rake, which is also the line it drops out along. */
-const MAG_RAKE = 0.14;
+/**
+ * The magazine's rake, which is also the line it drops out along, and it is
+ * NEGATIVE because a rifle magazine leans and curves toward the MUZZLE. The
+ * cartridges in it are tapered, so the column they stack into bends away from
+ * their bases — which is why every curved box magazine in service, STANAG and
+ * AK alike, hangs forward of its well rather than back toward the stock. A
+ * pivot's positive `rotX` sends everything below it backwards (see
+ * `magDropAxis`), so forward is the minus sign here, and the same sign takes
+ * the magazine out of the well down and FORWARD along its own body.
+ */
+const MAG_RAKE = -0.14;
 
 /**
  * Where the rifle offers its rail. The iron stations are as far apart as the
@@ -194,14 +203,16 @@ export function buildRifle(
   const meshes = b.merge("rifle", root);
 
   // Curved STANAG magazine: two segments, the lower one kicked further out.
-  // Built AFTER the weapon's own merge and merged into a node of its own, so
-  // the reload can drop it out of the well — see `WeaponParts.magazine`.
+  // Both kicks carry `MAG_RAKE`'s sign, so the curve deepens the way the
+  // magazine already leans — toward the muzzle — instead of doubling back on
+  // itself. Built AFTER the weapon's own merge and merged into a node of its
+  // own, so the reload can drop it out of the well — see `WeaponParts.magazine`.
   const magazine = new TransformNode(`${prefix}_magazine`, scene);
   magazine.parent = root;
   const magPivot = b.pivot("magPivot", 0, -0.115, 0.055, MAG_RAKE);
   b.box("magUpper", POLYMER, 0.058, 0.1, 0.105, 0, -0.05, 0, magPivot);
   b.box("magRibU", BODY, 0.061, 0.008, 0.108, 0, -0.04, 0, magPivot);
-  const magLower = b.pivot("magLowerPivot", 0, -0.1, 0, 0.13, magPivot);
+  const magLower = b.pivot("magLowerPivot", 0, -0.1, 0, -0.13, magPivot);
   b.box("magLower", POLYMER, 0.056, 0.085, 0.1, 0, -0.0425, 0, magLower);
   b.box("magRibL", BODY, 0.059, 0.008, 0.103, 0, -0.04, 0, magLower);
   b.box("magFloor", METAL, 0.062, 0.02, 0.108, 0, -0.095, 0, magLower);

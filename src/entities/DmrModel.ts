@@ -21,8 +21,15 @@ import {
   type WeaponParts,
 } from "./weaponKit";
 
-/** The magazine's rake, which is also the line it drops out along. */
-const MAG_RAKE = 0.06;
+/**
+ * The magazine's rake, which is also the line it drops out along. NEGATIVE for
+ * the reason the rifle's is: a box magazine leans toward the MUZZLE, and a
+ * pivot's positive `rotX` sends everything below it backwards (see
+ * `magDropAxis`). Shallower than the rifle's, because this one is a straight
+ * box — the lean is all the curve it gets, and past a few degrees a straight
+ * stick raked hard reads as a magazine that has been knocked out of true.
+ */
+const MAG_RAKE = -0.06;
 
 /**
  * Top face of the receiver's rail. Higher than the rifle's: this receiver is
