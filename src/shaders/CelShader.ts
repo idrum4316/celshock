@@ -1296,7 +1296,7 @@ export class CelMaterialFactory {
     let mat = this.cache.get(cacheKey);
     if (!mat) {
       mat = new ShaderMaterial(
-        `cel-ink-${sourceName}`,
+        `${INK_PREFIX}${sourceName}`,
         this.scene,
         { vertex: "cel", fragment: "cel" },
         {
@@ -1313,7 +1313,9 @@ export class CelMaterialFactory {
       // the nearest thing there is, and that ring is the line.
       mat.backFaceCulling = true;
       mat.cullBackFaces = false;
-      mat.setColor3("inkColor", inkColorFor(sourceName));
+      // `inkColor` is NOT set here: the tint is the environment's, so
+      // `applyEnvironment` below owns it and is the one writer — the same
+      // arrangement the fog and the light terms are under.
       const o = CONFIG.graphics.outlines;
       mat.setVector4(
         "inkParams",
@@ -1650,6 +1652,23 @@ export class CelMaterialFactory {
     setEmissiveFog(fogState.color, fogState.start, fogState.end);
     this.mistColor = env.mistColor;
     this.mistParams.set(env.mistHeight, env.mistStrength);
+    // The ink's tint is DERIVED from the two light terms just stored, and it is
+    // settled here — before the walk below, which is what pushes it onto every
+    // CEL_INK material. See `inkState`: an unlit line over a lit surface is only
+    // a line while it is the darker of the two, and what a map calls dark is the
+    // map's own business.
+    const o = CONFIG.graphics.outlines;
+    const tint = Math.min(
+      o.tintFactor,
+      o.shadeHeadroom * shadedFloorLuma(this.ambientColor, this.skyLightColor),
+    );
+    if (tint !== inkState.tint) {
+      inkState.tint = tint;
+      // Babylon's hull holds its colour per MESH and is never walked by the
+      // cache below, so the half of the ink that is not a cel material is
+      // re-inked here.
+      reinkOutlines();
+    }
     this.cache.forEach((mat) => this.applyEnvironment(mat));
   }
 
@@ -1941,6 +1960,15 @@ export class CelMaterialFactory {
     const variation = CONFIG.graphics.albedoVariation;
     mat.setFloat("variationScale", 1 / Math.max(0.001, variation.metersPerCell));
     mat.setFloat("variationAmount", variation.amount);
+    // CEL_INK materials only, and the SOURCE material's name is recovered from
+    // this one's — `inkColorFor` needs the palette colour, and the ink material
+    // is the only thing that still knows which one it was drawn for. The tint
+    // it scales by is the environment's (see `inkState`), so it is re-derived
+    // on every change exactly as the light terms above are, and this is already
+    // the walk that runs on creation and on every change alike.
+    if (mat.name.startsWith(INK_PREFIX)) {
+      mat.setColor3("inkColor", inkColorFor(mat.name.slice(INK_PREFIX.length)));
+    }
   }
 
   /** The eye the shader fogs and rims against. See `camPos` for why on create. */
@@ -2107,6 +2135,61 @@ export class CelMaterialFactory {
 const fogState = { color: new Color3(0.05, 0.06, 0.08), start: 24, end: 78 };
 
 /**
+ * The working ink tint: how much of a mesh's own albedo its outline returns.
+ *
+ * **`CONFIG.graphics.outlines.tintFactor` is the CEILING on this, not the
+ * value.** The ink is unlit — that is the whole of the `CEL_INK` branch, and
+ * Babylon's outline fragment shader is `gl_FragColor = color` and nothing else
+ * — while the surface under it is `albedo * light`. So a constant tint is a
+ * line only while it sits UNDER that light term, and inverts into a bright halo
+ * the moment the surface goes darker than the ink.
+ *
+ * That is not hypothetical, and the map it showed up on says why: Greyfen's
+ * ambient (0.24) and sky fill (0.16) put luma 0.165 on a vertical face in
+ * shadow, against a tint of 0.3 — so every trunk out of the sun wore an outline
+ * roughly twice as bright as itself, and flipped back to ink as the player
+ * stepped into a shaft, because the same face under that map's 1.55 key is at
+ * 1.25. Its own environment file records the re-lighting that caused it
+ * (ambient 0.7 -> 0.24, key 1.12 -> 1.55) without noticing this end of it,
+ * which is exactly why the tint is derived here rather than left as a per-map
+ * number for somebody to keep in step.
+ *
+ * `setEnvironment` is the only writer, so the ink and the light it is judged
+ * against cannot describe different weather — the rule `fogState` above is
+ * kept by, for the same reason.
+ */
+// Annotated rather than inferred: `CONFIG` is `as const`, so the ceiling's
+// type is the literal 0.3 and a derived tint would not assign to it.
+const inkState: { tint: number } = {
+  tint: CONFIG.graphics.outlines.tintFactor,
+};
+
+/**
+ * The luma of the darkest light a surface is COMMONLY seen under: the full
+ * ambient plus the sky fill's own quantised term on a vertical face, with no
+ * key light and no occlusion.
+ *
+ * **Deliberately not the true minimum, which is zero.** A down-facing facet in
+ * a fully occluded corner receives neither term, and an ink derived from that
+ * would be black on every map — throwing away the coloured line work the tint
+ * exists for in order to fix a case where the surface is already black. This is
+ * the trunk-in-shadow case instead, which is what an eye actually compares a
+ * line against. `shadeHeadroom` is the margin over it, and at 0.6 it covers
+ * baked occlusion down to about that same fraction before the line stops being
+ * the darker of the two; past that both go dark together, which reads as a
+ * subtle line rather than as an inverted one.
+ *
+ * `band(0.5 + 0.5 * n.y, 3.0)` is exactly 0.5 at `n.y = 0` — see BAND_GLSL, and
+ * keep the two in step if the sky fill's band count ever moves.
+ */
+function shadedFloorLuma(ambient: Color3, sky: Color3): number {
+  const r = ambient.r + sky.r * 0.5;
+  const g = ambient.g + sky.g * 0.5;
+  const b = ambient.b + sky.b * 0.5;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
  * The wind's bearing, normalised once.
  *
  * A module constant rather than a field for the reason `CONFIG.wind` is one
@@ -2126,6 +2209,14 @@ const fogState = { color: new Color3(0.05, 0.06, 0.08), start: 24, end: 78 };
  * one value and it is that one.
  */
 const INK_WIDTH = 0.05;
+
+/**
+ * The prefix `getInk` mints its materials under, and the one thing that makes
+ * an ink material recognisable after the fact — `applyEnvironment` recovers the
+ * SOURCE material's name from it to re-derive the tint on an environment
+ * change, the same way `inkColorFor` recovers a palette colour from `cel-`.
+ */
+const INK_PREFIX = "cel-ink-";
 
 const windBearing = new Vector2(
   CONFIG.wind.dir[0],
@@ -2177,12 +2268,16 @@ function outlineInkFor(mesh: Mesh): Color3 {
  * `outlineInkFor`, and `getInk` takes it per material for the geometry that
  * sways — where Babylon's hull cannot follow. A second darkening rule would
  * put two different lines on one map.
+ *
+ * The tint it scales by is `inkState`'s, which is the MAP's rather than a
+ * constant, so both readers owe a re-resolve on an environment change:
+ * `reinkOutlines` for the hull, `applyEnvironment` for the cel materials.
  */
 export function inkColorFor(materialName: string): Color3 {
   const o = CONFIG.graphics.outlines;
   const m = /^cel-(?:gloss-|trans-)?(#(?:[0-9a-fA-F]{6}))$/.exec(materialName);
   if (m) {
-    return Color3.FromHexString(m[1]).scale(o.tintFactor);
+    return Color3.FromHexString(m[1]).scale(inkState.tint);
   }
   return Color3.FromHexString(o.fallbackColor);
 }
@@ -2203,6 +2298,36 @@ export function addOutline(mesh: Mesh, width = 0.045): void {
   apply(mesh);
   for (const child of mesh.getChildMeshes()) {
     if (child instanceof Mesh) apply(child);
+  }
+}
+
+/**
+ * Re-inks every registered outline for a new tint. Called only from
+ * `setEnvironment`, and only when the derived tint actually moved.
+ *
+ * **The outline REGISTRY is the right set here where it is the wrong one for
+ * the fog.** `OutlineFog.dropCompiled` has to walk the whole scene because
+ * `ViewModel` sets `renderOutline` by hand and never registers — but it does
+ * not need to be reached from here at all, because the viewmodel inks itself
+ * BLACK rather than from `inkColorFor`, so there is no derived tint of its to
+ * be stale. What the registry does carry, and what makes this necessary rather
+ * than tidy, is the POOLED bot rigs: built once and alive across every map
+ * change, so a rig inked under Hollowmere would go on wearing that tint through
+ * Greyfen's forest for the rest of the session.
+ *
+ * The map's own geometry is inked at build time and would be correct either
+ * way, since `installMap` mints it after the environment is pushed. This does
+ * not rely on that ordering, which is the point of doing it at all.
+ */
+function reinkOutlines(): void {
+  for (let i = outlineEntries.length - 1; i >= 0; i--) {
+    const e = outlineEntries[i];
+    if (e.mesh.isDisposed()) {
+      outlineEntries[i] = outlineEntries[outlineEntries.length - 1];
+      outlineEntries.pop();
+      continue;
+    }
+    e.mesh.outlineColor = outlineInkFor(e.mesh);
   }
 }
 

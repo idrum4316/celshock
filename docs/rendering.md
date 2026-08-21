@@ -134,6 +134,55 @@ Three rules about that invalidation, all learned the hard way:
   `setOutlineFog` owns its own invalidation for exactly this reason — the first
   cut split it across the caller and got that list wrong.
 
+**The ink's TINT is the MAP's, and it is derived rather than authored, because an
+unlit line over a lit surface is only a line while it is the darker of the two.**
+`inkColorFor` returns `albedo * tint` and the ink carries no lighting at all —
+that is the whole of the `CEL_INK` branch, and Babylon's `gl_FragColor = color`
+from the other side — while the surface under it is `albedo * light`. So a
+constant tint inverts into a bright HALO the moment the light term falls under
+it, and it flips with the SHADOW rather than with distance: on Greyfen a trunk in
+the sun was outlined in ink and the same trunk two steps into the canopy's shade
+was outlined in something twice as bright as itself. The numbers are an ambient
+of 0.24 plus a sky fill of 0.16 — luma 0.165 on a vertical face out of the key
+light — against a tint of 0.3, and 1.25 on that same face under the map's 1.55
+key, which is what makes it a flip rather than a wash. Greyfen's own environment
+file records the re-lighting that caused it (ambient 0.7 → 0.24, key 1.12 →
+1.55) with no mention of this end of it, which is exactly why the number is no
+longer one somebody has to keep in step by hand.
+
+`CelMaterialFactory.setEnvironment` derives it from the two terms it is already
+being handed: `outlines.shadeHeadroom` (0.6) of the luma of `ambient + skyFill *
+0.5`, clamped to `outlines.tintFactor`. The ink then cannot out-brighten the
+darkest surface on the map it is drawn on, and a map that re-lights itself
+carries its ink with it. Three things follow:
+
+- **The reference is the trunk-in-shadow case and not the true minimum**, which
+  is zero — a down-facing facet in a fully occluded corner receives neither term,
+  and an ink derived from that would be black on every map, throwing away the
+  coloured line work the tint exists for in order to fix a case where the surface
+  is already black. `band(0.5 + 0.5 * n.y, 3.0)` is exactly 0.5 at `n.y = 0`,
+  which is where the halved sky fill comes from; keep the two in step if that
+  band count ever moves. The 0.6 headroom covers baked occlusion down to about
+  that same fraction, and below it both go dark together — a subtle line rather
+  than an inverted one.
+- **All three shipped maps move, and two of them are not the one that showed the
+  bug**: Greyfen 0.3 → 0.099, Hollowmere 0.3 → 0.103, Coldharbour 0.3 → 0.212.
+  Hollowmere's shaded floor is 0.171, within 4% of Greyfen's, so it had the same
+  inverted ink all along and merely MASKS it — its key is 0.78 rather than 1.55,
+  so the swing across a shadow edge is 3.6x rather than 7.6x, and its lamps are
+  point lights, which are neither shadowed nor occluded and lift the light term
+  past the tint wherever a player actually stands. `lampIntensity: 0` is what
+  Greyfen and Coldharbour have in common, and is why neither has that floor.
+- **Both ink paths owe a re-resolve on an environment change, and they get it
+  from different places.** The cel materials take it from the `applyEnvironment`
+  walk `setEnvironment` already runs, which recovers the palette colour out of
+  the material name `getInk` mints (`cel-ink-<source>`). Babylon's hull holds
+  `outlineColor` per MESH and is in no walk at all, so `reinkOutlines` goes over
+  the outline registry instead — and that registry is the right set here where it
+  is the wrong one for the fog above. `ViewModel` is missing from it and does not
+  need to be in it, because it inks itself BLACK rather than from `inkColorFor`.
+  What it does carry is the pooled bot rigs, which outlive every map change.
+
 **A fifth term modifies two of the four, and it arrives as a VERTEX ATTRIBUTE
 rather than a uniform.** `world/vertexShading.ts` bakes per-vertex ambient
 occlusion once per map build, out of the collider boxes `MapBuilder.collider()

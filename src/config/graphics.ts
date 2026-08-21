@@ -146,8 +146,29 @@ export const graphics = {
     fullDistance: 14,
     farDistance: 60,
     minScale: 0.3,
-    /** Outline colour = the mesh's base colour scaled by this. */
+    /**
+     * Outline colour = the mesh's base colour scaled by this — the CEILING on
+     * that scale rather than the scale itself. What is actually spent is
+     * derived per map and clamped here; see `shadeHeadroom`.
+     */
     tintFactor: 0.3,
+    /**
+     * How much of a SHADED surface's own light the ink may return.
+     *
+     * The ink is a fraction of the ALBEDO drawn with no lighting at all, while
+     * the surface under it is that albedo times the light on it — so the line
+     * reads as ink only while the tint sits under that light term, and inverts
+     * into a bright halo as soon as the surface is darker than the ink.
+     * `CelMaterialFactory.setEnvironment` derives the working tint from the
+     * map's own ambient plus sky fill and clamps it to `tintFactor`, so a map
+     * that re-lights itself carries its ink with it rather than leaving a
+     * constant here to be kept in step by hand. See `inkState` in
+     * `shaders/CelShader.ts` for the measurement that made this a derivation.
+     *
+     * 0.6 leaves the line clearly darker than what it borders while keeping it
+     * a tinted colour rather than the flat `fallbackColor` black.
+     */
+    shadeHeadroom: 0.6,
     /** Fallback ink for materials with no flat base colour to darken. */
     fallbackColor: "#12141a",
   },

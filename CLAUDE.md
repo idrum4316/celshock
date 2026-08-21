@@ -457,7 +457,8 @@ hangs on already casts the shadow and carries the ink).
 
 → **[`docs/rendering.md`](docs/rendering.md)** — the four light terms and the
 baked occlusion that modifies two of them (and the three further rules that
-buffer carries), the wind and the two rules it is bounded by, the three light
+buffer carries), the ink's derived tint and the three things that follow from
+it, the wind and the two rules it is bounded by, the three light
 flavours and the muzzle-flash budget, the
 per-pixel/per-mesh fog split and `OutlineFog`'s three cache-invalidation rules,
 the shadow window, its four-tap lookup and the registry that lets grass and water
@@ -667,7 +668,10 @@ misbehaves silently:
 - `noOutline: true` — skipped by `addOutline()`. Every emissive part (eyes, flames,
   signs, reticle) needs it. Outlines are coloured ink (a darkened take on the mesh's
   own cel colour), thinned with distance per mesh by `updateOutlineScales()` and
-  faded into the fog per pixel by `OutlineFog`.
+  faded into the fog per pixel by `OutlineFog`. **How far it is darkened is the
+  MAP's**, derived by `setEnvironment` from that map's ambient and sky fill: the
+  ink is unlit and the surface under it is not, so a constant tint inverts into a
+  bright halo wherever the light falls below it.
 - `noGlow: true` — excluded from the `GlowLayer` in the `Game` constructor. Only
   meshes existing at construction time are scanned. A mesh that stays in bloom
   is faded with distance instead (`customEmissiveColorSelector`), and
