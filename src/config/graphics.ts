@@ -186,6 +186,28 @@ export const graphics = {
      */
     rifle: { color: "#aecbf2", intensity: 0.6, shininess: 32 },
     /**
+     * The same fittings under a finish that has been rubbed back: broad,
+     * dim, and spread far enough that it reads as a sheen on a surface
+     * rather than as a point of light on an edge. What a satin lacquer, a
+     * parkerised grey or a dulled bronze wears.
+     *
+     * The three weapon-finish entries here are a LADDER — matte (no spec at
+     * all), `rifleSatin`, `rifle`, `rifleChrome` — and that is the whole of
+     * the vocabulary `entities/finishes.ts` paints in. Adding a fourth rung
+     * is fine; giving one finish a spec of its own is what is not, because
+     * the point of a ladder is that two finishes claiming the same gloss
+     * genuinely have it.
+     */
+    rifleSatin: { color: "#b7c2d2", intensity: 0.28, shininess: 12 },
+    /**
+     * Plating: bright, tight and near-white, for a surface that is a
+     * MIRROR rather than a metal — chrome, gold plate, a black lacquer
+     * polished until it behaves like one. The intensity is what separates
+     * it from `rifle` at a glance; the shininess keeps the highlight a
+     * hard-edged streak instead of a wash across a receiver.
+     */
+    rifleChrome: { color: "#eaf1ff", intensity: 0.95, shininess: 44 },
+    /**
      * Wet cobblestone streets: broad, dim grazing sheen, so the road
      * catches a streak when you look toward the moon — the "rained an
      * hour ago" read. Low shininess spreads it across the street.

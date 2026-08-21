@@ -188,6 +188,10 @@ export function buildSmg(
   b.box("magBase", RUBBER, 0.05, 0.012, 0.07, 0, -0.21, 0, magPivot);
   meshes.push(...b.merge("smgMag", magazine));
 
+  // Every colour group the WEAPON itself merged, taken before the optics are
+  // built so a finish can never reach one — see `WeaponBuild.takeFinish`.
+  const finish = b.takeFinish();
+
   const optics = buildOptics(b, MOUNT, prefix);
   meshes.push(...optics.meshes);
   b.disposePivots();
@@ -200,6 +204,7 @@ export function buildSmg(
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
     magazine,
     magDrop: magDropAxis(MAG_RAKE),
+    finish,
     sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };

@@ -281,9 +281,10 @@ machine gun without a per-weapon number anywhere.
   the magazine leaves through that edge, and the aimed reload keeps the whole
   middle of the screen clear.
 
-## The loadout: five weapons, five optics, and a sidearm
+## The loadout: five weapons, five optics, a finish each, and a sidearm
 
-Two tables, two slots, neither knowing about the other. `CONFIG.weapons` declares
+Two tables, two slots, neither knowing about the other (a third table, the
+finishes, is below and knows about neither). `CONFIG.weapons` declares
 what can be carried and `CONFIG.sights` what can be bolted to it;
 `entities/weapons.ts` and `entities/sights.ts` derive `WeaponId`/`SightId` **from
 those tables**, so each is declared in exactly one place. Every weapon *with a
@@ -314,6 +315,74 @@ the setting exists. **The one place it has to be written out is
 — it is the rate the aim assist bounds itself as a fraction of, and a player who
 has halved their stick speed has halved what "the player always out-turns the
 assist" is measured against.
+
+## The third slot: a finish, which decides nothing
+
+`entities/finishes.ts` is the same shape as the two tables above and the
+opposite of them in every way that matters. A weapon decides what the round
+does, an optic decides what you can see when you send it, and a **finish
+decides nothing at all** — it is the colour and the gloss of the merged colour
+groups and reaches no other line in the game. That is what lets it be a
+client-side preference that never touches the wire, the bots, the authority or
+the camera: a remote body is drawn by `SoldierModel`, which has never heard of
+any of it.
+
+**Each weapon offers four: the one it ships in, and three of its own.** The
+requirement is that no scheme is offered on two guns, and the table meets it by
+CONSTRUCTION rather than by review — every finish carries the one
+`PrimaryWeaponId` it belongs to and `FINISHES_BY_WEAPON` is derived from that
+field, so a scheme cannot appear on two lists because it cannot name two
+weapons. `standard` is the single entry allowed to name none, and it is what
+every gun's row opens with.
+
+**`standard` is the built state, not a repaint of it.** Its four colours are
+`weaponKit`'s own `BODY`/`POLYMER`/`METAL`/`RUBBER` constants and its metal
+carries the same `spec.rifle` that `WeaponBuild.collect` hands out, referenced
+rather than written out — so selecting it puts a weapon back to exactly what
+came off the builder, and moving a constant moves the default with it.
+
+**Gloss is a ladder with four rungs and a finish may not invent a fifth**: matte
+(no `spec` at all), `spec.rifleSatin`, `spec.rifle`, `spec.rifleChrome`. Two
+finishes that claim the same gloss have to genuinely have it. That ladder is
+also why `CelMaterialFactory.getGlossy` keys its cache on the SPEC as well as
+the colour: the spec is a uniform rather than a define, so one hex asked for at
+two gloss levels is two materials that differ only in what was uploaded to
+them, and a colour-only key would have let whichever asked first answer for
+both.
+
+**What a finish may reach is decided by the BUILDER, not by a check.**
+`WeaponBuild.merge` records the colour group each merged mesh came from, and a
+model calls `takeFinish()` at the seam it already merges at — after the weapon
+and its magazine, before any optic. So the parts list a finish is handed is the
+weapon and nothing else: an optic on a rail is a separate piece of kit and
+stays black on a chrome carbine, the way one does. Two groups are out of scope
+for their own reasons: **BRASS** has no key in the table at all, because the
+LMG's exposed belt is ammunition rather than weapon and stays cartridge-coloured
+under every scheme; and the emissive reticle never went through `collect` in the
+first place.
+
+The repaint itself is a handful of material-pointer writes over shared cached
+materials, so a pick costs nothing and nothing downstream of the fit is
+re-derived — a finish moves no landmark, no sight centre and no hand, which is
+why `ViewModel.setFinish` is the one loadout call that does not end in
+`applyFit`. The ink does not need re-deriving either: the viewmodel is the one
+thing in the game that outlines itself BLACK by hand rather than tinting the
+line from the surface's own colour, so there is no derived tint of its to go
+stale when the surface changes underneath it.
+
+**The sidearm has none**, and that is a statement about the kit screen rather
+than about the pistol. It is not offered there, so there is nowhere to pick
+one, and a pistol that turned gold because the machine gun did would be the
+loadout deciding something about a slot it was not asked about. `PistolModel`
+still hands back its `finish` list — `WeaponParts` is one shape for every
+weapon, not five — and nothing ever repaints it.
+
+Which finish is on which gun is remembered PER WEAPON (`prefs.readFinish` /
+`writeFinish`, one `localStorage` key each), because a finish belongs to a gun:
+a single key would mean picking up the SMG threw away what the rifle was
+painted in. The read is validated by `finishFor`, which is stricter than the
+weapon's and the optic's and has to be — a stored value that is a real
+`FinishId` may still be another gun's.
 
 ## Recoil has a shape, and the shape is learnable
 
@@ -846,6 +915,12 @@ stays with the weapon, since the fresh box needs a shelf to hang from. The
 pistol's is the only one built with geometry a seated magazine never shows: its
 magazine is up inside the grip, so the body is there to be seen on the way out
 and sized clear of the grip's walls on every face.
+
+**A colour group is also the unit a FINISH repaints**, which is the second job
+the merge does: `merge` records which group each merged mesh came from and
+`takeFinish()` hands the list back at the seam between the weapon and its
+optics. See the finish section above for what that buys and what it deliberately
+leaves out.
 
 **A colour group is free where it is unused, which is why BRASS is one.** `merge`
 skips a group with nothing in it, so the LMG's exposed belt costs the other four

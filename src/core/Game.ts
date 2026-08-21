@@ -76,10 +76,11 @@ import { NetSession } from "../net/NetSession";
 import { clearRequestTimings, fetchMatches } from "../net/lobby";
 import { RegionBook } from "../net/RegionBook";
 import { SNAPSHOT_HZ, TICK_HZ, type ServerEvent } from "../net/protocol";
+import { type FinishId } from "../entities/finishes";
 import { Player } from "../entities/Player";
 import { type SightId } from "../entities/sights";
 import { VIEWMODEL_GROUP } from "../entities/ViewModel";
-import { type PrimaryWeaponId } from "../entities/weapons";
+import { PRIMARY_WEAPON_IDS, type PrimaryWeaponId } from "../entities/weapons";
 import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
@@ -116,11 +117,13 @@ import { CameraSystem } from "./CameraSystem";
 import { InputManager } from "./InputManager";
 import {
   readDifficulty,
+  readFinish,
   readMap,
   readRegion,
   readSight,
   readWeapon,
   writeDifficulty,
+  writeFinish,
   writeMap,
   writeRegion,
   writeSight,
@@ -331,12 +334,25 @@ export class Game {
    */
   private difficulty = readDifficulty();
   /**
-   * The kit. Unlike the difficulty tier this applies immediately — both halves
-   * of it re-pose a weapon that is put away everywhere the loadout screen can
+   * The kit. Unlike the difficulty tier this applies immediately — both of
+   * these re-pose a weapon that is put away everywhere the loadout screen can
    * be opened from, so there is nothing to defer to the next round.
    */
   private sight: SightId = readSight();
   private weapon: PrimaryWeaponId = readWeapon();
+  /**
+   * What each weapon is PAINTED in — one entry per primary, because a finish
+   * belongs to a gun rather than to the loadout (see `finishes.ts`). The whole
+   * record is held rather than just the carried weapon's so that stepping
+   * across the weapon row shows each gun in the colours it was last left in,
+   * which is the only way the row means anything.
+   *
+   * Purely cosmetic, and the one part of the kit that reaches nothing but the
+   * viewmodel: no camera, no captions, and nothing on the wire.
+   */
+  private finishes: Record<PrimaryWeaponId, FinishId> = Object.fromEntries(
+    PRIMARY_WEAPON_IDS.map((id) => [id, readFinish(id)]),
+  ) as Record<PrimaryWeaponId, FinishId>;
   /** The display settings. Which states their screen may cover is the table's. */
   private settings: Settings = readSettings();
   /** Reused each frame: the player plus every bot, for objective occupancy. */
@@ -1046,6 +1062,7 @@ export class Game {
     this.deployScreen.onOpenLoadout = () => this.openLoadout();
     this.loadoutScreen.onWeapon = (id) => this.setWeapon(id);
     this.loadoutScreen.onSight = (id) => this.setSight(id);
+    this.loadoutScreen.onFinish = (id) => this.setFinish(id);
     this.loadoutScreen.onClose = () => this.closeLoadout();
     this.player.onCarryChanged = () => this.applyCarry();
     // A reload beginning, however it began — the key, or the last round leaving
@@ -1266,7 +1283,7 @@ export class Game {
    */
   private openLoadout(): void {
     if (!this.raiseLid("loadout")) return;
-    this.loadoutScreen.setFit(this.weapon, this.sight);
+    this.loadoutScreen.setFit(this.weapon, this.sight, this.finishes[this.weapon]);
     this.loadoutScreen.show();
     // The weapon comes out to be looked at. It is the real viewmodel on the
     // real camera — the kit screen shows what will be in the player's hands,
@@ -1612,20 +1629,41 @@ export class Game {
   }
 
   /**
+   * Paints the weapon in the player's hands.
+   *
+   * It writes the CARRIED weapon's entry and no other, which is what makes the
+   * record a per-gun memory rather than one setting with five copies: the kit
+   * screen only ever offers this weapon's schemes, so a pick can only ever be
+   * about this weapon.
+   */
+  private setFinish(id: FinishId): void {
+    if (id === this.finishes[this.weapon]) return;
+    this.finishes[this.weapon] = id;
+    writeFinish(this.weapon, id);
+    this.applyLoadout();
+  }
+
+  /**
    * Pushes the kit to everything that reads it: the player (what the rounds
-   * do, and which model ADS poses), the camera (how far it zooms, how much it
-   * slows, how fast it gets there), and the three captions. Split from the
-   * setters because the constructor owes the same push for a kit nobody just
-   * picked, and because both halves of the loadout owe all of it — a weapon
-   * change re-derives the aimed pose exactly as an optic change does.
+   * do, which model ADS poses, and what it is painted in), the camera (how far
+   * it zooms, how much it slows, how fast it gets there), and the three
+   * captions. Split from the setters because the constructor owes the same
+   * push for a kit nobody just picked, and because every slot of the loadout
+   * owes all of it — a weapon change re-derives the aimed pose exactly as an
+   * optic change does, and turns the finish row over as well.
    */
   private applyLoadout(): void {
     this.player.setWeapon(this.weapon);
     this.player.setSight(this.sight);
+    // The paint, which is the one slot of the three that reaches nothing but
+    // the model: no camera, no caption, and nothing below. Only the carried
+    // weapon's is pushed — it is the only rig that can be looked at, and the
+    // other four are repainted the moment the weapon row steps onto them.
+    this.player.setFinish(this.weapon, this.finishes[this.weapon]);
     this.applyCarry();
     const label = kitLabel(this.weapon, this.sight);
     this.deployScreen.setKit(label);
-    this.loadoutScreen.setFit(this.weapon, this.sight);
+    this.loadoutScreen.setFit(this.weapon, this.sight, this.finishes[this.weapon]);
     // The menu draws the kit into its own markup, so it has to be rebuilt;
     // the other two were just patched above.
     if (this.state === "menu") this.showMenu();

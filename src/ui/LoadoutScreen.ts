@@ -1,7 +1,7 @@
 /**
- * LoadoutScreen.ts — The kit screen: pick a weapon, fit an optic, turn the
- * thing over in your hands, and read what the trade costs.
- * Owns: its own DOM under `#hud`, the two-slot selection model, the stat
+ * LoadoutScreen.ts — The kit screen: pick a weapon, fit an optic, paint the
+ * thing, turn it over in your hands, and read what the trade costs.
+ * Owns: its own DOM under `#hud`, the three-slot selection model, the stat
  * table it derives from `CONFIG.weapons`, and the pointer drags over its
  * stage. It reports choices and redraws nothing on its own — `Game` applies a
  * pick and calls `setFit` back, so the highlighted button can never get ahead
@@ -21,7 +21,22 @@
  *   across the viewport, which is the anchor the weapon is placed at. Both
  *   sides are fractions of the viewport, so a resize moves them together.
  *
- * A screen rather than a row, because there are two slots now and the row it
+ * **The FINISH row is the one that is not a trade**, and it is drawn like the
+ * other two anyway. Every other choice on this screen costs something — a
+ * magnification is a field of view, a weapon is a rate against a magazine —
+ * and a finish costs nothing at all, so it has no bar on the chart and never
+ * touches one. What it has instead is the STAGE: it is the only pick here
+ * whose whole effect is the thing already turning on the turntable, which is
+ * why its copy is written under the weapon rather than beside the bars, and
+ * why its buttons carry a swatch. A row of names for fifteen colour schemes
+ * would be a row you have to try one at a time.
+ *
+ * The four on offer are the CARRIED weapon's own — the standard finish plus
+ * three nothing else is offered, which `FINISHES_BY_WEAPON` decides — so this
+ * row is rebuilt when the weapon row moves, exactly as the chart and the blurb
+ * are.
+ *
+ * A screen rather than a row, because there are three slots now and the row it
  * replaces was a strip of buttons wedged under a menu that already had a
  * difficulty picker on it. It is reachable from the MAIN MENU and from the
  * DEPLOY screen, and deliberately not from the pause menu: a round you are
@@ -43,6 +58,13 @@
  */
 import "./loadout.css";
 import { CONFIG } from "../config";
+import {
+  finishBlurb,
+  finishName,
+  finishSwatch,
+  FINISHES_BY_WEAPON,
+  type FinishId,
+} from "../entities/finishes";
 import { SIGHT_IDS, type SightId } from "../entities/sights";
 import {
   PRIMARY_WEAPON_IDS,
@@ -50,9 +72,15 @@ import {
   type WeaponId,
 } from "../entities/weapons";
 
-/** Which half of the kit the keyboard/pad is currently stepping through. */
-type Slot = "weapon" | "sight";
-const SLOTS: readonly Slot[] = ["weapon", "sight"];
+/**
+ * Which row of the kit the keyboard/pad is currently stepping through.
+ *
+ * In the order the choices depend on each other: the weapon decides what
+ * optics and what finishes the other two rows are even allowed to offer, so it
+ * is the one the cursor opens on and the one above the other two.
+ */
+type Slot = "weapon" | "sight" | "finish";
+const SLOTS: readonly Slot[] = ["weapon", "sight", "finish"];
 
 /**
  * What each weapon is for, in the player's terms. Copy, not configuration —
@@ -220,6 +248,18 @@ export class LoadoutScreen {
   private body: HTMLElement;
   /** The caption under the weapon on the stage. */
   private stageCap: HTMLElement;
+  /**
+   * What the FINISH is, said under the weapon rather than in the panel.
+   *
+   * The other two picks are written up beside their bars because what they
+   * cost is invisible — a magnification is a field of view, a burst is four
+   * tenths of a second. A finish costs nothing and its whole effect is the
+   * thing on the turntable, so its copy belongs where the eye already is. It
+   * is also fifty pixels the panel does not spend on a third paragraph, which
+   * on a 1280x720 laptop is the difference between the footer being on the
+   * screen and being scrolled to.
+   */
+  private stageNote: HTMLElement;
   /** The same caption in the panel's head. */
   private carriedEl!: HTMLElement;
   /**
@@ -231,12 +271,15 @@ export class LoadoutScreen {
   private dragY = 0;
   private weapon: PrimaryWeaponId = PRIMARY_WEAPON_IDS[0];
   private sight: SightId = SIGHT_IDS[0];
+  /** The finish on the CARRIED weapon — this row's list turns over with it. */
+  private finish: FinishId = FINISHES_BY_WEAPON[PRIMARY_WEAPON_IDS[0]][0];
   /** Which row the d-pad is on. Left/right steps inside it; up/down swaps it. */
   private slot: Slot = "weapon";
 
   /** Wired by Game. Each reports a choice; none of them redraws. */
   onWeapon: (id: PrimaryWeaponId) => void = () => {};
   onSight: (id: SightId) => void = () => {};
+  onFinish: (id: FinishId) => void = () => {};
   onClose: () => void = () => {};
 
   constructor() {
@@ -265,12 +308,14 @@ export class LoadoutScreen {
       </div>
       <div class="lo-stage">
         <span class="lo-stage-cap"></span>
+        <p class="lo-stage-note"></p>
         <span class="lo-stage-hint">Drag &middot; right stick to turn</span>
       </div>
     `;
     document.getElementById("hud")!.appendChild(this.root);
     this.body = this.root.querySelector(".lo-body")!;
     this.stageCap = this.root.querySelector(".lo-stage-cap")!;
+    this.stageNote = this.root.querySelector(".lo-stage-note")!;
     // The head's right-hand slot names the same kit the stage's caption
     // does, and is written by the same call — see `setCaption`. It is the
     // panel's own read-back: the caption lives over the weapon on the far
@@ -339,10 +384,12 @@ export class LoadoutScreen {
   }
 
   /** Shows the kit that is actually fitted. Called by Game, never by a click. */
-  setFit(weapon: PrimaryWeaponId, sight: SightId): void {
-    if (weapon === this.weapon && sight === this.sight) return;
+  setFit(weapon: PrimaryWeaponId, sight: SightId, finish: FinishId): void {
+    if (weapon === this.weapon && sight === this.sight && finish === this.finish)
+      return;
     this.weapon = weapon;
     this.sight = sight;
+    this.finish = finish;
     this.draw();
   }
 
@@ -388,9 +435,16 @@ export class LoadoutScreen {
       const n = PRIMARY_WEAPON_IDS.length;
       const i = PRIMARY_WEAPON_IDS.indexOf(this.weapon);
       this.onWeapon(PRIMARY_WEAPON_IDS[(i + delta + n) % n]);
-    } else {
+    } else if (this.slot === "sight") {
       const i = SIGHT_IDS.indexOf(this.sight);
       this.onSight(SIGHT_IDS[(i + delta + SIGHT_IDS.length) % SIGHT_IDS.length]);
+    } else {
+      // This weapon's own list, not every finish there is — the row wraps
+      // through four, and the other twelve belong to guns that are not in the
+      // player's hands.
+      const ids = FINISHES_BY_WEAPON[this.weapon];
+      const i = ids.indexOf(this.finish);
+      this.onFinish(ids[(i + delta + ids.length) % ids.length]);
     }
   }
 
@@ -410,10 +464,26 @@ export class LoadoutScreen {
     }).join("");
     const sights = SIGHT_IDS.map(
       (id) => `
-        <button class="lo-opt${id === this.sight ? " on" : ""}" data-sight="${id}">
+        <button class="lo-opt lo-optic${id === this.sight ? " on" : ""}" data-sight="${id}">
           <b>${CONFIG.sights[id].name}</b><i>${magLabel(id)}</i>
         </button>`,
     ).join("");
+    // The swatch is what a finish button says instead of a figure: three
+    // custom properties the CSS lays out as a strip along the top edge, in
+    // the order the eye reads a weapon — furniture, receiver, fittings. It
+    // takes the `i` row's place rather than sitting beside the name, so a
+    // finish button measures exactly like a weapon's and the three rows stay
+    // one control.
+    const finishes = FINISHES_BY_WEAPON[this.weapon]
+      .map((id) => {
+        const [a, b, c] = finishSwatch(id);
+        return `
+        <button class="lo-opt lo-finish${id === this.finish ? " on" : ""}" data-finish="${id}"
+                style="--sw-a:${a};--sw-b:${b};--sw-c:${c}">
+          <b>${finishName(id)}</b>
+        </button>`;
+      })
+      .join("");
     const bars = weaponStats(this.weapon)
       .map(
         (s) => `
@@ -432,6 +502,12 @@ export class LoadoutScreen {
     const carried = kitLabel(this.weapon, this.sight);
     this.stageCap.textContent = carried;
     this.carriedEl.textContent = carried;
+    // The paint, named and described under the weapon it is on. Deliberately
+    // NOT folded into `kitLabel`: that string is also the HUD's magazine
+    // caption and the deploy screen's kit line, and neither of those is
+    // anywhere the colour of the gun is a thing you are choosing.
+    this.stageNote.innerHTML =
+      `<b>${finishName(this.finish)}</b>${finishBlurb(this.finish)}`;
 
     this.body.innerHTML = `
       <div class="lo-slots">
@@ -442,6 +518,10 @@ export class LoadoutScreen {
         <div class="lo-slot${this.slot === "sight" ? " active" : ""}" data-slot="sight">
           <span class="lo-slot-name">Optic</span>
           <div class="lo-opts">${sights}</div>
+        </div>
+        <div class="lo-slot${this.slot === "finish" ? " active" : ""}" data-slot="finish">
+          <span class="lo-slot-name">Finish</span>
+          <div class="lo-opts">${finishes}</div>
         </div>
       </div>
       <div class="lo-detail frame">
@@ -456,7 +536,9 @@ export class LoadoutScreen {
     this.body.querySelectorAll<HTMLElement>("button.lo-opt").forEach((btn) => {
       btn.onclick = () => {
         const w = btn.dataset.weapon;
+        const f = btn.dataset.finish;
         if (w) this.onWeapon(w as PrimaryWeaponId);
+        else if (f) this.onFinish(f as FinishId);
         else this.onSight(btn.dataset.sight as SightId);
       };
     });

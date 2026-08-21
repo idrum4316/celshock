@@ -312,6 +312,10 @@ export function buildDmr(
   b.box("magBase", RUBBER, 0.06, 0.014, 0.104, 0, -0.242, 0, magPivot);
   meshes.push(...b.merge("dmrMag", magazine));
 
+  // Every colour group the WEAPON itself merged, taken before the optics are
+  // built so a finish can never reach one — see `WeaponBuild.takeFinish`.
+  const finish = b.takeFinish();
+
   const optics = buildOptics(b, MOUNT, prefix);
   meshes.push(...optics.meshes);
   b.disposePivots();
@@ -325,6 +329,7 @@ export function buildDmr(
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
     magazine,
     magDrop: magDropAxis(MAG_RAKE),
+    finish,
     sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };

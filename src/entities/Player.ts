@@ -67,6 +67,7 @@ import { SOLID_ONLY } from "../world/solid";
 import { CelMaterialFactory } from "../shaders/CelShader";
 import type { CameraSystem } from "../core/CameraSystem";
 import type { InputManager } from "../core/InputManager";
+import type { FinishId } from "./finishes";
 import type { SightId } from "./sights";
 import {
   DEFAULT_WEAPON,
@@ -913,6 +914,15 @@ export class Player implements Combatant {
    */
   setSight(id: SightId): void {
     this.view.setSight(id);
+  }
+
+  /**
+   * Paints a weapon. The purest pass-through on this class — a finish changes
+   * what the gun looks like and nothing else at all, so unlike the optic it is
+   * not even upstream of what the player can SEE.
+   */
+  setFinish(weapon: PrimaryWeaponId, id: FinishId): void {
+    this.view.setFinish(weapon, id);
   }
 
   /**

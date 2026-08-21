@@ -151,7 +151,7 @@ the kit screen, and only the pair that works everywhere is on the button.
 
 **The four cards are one class because they are one element** — they share the
 shell, the title block and the Deploy button. The bar for a screen of its own is
-*state*: the deploy map has a selection and a canvas, the kit screen has two
+*state*: the deploy map has a selection and a canvas, the kit screen has three
 slots and a turntable; a card that is markup plus a button has not earned one.
 
 **Three of the four take the screen and the PAUSE does not.** `setCardClass` is
@@ -656,6 +656,34 @@ and drawn in `VIEWMODEL_GROUP`.
 - **The hands let go.** A forearm cut off at the elbow reads fine on a carried
   weapon and as a severed arm on a bench, so `ViewModel` hides the arm meshes for the
   duration — one place writes mesh visibility.
+- **The FINISH row is the one pick on this screen that is not a trade, and it
+  is drawn like the other two anyway.** Every other choice here costs
+  something — a magnification is a field of view, a burst is four tenths of a
+  second — and a finish costs nothing, so it gets no bar on the chart and never
+  moves one. What it has instead is the stage. Two consequences: its buttons
+  carry a three-stop SWATCH along the top edge (furniture, receiver, fittings,
+  in the order the eye reads a weapon), because "Verdigris" and "Oxblood" are
+  words you would otherwise have to try one at a time; and its COPY is written
+  under the weapon rather than beside the bars, because a finish is the one pick
+  whose whole effect is the thing already turning on the turntable. The swatch
+  is absolutely positioned into padding the button already has, so a finish
+  button measures exactly like a weapon's — four pixels taller, times three
+  rows, is a whole row's worth on the viewport with least height to give.
+- **A third row of buttons is 45 px of panel, and the panel is what paid for
+  it.** Two pixels off each row's padding and each gap, a smaller flex BASIS for
+  the two rows whose names are one short word each (68 against the weapon row's
+  96, which is sized for "SUBMACHINE GUN"), and a row gap on the detail card
+  stated apart from its column gap — only one of the two is ever spent, and a
+  single number was charging the stacked case for a gutter it does not have.
+  Between them the screen fits 1280x720 again, and a landscape phone fits the
+  five optics on one line where it used to break them 3 + 2.
+- **`.lo-panel` scrolls at every height now, and centres SAFELY.** It used to do
+  both only below 560 px, so between there and a full desktop a window that ran
+  out of room simply put the footer under the bottom edge with no way to reach
+  it — and a column centred in a box it is taller than overflows equally at both
+  ends, which puts the head out of reach too. `justify-content: safe center`
+  drops to flex-start exactly when that would happen. A third row of buttons is
+  not the sort of thing that should be able to strand the way off a screen.
 - **On a landscape phone the whole HEAD goes**, and it is the same argument
   that already took the prose. This is the one screen outside `--ov-scale`, so
   it has to fit a 390 px-tall window on its own; the eyebrow says what kind of

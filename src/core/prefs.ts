@@ -1,6 +1,6 @@
 /**
- * prefs.ts — What the player picked last time: difficulty, map, loadout and
- * region.
+ * prefs.ts — What the player picked last time: difficulty, map, loadout (both
+ * slots and a finish per weapon) and region.
  * Owns the localStorage round trip for each; owns nothing that applies them
  * (that is `Game.setDifficulty` / `setMap` / `applyLoadout` / `setRegion`).
  * Sibling of [`settings.ts`](settings.ts), which does the same job for the
@@ -14,6 +14,11 @@
  * would otherwise look up a built model with `undefined`.
  */
 import { CONFIG } from "../config";
+import {
+  DEFAULT_FINISH,
+  finishFor,
+  type FinishId,
+} from "../entities/finishes";
 import {
   DEFAULT_SIGHT,
   isSightId,
@@ -33,6 +38,16 @@ const MAP_KEY = "hollowmere.map";
 /** …and the loadout. Same store, same tolerance for it not working. */
 const SIGHT_KEY = "hollowmere.sight";
 const WEAPON_KEY = "hollowmere.weapon";
+/**
+ * …and the finish, which is the one preference here that is remembered PER
+ * WEAPON rather than once.
+ *
+ * A finish belongs to a gun — the three on offer are that gun's and no other's
+ * — so a single key would mean picking up the SMG threw away what the rifle
+ * was painted in. One key each is what makes "your rifle is Coyote and your
+ * SMG is Voltage" a thing the game can remember.
+ */
+const FINISH_KEY_PREFIX = "hollowmere.finish.";
 /** …and which region the player chose to play in, by `Region.id`. */
 const REGION_KEY = "hollowmere.region";
 
@@ -162,6 +177,33 @@ export function readWeapon(): PrimaryWeaponId {
 export function writeWeapon(id: PrimaryWeaponId): void {
   try {
     window.localStorage.setItem(WEAPON_KEY, id);
+  } catch {
+    // As above.
+  }
+}
+
+/**
+ * The finish remembered for one weapon.
+ *
+ * Validated by `finishFor`, which is stricter than the two above and has to
+ * be: a stored value that is a real `FinishId` may still be another gun's, and
+ * painting the rifle in the machine gun's gold is not something the kit screen
+ * could ever have been asked for. Anything that does not fit falls back to the
+ * standard finish, which every weapon offers.
+ */
+export function readFinish(weapon: PrimaryWeaponId): FinishId {
+  try {
+    const raw = window.localStorage.getItem(FINISH_KEY_PREFIX + weapon);
+    if (raw !== null) return finishFor(weapon, raw);
+  } catch {
+    // As above.
+  }
+  return DEFAULT_FINISH;
+}
+
+export function writeFinish(weapon: PrimaryWeaponId, id: FinishId): void {
+  try {
+    window.localStorage.setItem(FINISH_KEY_PREFIX + weapon, id);
   } catch {
     // As above.
   }

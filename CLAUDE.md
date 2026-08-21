@@ -286,6 +286,20 @@ the round and `CONFIG.sights` owns the picture, and `entities/weapons.ts` /
 `entities/sights.ts` derive their ids from those tables so each is declared in
 exactly one place.
 
+**A third table carries what the gun is PAINTED in, and it is the one that
+decides nothing.** `entities/finishes.ts` gives each weapon four schemes — the
+one it ships in plus three of its own — as colours and gloss levels over the
+merged colour groups, and reaches nothing else in the game: not the camera, not
+a caption, not the wire. No scheme is offered on two guns, and that holds by
+CONSTRUCTION rather than by review, because a finish names the one weapon it
+belongs to and the per-weapon lists are derived from that field. `standard` is
+the BUILT state rather than a repaint of it — `weaponKit`'s own constants,
+referenced — so it puts a weapon back to exactly what came off the builder.
+What a finish may reach is the builder's call too: `WeaponBuild.takeFinish` is
+taken after the weapon and its magazine and before any optic, so the optic on
+the rail stays black on a chrome carbine. The **brass** group has no key in the
+table at all: the LMG's belt is ammunition, not weapon.
+
 **Everything about an aimed weapon is arranged so that the reticle cannot lie,
 and every rule here is that one rule.** The aimed pose is DERIVED and never
 authored — `applyFit` cancels the fitted sight's own `sightCenter` so its reticle
@@ -309,6 +323,8 @@ what one pull spends, and a reload, a swap, an empty magazine or a death must
 ABANDON what a burst still owes rather than bank it.
 
 → **[`docs/weapons.md`](docs/weapons.md)** — the crouch latch and what spends it,
+the four-rung gloss ladder a finish paints in and why `getGlossy` keys its cache
+on the spec,
 the viewmodel's own rendering group and pose stack, the bob phase's single
 integrator, the reload's four beats and the magazine that leaves the weapon on
 them, the kick spring's compressed reach and the recoil pattern's two envelopes,
@@ -355,6 +371,13 @@ consumer already reads, and nothing in gameplay has heard of it. It is drawn for
 what it was holding, because a pause taken with the trigger down must not come
 back with it down. The one control on it that is not input is the pause button,
 because a phone has no Escape key.
+
+**A row whose pick costs NOTHING is drawn like the ones that do, and says what
+it does with something other than a number.** The kit screen's third row is the
+weapon's finish: no bar on the chart, a colour swatch on each button because
+"Verdigris" is a word you would otherwise have to try, and its one line of copy
+under the weapon on the turntable rather than beside the bars — it is the only
+pick on that screen whose whole effect is the thing already on screen.
 
 **Every screen here is a LIST, and a list whose rows can change under the cursor
 keeps its place by IDENTITY rather than by index.** The lobby is the one that

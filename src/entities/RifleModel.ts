@@ -219,6 +219,10 @@ export function buildRifle(
   b.box("magBase", RUBBER, 0.058, 0.014, 0.1, 0, -0.11, 0, magLower);
   meshes.push(...b.merge("rifleMag", magazine));
 
+  // Every colour group the WEAPON itself merged, taken before the optics are
+  // built so a finish can never reach one — see `WeaponBuild.takeFinish`.
+  const finish = b.takeFinish();
+
   const optics = buildOptics(b, MOUNT, prefix);
   meshes.push(...optics.meshes);
   b.disposePivots();
@@ -233,6 +237,7 @@ export function buildRifle(
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
     magazine,
     magDrop: magDropAxis(MAG_RAKE),
+    finish,
     sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };

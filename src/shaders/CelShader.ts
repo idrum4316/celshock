@@ -1226,9 +1226,18 @@ export class CelMaterialFactory {
    * Cached under its own key so the matte variant of the same colour is
    * untouched; named `cel-gloss-#rrggbb` so outlineInkFor() still recovers
    * the palette colour for the ink.
+   *
+   * **The SPEC is part of the cache key and the NAME is not**, and both
+   * halves of that are load-bearing. The spec is a uniform rather than a
+   * define, so one hex asked for at two gloss levels is two materials that
+   * differ only in what was uploaded to them — keyed on the colour alone,
+   * whichever level asked first would silently answer for both, which is a
+   * weapon finish coming out matte because some other finish had already
+   * minted its colour. The NAME still carries the palette colour and
+   * nothing else, because `inkColorFor` parses it.
    */
   getGlossy(hex: string, spec: SpecSpec): ShaderMaterial {
-    const cacheKey = `\0gloss-${hex}`;
+    const cacheKey = `\0gloss-${hex}-${spec.color}-${spec.intensity}-${spec.shininess}`;
     let mat = this.cache.get(cacheKey);
     if (!mat) {
       mat = new ShaderMaterial(

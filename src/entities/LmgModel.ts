@@ -366,6 +366,10 @@ export function buildLmg(
   }
   meshes.push(...b.merge("lmgBox", magazine));
 
+  // Every colour group the WEAPON itself merged, taken before the optics are
+  // built so a finish can never reach one — see `WeaponBuild.takeFinish`.
+  const finish = b.takeFinish();
+
   const optics = buildOptics(b, MOUNT, prefix);
   meshes.push(...optics.meshes);
   b.disposePivots();
@@ -384,6 +388,7 @@ export function buildLmg(
     // the hand lands on its rear underside, which is where you take hold of a
     // container you are about to unlatch and swing off.
     magazine,
+    finish,
     sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };

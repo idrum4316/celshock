@@ -214,6 +214,12 @@ export function buildPistol(
   b.box("magPad", RUBBER, 0.03, 0.008, 0.05, 0, -0.103, 0.002, gripPivot);
   meshes.push(...b.merge("pistolMag", magazine));
 
+  // Every colour group the weapon itself merged, taken before the sight is
+  // built. The sidearm is offered no finishes — it is not on the kit screen —
+  // so nothing ever repaints these; the list is handed back because
+  // `WeaponParts` is one shape for every weapon, not five.
+  const finish = b.takeFinish();
+
   const sight = buildFixedIrons(b, prefix, root);
   meshes.push(...sight.meshes);
   b.disposePivots();
@@ -228,6 +234,7 @@ export function buildPistol(
     magHand: MAG_HAND,
     magazine,
     magDrop: magDropAxis(GRIP_RAKE),
+    finish,
     sights: { kind: "fixed", sight: "iron", assembly: sight },
     meshes,
   };

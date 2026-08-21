@@ -325,6 +325,10 @@ export function buildCarbine(
   b.box("magBase", RUBBER, 0.05, 0.012, 0.074, 0, -0.229, -0.235);
   meshes.push(...b.merge("carbineMag", magazine));
 
+  // Every colour group the WEAPON itself merged, taken before the optics are
+  // built so a finish can never reach one — see `WeaponBuild.takeFinish`.
+  const finish = b.takeFinish();
+
   const optics = buildOptics(b, MOUNT, prefix);
   meshes.push(...optics.meshes);
   b.disposePivots();
@@ -339,6 +343,7 @@ export function buildCarbine(
     support: { hand: SUPPORT_HAND, elbow: SUPPORT_ELBOW },
     magHand: MAG_HAND,
     magazine,
+    finish,
     sights: { kind: "fitted", assemblies: optics.sights },
     meshes,
   };

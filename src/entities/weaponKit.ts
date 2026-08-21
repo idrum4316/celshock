@@ -19,6 +19,11 @@
  *   (`shell`) for exactly that reason.
  * - A colour absent from `SECTIONS` is silently never merged: anything handed
  *   to `collect` has to appear there.
+ * - A colour group is also the unit a FINISH repaints, so `merge` records
+ *   which group each merged mesh came from and `takeFinish` hands the list
+ *   back at the seam between the weapon and its optics. What `collect`
+ *   paints here IS the standard finish — see `finishes.ts`, whose
+ *   `standard` entry is these same four constants and must stay them.
  * - Emissive parts go through `lit`, never `collect` — merged into a colour
  *   group they would take that group's cel material, and an outline shell
  *   around a glowing dot is a black smudge where the aim point should be.
@@ -57,16 +62,38 @@ export const BRASS = "#a8823a";
 export const RETICLE = "#ff3b30";
 
 /**
+ * A colour group, by name — one merged mesh per weapon, and the unit a
+ * FINISH repaints in. `entities/finishes.ts` is the table of those repaints
+ * and the only thing that reads this type.
+ */
+export type FinishGroup = "body" | "polymer" | "metal" | "rubber" | "brass";
+
+/**
  * Colour groups, merged into one mesh each. Order fixes the merged names, and
  * a colour absent from this list is silently never merged.
  */
-const SECTIONS: ReadonlyArray<readonly [string, string]> = [
+const SECTIONS: ReadonlyArray<readonly [FinishGroup, string]> = [
   ["body", BODY],
   ["polymer", POLYMER],
   ["metal", METAL],
   ["rubber", RUBBER],
   ["brass", BRASS],
 ];
+
+/**
+ * One merged colour group, and which group it is — everything a finish needs
+ * to repaint a built weapon without knowing anything about how it was built.
+ *
+ * The pair exists because the merge is the ONLY place the two facts are ever
+ * in the same scope: after it, a colour group is an anonymous mesh whose
+ * material happens to hold the colour it was assembled under. Recovering the
+ * group from the merged mesh's NAME would work today and is exactly the kind
+ * of thing that stops working the first time a suffix is renamed.
+ */
+export interface FinishPart {
+  mesh: Mesh;
+  group: FinishGroup;
+}
 
 /** Facets around a round shell. 14 reads round at arm's length and stays cheap. */
 export const FACETS = 14;
@@ -189,6 +216,12 @@ export interface WeaponParts {
   magDrop?: Vector3;
   /** A rail's worth of optics, or the one sight this weapon was born with. */
   sights: WeaponSights;
+  /**
+   * The weapon's own colour groups, magazine included and optics excluded —
+   * what a FINISH repaints. `WeaponBuild.takeFinish` is where it comes from
+   * and says which side of the seam each part falls.
+   */
+  finish: FinishPart[];
   /** Every visible mesh, every optic's included. */
   meshes: Mesh[];
 }
@@ -211,6 +244,8 @@ export type WeaponBuilder = (
 export class WeaponBuild {
   private target = new Map<string, Mesh[]>();
   private readonly pivots: TransformNode[] = [];
+  /** Merged colour groups since the last `takeFinish()` — see there. */
+  private finish: FinishPart[] = [];
 
   constructor(
     readonly scene: Scene,
@@ -399,8 +434,27 @@ export class WeaponBuild {
       merged.name = `${this.prefix}_${suffix}_${name}`;
       merged.parent = parent;
       merged.isPickable = false;
+      this.finish.push({ mesh: merged, group: name });
       out.push(merged);
     }
+    return out;
+  }
+
+  /**
+   * Every colour group merged since the last call, and arms a fresh list —
+   * what a builder hands back as `WeaponParts.finish`.
+   *
+   * Called after the magazine's merge and BEFORE the optics are built, which
+   * is the same seam `merge` itself is cut along and for the same reason: an
+   * optic is a separate piece of kit on a rail, so a finish that repainted it
+   * would paint the player's holo sight to match a rifle it is not part of.
+   * A builder that forgets to call it hands back an empty list and its weapon
+   * simply never takes a finish — which is what the sidearm does on purpose,
+   * having none to take.
+   */
+  takeFinish(): FinishPart[] {
+    const out = this.finish;
+    this.finish = [];
     return out;
   }
 

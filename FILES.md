@@ -125,7 +125,8 @@ src/
                         #   Builds every weapon, enables one
     weaponKit.ts        # The build accumulator every weapon model is written
                         #   in + WeaponParts and WeaponSights (rail, or fixed),
-                        #   and the five colour groups a weapon merges into
+                        #   and the five colour groups a weapon merges into —
+                        #   which are also what a finish repaints
     RifleModel.ts       # Low-poly SCAR-pattern battle rifle
     CarbineModel.ts     # Low-poly FAMAS-pattern bullpup burst carbine —
                         #   magazine behind the grip, carry-handle blade,
@@ -142,6 +143,9 @@ src/
                         #   weapon's OpticMount asked for them
     weapons.ts          # WeaponId + WeaponSetup, + SIDEARM/PRIMARY_WEAPON_IDS
     sights.ts           # SightId + magnification -> FOV, sensitivity, zoomComp
+    finishes.ts         # FinishId + the four colour schemes each weapon is
+                        #   offered, and the repaint over its colour groups.
+                        #   The one kit table that decides nothing
     Combatant.ts        # Team + the shared shootable/shooter interface
     callsigns.ts        # What to call an AI on the scoreboard: roster index ->
                         #   phonetic name, derived on both sides, never sent

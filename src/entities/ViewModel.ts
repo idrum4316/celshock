@@ -32,6 +32,12 @@
  *   bolt anything to. `wornSight` resolves the two and `applyFit` is the only
  *   caller, which is what keeps the aimed pose, the zoom compensation and (via
  *   `carriedSight`) the camera's own FOV all derived from one sight.
+ * - A FINISH is the one thing about a weapon that may be changed after it is
+ *   built, and it is a material write and nothing else: `finishes.ts` owns
+ *   the table and the repaint, `WeaponParts.finish` is the set of colour
+ *   groups it may reach, and the optic on the rail is deliberately not in it.
+ *   Nothing downstream of the fit is re-derived for one, because a finish
+ *   moves no geometry.
  * - Every weapon is built once and all but the carried one is disabled, the
  *   same trick the optics use: a loadout change is a handful of boolean
  *   writes and a re-derivation, never a rebuild. That is also why the muzzle
@@ -91,12 +97,14 @@ import { buildLmg } from "./LmgModel";
 import { buildPistol } from "./PistolModel";
 import { buildRifle } from "./RifleModel";
 import { buildSmg } from "./SmgModel";
+import { applyFinish, type FinishId } from "./finishes";
 import { DEFAULT_SIGHT, sightSetup, type SightId, type SightSetup } from "./sights";
 import { wornSight, type GripSpec, type WeaponBuilder, type WeaponParts } from "./weaponKit";
 import {
   DEFAULT_WEAPON,
   WEAPON_IDS,
   weaponSetup,
+  type PrimaryWeaponId,
   type WeaponId,
   type WeaponSetup,
 } from "./weapons";
@@ -395,6 +403,12 @@ export class ViewModel {
    */
   private readonly backdrop: Mesh;
   private readonly rigs = {} as Record<WeaponId, WeaponRig>;
+  /**
+   * The material factory, kept for the one thing here that mints materials
+   * after construction: a FINISH. Everything else about a weapon is decided
+   * when it is built, which is why nothing else on this class holds it.
+   */
+  private readonly mats: CelMaterialFactory;
 
   /**
    * The throwing arm, and the grenade in its fist. Parented to the CAMERA
@@ -497,6 +511,7 @@ export class ViewModel {
 
   constructor(scene: Scene, mats: CelMaterialFactory, camera: Node) {
     const v = CONFIG.viewmodel;
+    this.mats = mats;
     this.hipPos = new Vector3(v.hipPos.x, v.hipPos.y, v.hipPos.z);
     this.hipRot = new Vector3(v.hipRot.x, v.hipRot.y, v.hipRot.z);
 
@@ -641,6 +656,20 @@ export class ViewModel {
   setSight(id: SightId): void {
     this.fittedSight = id;
     this.applyFit();
+  }
+
+  /**
+   * Paints a weapon. Cosmetic to the last pixel: nothing downstream of the fit
+   * is re-derived, because a finish moves no landmark, no sight centre and no
+   * hand — which is why this is the one loadout call that does not end in
+   * `applyFit`.
+   *
+   * It names the weapon rather than assuming the carried one, so the pick a
+   * player makes on the kit screen lands on the rig it was made against even
+   * if something else is in the hands by the time it arrives.
+   */
+  setFinish(weapon: PrimaryWeaponId, id: FinishId): void {
+    applyFinish(this.mats, this.rigs[weapon].parts.finish, id);
   }
 
   /**

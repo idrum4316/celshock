@@ -76,7 +76,25 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* SAFE centring, plus a way to be taller than the window. The two are one
+     rule: a column centred in a box it is taller than overflows equally at
+     both ends and the half above the top edge cannot be scrolled back to, so
+     `safe` drops to flex-start exactly when that would happen and the scroll
+     reaches everything. Below `max-height: 560px` the same pair is stated
+     outright — see there for why the panel's height is at the mercy of how
+     many lines its rows break into.
+
+     It matters at heights ABOVE that breakpoint too, which is what this is
+     for: a 1024x640 window already put the footer sixty pixels under a panel
+     with no way to scroll to it, and a third row of buttons is not the sort of
+     thing that should be able to strand the way off a screen. */
+  justify-content: safe center;
+  overflow-y: auto;
+  /* Thin and in the panel's own colours: the bar is chrome on an overlay,
+     and the default one is a light rail down the seam between this column
+     and the hole the weapon is drawn through. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
   gap: clamp(12px, 2.4vh, 26px);
   padding-block: var(--ui-pad-y);
   /* The gutter is a share of the column rather than a fixed inset, because
@@ -139,6 +157,35 @@
   text-align: center;
   text-transform: uppercase;
 }
+/* What the paint is, under the weapon that is wearing it — the one piece of
+   copy on this screen that is not in the panel. It hangs from the caption's
+   own bottom edge (`top: 79%` is `bottom: 21%` read the other way) rather
+   than from a percentage of its own, so the two cannot drift apart when the
+   window changes shape. Sentence case, because it is a sentence: everything
+   else on the stage is a label. */
+#loadout .lo-stage-note {
+  position: absolute;
+  top: 79%;
+  left: 0;
+  right: 0;
+  /* A generous inset, because the measure is what makes this readable: the
+     bay is more than half the viewport, and a sentence run across all of it
+     at 11 px is one line the eye has to travel. */
+  padding: 14px 24% 0;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.42);
+}
+#loadout .lo-stage-note b {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.7);
+}
 #loadout .lo-stage-cap {
   bottom: 21%;
   font-size: 12px;
@@ -147,7 +194,7 @@
   color: var(--hot);
 }
 #loadout .lo-stage-hint {
-  bottom: 17%;
+  bottom: 6%;
   font-size: 9px;
   letter-spacing: 0.2em;
   color: rgba(255, 255, 255, 0.34);
@@ -187,7 +234,13 @@
   max-width: 780px;
   text-align: left;
 }
-#loadout .lo-slots { display: flex; flex-direction: column; gap: 8px; }
+/* Six pixels rather than eight, and the same two off each row's padding
+   below: three rows of buttons is 48 px more panel than two were, and at
+   1280x720 — where the chart and the copy have already stacked — that was the
+   Back button three pixels under the bottom of a panel that does not scroll at
+   this height. The chrome between the rows is what pays for the row, because
+   it is the only thing here that is not something to read. */
+#loadout .lo-slots { display: flex; flex-direction: column; gap: 6px; }
 /* The active row is the one the arrow keys are stepping. It is marked
    with a bar and a wash rather than with a focus ring, because the
    selection is the screen's own and not the browser's.
@@ -201,7 +254,7 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   border-left: 2px solid transparent;
   transition: background 0.12s, border-color 0.12s;
 }
@@ -278,6 +331,59 @@
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.4);
 }
+/* The optic and finish rows break LATER than the weapon row, and the extra
+   class on each is what makes that survive the two responsive blocks below
+   that set a basis on `.lo-opt`.
+
+   The basis is what decides where a flex row breaks — the line is filled
+   before anything is allowed to shrink — and 96 is sized for the weapon row,
+   whose names are two words ("SUBMACHINE GUN", "MARKSMAN RIFLE"). The other
+   two rows are one short word each, so at 96 they were breaking for width
+   they did not need: on a 900x430 window the five optics landed 3 + 2 and the
+   four finishes 3 + 1, which is two extra lines of buttons on the viewport
+   with the least height to give them. At 68 both rows sit on one line down to
+   a landscape phone, and the buttons still fill the row because they still
+   grow. "QUICKSILVER" is the one name that can force a wrap anyway, for the
+   same reason "SUBMACHINE" does one row up: a flex item cannot be squeezed
+   below its own longest word. */
+#loadout button.lo-opt.lo-optic,
+#loadout button.lo-opt.lo-finish { flex-basis: 68px; }
+/* A finish button says what it does with COLOUR, because its name cannot:
+   "Verdigris" and "Oxblood" are words you have to try one at a time, and the
+   row exists precisely so you do not have to. Three stops in the order the eye
+   reads a weapon — furniture, receiver, fittings — laid along the top edge as
+   a strip rather than as a dot, so the proportions survive the button being
+   84 px wide on a phone.
+
+   Hard stops, no gradient: these are three flat cel colours and a blend
+   between them would invent two more the weapon does not have.
+
+   The strip is the button's own top edge and costs NO HEIGHT: it is absolutely
+   positioned into the padding the button already has above its label, rather
+   than pushing that label down. That is the difference between a finish button
+   measuring like every other button on the screen and measuring four pixels
+   taller than one — which on a landscape phone, where three rows of buttons
+   are what the Back button has to fit under, is a whole row's worth across the
+   screen. It also sits above `.on`'s hot fill, for the same reason it exists:
+   the swatch is the only thing on the button that is not the label, and the
+   selected finish is exactly the one whose colours you want to still see. */
+#loadout button.lo-finish { position: relative; }
+#loadout button.lo-finish::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  /* Inset by the clip-path's own 8px bevel, so the strip stops where the
+     corner is cut instead of being sliced through by it. */
+  left: 8px;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--sw-a) 0 34%,
+    var(--sw-b) 34% 67%,
+    var(--sw-c) 67% 100%
+  );
+}
 #loadout button.lo-opt:hover {
   background: rgba(255, 230, 128, 0.18);
   color: var(--hot);
@@ -295,8 +401,14 @@
      bars a couple of pixels and the chart silently becomes a list of
      numbers. Stacked, both halves keep their width. */
   flex-wrap: wrap;
-  gap: 26px;
-  padding: 18px 22px;
+  /* Row gap and column gap stated apart, because only ONE of them is ever
+     spent: the two halves are side by side on a wide panel and stacked on a
+     narrow one, so 26 is the air between the chart and the copy and 16 is the
+     air between the chart and the copy UNDER it — where a third blurb has just
+     arrived and the panel is the thing running out of height. A single number
+     charges the stacked case for a gutter it does not have. */
+  gap: 16px 26px;
+  padding: 16px 22px;
   min-height: 168px;
 }
 /* The basis is what DECIDES the wrap above, and it is set by the chart
@@ -350,7 +462,7 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
 }
 #loadout .lo-blurb {
   font-size: 11px;
@@ -390,12 +502,16 @@
      one line that says which screen this is. */
   #loadout .ui-head { padding-bottom: 4px; }
   #loadout .lo-body { gap: 8px; }
-  #loadout .lo-slots { gap: 4px; }
-  #loadout .lo-detail { min-height: 0; padding: 10px 14px; }
+  #loadout .lo-slots { gap: 2px; }
+  #loadout .lo-detail { min-height: 0; padding: 8px 14px; }
   #loadout .lo-stats { gap: 4px; }
   #loadout .lo-blurbs { display: none; }
+  /* The stage's own paragraph goes with them — it is the same prose, and the
+     name is still on the button that is lit. */
+  #loadout .lo-stage-note { display: none; }
+  #loadout .lo-stage-hint { bottom: 12%; }
   #loadout button.lo-opt { min-height: 40px; padding: 6px 9px; }
-  #loadout .lo-slot { gap: 4px; padding: 4px 10px; }
+  #loadout .lo-slot { gap: 4px; padding: 2px 10px; }
 }
 /* A landscape PHONE is where the two axes finally disagree, and the option
    rows are what does it: a panel 388 px across cannot hold five buttons on
@@ -425,7 +541,7 @@
      row and the five weapons land as 2 + 2 + 1. At 84 they land as 3 + 2 and
      each slot costs two rows instead of three, which is the difference
      between the Back button being on this screen and being under it. */
-  #loadout .lo-detail { padding: 8px 12px; }
+  #loadout .lo-detail { padding: 6px 12px; }
   #loadout .lo-stats { gap: 3px; }
 }
 /* And the same button sizing wherever the PANEL is narrow, which is the other
@@ -441,6 +557,16 @@
      in a column this narrow it is a second line of head bought for nothing. */
   #loadout .ui-meta { display: none; }
   #loadout button.lo-opt { flex-basis: 84px; min-height: 34px; padding: 6px 8px; }
+  /* The two short-name rows, squeezed to whatever their longest word is. A
+     panel this narrow is 338 px of button track, and five optics at the
+     ordinary basis need 364 — so the row broke 3 + 2 and cost forty pixels of
+     a viewport that has to end in a Back button. Four off the gap and the
+     basis down to the words themselves is what puts all five back on one line;
+     the weapon row above keeps its own basis, because two-word names are why
+     that number is what it is. */
+  #loadout .lo-opts { gap: 4px; }
+  #loadout button.lo-opt.lo-optic,
+  #loadout button.lo-opt.lo-finish { flex-basis: 60px; }
   #loadout button.lo-opt i { display: none; }
   #loadout button.lo-opt b { font-size: 11px; }
 }
