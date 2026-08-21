@@ -10,6 +10,15 @@
  * self-remove via setTimeout; the damage arcs are a fixed pool, never allocated
  * per hit.
  *
+ * **The hitmarker is the one transient with an ORDERING, and it is a rule
+ * rather than a preference.** Rounds land faster than the mark lives and one
+ * blast raises it once per body it caught, so a flash may only ever RAISE what
+ * the mark says (`HIT_RANK`) — a plain hit arriving a few milliseconds after a
+ * kill re-pops the mark and changes nothing else. It is also the one thing
+ * here that has to be TORN DOWN rather than left to expire: the HUD is ticked
+ * with `dt = 0` under a pause, so a mark hidden by a lid would otherwise still
+ * be there when the lid came off. See `flashHitmarker` and `dropHitmarker`.
+ *
  * The menu, the round-over card and the pause list are NOT here — they are
  * `OverlayScreen`, a peer of DeployScreen and LoadoutScreen. This file was both
  * for a long time, which is why every new screen grew it. What stays is the two
@@ -185,6 +194,66 @@ const LABELS: Record<ScoreKind, string> = {
 };
 
 /**
+ * How severe the round that just landed was, in one number.
+ *
+ * The marker is a single element re-triggered several times a second at
+ * automatic rates, so "which flavour is on screen" has to be comparable
+ * rather than merely settable: two rounds land inside one marker's life
+ * often enough that whichever arrived LAST used to decide what it said, and
+ * a blast that kills one body and wounds another raises this handler once
+ * per victim in whatever order the pool happens to hold them. That is the
+ * bug the player sees as a kill marker that "did not come up" — it came up
+ * and was overwritten by an ordinary hit a few milliseconds later.
+ *
+ * A rank makes the rule one comparison: a flash may only ever move the
+ * marker UP this scale while the previous one is still standing. Nothing is
+ * lost by it — the lesser round still re-pops the marker (see `hitPop`), so
+ * every hit is still confirmed; it just cannot take the louder statement
+ * away.
+ */
+const HIT_RANK = { hit: 1, head: 2, kill: 3, headKill: 4 } as const;
+
+/**
+ * How long each flavour stands, in seconds, indexed by the rank above.
+ *
+ * They are deliberately NOT equal, and the spread is the other half of the
+ * missing-kill-marker complaint. A body hit is the common case and wants to
+ * be brief — at 600 rpm a marker that outlived its round would smear the
+ * next one — while a kill is the rarest thing the marker says and the only
+ * one that asks the player to CHANGE what they are doing (stop shooting,
+ * pick the next man). Every flavour used to stand for 120 ms, which for the
+ * kill is seven frames arriving in the same instant as a muzzle flash, a
+ * tracer and the crosshair blooming — it was being missed because it was
+ * genuinely almost not there.
+ */
+const HIT_LIFE = [0, 0.14, 0.2, 0.42, 0.46] as const;
+
+/**
+ * The pop each landed round gives the marker, and how it decays.
+ *
+ * Restarted on EVERY flash rather than only on a flavour change, which is
+ * what keeps a string of body hits legible as separate rounds: without it a
+ * second hit inside the first's life is a marker that simply stays where it
+ * is, and reads as one hit that lasted longer.
+ */
+const HIT_POP = 0.09;
+const HIT_POP_GAIN = 0.55;
+
+/**
+ * The fraction of a marker's life spent fading out.
+ *
+ * The marker used to vanish between two frames, which at 140 ms reads as a
+ * flicker rather than as a mark. Fading the tail costs nothing (the element
+ * is already written every frame it is up) and is most of why the longer
+ * kill marker does not feel like a sticker left on the screen.
+ */
+const HIT_FADE = 0.45;
+
+/** The kill ring's travel, as a multiple of its drawn radius. */
+const RING_FROM = 0.45;
+const RING_TO = 1.5;
+
+/**
  * One combatant's line on the scoreboard.
  *
  * A body, not a person: a bot and a human are the same row with the same three
@@ -298,6 +367,8 @@ export class HUD {
   }[] = [];
   private crosshair: HTMLElement;
   private hitmarker: HTMLElement;
+  /** The kill ring inside the marker, driven per frame like the ticks. */
+  private hitRing: HTMLElement;
   private vignette: HTMLElement;
   private damageDirs: HTMLElement;
   private message: HTMLElement;
@@ -316,7 +387,23 @@ export class HUD {
   };
 
 
+  /** What the marker is saying, on the `HIT_RANK` scale; 0 when it is down. */
+  private hitRank = 0;
+  /** How long the current marker has left, and what it started with. */
   private hitT = 0;
+  private hitLife = 0;
+  /** The per-round pop, restarted by every flash including a repeat one. */
+  private hitPop = 0;
+  /**
+   * The kill ring's own clock, deliberately not the marker's.
+   *
+   * A body hit landing on a man who is already going down extends the marker
+   * (it is a round that landed, and it re-pops), and if the ring rode that
+   * clock it would be thrown out a second time by a round that killed nobody
+   * — the one statement the ring exists to make, made about the wrong bullet.
+   */
+  private hitRingT = 0;
+  private hitRingLife = 0;
   private vignetteT = 0;
   private messageT = 0;
   /** The frame-rate readout, and the clock that rations writes to it. */
@@ -430,7 +517,10 @@ export class HUD {
         <i class="t"></i><i class="r"></i><i class="b"></i><i class="l"></i>
         <span class="dot"></span>
       </div>
-      <div id="hitmarker" class="hidden"><i></i><i></i><i></i><i></i></div>
+      <div id="hitmarker" class="hidden">
+        <i><b></b></i><i><b></b></i><i><b></b></i><i><b></b></i>
+        <span class="ring"></span>
+      </div>
       <div id="vignette"></div>
       <div id="damage-dirs"></div>
       <div id="message" class="hidden"></div>
@@ -502,6 +592,7 @@ export class HUD {
     this.flagStrip = document.getElementById("flag-strip")!;
     this.crosshair = document.getElementById("crosshair")!;
     this.hitmarker = document.getElementById("hitmarker")!;
+    this.hitRing = this.hitmarker.querySelector(".ring") as HTMLElement;
     this.vignette = document.getElementById("vignette")!;
     this.damageDirs = document.getElementById("damage-dirs")!;
     this.message = document.getElementById("message")!;
@@ -530,14 +621,42 @@ export class HUD {
   update(dt: number): void {
     if (this.hitT > 0) {
       this.hitT -= dt;
-      if (this.hitT <= 0) this.hitmarker.classList.add("hidden");
-      else {
-        // The pop is driven here rather than by a CSS animation: the marker is
-        // re-triggered several times a second at full auto, and restarting a
-        // keyframe animation needs a forced reflow every time.
-        const pop = 1 + 0.4 * Math.max(0, this.hitT / 0.12);
-        this.hitmarker.style.transform = `translate(-50%, -50%) scale(${pop.toFixed(3)})`;
+      this.hitPop = Math.max(0, this.hitPop - dt);
+      if (this.hitT <= 0) {
+        this.hitmarker.classList.add("hidden");
+        // So the next round is compared against nothing rather than against
+        // whatever the last one happened to be — the rank is only an
+        // upgrade gate while a marker is actually standing.
+        this.hitRank = 0;
+      } else {
+        // The pop and the fade are driven here rather than by a CSS
+        // animation: the marker is re-triggered several times a second at
+        // full auto, and restarting a keyframe animation needs a forced
+        // reflow every time.
+        //
+        // Squared, so the mark snaps out and settles rather than easing
+        // linearly back — the whole travel is 90 ms and a linear one reads
+        // as a wobble at that length.
+        const pop = this.hitPop / HIT_POP;
+        const scale = 1 + HIT_POP_GAIN * pop * pop;
+        this.hitmarker.style.transform = `translate(-50%, -50%) scale(${scale.toFixed(3)})`;
+        const fade = Math.min(1, this.hitT / (this.hitLife * HIT_FADE));
+        this.hitmarker.style.opacity = fade.toFixed(3);
       }
+    }
+    // The ring is the kill's own mark and the slow half of the cue — what
+    // makes a kill a different SHAPE and not merely a redder one. Its clock
+    // is stepped beside the marker's rather than inside it, because the two
+    // genuinely can outlive each other: `dropHitmarker` takes both, and a
+    // later body hit extends the marker without re-throwing the ring.
+    if (this.hitRingT > 0) {
+      this.hitRingT -= dt;
+      const t = Math.min(1, 1 - this.hitRingT / this.hitRingLife);
+      // Eased out: the ring leaves fast and settles, which is what makes it
+      // read as thrown off the body rather than as a circle growing.
+      const r = RING_FROM + (RING_TO - RING_FROM) * (1 - (1 - t) * (1 - t));
+      this.hitRing.style.transform = `scale(${r.toFixed(3)})`;
+      this.hitRing.style.opacity = (1 - t).toFixed(3);
     }
     if (this.vignetteT > 0) {
       this.vignetteT -= dt;
@@ -1113,22 +1232,91 @@ export class HUD {
   }
 
   /**
-   * The hit confirmation. A kill is a distinct, redder marker — the standard
-   * shooter read, and the one piece of feedback that tells you to stop
-   * shooting at a body that is already going down.
+   * The hit confirmation, in four flavours: a body hit, a headshot, a kill,
+   * and a kill that was a headshot.
    *
-   * A headshot is a second axis and it LOSES to a kill, deliberately: the two
-   * would otherwise fight over the same four ticks, and of the two things the
-   * marker can say, "this one is going down" is the one that changes what you
-   * do next. The headshot keeps its own sound regardless, which is where that
-   * read actually lands — and a headshot that killed is a kill marker with a
-   * ding on it, which is the correct pair of statements.
+   * The two axes COMPOSE rather than fight, which is the one thing about this
+   * that changed. They used to argue over the same four ticks and a headshot
+   * lost outright to a kill, on the reasoning that "stop shooting" is the more
+   * urgent of the two things to say and the ding is where the headshot read
+   * actually lands. The urgency ordering is right and is kept — a kill still
+   * decides the COLOUR and still brings the ring with it — but the ticks now
+   * carry length as a second, independent axis, so a headshot that killed is
+   * the kill marker drawn long instead of the headshot being thrown away. Two
+   * statements, two properties, no arbitration. `hud.css` holds the four
+   * numbers each flavour moves.
+   *
+   * **A standing marker may only be upgraded, never downgraded** (`HIT_RANK`).
+   * Two rounds inside one marker's life is the common case rather than the
+   * exceptional one — an automatic weapon fires faster than the marker lives,
+   * and one blast raises this once per body it caught, in pool order — and
+   * letting the last arrival win is what put an ordinary white marker over the
+   * kill a few milliseconds after it appeared. The lesser round is not
+   * swallowed: it restarts the pop, so it is still confirmed as a separate
+   * round; it simply cannot take the louder statement away.
    */
   flashHitmarker(killed = false, headshot = false): void {
+    const rank = killed
+      ? headshot
+        ? HIT_RANK.headKill
+        : HIT_RANK.kill
+      : headshot
+        ? HIT_RANK.head
+        : HIT_RANK.hit;
+    // The clock and not the rank decides whether there is a marker to
+    // upgrade. `update` does clear the rank as it takes the marker down, so
+    // the two agree — but only while the HUD is being ticked, and it is not
+    // ticked under a lid (`docs/states.md`). A round that lands the frame
+    // after a pause is lifted must not be arbitrated against a flavour that
+    // stopped being on screen before the pause.
+    if (this.hitT <= 0 || rank >= this.hitRank) {
+      this.hitRank = rank;
+      this.hitmarker.classList.toggle("kill", killed);
+      this.hitmarker.classList.toggle("head", headshot);
+      // The ring is written by its own clock and by nothing else, so a kill
+      // followed by a plain hit would otherwise leave the last frame of the
+      // old ring standing on the new marker.
+      if (!killed) {
+        this.hitRingT = 0;
+        this.hitRing.style.opacity = "0";
+      }
+    }
+    // Thrown by the kill itself, and only ever by a kill — including a second
+    // kill inside the first's life, which is a fresh statement about a fresh
+    // body and deserves a fresh ring.
+    if (killed) {
+      this.hitRingLife = HIT_LIFE[rank];
+      this.hitRingT = this.hitRingLife;
+    }
+    // Whatever it says, this round says it again: the pop is the confirmation
+    // that a SECOND bullet landed, and it is restarted even when the flavour
+    // did not change.
+    this.hitPop = HIT_POP;
+    // The longer of the two, so an upgrade extends the marker and a lesser
+    // round can neither cut a kill short nor stretch a body hit out.
+    this.hitLife = Math.max(this.hitT, HIT_LIFE[this.hitRank]);
+    this.hitT = this.hitLife;
     this.hitmarker.classList.remove("hidden");
-    this.hitmarker.classList.toggle("kill", killed);
-    this.hitmarker.classList.toggle("head", headshot && !killed);
-    this.hitT = 0.12;
+  }
+
+  /**
+   * Takes the marker down and forgets what it said.
+   *
+   * The three callers are the three ways the chrome stops being true —
+   * a pause, the death cam and the editor — and each of them already hides
+   * this element in `hud.css`. Hiding it is not enough on its own: the HUD is
+   * ticked with `dt = 0` under a pause (`docs/states.md`), so the marker's
+   * clock does not run while it is out of sight and what was left of it is
+   * still there when the lid comes off. At 120 ms nobody could have seen the
+   * difference; a kill marker lives long enough now that they would.
+   */
+  private dropHitmarker(): void {
+    this.hitT = 0;
+    this.hitPop = 0;
+    this.hitRank = 0;
+    this.hitRingT = 0;
+    this.hitRing.style.opacity = "0";
+    this.hitmarker.classList.add("hidden");
   }
 
   flashDamage(): void {
@@ -1413,6 +1601,7 @@ export class HUD {
    */
   setEditing(on: boolean): void {
     this.root.classList.toggle("editing", on);
+    if (on) this.dropHitmarker();
   }
 
   /**
@@ -1515,6 +1704,7 @@ export class HUD {
    */
   setPaused(on: boolean): void {
     this.root.classList.toggle("paused", on);
+    if (on) this.dropHitmarker();
   }
 
   /**
@@ -1532,6 +1722,7 @@ export class HUD {
    */
   setDeathCam(on: boolean): void {
     this.root.classList.toggle("dying", on);
+    if (on) this.dropHitmarker();
   }
 
   /**
