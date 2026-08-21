@@ -1159,15 +1159,17 @@ export class Game {
    */
   private showMenu(): void {
     this.overlayScreen.showMenu({
-      maps: MAPS.map((m) => m.name),
+      // The maps themselves. The card draws a schematic of the highlighted one
+      // out of its layout and colours it out of its environment, and reads the
+      // flag count and the extent off the same object — which is what the card
+      // used to be handed separately and trusted to keep in step. Nothing about
+      // a map is stated twice.
+      maps: MAPS,
       selectedMap: MAPS.indexOf(this.mapDef),
       difficulties: difficultyNames(),
       selected: this.difficulty,
-      kit: kitLabel(this.weapon, this.sight),
-      // Stated rather than written into the markup: the number of flags is the
-      // chosen map's, and a tagline that says "five" on a map with four is the
-      // kind of wrong nobody reports.
-      flagCount: this.mapDef.layout.controlPoints.length,
+      weapon: this.weapon,
+      sight: this.sight,
     });
   }
 

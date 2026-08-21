@@ -792,12 +792,34 @@ export const bots = {
      * Skill is drawn per *squad*, with a small jitter inside it: an elite
      * squad and a green squad is something a player can read and respond to,
      * where salt-and-pepper skill inside a squad just reads as noise.
+     *
+     * `blurb` is what the menu's panel says a tier means, and it is here
+     * beside the number it describes rather than in the UI: `centre` is the
+     * only thing that decides how these bots actually behave, so a line about
+     * them written anywhere else is a line that goes stale the next time this
+     * number is tuned.
      */
     difficulties: [
-      { name: "Recruit", centre: 0.25 },
-      { name: "Regular", centre: 0.5 },
-      { name: "Veteran", centre: 0.75 },
-      { name: "Elite", centre: 0.95 },
+      {
+        name: "Recruit",
+        centre: 0.25,
+        blurb: "Slow to react and quick to lose you. A tier to learn a map in.",
+      },
+      {
+        name: "Regular",
+        centre: 0.5,
+        blurb: "Takes cover, calls contacts, and misses often enough to be pushed.",
+      },
+      {
+        name: "Veteran",
+        centre: 0.75,
+        blurb: "Holds angles, punishes a second peek, and rarely wastes a flank.",
+      },
+      {
+        name: "Elite",
+        centre: 0.95,
+        blurb: "Fires before you have finished leaning out. Bring the squad.",
+      },
     ],
     /** Default tier index — `Regular`. */
     defaultDifficulty: 1,

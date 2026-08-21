@@ -1,8 +1,12 @@
 /**
- * lobby.css — The match browser: a scrim, a panel, and a list of matches.
- * Owns #lobby and nothing else. Scaled by --ov-scale (declared in base.css,
- * where #lobby is in the selector list) — like #settings and unlike #loadout,
- * this screen has no hole in it for the 3D scene, so a transform is safe.
+ * lobby.css — The match browser: the list of matches and the two picker rows
+ * under it.
+ * Owns #lobby and nothing else. Drawn in the shell (`.ui-screen` / `.ui-veil`
+ * / `.ui-solid` in base.css) — the head carries the title and the status line,
+ * the foot carries the hints and Back, and what is here is the list.
+ * Still in --ov-scale's selector list (base.css) as the safety valve of last
+ * resort — like #settings and unlike #loadout, this screen has no hole in it
+ * for the 3D scene, so a transform is safe.
  */
 
 /* Level with #loadout at 11 rather than above it: both are lids raised
@@ -15,81 +19,29 @@
   position: absolute;
   inset: 0;
   z-index: 11;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   pointer-events: auto;
-  background: radial-gradient(
-    ellipse at 50% 45%,
-    rgba(6, 9, 16, 0.9) 0%,
-    rgba(2, 3, 6, 0.97) 70%
-  );
 }
 
 #lobby.hidden { display: none; }
 
+/* The list's own width, and the one thing on this screen that is capped
+   rather than fluid. A match row is five short cells — a region, a map, a
+   state, a count and a ping — and spread across an ultrawide the count ends
+   up a foot away from the name it belongs to, which is a table nobody can
+   read across. `.lb-panel` also survives as what the row grids are scoped
+   to: `.multi` on it is what turns the three-column screen into the
+   five-column one. */
 #lobby .lb-panel {
-  --cham: 16px;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  /* ONE content width, the rule every screen in here follows: the
-     heading, every row and the foot measure to this, so three edges run
-     down the panel instead of each block centring on itself. */
-  --col: 640px;
-  width: min(var(--col), calc(100vw - 64px));
-  padding: 26px 30px 22px;
+  width: 100%;
+  max-width: min(100%, 1080px);
+  margin: 0 auto;
+  align-self: center;
 }
 
-/* Two more columns want somewhere to come from, and taking it out of the
-   middle is what makes a hint wrap and a label clip. The width is still one
-   number for the whole panel — the heading, the rows and the foot all measure
-   to it — and it still yields to a narrow viewport before --ov-scale has to.
-   Declared here rather than as a wider default because the three-column screen
-   was measured at 640 and there is nothing about a second region that should
-   move a single-server deployment's layout. */
-#lobby .lb-panel.multi { --col: 720px; }
-
-/* Rules either side, matching the settings and kit screens' headings. */
-#lobby h2 {
-  position: relative;
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: 0.55em;
-  color: var(--hot);
-  padding: 0 26px;
-}
-#lobby h2::before,
-#lobby h2::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  width: 54px;
-  height: 1px;
-  background: linear-gradient(to right, transparent, rgba(255, 230, 128, 0.55));
-}
-#lobby h2::before { right: 100%; }
-#lobby h2::after {
-  left: 100%;
-  background: linear-gradient(to left, transparent, rgba(255, 230, 128, 0.55));
-}
-
-/* The status line: how many matches, or why there are none to show. It
-   holds its height when empty so the list below does not jump between a
-   fetch and its answer. */
-#lobby .lb-sub {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  min-height: 14px;
-  font-size: 11px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.42);
-}
+/* The status line, in the head's right-hand slot: how many matches, or why
+   there are none to show. It holds its height when empty so the head does
+   not shift between a fetch and its answer. */
+#lobby .lb-status { min-height: 1em; }
 
 /* The round trip to this server, on the status line rather than in a row of
    its own: with ONE region it is one fact about the machine every row is
@@ -101,7 +53,7 @@
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.5);
 }
-#lobby .lb-sub .lb-ping:empty { display: none; }
+#lobby .ui-meta .lb-ping:empty { display: none; }
 /* A good connection is the ordinary case and says nothing; the two that are
    worth a player's attention are the two that are coloured. Shared by the
    status line and the per-row column, because `ui/ping.ts` exists so that two
@@ -117,9 +69,10 @@
   gap: 3px;
   width: 100%;
   /* Bounded so a server running many matches scrolls rather than pushing
-     the foot off a short viewport. --ov-scale has already shrunk the
-     whole screen by then; this is the second line of defence. */
-  max-height: 46vh;
+     the foot off a short viewport. The frame's body row is already
+     `minmax(0, 1fr)`, so this is the second line of defence and the one that
+     decides WHERE the overflow goes. */
+  max-height: 62vh;
   overflow-y: auto;
 }
 
@@ -130,10 +83,15 @@
    row with no box of its own has nothing to hit. */
 #lobby .lb-row {
   display: grid;
-  grid-template-columns: 1fr auto 74px;
+  /* Two proportional tracks and a fixed one, rather than the `1fr auto 74px`
+     this was while the panel was 640px wide. A shrink-to-fit middle column is
+     pinned to whatever is on its right, so on a list given the width of a
+     window the state ends up against the count with a hand's width of nothing
+     between it and the name it describes. */
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) 74px;
   align-items: center;
-  gap: 0 16px;
-  padding: 10px 14px;
+  gap: 0 clamp(10px, 1.4vw, 24px);
+  padding: clamp(8px, 1.2vh, 14px) clamp(10px, 1vw, 18px);
   border-left: 2px solid transparent;
   background: rgba(255, 255, 255, 0);
   transition: background 0.12s, border-color 0.12s;
@@ -157,7 +115,7 @@
      beside it ("Start a fresh round on Hollowmere") wins the whole row and
      "New match" clips to "Ne…". The floor fits the longest label this screen
      has; a hostile map id still clips, which is what that cell is for. */
-  grid-template-columns: 88px minmax(104px, 1fr) auto 74px 44px;
+  grid-template-columns: 88px minmax(104px, 1.15fr) minmax(0, 1fr) 74px 44px;
 }
 
 /* A picker row's buttons take everything past the label instead of squeezing
@@ -168,6 +126,11 @@
 #lobby .lb-panel.multi .lb-pickline {
   grid-template-columns: 88px auto 1fr;
 }
+/* And the same for the three-column screen. A picker's buttons belong beside
+   the word that names them: left in the row's first proportional track they
+   would sit halfway across the list, which reads as a control for the column
+   it has drifted into rather than for its own row. */
+#lobby .lb-pickline { grid-template-columns: minmax(72px, auto) 1fr auto; }
 /* The labels ("Map", "Region") clip like every other first cell, and an item
    that clips contributes NOTHING to its column's minimum — so a wide enough row
    of buttons collapses the label to zero width and the row loses its name with
@@ -179,7 +142,7 @@
    quietest thing in the row and to clip rather than to push the map name
    about. A deploy-time file writes this string, so it can be any length. */
 #lobby .lb-region {
-  font-size: 10px;
+  font-size: var(--ui-cap);
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -195,7 +158,7 @@
    a column of them readable at a glance rather than one at a time. */
 #lobby .lb-lat {
   text-align: right;
-  font-size: 11px;
+  font-size: var(--ui-cap);
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.45);
 }
@@ -208,7 +171,7 @@
   cursor: default;
 }
 #lobby .lb-note .lb-id {
-  font-size: 11px;
+  font-size: var(--ui-cap);
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: none;
@@ -217,7 +180,7 @@
 #lobby .lb-note.sel .lb-id { color: rgba(255, 255, 255, 0.5); }
 
 #lobby .lb-id {
-  font-size: 13px;
+  font-size: var(--ui-row);
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -233,7 +196,7 @@
 #lobby .lb-row.sel .lb-id { color: #fff; }
 
 #lobby .lb-state {
-  font-size: 10px;
+  font-size: var(--ui-cap);
   font-weight: 700;
   letter-spacing: 0.2em;
   text-transform: uppercase;
@@ -242,7 +205,7 @@
 
 #lobby .lb-count {
   text-align: right;
-  font-size: 11px;
+  font-size: var(--ui-cap);
   letter-spacing: 0.1em;
   color: rgba(255, 255, 255, 0.4);
 }
@@ -297,7 +260,7 @@
 #lobby .lb-pickline { cursor: default; }
 #lobby button.lb-pick {
   font: inherit;
-  font-size: 10px;
+  font-size: var(--ui-cap);
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;

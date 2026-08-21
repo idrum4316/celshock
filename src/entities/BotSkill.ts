@@ -60,6 +60,20 @@ export function difficultyNames(): readonly string[] {
 }
 
 /**
+ * The tiers as the menu's panel reads them: a name, the line that says what
+ * the tier is like, and the skill centre it is — which the panel draws as a
+ * meter, so the rungs are spaced by the numbers the bots are actually given
+ * rather than by their position in the list.
+ */
+export function difficultyTiers(): readonly {
+  name: string;
+  blurb: string;
+  centre: number;
+}[] {
+  return CONFIG.bots.skill.difficulties;
+}
+
+/**
  * Draws a skill for every bot from the tier's distribution and resolves each
  * one's profile.
  *

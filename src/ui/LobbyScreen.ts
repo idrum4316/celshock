@@ -209,7 +209,11 @@ export class LobbyScreen {
   constructor() {
     this.root = document.createElement("div");
     this.root.id = "lobby";
-    this.root.className = "hidden";
+    // The shell's frame and its backdrop, carried permanently: this screen has
+    // one card rather than four, so nothing here has to swap them the way
+    // `OverlayScreen.setCardClass` does. `.hidden` is `!important` and wins
+    // over the display the frame sets.
+    this.root.className = "ui-screen ui-veil ui-solid hidden";
     document.getElementById("hud")!.appendChild(this.root);
   }
 
@@ -447,20 +451,34 @@ export class LobbyScreen {
         ? wanted
         : Math.max(0, Math.min(this.index, this.rows.length - 1));
 
+    // `.lb-panel` survives the move into the shell as the thing the rows'
+    // grid templates are scoped to — `.multi` on it is what turns the
+    // three-column screen into the five-column one, and hanging that off the
+    // frame instead would put a layout decision about ROWS on the screen.
     this.root.innerHTML = `
-      <div class="lb-panel frame${this.multi() ? " multi" : ""}">
-        <h2>Multiplayer</h2>
-        <p class="lb-sub"><span class="lb-status"></span><span class="lb-ping"></span></p>
-        <div class="lb-body">
-          ${this.rows.map((row, i) => this.rowMarkup(row, i)).join("")}
+      <div class="ui-head">
+        <div class="ui-titles">
+          <span class="ui-eyebrow">Online</span>
+          <h2>Multiplayer</h2>
         </div>
-        <p class="ui-foot">
-          <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick / D-pad</kbd> move</span>
-          <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> pick</span>
-          <span><kbd>Enter</kbd><kbd class="pad">A</kbd> select</span>
-          <button class="ui-back"><kbd>Esc</kbd><kbd class="pad">B</kbd> Back</button>
-        </p>
+        <div class="ui-meta">
+          <span class="lb-status"></span>
+          <span class="lb-ping"></span>
+        </div>
       </div>
+      <div class="ui-body solo">
+        <div class="lb-panel${this.multi() ? " multi" : ""}">
+          <div class="lb-body">
+            ${this.rows.map((row, i) => this.rowMarkup(row, i)).join("")}
+          </div>
+        </div>
+      </div>
+      <p class="ui-foot">
+        <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick / D-pad</kbd> move</span>
+        <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> pick</span>
+        <span><kbd>Enter</kbd><kbd class="pad">A</kbd> select</span>
+        <button class="ui-back"><kbd>Esc</kbd><kbd class="pad">B</kbd> Back</button>
+      </p>
     `;
 
     // Assigned, not interpolated. The subtitle carries a server-supplied error
@@ -636,7 +654,7 @@ export class LobbyScreen {
    * and a second cell saying so in numbers is a reading nobody took.
    */
   private fillPing(): void {
-    const el = this.root.querySelector<HTMLElement>(".lb-sub .lb-ping");
+    const el = this.root.querySelector<HTMLElement>(".ui-meta .lb-ping");
     if (!el) return;
     const ping = this.multi() || this.regions.length === 0 ? -1 : this.pingOf(this.regions[0].id);
     el.className = `lb-ping ${pingQuality(ping)}`;

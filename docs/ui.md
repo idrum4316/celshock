@@ -15,6 +15,77 @@ chrome. `TouchControls` is in the directory and is deliberately not in that
 count — it draws like a screen and answers like a gamepad; see the last section
 here.
 
+## The shell
+
+**Every screen between the title and the world is drawn in one frame, and the
+frame is anchored to the VIEWPORT rather than centred in it.** `.ui-screen` in
+[`base.css`](../src/ui/base.css) is three grid rows — a head, a body, a foot —
+with fluid gutters: the head carries the screen's name on the left and a meta
+slot on the right under a hairline, the foot carries the input hints and the
+way out along the bottom edge, and the body takes everything between them.
+
+What it replaced is the reason it exists. Every one of these screens used to be
+a ~600 px column floating in the middle of the window — `--col` on `#overlay`,
+a 680 px `.se-panel`, a 640 px `.lb-panel`. On a 2560-wide monitor that is a
+quarter of the width in use and nothing within 500 px of an edge, which is what
+makes a screen read as a dialog box laid over a game rather than as the game's
+own front end. The head and the foot now run to the glass; `--ui-max` (1680 px)
+caps the BODY, so an ultrawide gets a wide composition rather than a stretched
+one. That split is the whole trick — the chrome touches the edges, the reading
+matter does not.
+
+**The body is a LIST and the PANEL that says what the list's cursor is on.**
+`.ui-rail` is the list column and `.ui-panel` the one beside it, and the second
+is what turns leftover window into a reason to have it: which map, drawn and
+described; which enemy, and what that tier is like to fight; what is in your
+hands and what it does. A wide screen that puts the same six rows in the middle
+of more emptiness has not used the space, it has just left more of it.
+
+`.ui-panel` is an OPEN column with a rule down its edge, not a box. It was a
+chamfered plate first and the plate was the wrong shape: the panel is full
+height because it is one side of the screen, while what it holds runs from four
+lines to a schematic — so on the short rows a box read as an oversized empty
+container. A screen that wants a plate adds `.frame` and the rule steps aside.
+
+**Everything is sized in `clamp()` over `vmin`, and the reason is the phone.**
+A menu drawn at one size and scaled down is a miniature of a desktop layout:
+right proportions, unreadable type, a title bigger than the list under it. Sized
+fluidly, the same markup is a phone layout at 390 px tall and a cinema layout at
+1440. `vmin` rather than `vw`, because an ultrawide is short for its width and a
+title scaled by width alone on a 2560x1080 is taller than the rows it heads.
+
+**One column when there are not two columns' worth of room**, keyed on width AND
+on aspect — a narrow window has no room for a panel beside a rail, and a nearly
+square one has room and no HEIGHT to spend on stacking. The panel GOES rather
+than shrinking (`.ui-optional`), because half a panel says less than none and
+takes the rail's room to say it. `--ui-lean` is the same pair of queries as a
+custom property, for the screens that drop optional matter of their own.
+
+**A screen over another SCREEN is opaque; a screen over the SCENE is not.**
+`.ui-veil` is the backdrop — a warm glow off the lower-left corner and a cold one
+off the upper-right (the friend/foe pair the whole HUD is coloured by, and what
+gives the frame a direction to be lit from), a vignette, a diagonal hatch, and
+the scanlines every card here already had. The menu, the round-over card and the
+deploy screen stand over a live 3D view and let it through. The settings list and
+the lobby stand over the MENU — DOM over DOM — and add `.ui-solid`, which closes
+the vignette: a veil tuned to let a village through lets a wordmark and a rail of
+buttons through with it, which reads as two screens up at once.
+
+**`--ov-scale` is a safety valve now, not the layout.** It is still the mechanism
+described further down — draw the screen at the size it was authored for and
+scale it down — but the fluid frame fits the viewport it is given, so the ladder
+is 1 until a viewport is shorter than anything the clamp minimums fit in
+(380 px), and gentle when it does engage. At the old 0.45 a landscape phone got a
+legible desktop menu rendered at 45%. Raising it back toward those numbers undoes
+the responsive layout wholesale.
+
+**The kit screen carries the head without the frame**, and it is the one
+exception. Its right half is a hole the 3D turntable is placed through, so a
+grid with a foot across the bottom would put a row of key chips over the weapon;
+it keeps its own two-column flex and takes `.ui-head` and `.ui-foot` bounded to
+its panel column. That is why the title rule is scoped to `.ui-head` rather than
+to `.ui-screen`.
+
 **The boot screen is the one piece of interface that is not in this directory**,
 and the exception is what defines it: it covers the stretch before any module
 has evaluated, so `src/ui/` could not draw it — the bundle it would be drawn by
@@ -83,6 +154,22 @@ shell, the title block and the Deploy button. The bar for a screen of its own is
 *state*: the deploy map has a selection and a canvas, the kit screen has two
 slots and a turntable; a card that is markup plus a button has not earned one.
 
+**Three of the four take the screen and the PAUSE does not.** `setCardClass` is
+what decides it: the menu, the round-over card and the building card get the
+frame and the veil, and the pause gets a left-anchored column over a scrim that
+fades out before the middle of the window. The round under a pause is this
+round, frozen where it stood — the flag strip along the top, your own vitals,
+the body you were lining up — so a full-bleed veil over it hides the thing the
+pause is *in*. It is the same argument that keeps `setOverlaid` out of
+`showPause`, stated as a layout instead of as a class. The list is on the left
+because that is the side a pause menu has been on since consoles had two sticks,
+and because the crosshair is in the middle.
+
+**The building card is the one that stays centred and bare**, and the freeze it
+covers is why. Everything on it has to be PAINTED before the main thread stops,
+so a panel with a canvas in it would be a schematic drawn on the frame the
+player was already waiting through. A name, a word, and a bar.
+
 **The key-cap table is no longer one of the things they share, and that is the
 whole reason it moved.** It hung under the menu's title and under the pause list,
 drawn from one table by one loop, which was right while the settings screen was
@@ -145,13 +232,37 @@ whole rest of the list back. The split rule is the mechanical one — a page tha
 outgrows the panel splits into another page, exactly as a section would have
 split into another heading.
 
-**The key-cap table is the one thing on the screen that is not a choice.** It
-carries no `data-row`, so the cursor steps straight past it, and it spans every
-column of the grid rather than sitting in the control one — it is not a row, it
-is what the Controls page is *about*. Its own three columns (action / keyboard /
-pad) are set independently of the list's above it, because an action name is
-short where a setting's label is long and matching the two would leave the key
-chips stranded mid-panel with the pad column adrift at the far edge.
+**The key-cap table is the one thing on the screen that is not a choice, and it
+is in the PANEL beside the list rather than under it.** It carries no
+`data-row`, so the cursor steps straight past it — it is not a row, it is what
+the Controls page is *about*. Eleven rows under a list of three sliders was the
+longest block on the screen and the thing that decided the panel's height;
+beside that list it costs it nothing. Its own three columns (action / keyboard /
+pad) are set independently of the list's, because an action name is short where
+a setting's label is long and matching the two would leave the key chips
+stranded mid-panel with the pad column adrift at the far edge.
+
+**The row HINT moved into that panel with it, and the list is two columns now.**
+A hint is a sentence of prose, and it was in a cell as wide as a control, set at
+10 px, clipped whenever the panel narrowed. One row's hint at a time, given a
+column of its own, is both more of it and less of it on screen: the row you are
+standing on gets a heading and a readable line, and the four you are not stop
+competing with their own controls for width. The page selector is answered there
+like any other row, which is the same argument that made it a row at all.
+
+**The Display page's panel carries a `facts` block instead of a table**, and it
+is a function rather than a string because every figure in it is measured when
+it is drawn — the window, the pixel ratio, what the ladder above actually comes
+to on this machine. A settings screen reporting the size the window was when the
+bundle loaded is worse than one reporting nothing. It is also what keeps that
+page's panel from being a heading and one sentence in a column the height of the
+screen.
+
+**A viewport too narrow for the panel gets the hint back as a third column and
+loses the key table**, and that is the right thing to lose. A window that narrow
+is a phone held sideways; the table names a keyboard and a pad, and the game on
+that device is played with the touch controls, which are drawn on screen and
+name themselves.
 
 - **The slider is positioned by option INDEX, not by value**, one rung per equal
   share of the track. That is what keeps it a choice over the same `options` the
@@ -338,8 +449,11 @@ change moved no content-hashed filename. Three rules keep it that way:
 
 - **`base.css` is for what two or more screens share** — the reset, the canvas, the
   `#hud` root, `.frame`, `.brackets`, `.hidden`, the `--ov-scale` short-viewport
-  block, `@keyframes pulse`, the kit button, and `.ui-foot`/`.ui-back` (the hint
-  line and the Back button three screens end with). A rule only one screen uses
+  block, `@keyframes pulse`, the kit button, the whole SHELL (`.ui-screen`,
+  `.ui-veil`/`.ui-solid`, `.ui-head`/`.ui-eyebrow`/`.ui-meta`, `.ui-body`,
+  `.ui-rail`, `.ui-panel`, `.ui-facts`, and the design tokens the five screens
+  are measured and coloured in), and `.ui-foot`/`.ui-back` (the hint line and
+  the Back button three screens end with). A rule only one screen uses
   belongs in that screen's sheet however tempting the shared file is.
 - **A screen's state rules go with whoever sets the class**, not whoever owns the
   element: `#hud.paused #deploy { opacity: 0.18 }` is in `hud.css` because
@@ -404,17 +518,45 @@ buttons, so opposing presses cancel and a diagonal resolves into one step per ax
 is what makes a stick usable (it has no detent to tap) and deliberately does not
 extend to confirm or back.
 
-**Each screen has ONE content width and everything hangs off it.** `#overlay`
-declares `--col` (settings grid, Deploy button, pause list, result bar) and
-`#deploy` declares `--map` (status line, hint row, button row, so they meet
-the map's edges). The two big titles are the deliberate exception.
+**Each screen hangs off the SHELL's tracks, and what is left screen-local is
+what only that screen has.** `--col` is gone — the one content width every
+block measured to was what made these screens a column in the middle of a
+window (see the shell, at the top of this file). `#deploy` still declares
+`--map`, because the map's side is genuinely the number the orders panel beside
+it is measured against.
 
-- **The menu's two settings rows are one grid, not two rows.** Centred
-  independently they put labels, controls and hints at three different x each.
-  `.ov-settings` owns the three columns and each row is `display: contents`. The
-  control column is `1fr`, so the four difficulty tiers and the kit button span the
-  same width — which sets the tiers' padding, since at 18px their min-content
-  overflowed `--col` at every viewport size.
+- **The menu's rows all state the same three tracks**, so the labels line up
+  down the rail and every control begins on one edge — a label column sized to
+  `max-content` is measured per row, and five rows would find five widths. Each
+  row is a box of its own rather than `display: contents`, because each one now
+  carries a selection: a plate and an accent bar down its left side. The control
+  column is `minmax(0, 1fr)`, so the four difficulty tiers and the kit button
+  span the same width.
+- **The panel beside the rail is redrawn on every cursor move and the rows are
+  not.** The rows carry the selection as a class on elements that already exist,
+  for the reasons below; the panel has no listener, no transition and no hover
+  state on it, so rewriting it costs one box's layout and nothing that can be
+  seen going wrong. `start` gets a DEPLOYMENT BRIEF rather than nothing, and
+  that is where the cursor opens — the map, the enemy and the kit, which are
+  the whole of what the button under it is about.
+- **The map row's schematic is drawn from the LAYOUT, never from a built map**
+  ([`MapThumb.ts`](../src/ui/MapThumb.ts)). The deploy screen draws its map out
+  of the finished collider set, which is the honest way to draw a map you are
+  standing in; the menu is the one screen in the game where there is no built
+  map at all, and building one to illustrate a row costs the ~0.7 s the building
+  card exists to cover. Everything it reads — the heightfield, the water rects,
+  the scatter regions, the placements, the flags — is a module constant that was
+  in the bundle before the player pressed anything, and its palette is the map's
+  own `EnvironmentSpec`, so a fourth map is coloured by what it ships with
+  rather than by a table here somebody has to remember to extend.
+- **The prose those panels carry lives with the thing it describes**, not in
+  this directory: a map's line is `MapDef.blurb` in
+  [`world/maps.ts`](../src/world/maps.ts), a tier's is `blurb` beside its own
+  `centre` in `CONFIG.bots.skill.difficulties`, and a weapon's is
+  `WEAPON_BLURBS`, which the kit screen already owned and now exports. Every
+  figure beside them is read off the same object the line is on — the flag
+  count, the extent, the view distance, the reaction time — so a panel cannot
+  describe a map or a difficulty that is not the one being played.
 - **Only the controls opt into pointer events, never the rows.** `#hud` is
   `pointer-events: none` and the menu's confirm is a mouse-down anywhere, so a row
   that claimed events would turn its labels, hints and the grid's gaps into dead zones
@@ -427,11 +569,25 @@ the map's edges). The two big titles are the deliberate exception.
   in `overlay.css` — a fifth opener goes in **both**, not just the first. The
   multiplayer button shipped in neither and read as a bug in the button rather than a
   missing rule.
-- **`#deploy-actions` wraps.** The map is height-led, so on a 768-tall laptop it is
-  430 px across and the longest kit ("Marksman rifle · Scope") does not fit beside a
-  Deploy button. Both buttons grow, so a broken row gives two full-width buttons
-  stacked rather than one hanging over the map's edge. That width is also why every
-  input hint lives in the one hint row.
+- **`#deploy-actions` is a column**, now that the buttons are in an orders panel
+  beside the map rather than under it. They were a wrapping row because the
+  map's width was all they had, and on a 768-tall laptop the longest kit
+  ("Marksman rifle · Scope") did not fit beside a Deploy button — so the row
+  broke and gave two full-width buttons anyway. Every input hint is in the
+  frame's foot, which is the one row this screen has for them.
+- **The deploy screen's foot is the only one CENTRED**, and the HUD is why. It
+  is the one screen here drawn over gameplay chrome that is still up: the vitals
+  are in the bottom-left corner and the ammunition column is in the
+  bottom-right, which are exactly the two ends a full-width foot puts its hints
+  and its button on. The middle of that edge is the one part of it the HUD
+  leaves empty.
+- **Its one-column rule is keyed on WIDTH alone**, unlike every other screen's.
+  Those collapse on height as well, because a rail and a panel side by side in a
+  short window have the room and not the height. This screen's second column is
+  240 px of buttons beside a map that is height-led — so a short window is
+  exactly where the two belong side by side, and stacking them there takes the
+  map's height away to spend on the thing that did not need it. A landscape
+  phone keeps both columns; a portrait one is what the rule is for.
 
 **The menu and round-over card carry a `Deploy` button**
 (`OverlayScreen.bindStart` → `Game.onStart`), and it is the **only** thing on either
@@ -500,6 +656,12 @@ and drawn in `VIEWMODEL_GROUP`.
 - **The hands let go.** A forearm cut off at the elbow reads fine on a carried
   weapon and as a severed arm on a bench, so `ViewModel` hides the arm meshes for the
   duration — one place writes mesh visibility.
+- **On a landscape phone the whole HEAD goes**, and it is the same argument
+  that already took the prose. This is the one screen outside `--ov-scale`, so
+  it has to fit a 390 px-tall window on its own; the eyebrow says what kind of
+  screen this is, the slot opposite names the weapon carried, and the STAGE's
+  own caption already says the second under the weapon itself. Two lines of
+  head there is the Back button falling off the bottom.
 
 `Game.updateKitStage` drives it, because `loadout` is the one lid state showing live
 3D and owes by hand the per-frame pushes only `updateGameplay` makes. The camera

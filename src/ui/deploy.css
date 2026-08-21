@@ -1,9 +1,10 @@
 /**
- * deploy.css — The between-lives deploy screen: the map, its status line, the
- * input hint row and the two action buttons.
+ * deploy.css — The between-lives deploy screen: the map, the orders panel
+ * beside it, and the two action buttons in it.
  * Owns: #deploy and everything under it. The one screen inside #hud that opts
  * back into pointer events, because its map and buttons take their own clicks.
- * Every block on it takes --map, the screen's one content width.
+ * Drawn in the shell (`.ui-screen` / `.ui-veil` in base.css) and deliberately
+ * NOT `.ui-solid` — the round behind this one is still being fought.
  */
 
 /* --- deploy screen --- */
@@ -12,67 +13,54 @@
 #deploy {
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(ellipse at center, rgba(6, 8, 14, 0.72), rgba(3, 4, 8, 0.94)),
-    repeating-linear-gradient(
-      to bottom,
-      rgba(255, 255, 255, 0.022) 0 1px,
-      transparent 1px 3px
-    );
-  display: flex;
-  flex-direction: column;
+  pointer-events: auto;
+}
+
+/* THE MAP IS THE SCREEN. It takes the body row's whole height and the
+   orders take the column beside it — which is the change that made the map
+   big. Stacked under a status line, a hint row and two buttons it was
+   capped at `min(56vh, 60vw)`, because everything below it came out of the
+   same height; beside them there is nothing under it to give way to.
+
+   The map track is sized by the map: `min-content` measures the square,
+   which is height-led (see `#deploy-map`), so the orders take the rest.
+   `align-items: center` rather than the shell's `stretch`, because the
+   square must not be told to be a rectangle. */
+#deploy .dp-body {
+  /* The orders column is BOUNDED, and the pair is centred as one. Given
+     `1fr` the panel takes everything the map leaves, which on a wide window
+     is a Deploy button a foot across with its caption lost in the middle of
+     it — and it also pushed the map off centre, since the two together no
+     longer measured the viewport. */
+  grid-template-columns: min-content minmax(240px, 430px);
   align-items: center;
   justify-content: center;
-  /* Tighter than it looks like it wants to be: the map, the status line
-     and the kit button together have to clear a 720p window, and this
-     screen has no scroll to fall back on. */
-  gap: 14px;
-  pointer-events: auto;
-  /* The map's size, hoisted so its siblings can share it. Everything
-     below the map used to size itself to its own contents and centre on
-     that, so the status line, the hints and the buttons each floated at
-     their own width under a map none of them touched. One width, four
-     shared edges, and the column reads as a panel with a map in it.
+  gap: clamp(16px, 3vw, 56px);
+}
+#deploy .dp-orders {
+  justify-content: center;
+  gap: clamp(12px, 2.4vh, 26px);
+}
 
-     Divided by `--ov-scale` because `vh` is the VIEWPORT's, while this
-     box is `100% / scale` across and then scaled back down — so on a
-     short viewport a raw `56vh` was scaled a second time and the map came
-     out at a quarter of the height it asked for. At scale 1, which is
-     every desktop, the divide is the identity. */
-  --map: calc(min(56vh, 60vw) / var(--ov-scale));
-}
-#deploy-status,
-#deploy-nav,
-#deploy-actions { width: var(--map); }
-#deploy h2 {
-  position: relative;
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: 0.55em;
-  color: var(--hot);
-  padding: 0 26px;
-}
-/* Rules either side of the heading — a title bar without a box. */
-#deploy h2::before,
-#deploy h2::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  width: 54px;
-  height: 1px;
-  background: linear-gradient(to right, transparent, rgba(255, 230, 128, 0.55));
-}
-#deploy h2::before { right: 100%; }
-#deploy h2::after {
-  left: 100%;
-  background: linear-gradient(to left, transparent, rgba(255, 230, 128, 0.55));
-}
 /* Same hull-behind-canvas trick as the minimap, and for the same reason:
    a canvas cannot draw its own chamfered edge or corner brackets. */
-#deploy .map-wrap { position: relative; z-index: 0; line-height: 0; }
-/* Height-led rather than square-led: the column above and below it is
-   all fixed-height, so the viewport's height is the only thing the map
-   can give ground to. */
+#deploy .map-wrap {
+  position: relative;
+  z-index: 0;
+  line-height: 0;
+  /* The map's side, and the one number the rest of this screen measures
+     against. HEIGHT-LED, because the body row is exactly as tall as the
+     window less the head and the foot, and the width has a whole orders
+     panel to share with — so height is what binds. The `vw` term is what
+     keeps it from eating that panel on a short, narrow window.
+
+     Divided by `--ov-scale` because `vh` is the VIEWPORT's, while this box
+     is `100% / scale` across and then scaled back down — so on a short
+     viewport a raw `78vh` was scaled a second time and the map came out at
+     a fraction of the height it asked for. At scale 1, which is every
+     desktop, the divide is the identity. */
+  --map: calc(min(70vh, 46vw) / var(--ov-scale));
+}
 #deploy-map {
   width: var(--map);
   height: var(--map);
@@ -106,68 +94,54 @@
     calc(100% - 23px) 100%, 0 100%, 0 23px
   );
 }
+/* The status: what the reinforcement clock says, over WHERE the cursor is.
+   Two lines rather than one, because they are two different facts and the
+   panel finally has the room to say so — the clock changes every second and
+   the place changes when the player moves the highlight, and running them
+   together on one line made the name of the spawn jitter beside a counting
+   number. */
 #deploy-status {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.28em;
-  color: rgba(255, 255, 255, 0.55);
-  padding: 7px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: clamp(8px, 1.4vh, 14px) clamp(12px, 1.2vw, 20px);
   border-left: 2px solid rgba(255, 255, 255, 0.2);
   background: rgba(255, 255, 255, 0.04);
 }
+#deploy-status .dp-state {
+  font-size: var(--ui-cap);
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+#deploy-status .dp-spawn {
+  font-size: clamp(15px, 2.4vmin, 26px);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #fff;
+}
 #deploy-status.ready {
-  color: var(--hot);
   border-left-color: var(--hot);
   background: rgba(255, 230, 128, 0.1);
+}
+#deploy-status.ready .dp-state {
+  color: var(--hot);
   animation: pulse 1.4s ease-in-out infinite;
 }
-/* The map takes a click, and before this row nothing said the arrows and
-   the d-pad move the selection too — which on a pad left the confirm
-   deploying at whichever spawn the list started on. */
-#deploy-nav {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 4px 22px;
-  font-size: 10px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.35);
-}
-#deploy-nav kbd {
-  font: inherit;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  padding: 3px 7px;
-  margin-right: 4px;
-  color: #cfd6e2;
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
-  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
-}
-#deploy-nav kbd.pad {
-  color: var(--hot);
-  box-shadow: inset 0 0 0 1px rgba(255, 230, 128, 0.3);
-}
-/* Side by side rather than stacked: this column has the map, a status
-   line, a hint row and two buttons to fit inside a 720p window, and the
-   two buttons are the only pair that reads as a row. They share the map's
-   width rather than measuring whatever the weapon happens to be called.
-
-   WRAPPING IS THE SAFETY, and it is needed: the map is height-led, so on
-   a 768-tall laptop it is 430 px wide and the longest kit
-   ("Marksman rifle · Scope") does not fit beside a Deploy button. Both
-   grow, so a row that breaks gives two full-width buttons stacked rather
-   than one button hanging over the edge of the map above it. */
+/* STACKED, now that they are in a column rather than under the map.
+   They were a wrapping row because the map's width was all they had and
+   the longest kit ("Marksman rifle · Scope") did not fit beside a Deploy
+   button on a 768-tall laptop — so the row broke and gave two full-width
+   buttons anyway. In the orders panel that is simply the layout: the
+   action first, the way to the kit screen under it. */
 #deploy-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: stretch;
-  gap: 12px;
+  gap: 8px;
 }
-#deploy-go,
-#deploy-kit { flex: 1 1 auto; }
 #deploy-go {
   font: inherit;
   display: flex;
@@ -175,9 +149,7 @@
   align-items: center;
   justify-content: center;
   gap: 2px;
-  /* Narrow enough that the kit button beside it still fits the map's
-     width without wrapping — the pair has 448 px to live in. */
-  padding: 8px 26px;
+  padding: clamp(10px, 1.6vh, 17px) 26px;
   color: #12141a;
   background: var(--hot);
   border: 0;
@@ -186,7 +158,7 @@
   transition: background 0.12s;
 }
 #deploy-go b {
-  font-size: 13px;
+  font-size: clamp(13px, 1.9vmin, 19px);
   font-weight: 800;
   letter-spacing: 0.24em;
   text-indent: 0.24em;
@@ -194,7 +166,7 @@
 }
 #deploy-go i {
   font-style: normal;
-  font-size: 9px;
+  font-size: var(--ui-cap);
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: rgba(18, 20, 26, 0.6);
@@ -209,3 +181,46 @@
 }
 #deploy-go.waiting i { color: rgba(255, 255, 255, 0.25); }
 #deploy-go.waiting:hover { background: rgba(255, 255, 255, 0.06); }
+
+/* CENTRED, alone among the four screens with a foot. The frame's foot runs
+   the width of the viewport, and this is the one screen drawn over a HUD
+   that is still up — the vitals are in the bottom-left corner and the
+   ammunition column is in the bottom-right, which are exactly the two ends
+   a foot puts its hints and its button on. The middle of that edge is the
+   one part of it the HUD leaves empty. */
+#deploy .ui-foot { justify-content: center; }
+
+/* --- one column ---
+   The orders go under the map rather than beside it, and the map gives up
+   the height they take. `.ui-optional` is not used here: the panel holds
+   the Deploy button, which is the pointer's only way off this screen.
+
+   **WIDTH ONLY**, unlike every other screen's one-column rule. Those collapse
+   on height as well, because a rail and a panel side by side in a short window
+   have the room and not the height. This screen's second column is 240 px of
+   buttons beside a map that is HEIGHT-led — so a short window is exactly where
+   the two belong side by side, and stacking them there takes the map's height
+   away to spend on the thing that did not need it. A landscape phone keeps the
+   two columns; a portrait one is what this rule is for. */
+@media (max-width: 760px) {
+  #deploy .dp-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: min-content;
+    /* Both axes: `justify-items` centres the stack across, `align-content`
+       centres it down. Without the second the pair sits at the top of a body
+       row that is the height of a portrait phone, with the whole lower half
+       of the screen empty under the Deploy button. */
+    align-content: center;
+    justify-items: center;
+    gap: clamp(8px, 1.6vh, 16px);
+  }
+  #deploy .map-wrap { --map: calc(min(52vh, 62vw) / var(--ov-scale)); }
+  #deploy .dp-orders {
+    width: min(100%, 420px);
+    padding: 0;
+    border-left: 0;
+    gap: 8px;
+  }
+  #deploy #deploy-actions { flex-direction: row; }
+  #deploy #deploy-go, #deploy #deploy-kit { flex: 1 1 auto; }
+}

@@ -38,6 +38,18 @@ export interface MapDef {
   id: string;
   /** Shown to the player — the scoreboard's header and the round-over card. */
   name: string;
+  /**
+   * One line about what it is like to fight here, for the menu's map panel.
+   *
+   * It lives here rather than in a table under `src/ui/` for the reason `name`
+   * does: a map's own file is the only place that cannot fall out of step with
+   * the map, and a fourth map added to this registry should not compile to a
+   * front end with a blank panel in it. Prose, not a stat line — everything
+   * countable on that panel (the flags, the extent, the view distance) is read
+   * off the layout and the environment beside it, and repeating any of it here
+   * is how the two come to disagree.
+   */
+  blurb: string;
   layout: MapLayout;
   environment: EnvironmentSpec;
   /**
@@ -56,6 +68,9 @@ export interface MapDef {
 export const HOLLOWMERE: MapDef = {
   id: "hollowmere",
   name: "Hollowmere",
+  blurb:
+    "A drowned village under a night fog. Lanes and walled yards make every " +
+    "flag a short fight, and the mist closes the long ones down.",
   layout: HollowmereLayout,
   environment: HollowmereEnvironment,
   collision: () => import("./hollowmere/collision"),
@@ -69,6 +84,9 @@ export const HOLLOWMERE: MapDef = {
 export const GREYFEN: MapDef = {
   id: "greyfen",
   name: "Greyfen",
+  blurb:
+    "The same valley two hours after sunrise, gone to jungle. The canopy " +
+    "takes the sightlines and gives them back in shafts.",
   layout: GreyfenLayout,
   environment: GreyfenEnvironment,
   collision: () => import("./greyfen/collision"),
@@ -84,6 +102,9 @@ export const GREYFEN: MapDef = {
 export const COLDHARBOUR: MapDef = {
   id: "coldharbour",
   name: "Coldharbour",
+  blurb:
+    "A business district an hour before dusk. Three floors to hold, glass " +
+    "to break, and no fog at all to be missed in.",
   layout: ColdharbourLayout,
   environment: ColdharbourEnvironment,
   collision: () => import("./coldharbour/collision"),

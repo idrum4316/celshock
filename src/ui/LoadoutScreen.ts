@@ -59,7 +59,7 @@ const SLOTS: readonly Slot[] = ["weapon", "sight"];
  * every number these describe lives in `CONFIG.weapons` and is read from there
  * for the buttons and the bars rather than written twice.
  */
-const WEAPON_BLURBS: Record<PrimaryWeaponId, string> = {
+export const WEAPON_BLURBS: Record<PrimaryWeaponId, string> = {
   rifle:
     "A full-power battle rifle. Four rounds kill at any distance you can see a target at, and it holds its group across the valley — but the magazine is short and every round has to be worth its recoil.",
   carbine:
@@ -220,6 +220,8 @@ export class LoadoutScreen {
   private body: HTMLElement;
   /** The caption under the weapon on the stage. */
   private stageCap: HTMLElement;
+  /** The same caption in the panel's head. */
+  private carriedEl!: HTMLElement;
   /**
    * Drag accumulated since `Game` last read it. Pixels, not radians — how far
    * a pixel turns the weapon is the viewmodel's business, and this screen has
@@ -244,7 +246,16 @@ export class LoadoutScreen {
     this.root.innerHTML = `
       <div class="lo-scrim"></div>
       <div class="lo-panel">
-        <h2>LOADOUT</h2>
+        <div class="ui-head">
+          <div class="ui-titles">
+            <span class="ui-eyebrow">Kit</span>
+            <h2>Loadout</h2>
+          </div>
+          <div class="ui-meta">
+            <span>Carried</span>
+            <b class="lo-carried"></b>
+          </div>
+        </div>
         <div class="lo-body"></div>
         <p class="lo-foot ui-foot">
           <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd class="pad">Stick</kbd> choose</span>
@@ -260,6 +271,12 @@ export class LoadoutScreen {
     document.getElementById("hud")!.appendChild(this.root);
     this.body = this.root.querySelector(".lo-body")!;
     this.stageCap = this.root.querySelector(".lo-stage-cap")!;
+    // The head's right-hand slot names the same kit the stage's caption
+    // does, and is written by the same call — see `setCaption`. It is the
+    // panel's own read-back: the caption lives over the weapon on the far
+    // side of the screen, and the column making the choice should not send
+    // the eye across a bay to see what it has chosen.
+    this.carriedEl = this.root.querySelector(".lo-carried")!;
     this.bindStage(this.root.querySelector<HTMLElement>(".lo-stage")!);
     // The pointer's way off this screen, in the footer every lid screen ends
     // with (`.ui-foot` / `.ui-back` in base.css). It reads "Back" and not
@@ -409,8 +426,12 @@ export class LoadoutScreen {
       .join("");
 
     // The stage's own caption: what is actually on the turntable, named where
-    // the eye already is rather than only over on the buttons.
-    this.stageCap.textContent = kitLabel(this.weapon, this.sight);
+    // the eye already is rather than only over on the buttons — and the same
+    // string in the panel's head, so the column doing the choosing says what
+    // it has chosen without the eye crossing the bay to check.
+    const carried = kitLabel(this.weapon, this.sight);
+    this.stageCap.textContent = carried;
+    this.carriedEl.textContent = carried;
 
     this.body.innerHTML = `
       <div class="lo-slots">

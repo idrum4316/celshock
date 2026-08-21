@@ -161,14 +161,24 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 
 /* --- short viewports (a phone held sideways) ---
    The menu and the deploy map stack a title, a picker, a table and a
-   prompt, they are sized in px for a 720p window, and NOTHING in this
-   HUD scrolls — so on a 350px-tall landscape phone the stack simply
-   runs off both ends. The fix is to draw the whole screen at the size
-   it was authored for and scale it down: the box is grown by 1/s so
-   that scaling it by s about the top-left lands exactly on the
-   viewport again, which keeps the backdrop full-bleed. At the default
-   s = 1 both the size and the transform are identities, so a desktop
-   layout is untouched pixel for pixel.
+   prompt, and NOTHING in this HUD scrolls — so a stack authored in px
+   for a 720p window simply runs off both ends of a 350px-tall landscape
+   phone. The fix is to draw the whole screen at the size it was
+   authored for and scale it down: the box is grown by 1/s so that
+   scaling it by s about the top-left lands exactly on the viewport
+   again, which keeps the backdrop full-bleed. At the default s = 1 both
+   the size and the transform are identities, so a desktop layout is
+   untouched pixel for pixel.
+
+   **IT IS A SAFETY VALVE NOW, NOT THE LAYOUT.** Every screen under
+   `.ui-screen` is sized in `clamp()` over `vmin`/`vh`, so it fits the
+   viewport it is given rather than being drawn at one size and shrunk to
+   another — and a fluid layout fought this transform rather than being
+   helped by it: at the old 0.45 a landscape phone got a legible desktop
+   menu rendered at 45%, which is a miniature of the wrong design. The
+   ladder is therefore 1 down to viewports shorter than anything the
+   fluid minimums fit in, and gentle when it does engage. Raising it back
+   toward the old numbers un-does the responsive layout wholesale.
 
    `#loadout` is deliberately NOT in this list. Its stage is a hole in
    the scrim that the 3D turntable is placed through, back-projected
@@ -177,8 +187,8 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
    leave the weapon behind it. `#settings` has no such hole, so it is
    in the list. */
 #hud { --ov-scale: 1; }
-@media (max-height: 620px) { #hud { --ov-scale: 0.75; } }
-@media (max-height: 430px) { #hud { --ov-scale: 0.45; } }
+@media (max-height: 380px) { #hud { --ov-scale: 0.84; } }
+@media (max-height: 300px) { #hud { --ov-scale: 0.66; } }
 
 /* --- and the gauges, when a thumb needs the corner they are in ---
    `--hud-touch` is the sibling ladder, applied under `#hud.touching`
@@ -198,6 +208,339 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   height: calc(100% / var(--ov-scale));
   transform: scale(var(--ov-scale));
   transform-origin: top left;
+}
+
+/* =====================================================================
+   THE SHELL — the frame every screen between the title and the world is
+   built in.
+   ---------------------------------------------------------------------
+   One shape, five screens: the menu, the settings list, the lobby, the
+   deploy screen and the kit screen. A brand block in the top-left, a
+   meta slot opposite it, a body split into a LIST and the PANEL that
+   says what the list's cursor is resting on, and a rail along the bottom
+   carrying the input hints and the way out.
+
+   **It is anchored to the viewport, not centred in it, and that is the
+   whole of what it replaced.** Every one of these screens used to be a
+   ~600px column floating in the middle of the window: on a 2560-wide
+   monitor that is a quarter of the width in use and nothing within
+   500px of an edge, which is what makes a screen read as a dialog box
+   over a game rather than as the game's own front end. The frame's
+   padding is fluid, so the gutter grows with the viewport instead of the
+   emptiness doing it; `--ui-max` caps the BODY so an ultrawide gets a
+   wide composition rather than a stretched one, while the head and the
+   foot still run to the edges. That split is the point — the chrome
+   touches the glass, the reading matter does not.
+
+   **Everything here is sized in `clamp()` over `vmin`, and the reason is
+   the phone.** A menu drawn at one size and scaled down (which is what
+   `--ov-scale` used to do for all of it) is a miniature of a desktop
+   layout: correct proportions, unreadable type, and a title bigger than
+   the list under it. Sized fluidly, the same markup is a phone layout at
+   390px tall and a cinema layout at 1440 — one rail, one panel, type
+   that stays in its own band at both. `vmin` rather than `vw` because
+   an ultrawide is short for its width, and a title scaled by width alone
+   on a 2560x1080 is a title taller than the rows it heads.
+
+   A screen opts in by putting `.ui-screen` on its root and `.ui-veil` on
+   whatever draws its backdrop; the parts below are the vocabulary. What
+   a screen does NOT get from here is its own list — a rail of rows, a
+   match table and a spawn map are three different things and each keeps
+   its own markup and its own hit-testing. What is shared is the frame
+   around them, so five screens cannot drift into five ideas of where a
+   title goes.
+   ===================================================================== */
+#hud {
+  /* The frame's inset. Fluid, so the gutter is a proportion of the
+     viewport rather than a constant that is a margin on a laptop and a
+     rounding error on a monitor. */
+  --ui-pad-x: clamp(18px, 4vw, 88px);
+  --ui-pad-y: clamp(14px, 3.4vh, 40px);
+  /* How wide the reading matter is allowed to get. The head and the foot
+     ignore it on purpose: chrome to the edges, content in a column. */
+  --ui-max: 1680px;
+  --ui-gap: clamp(14px, 2.2vw, 44px);
+  /* The type scale, top to bottom. Four sizes and no more — a front end
+     with six is a front end where nothing is obviously the title. */
+  --ui-h1: clamp(30px, 7vmin, 88px);
+  --ui-h2: clamp(15px, 2.5vmin, 24px);
+  --ui-row: clamp(12px, 1.75vmin, 16px);
+  --ui-cap: clamp(9px, 1.15vmin, 11px);
+  /* Surfaces. A plate is what a control is drawn on, a rule is what
+     separates two blocks, and `--dim`/`--dimmer` are the two weights
+     below white that a caption and a hint are set in. */
+  --plate: rgba(255, 255, 255, 0.05);
+  --plate-hi: rgba(255, 255, 255, 0.1);
+  --rule: rgba(255, 255, 255, 0.1);
+  --dim: rgba(255, 255, 255, 0.44);
+  --dimmer: rgba(255, 255, 255, 0.3);
+}
+
+/* The backdrop, and it is five layers because a flat wash over a black
+   scene is what "empty" looks like. Bottom to top: a warm glow off the
+   lower-left corner and a cold one off the upper-right, which is the
+   friend/foe pair the whole HUD is coloured by and what gives the frame
+   a direction to be lit from; a vignette that holds the middle down; a
+   diagonal hatch; and the scanlines every card here already had.
+
+   It stays TRANSLUCENT because the scene renders in every state — quit
+   to the menu after a round and the village is still standing behind
+   this, which is worth seeing through a veil and not worth painting
+   over. On a cold boot there is no map yet and the layers are what the
+   player is looking at, which is the case this was drawn for. */
+.ui-veil {
+  /* Dense enough that a lit street behind it cannot take a caption off it.
+     0.7 was the old menu card's, tuned against a menu that stands over
+     nothing; the deploy screen stands over a village with lamps in it, and
+     a panel of small text over that is the case this has to hold up in. */
+  --veil-in: 0.84;
+  --veil-out: 0.98;
+  background:
+    radial-gradient(115% 85% at 10% 112%, rgba(255, 230, 128, 0.1), transparent 60%),
+    radial-gradient(95% 75% at 92% -12%, rgba(53, 240, 255, 0.075), transparent 58%),
+    radial-gradient(
+      ellipse 125% 105% at 50% 46%,
+      rgba(6, 8, 14, var(--veil-in)),
+      rgba(2, 3, 6, var(--veil-out)) 76%
+    ),
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.016) 0 1px, transparent 1px 8px),
+    repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 3px);
+}
+/* **A screen over another SCREEN is opaque; a screen over the SCENE is not.**
+   The menu, the round-over card and the deploy screen all stand over a live
+   3D view that is worth seeing a village through. The settings list and the
+   lobby stand over the MENU — DOM over DOM — and a veil tuned to let a scene
+   through lets a wordmark and a rail of buttons through with it, which reads
+   as two screens up at once rather than as one over the other. Same layers,
+   same light, the vignette closed. */
+.ui-solid { --veil-in: 1; --veil-out: 1; }
+
+/* The frame. Three rows — head, body, foot — with the body taking
+   whatever the other two leave, which is what lets a list grow into a
+   tall window without the title and the hints moving. */
+.ui-screen {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: clamp(10px, 2vh, 26px);
+  padding: var(--ui-pad-y) var(--ui-pad-x);
+}
+/* Corner ticks on the frame itself, at the four edges of the viewport.
+   The cheapest mark there is that says the whole window is the screen
+   rather than the panel in the middle of it — and the one thing on any
+   of these that is genuinely decoration, which is why it is a pair of
+   pseudo-elements on the root and not markup anybody has to remember. */
+.ui-screen::before,
+.ui-screen::after {
+  content: "";
+  position: absolute;
+  width: clamp(14px, 2.4vmin, 30px);
+  height: clamp(14px, 2.4vmin, 30px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  pointer-events: none;
+}
+.ui-screen::before {
+  top: calc(var(--ui-pad-y) * 0.5);
+  left: calc(var(--ui-pad-x) * 0.4);
+  border-right: 0;
+  border-bottom: 0;
+}
+.ui-screen::after {
+  bottom: calc(var(--ui-pad-y) * 0.5);
+  right: calc(var(--ui-pad-x) * 0.4);
+  border-left: 0;
+  border-top: 0;
+}
+
+/* --- the head: what this screen is, and what it is about ---
+   The title block runs to the left edge of the frame and the meta slot
+   to the right, with a hairline under both. `align-items: end` so a
+   one-line meta sits on the title's baseline however tall the title
+   grows — the two are read as one line and a meta floating at the top of
+   a 90px wordmark reads as a detached label. */
+.ui-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  /* Wraps, because the meta is a right-aligned block in the same row as the
+     title and nothing bounds either: a weapon's name beside a screen's name
+     in a column 190 px wide (the kit screen in portrait) is two blocks laid
+     over each other, and a head that overlaps its own title is worse than one
+     that costs a second line. */
+  flex-wrap: wrap;
+  gap: var(--ui-gap);
+  padding-bottom: clamp(8px, 1.4vh, 16px);
+  border-bottom: 1px solid var(--rule);
+}
+/* --- the rules run to the glass; the CONTENT lines up with the body ---
+   The head's hairline and the foot's are the frame, so they span the whole
+   viewport. What hangs off them must not: with the body capped at `--ui-max`
+   and centred, a wordmark in the frame's own corner sits a third of a metre
+   left of the rail underneath it on an ultrawide, and two left-aligned things
+   at two different x is the one misalignment the eye picks out of any layout.
+
+   The inset is the body's own — half of whatever the cap leaves over — and it
+   resolves to zero on every window narrower than `--ui-max`, so nothing below
+   an ultrawide moves at all. A percentage in `padding` measures the containing
+   block's WIDTH, which here is the frame's content box: the same box the body
+   is centred in. */
+.ui-head,
+.ui-foot {
+  padding-inline: max(0px, (100% - var(--ui-max)) / 2);
+}
+.ui-head .ui-titles { min-width: 0; }
+/* The eyebrow over a title: what KIND of screen this is, at the size
+   every caption in this interface is set at. */
+.ui-eyebrow {
+  display: block;
+  font-size: var(--ui-cap);
+  font-weight: 700;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: rgba(255, 230, 128, 0.75);
+}
+/* The screen's own name. Not the wordmark — the menu overrides this with
+   `--ui-h1`, and it is the only screen that earns it.
+
+   Scoped to `.ui-head` rather than to `.ui-screen`, because the kit screen
+   carries the head without the frame: its right half is a hole the turntable
+   is placed through, so it cannot be a `.ui-screen` at all, and a title rule
+   that only applied inside one would have left that screen the only heading
+   in the interface set in sentence case. */
+.ui-head h2 {
+  font-size: var(--ui-h2);
+  font-weight: 800;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #fff;
+  line-height: 1.05;
+}
+/* The right-hand slot. A stack of small facts — a status line, a region,
+   a ticket count — right-aligned so the column ends on the frame's edge
+   whatever the longest of them happens to be. */
+.ui-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  text-align: right;
+  font-size: var(--ui-cap);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.ui-meta b {
+  font-size: var(--ui-row);
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: #fff;
+}
+
+/* --- the body: a list and what the list is about ---
+   Two columns, and the second one is the whole argument for the frame.
+   A menu is five decisions, which is a short list and a lot of leftover
+   window; giving the leftover to a PANEL that describes the row the
+   cursor is on turns the space into the reason to have it — which map,
+   which enemy, which kit — instead of margin.
+
+   `minmax(0, …)` on both tracks because either can hold something with
+   an intrinsic width (a canvas, a key chip, a long weapon name) and a
+   grid track sized to that stops being a fraction of the window. */
+.ui-body {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: var(--ui-gap);
+  align-items: stretch;
+  width: 100%;
+  max-width: var(--ui-max);
+  margin: 0 auto;
+  min-height: 0;
+}
+/* One column: a screen whose panel is the whole of it (the deploy map is
+   its own case and declares its own tracks). */
+.ui-body.solo { grid-template-columns: minmax(0, 1fr); }
+.ui-rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(4px, 0.8vh, 9px);
+  min-width: 0;
+}
+/* The panel — an OPEN column separated by a rule, not a box.
+   
+   It was a chamfered plate first and the plate was the wrong shape for
+   what goes in it: the panel is full-height because it is one side of
+   the screen, while what it holds is between four lines and a
+   schematic, so on the short rows a box read as an oversized empty
+   container rather than as a column with something in it. A rule down
+   its edge does the whole job — it says where the column starts and
+   claims nothing about what fills it.
+
+   A screen that wants a plate adds `.frame` and gets the same hull the
+   gauges use; the rule steps aside for it, since a border and a hull an
+   inch apart is two edges for one column. */
+.ui-panel {
+  --cham: clamp(12px, 2vmin, 22px);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.6vh, 18px);
+  min-width: 0;
+  padding: clamp(10px, 1.8vmin, 24px) 0
+    clamp(10px, 1.8vmin, 24px) clamp(14px, 2.4vmin, 34px);
+  border-left: 1px solid var(--rule);
+}
+.ui-panel.frame {
+  padding: clamp(14px, 2.4vmin, 30px);
+  border-left: 0;
+  --frame-fill: rgba(6, 8, 14, 0.72);
+}
+
+/* The fact strip — a figure over its caption, two or three across, under a
+   rule. The menu's panel and the settings screen's both end on one, which is
+   what puts it here rather than in either sheet.
+
+   Equal columns rather than shrink-wrapped, so the figures sit on the same
+   rhythm whatever they happen to say: "Clear" and "480 m" are the same cell,
+   and a strip that re-flowed as the cursor moved down a list would be the one
+   thing on the panel drawing attention to itself. */
+.ui-facts {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: clamp(8px, 1vw, 18px);
+  padding-top: clamp(8px, 1.2vh, 14px);
+  border-top: 1px solid var(--rule);
+}
+.ui-facts b {
+  display: block;
+  font-size: clamp(15px, 2.4vmin, 26px);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--hot);
+}
+.ui-facts span {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--ui-cap);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+}
+
+/* --- one column, when there are not two columns' worth of room ---
+   Keyed on width AND on aspect, because the two ways this gets tight are
+   different shapes. A narrow window has no room for a panel beside a
+   rail; a window that is nearly square has room and no HEIGHT to spend
+   on what stacking would cost. The panel goes rather than shrinking:
+   half a panel says less than none and takes the rail's room to say it.
+
+   `--ui-lean` is what a screen reads to leave its own optional matter
+   out — the deploy screen's hint row, the menu's tagline — and it is a
+   custom property rather than each sheet re-stating these two queries. */
+#hud { --ui-lean: 0; }
+@media (max-width: 900px), (max-height: 460px) {
+  #hud { --ui-lean: 1; }
+  .ui-body { grid-template-columns: minmax(0, 1fr); }
+  .ui-body > .ui-panel.ui-optional { display: none; }
 }
 
 /* --- the screen-opening buttons on the menu and the deploy screen ---
@@ -225,9 +568,9 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 8px 20px;
+  padding: clamp(7px, 1.1vh, 12px) clamp(12px, 1.4vw, 22px);
   color: #cdd6e6;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--plate);
   border: 0;
   cursor: pointer;
   text-align: left;
@@ -238,9 +581,9 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 #overlay button.settings-open b,
 #overlay button.mp-open b,
 #deploy-kit b {
-  font-size: 12px;
+  font-size: var(--ui-row);
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 #overlay button.kit-open i,
@@ -248,10 +591,10 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 #overlay button.mp-open i,
 #deploy-kit i {
   font-style: normal;
-  font-size: 10px;
+  font-size: var(--ui-cap);
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--dim);
 }
 #overlay button.kit-open:hover,
 #overlay button.settings-open:hover,
@@ -319,7 +662,14 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
    this rule verbatim, which is the bar base.css states at the top of the
    file. A screen adds `class="ui-foot"` to its footer and `ui-back` to the
    button in it; anything it needs on top of that (the kit screen wants a
-   width) goes in its own sheet. */
+   width) goes in its own sheet.
+
+   In the shell it is the frame's bottom ROW, so it runs the full width
+   of the viewport with a hairline over it — the same rule the head hangs
+   under, which is what closes the frame. That is also why the hints wrap
+   rather than shrink: the rail is as wide as the window, so on anything
+   but a phone they all fit on one line, and on a phone a second line is
+   cheaper than a chip nobody can read. */
 .ui-foot {
   display: flex;
   align-items: center;
@@ -328,13 +678,19 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
      can be a landscape phone. A row that breaks is two short lines; one
      that cannot puts the button past the panel's edge. */
   flex-wrap: wrap;
-  gap: 10px 20px;
+  gap: 8px clamp(12px, 2vw, 30px);
   width: 100%;
-  font-size: 10px;
+  padding-top: clamp(8px, 1.4vh, 16px);
+  border-top: 1px solid var(--rule);
+  font-size: var(--ui-cap);
   letter-spacing: 0.2em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--dimmer);
 }
+/* The one exception: a footer inside a panel of its own (the kit screen's
+   left column) closes that panel rather than the frame, and a rule there
+   would be a second horizontal line a few pixels above the frame's. */
+.ui-foot.bare { border-top: 0; padding-top: 0; }
 /* One hint: its key chips and the word they mean, kept together on a line
    of their own so a wrap never splits a chip from its label. */
 .ui-foot span {
@@ -344,7 +700,7 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
 }
 .ui-foot kbd {
   font: inherit;
-  font-size: 10px;
+  font-size: var(--ui-cap);
   font-weight: 700;
   letter-spacing: 0.1em;
   padding: 3px 7px;
@@ -372,10 +728,10 @@ body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   align-items: center;
   gap: 5px;
   font: inherit;
-  font-size: 10px;
+  font-size: var(--ui-cap);
   letter-spacing: 0.2em;
   text-transform: uppercase;
-  padding: 6px 14px;
+  padding: 7px clamp(12px, 1.4vw, 22px);
   color: var(--hot);
   background: rgba(255, 230, 128, 0.1);
   border: 0;

@@ -30,6 +30,13 @@
  * raises one of them.
  */
 import "./overlay.css";
+import { CONFIG } from "../config";
+import { difficultyTiers } from "../entities/BotSkill";
+import type { SightId } from "../entities/sights";
+import type { PrimaryWeaponId } from "../entities/weapons";
+import type { MapDef } from "../world/maps";
+import { kitLabel, WEAPON_BLURBS } from "./LoadoutScreen";
+import { drawMapThumb } from "./MapThumb";
 
 /**
  * What the pause menu can do, and the label for each. In screen order.
@@ -73,13 +80,22 @@ type MenuItem =
  * difficulty tier still typechecks and silently picks the wrong thing.
  */
 export interface MenuState {
-  maps: readonly string[];
+  /**
+   * The maps themselves, not their names.
+   *
+   * The panel beside the list draws a thumbnail of the highlighted map out of
+   * its layout and colours it out of its environment, so what this row needs
+   * is the `MapDef` — and once it has that, the flag count and the extent the
+   * card used to be handed separately are read off the same object rather than
+   * being passed alongside it and trusted to agree.
+   */
+  maps: readonly MapDef[];
   selectedMap: number;
   difficulties: readonly string[];
   selected: number;
-  kit: string;
-  /** The chosen map's control-point count — the tagline states it. */
-  flagCount: number;
+  /** The two slots, by id: the panel names them apart and quotes their table. */
+  weapon: PrimaryWeaponId;
+  sight: SightId;
 }
 
 /**
@@ -123,6 +139,32 @@ const MENU_ITEMS: readonly MenuItem[] = [
  */
 const MENU_DEFAULT = MENU_ITEMS.indexOf("start");
 
+/**
+ * The panel's three shapes, as three functions rather than three copies of the
+ * same markup in five branches of `drawDetail`.
+ *
+ * A head (what kind of thing this is, and which one), a fact strip (a figure
+ * over its caption, two or three across), and the whole block for the rows
+ * whose panel is only a paragraph. Everything they take is this build's own
+ * constants — a map's name, a tier's blurb, a weapon's table — so it is
+ * interpolated; nothing a player or a server typed reaches this screen at all.
+ */
+function detailHead(eyebrow: string, title: string): string {
+  return `<div class="ov-detail-head">
+      <span class="ui-eyebrow">${eyebrow}</span><h3>${title}</h3>
+    </div>`;
+}
+
+function facts(rows: readonly [string, string][]): string {
+  return `<div class="ui-facts">${rows
+    .map(([value, label]) => `<div><b>${value}</b><span>${label}</span></div>`)
+    .join("")}</div>`;
+}
+
+function detailBlock(eyebrow: string, title: string, blurb: string): string {
+  return `${detailHead(eyebrow, title)}<p class="ov-blurb">${blurb}</p>`;
+}
+
 export class OverlayScreen {
   private root: HTMLElement;
   /** Live only while the pause card is up — the buttons die with its markup. */
@@ -137,6 +179,20 @@ export class OverlayScreen {
   /** The map row's state, same reason. */
   private mapCount = 0;
   private mapIndex = 0;
+  /**
+   * What the panel beside the list draws itself from, held because the panel
+   * is redrawn on every cursor move while `showMenu` is called only when
+   * something actually changed. Both are set from the `MenuState` and never
+   * decided here — this screen still knows nothing about the game beyond what
+   * it is handed.
+   */
+  private maps: readonly MapDef[] = [];
+  private kit: { weapon: PrimaryWeaponId; sight: SightId } = {
+    weapon: "rifle",
+    sight: "holo",
+  };
+  /** The panel element, live only while the menu card is up. */
+  private detailEl: HTMLElement | null = null;
   /**
    * Which card is up. The cursor is reset when the menu is RAISED and kept
    * across a redraw: `showMenu` is called again on every difficulty change and
@@ -171,23 +227,38 @@ export class OverlayScreen {
     // can be taken with either of those on screen and an overlay you can see a
     // map through is not an overlay.
     document.getElementById("hud")!.appendChild(this.root);
+    // The one thing on this screen that a resize genuinely breaks. Everything
+    // else here is CSS and re-lays itself; the map schematic is a canvas whose
+    // backing store was sized to the box it had when it was drawn, so a window
+    // dragged wider leaves it stretched. Guarded on the card, because the
+    // panel only exists on one of the four.
+    window.addEventListener("resize", () => {
+      if (this.card === "menu") this.paintThumb();
+    });
   }
 
   /**
-   * The main menu: the difficulty picker and the way into the loadout screen.
+   * The main menu: a rail of five decisions with the Deploy button under them,
+   * and the panel beside it saying what the cursor is standing on.
    *
-   * The kit itself is not edited here — it is two slots and a stat chart now,
-   * which is a screen rather than a strip of buttons under a title. What sits
-   * here is the button that opens it and a reminder of what is currently in
-   * the player's hands, which is the part of the old row that was worth
-   * keeping on the menu.
+   * The kit itself is not edited here — it is two slots and a stat chart, which
+   * is a screen rather than a strip of buttons under a title. What sits here is
+   * the button that opens it and a reminder of what is currently in the
+   * player's hands.
    *
-   * The two rows are ONE grid, not two centred rows. They are the same shape —
-   * label, control, hint — and centring each independently put their labels,
-   * their controls and their hints at three different x each, which is most of
-   * what made this screen read as a pile rather than a panel. `.ov-settings`
-   * owns the columns and each row is `display: contents`, so the label column
-   * ends on one edge and both controls begin on the next.
+   * The card is drawn in the shell (`.ui-screen` in `base.css`) and is ANCHORED
+   * to the viewport rather than centred in it. It was a 600px column down the
+   * middle of the window, which on a monitor is a quarter of the width in use
+   * and nothing within 500px of an edge — a dialog box over a game rather than
+   * the game's own front end. What that column's width bought was alignment,
+   * and the rail keeps it a different way: every row states the same three
+   * tracks, so the labels line up and every control begins on one edge.
+   *
+   * Each row is a BOX now rather than `display: contents`, because each one
+   * carries a selection — a plate and an accent bar down its left side. The
+   * label column is a percentage rather than `max-content`, and that is what
+   * keeps the alignment: a content-sized track is measured per row, so five
+   * rows would find five widths.
    *
    * `#overlay` is inside a `pointer-events: none` HUD and does not opt back in
    * (only `#deploy` does), so the individual CONTROLS ask for pointer events —
@@ -199,16 +270,19 @@ export class OverlayScreen {
    * those two fire on mouse-UP, and the confirm reads the mouse-DOWN before it.
    */
   showMenu(opts: MenuState): void {
-    const { maps, selectedMap, difficulties, selected, kit, flagCount } = opts;
-    this.root.classList.remove("hidden");
+    const { maps, selectedMap, difficulties, selected } = opts;
     this.setOverlaid(true);
     // Raised anew, not redrawn — see `card`.
     if (this.card !== "menu") this.menuIndex = MENU_DEFAULT;
     this.card = "menu";
+    this.kit = { weapon: opts.weapon, sight: opts.sight };
+    this.maps = maps;
     this.tierCount = difficulties.length;
     this.tier = selected;
     this.mapCount = maps.length;
     this.mapIndex = selectedMap;
+    const map = maps[selectedMap];
+    const flags = map ? map.layout.controlPoints.length : 0;
     const tiers = difficulties
       .map(
         (name, i) =>
@@ -217,48 +291,62 @@ export class OverlayScreen {
       .join("");
     const mapButtons = maps
       .map(
-        (name, i) =>
-          `<button class="tier${i === selectedMap ? " on" : ""}" data-map="${i}">${name}</button>`,
+        (m, i) =>
+          `<button class="tier${i === selectedMap ? " on" : ""}" data-map="${i}">${m.name}</button>`,
       )
       .join("");
+    this.setCardClass("menu");
     this.root.innerHTML = `
-      <div class="ov-title">
-        <h1>HOLLOWMERE</h1>
-        <p class="tagline">Conquest &mdash; take and hold ${spellCount(flagCount)} points against Redline</p>
-      </div>
-      <div class="ov-settings">
-        <div class="segmented" data-menu="map">
-          <span class="label">Map</span>
-          <div class="tiers">${mapButtons}</div>
-          <span class="hint">&larr; &rarr;</span>
+      <div class="ui-head">
+        <div class="ui-titles">
+          <span class="ui-eyebrow">Cel-shaded conquest</span>
+          <h1>HOLLOWMERE</h1>
+          <p class="tagline">Take and hold ${spellCount(flags)} points against ${CONFIG.teams[1].name}</p>
         </div>
-        <div class="segmented" data-menu="difficulty">
-          <span class="label">Enemy skill</span>
-          <div class="tiers">${tiers}</div>
-          <span class="hint">&larr; &rarr;</span>
-        </div>
-        <div class="kit" data-menu="loadout">
-          <span class="label">Loadout</span>
-          <button class="kit-open"><b>${kit}</b><i>Change kit</i></button>
-          <span class="hint">L / Y</span>
-        </div>
-        <div class="kit" data-menu="settings">
-          <span class="label">Options</span>
-          <button class="settings-open"><b>Settings</b><i>Controls &middot; display</i></button>
-          <span class="hint">O</span>
-        </div>
-        <div class="kit" data-menu="multiplayer">
-          <span class="label">Online</span>
-          <button class="mp-open"><b>Multiplayer</b><i>Browse matches</i></button>
-          <span class="hint">M</span>
+        <div class="ui-meta">
+          <span>Deployment</span>
+          <b>${CONFIG.bots.perTeam} v ${CONFIG.bots.perTeam}</b>
+          <span>${CONFIG.teams[0].name}</span>
         </div>
       </div>
-      <button class="ov-start" data-menu="start"><b>Deploy</b><i>Enter &middot; A &middot; Start</i></button>
-      <p class="ov-nav">
+      <div class="ui-body">
+        <div class="ui-rail">
+          <div class="ov-row segmented" data-menu="map">
+            <span class="label">Map</span>
+            <div class="tiers">${mapButtons}</div>
+            <span class="hint">&larr; &rarr;</span>
+          </div>
+          <div class="ov-row segmented" data-menu="difficulty">
+            <span class="label">Enemy</span>
+            <div class="tiers">${tiers}</div>
+            <span class="hint">&larr; &rarr;</span>
+          </div>
+          <div class="ov-row kit" data-menu="loadout">
+            <span class="label">Loadout</span>
+            <button class="kit-open"><b>${kitLabel(opts.weapon, opts.sight)}</b><i>Change kit</i></button>
+            <span class="hint">L / Y</span>
+          </div>
+          <div class="ov-row kit" data-menu="settings">
+            <span class="label">Options</span>
+            <button class="settings-open"><b>Settings</b><i>Controls &middot; display</i></button>
+            <span class="hint">O</span>
+          </div>
+          <div class="ov-row kit" data-menu="multiplayer">
+            <span class="label">Online</span>
+            <button class="mp-open"><b>Multiplayer</b><i>Browse matches</i></button>
+            <span class="hint">M</span>
+          </div>
+          <button class="ov-start" data-menu="start"><b>Deploy</b><i>Enter &middot; A &middot; Start</i></button>
+        </div>
+        <div class="ui-panel ui-optional ov-detail"></div>
+      </div>
+      <p class="ui-foot">
         <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick / D-pad</kbd> move</span>
+        <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> change</span>
         <span><kbd>Enter</kbd><kbd class="pad">A</kbd> select</span>
       </p>
     `;
+    this.detailEl = this.root.querySelector(".ov-detail");
     this.root
       .querySelectorAll<HTMLElement>("button[data-tier]")
       .forEach((btn) => {
@@ -291,6 +379,186 @@ export class OverlayScreen {
     const mpBtn = this.root.querySelector<HTMLElement>("button.mp-open");
     if (mpBtn) mpBtn.onpointerdown = () => this.onOpenMultiplayer();
     this.bindStart();
+  }
+
+  /**
+   * The panel beside the list, and the reason the menu is a two-column screen
+   * rather than a column down the middle of one.
+   *
+   * A front end for a game with five decisions on it is a short list and a
+   * great deal of leftover window. The leftover is spent here, on whatever the
+   * cursor is standing on: which map, drawn and described; which enemy, and
+   * what that tier is like to fight; what is in your hands and what it does.
+   * That is the whole justification for the width — a wide screen that puts
+   * the same six rows in the middle of more emptiness has not used the space,
+   * it has just left more of it.
+   *
+   * It is REDRAWN on every cursor move and the rows are not: the rows carry
+   * the selection as a class on elements that already exist (see
+   * `applyMenuSelection`), because moving down a list must not restart the
+   * title's animation or drop the hover under the mouse. The panel has neither
+   * a listener nor a transition on it, so rewriting it costs a layout of one
+   * box and nothing that can be seen going wrong.
+   *
+   * `start` gets the DEPLOYMENT BRIEF rather than nothing, and that is where
+   * the cursor opens: the map, the enemy and the kit, which between them are
+   * the whole of what pressing the button under it is about.
+   */
+  private drawDetail(): void {
+    const el = this.detailEl;
+    if (!el) return;
+    const item = MENU_ITEMS[this.menuIndex];
+    const map = this.maps[this.mapIndex];
+    switch (item) {
+      case "map":
+        el.innerHTML = map ? this.mapDetail(map) : "";
+        break;
+      case "difficulty":
+        el.innerHTML = this.tierDetail();
+        break;
+      case "loadout":
+        el.innerHTML = this.kitDetail();
+        break;
+      case "settings":
+        el.innerHTML = detailBlock(
+          "Options",
+          "Settings",
+          "Look speed for mouse, stick and thumb; how much of the screen the " +
+            "renderer is given; and the full control map for all three.",
+        );
+        break;
+      case "multiplayer":
+        el.innerHTML = detailBlock(
+          "Online",
+          "Multiplayer",
+          `Browse what every region is running, or start a round of your own. ` +
+            `Sixteen slots either way — every seat nobody is sitting in is a bot, ` +
+            `and it stands up again when they leave.`,
+        );
+        break;
+      case "start":
+        el.innerHTML = this.briefDetail(map);
+        break;
+    }
+    this.paintThumb();
+  }
+
+  /** The map row's panel: the schematic, the line, and the three facts. */
+  private mapDetail(map: MapDef): string {
+    return `
+      ${detailHead("Map", map.name)}
+      <div class="ov-thumb"><canvas></canvas></div>
+      <p class="ov-blurb">${map.blurb}</p>
+      ${this.mapFacts(map)}
+    `;
+  }
+
+  /**
+   * What is countable about a map, read off the map rather than written down
+   * beside it: how many flags, how big the square is, and how far you can
+   * actually see across it — which on this game's maps is the single biggest
+   * difference between two of them, and is `fogEnd` against the map's extent
+   * rather than a weather note somebody has to remember to update.
+   */
+  private mapFacts(map: MapDef): string {
+    const size = map.layout.size ?? CONFIG.map.size;
+    const fog = map.environment.fogEnd;
+    return facts([
+      [String(map.layout.controlPoints.length), "Control points"],
+      [`${size} m`, "Across"],
+      [fog >= size ? "Clear" : `${Math.round(fog)} m`, "Visibility"],
+    ]);
+  }
+
+  /**
+   * The enemy row's panel: a meter, the tier's line, and the reaction time.
+   *
+   * The meter's rungs are placed at each tier's own `centre`, not at equal
+   * steps, so the gap between Veteran and Elite reads as the small one it is
+   * and the gap below Recruit reads as the room that is left. Both numbers are
+   * `CONFIG.bots.skill`'s — the tier and the wind-up it actually gets — so
+   * this cannot describe a difficulty the bots are not being given.
+   */
+  private tierDetail(): string {
+    const tiers = difficultyTiers();
+    const t = tiers[this.tier];
+    if (!t) return "";
+    const react = CONFIG.bots.skill.reactionTime;
+    const wind = react.rookie + (react.ace - react.rookie) * t.centre;
+    const rungs = tiers
+      .map(
+        (r, i) =>
+          `<i class="${i <= this.tier ? "on" : ""}" style="left:${(r.centre * 100).toFixed(1)}%"></i>`,
+      )
+      .join("");
+    return `
+      ${detailHead("Enemy skill", t.name)}
+      <div class="ov-meter"><span style="width:${(t.centre * 100).toFixed(1)}%"></span>${rungs}</div>
+      <p class="ov-blurb">${t.blurb}</p>
+      ${facts([
+        [`${wind.toFixed(2)} s`, "Reaction"],
+        [`${CONFIG.bots.perTeam}`, "Per side"],
+        [`${Math.round(t.centre * 100)}%`, "Skill band"],
+      ])}
+    `;
+  }
+
+  /** The loadout row's panel: the two slots, named apart and quoted. */
+  private kitDetail(): string {
+    const w = CONFIG.weapons[this.kit.weapon];
+    const s = CONFIG.sights[this.kit.sight];
+    return `
+      ${detailHead("Loadout", w.name)}
+      <p class="ov-blurb">${WEAPON_BLURBS[this.kit.weapon]}</p>
+      ${facts([
+        [w.damageFar === w.damage ? `${w.damage}` : `${w.damage}–${w.damageFar}`, "Damage"],
+        [`${w.magSize}`, "Magazine"],
+        [`${w.range} m`, "Range"],
+      ])}
+      <div class="ov-slot">
+        <span class="ui-eyebrow">Optic</span>
+        <b>${s.name}</b>
+        <i>${s.magnification.toFixed(1)}&times; magnification</i>
+      </div>
+    `;
+  }
+
+  /**
+   * The brief: what the Deploy button under the cursor is about to spend.
+   *
+   * Three lines and the map's own schematic, which is the summary a player
+   * arriving at this screen and pressing A immediately never otherwise gets to
+   * see — and the one place the three separate decisions above are shown
+   * having been made together.
+   */
+  private briefDetail(map: MapDef | undefined): string {
+    const tier = difficultyTiers()[this.tier];
+    return `
+      ${detailHead("Ready", "Deployment brief")}
+      <div class="ov-thumb"><canvas></canvas></div>
+      <div class="ov-brief">
+        <div><span>Map</span><b>${map ? map.name : "&mdash;"}</b></div>
+        <div><span>Enemy</span><b>${tier ? tier.name : "&mdash;"}</b></div>
+        <div><span>Kit</span><b>${kitLabel(this.kit.weapon, this.kit.sight)}</b></div>
+      </div>
+    `;
+  }
+
+  /**
+   * Paints the map schematic, if the panel that is up has one in it.
+   *
+   * Separate from the markup because a canvas is not markup: it has to be
+   * drawn AFTER the element is in the document and has been laid out, since
+   * `drawMapThumb` sizes its backing store from the box it was given. Reading
+   * that box here forces the layout the assignment above deferred, which is
+   * the one synchronous reflow this screen pays and is why it is not on a
+   * frame callback — a thumbnail that arrives a frame after the row it belongs
+   * to reads as the panel flickering.
+   */
+  private paintThumb(): void {
+    const canvas = this.detailEl?.querySelector("canvas");
+    const map = this.maps[this.mapIndex];
+    if (canvas && map) drawMapThumb(canvas, map);
   }
 
   /**
@@ -383,8 +651,20 @@ export class OverlayScreen {
     MENU_ITEMS.forEach((item, i) => {
       this.menuEls.get(item)?.classList.toggle("sel", i === this.menuIndex);
     });
+    // The panel IS redrawn, and only the panel: it carries no listener, no
+    // transition and no hover state, so there is nothing on it a rewrite can
+    // interrupt — which is exactly what the rows above cannot say.
+    this.drawDetail();
   }
 
+  /**
+   * The round-over card: who holds the map, and what it cost both sides.
+   *
+   * The result is the SCREEN rather than a line under a title. Two blocks
+   * facing each other across a bar, each in its own side's colour, with the
+   * reinforcements each has left — which is the number the round was actually
+   * decided by, and was a 24 px pair in a strip 600 px wide before this.
+   */
   showRoundOver(
     winnerName: string,
     playerWon: boolean,
@@ -392,20 +672,50 @@ export class OverlayScreen {
     tickets1: number,
     mapName: string,
   ): void {
-    this.root.classList.remove("hidden");
+    this.setCardClass("roundover");
     this.setOverlaid(true);
     this.card = "roundover";
     this.menuEls.clear();
+    this.detailEl = null;
+    // The bar is the two counts against each other rather than against the
+    // ticket pool they started from: a round that ends 142-0 and one that ends
+    // 12-0 are not the same round, and the pool is the same number on both
+    // sides so the share IS the margin.
+    const total = Math.max(1, tickets0 + tickets1);
     this.root.innerHTML = `
-      <div class="ov-title">
-        <h1 class="${playerWon ? "win" : "dead"}">${playerWon ? "VICTORY" : "DEFEAT"}</h1>
-        <p class="tagline">${winnerName} hold ${mapName}</p>
+      <div class="ui-head">
+        <div class="ui-titles">
+          <span class="ui-eyebrow">Round over &middot; ${mapName}</span>
+          <h1 class="${playerWon ? "win" : "dead"}">${playerWon ? "VICTORY" : "DEFEAT"}</h1>
+        </div>
+        <div class="ui-meta">
+          <span>Holding the map</span>
+          <b>${winnerName}</b>
+        </div>
       </div>
-      <div class="ov-result frame">
-        <span class="lbl">REINFORCEMENTS REMAINING</span>
-        <span class="vals"><b>${tickets0}</b><i>/</i><b>${tickets1}</b></span>
+      <div class="ui-body solo">
+        <div class="ov-outcome">
+          <div class="ov-result frame">
+            <span class="lbl">Reinforcements remaining</span>
+            <div class="ov-sides">
+              <div class="side mine">
+                <span>${CONFIG.teams[0].name}</span><b>${tickets0}</b>
+              </div>
+              <div class="ov-split">
+                <i class="mine" style="flex:${tickets0 / total}"></i>
+                <i class="theirs" style="flex:${tickets1 / total}"></i>
+              </div>
+              <div class="side theirs">
+                <span>${CONFIG.teams[1].name}</span><b>${tickets1}</b>
+              </div>
+            </div>
+          </div>
+          <button class="ov-start"><b>Another round</b><i>Enter &middot; A &middot; Start</i></button>
+        </div>
       </div>
-      <button class="ov-start"><b>Another round</b><i>Enter &middot; A &middot; Start</i></button>
+      <p class="ui-foot">
+        <span><kbd>Enter</kbd><kbd class="pad">A</kbd> deploy again</span>
+      </p>
     `;
     this.bindStart();
   }
@@ -433,17 +743,23 @@ export class OverlayScreen {
    * constraint on which CSS properties may animate it, not a style choice.
    */
   showBuilding(mapName: string): void {
-    this.root.classList.remove("hidden");
+    this.setCardClass("building");
     this.setOverlaid(true);
     this.card = "building";
     this.menuEls.clear();
+    this.detailEl = null;
+    // Centred and deliberately bare. Everything else in this file grew a
+    // second column while this card did not, and the reason is the freeze it
+    // covers: whatever is on it has to be PAINTED before the main thread stops,
+    // so a panel with a canvas in it would be a schematic drawn on the frame
+    // the player was already waiting through. A name, a word and a bar.
     this.root.innerHTML = `
-      <div class="ov-title">
+      <div class="ov-build">
+        <span class="ui-eyebrow">Building</span>
         <h1 class="building-title">${mapName}</h1>
-        <p class="tagline">Building the valley</p>
+        <p class="prompt">Stand by</p>
+        <div class="ov-bar"><i></i></div>
       </div>
-      <p class="prompt">Stand by</p>
-      <div class="ov-bar"><i></i></div>
     `;
   }
 
@@ -463,20 +779,28 @@ export class OverlayScreen {
    * list does not restart the prompt's animation or drop the hover state.
    */
   showPause(): void {
-    this.root.classList.remove("hidden");
+    this.setCardClass("pause");
     this.card = "pause";
     this.menuEls.clear();
+    this.detailEl = null;
     const items = PAUSE_ITEMS.map(
       ([action, label]) =>
         `<button class="pact" data-action="${action}">${label}</button>`,
     ).join("");
+    // Anchored to the LEFT and scrimmed from that side only, which is the one
+    // place in this file a card deliberately does not take the screen. The
+    // round under a pause is this round, frozen where it stood: the flags
+    // along the top, your own vitals, the body you were about to shoot. A
+    // full-bleed veil over that is a card hiding the thing it is a pause IN,
+    // and `setOverlaid` is not called here for exactly the same reason.
     this.root.innerHTML = `
-      <div class="ov-title">
+      <div class="ov-pause">
+        <span class="ui-eyebrow">Round held</span>
         <h1 class="pause-title">PAUSED</h1>
-        <p class="tagline">The round is held &mdash; nothing moves until you resume</p>
+        <p class="tagline">Nothing moves until you resume</p>
+        <div class="pause-actions">${items}</div>
+        <p class="prompt">Esc &middot; Start &middot; B to resume</p>
       </div>
-      <div class="pause-actions">${items}</div>
-      <p class="prompt">Esc &middot; Start &middot; B to resume</p>
     `;
     this.pauseButtons = [];
     this.root
@@ -509,10 +833,29 @@ export class OverlayScreen {
     this.pauseButtons.forEach((b, k) => b.classList.toggle("on", k === i));
   }
 
+  /**
+   * Which card is up, as a class on the root — and what BACKDROP it gets.
+   *
+   * Three of the four are full-bleed screens over a scene that is either last
+   * round's or nothing at all, and they take the shell's frame and its veil.
+   * The pause is the exception and has to be: it is a lid over a live round
+   * that the player is coming back to, so it is anchored to one side and
+   * scrimmed from that side only. Setting `className` outright rather than
+   * toggling is what stops the previous card's modifier surviving into the
+   * next one — every one of these rewrites the markup underneath it anyway.
+   */
+  private setCardClass(
+    card: "menu" | "roundover" | "building" | "pause",
+  ): void {
+    this.root.className =
+      card === "pause" ? "card-pause" : `ui-screen ui-veil card-${card}`;
+  }
+
   /** Takes whichever card is up back down. The single way off all three. */
   hide(): void {
-    this.root.classList.add("hidden");
+    this.root.className = "hidden";
     this.setOverlaid(false);
+    this.detailEl = null;
     // The buttons live in the card's markup, so they die with it.
     this.pauseButtons = [];
     this.pauseIndex = 0;

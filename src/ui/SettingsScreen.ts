@@ -115,8 +115,20 @@ const BINDINGS: readonly Binding[] = [
 interface Page {
   label: string;
   rows: readonly AnyControl[];
-  /** The key-cap table under the rows, on the page that carries one. */
+  /** The key-cap table beside the rows, on the page that carries one. */
   bindings?: readonly Binding[];
+  /**
+   * What the page's panel says about the MACHINE, under the row's own line.
+   *
+   * A function rather than a table of strings because every one of these is
+   * measured at the moment it is drawn — the window's size, the pixel ratio —
+   * and a settings screen that reports the size the window was when the bundle
+   * loaded is worse than one that reports nothing. It is also what keeps the
+   * Display page's panel from being a heading and one sentence in a column the
+   * height of the screen: the Controls page has a key table to fill it and
+   * this is the other page's answer.
+   */
+  facts?: () => readonly [string, string][];
 }
 
 /** Off/On, the shape four of the rows share. */
@@ -206,6 +218,22 @@ const PAGES: readonly Page[] = [
         options: OFF_ON,
       },
     ],
+    // What the ladder above actually comes to on this machine. The scene's
+    // backing store is the display's pixels times the ratio times the scale,
+    // and Babylon floors it — the same arithmetic `hintFor` does for the row.
+    facts: () => {
+      const dpr = window.devicePixelRatio || 1;
+      return [
+        [`${window.innerWidth}\u00d7${window.innerHeight}`, "Window"],
+        [dpr.toFixed(2).replace(/\.?0+$/, "") + "\u00d7", "Pixel ratio"],
+        [
+          `${Math.floor(window.innerWidth * dpr)}\u00d7${Math.floor(
+            window.innerHeight * dpr,
+          )}`,
+          "Native",
+        ],
+      ];
+    },
   },
 ];
 
@@ -227,6 +255,20 @@ export class SettingsScreen {
   private root: HTMLElement;
   private body: HTMLElement;
   private values: Settings;
+  /**
+   * The column beside the list: what the cursor's row is FOR, and — on the
+   * page that has one — the key-cap table.
+   *
+   * The hint used to be a third column on every row, which is a sentence
+   * of prose in a cell as wide as a control, set at 10px and clipped when
+   * the panel narrowed. One row's hint at a time, given a column of its own,
+   * is both more of it and less of it on screen: the row you are standing on
+   * gets a heading and a readable line, and the four you are not stop
+   * competing with their own controls for width.
+   */
+  private side!: HTMLElement;
+  /** The head's right-hand slot — which page the list is showing. */
+  private pageEl!: HTMLElement;
   /** Which page is shown. Indexes `PAGES`. */
   private page = 0;
   /** Where the cursor is: 0 is the page selector, 1.. are the page's rows. */
@@ -258,20 +300,36 @@ export class SettingsScreen {
     this.values = { ...initial };
     this.root = document.createElement("div");
     this.root.id = "settings";
-    this.root.className = "hidden";
+    // The shell's frame and its backdrop, carried permanently: this screen has
+    // one card rather than four, so nothing here has to swap them the way
+    // `OverlayScreen.setCardClass` does. `.hidden` is `!important` and wins
+    // over the display the frame sets.
+    this.root.className = "ui-screen ui-veil ui-solid hidden";
     this.root.innerHTML = `
-      <div class="se-panel frame">
-        <h2>SETTINGS</h2>
-        <div class="se-body"></div>
-        <p class="ui-foot">
-          <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick</kbd> row</span>
-          <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>Enter</kbd><kbd class="pad">A</kbd> change</span>
-          <button class="ui-back"><kbd>Esc</kbd><kbd class="pad">B</kbd> Back</button>
-        </p>
+      <div class="ui-head">
+        <div class="ui-titles">
+          <span class="ui-eyebrow">Options</span>
+          <h2>Settings</h2>
+        </div>
+        <div class="ui-meta">
+          <span>Applied as you choose</span>
+          <b class="se-page"></b>
+        </div>
       </div>
+      <div class="ui-body">
+        <div class="se-body"></div>
+        <div class="ui-panel ui-optional se-side"></div>
+      </div>
+      <p class="ui-foot">
+        <span><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd class="pad">Stick</kbd> row</span>
+        <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>Enter</kbd><kbd class="pad">A</kbd> change</span>
+        <button class="ui-back"><kbd>Esc</kbd><kbd class="pad">B</kbd> Back</button>
+      </p>
     `;
     document.getElementById("hud")!.appendChild(this.root);
     this.body = this.root.querySelector(".se-body")!;
+    this.side = this.root.querySelector(".se-side")!;
+    this.pageEl = this.root.querySelector(".se-page")!;
     // The pointer's way off this screen, in the footer every lid screen ends
     // with (`.ui-foot` / `.ui-back` in base.css) — same place, same chips,
     // same weight on all three, which is the point of it being shared.
@@ -479,9 +537,41 @@ export class SettingsScreen {
   }
 
   /**
+   * The panel's head: what the row under the cursor is, and what it does.
+   *
+   * The page selector is row 0 and is answered here like any other row, which
+   * is the same argument that made it a row in the first place — it is a
+   * choice over a list, it takes the same keys, and a screen with a second
+   * kind of thing on it needs a second explanation of how to use it.
+   */
+  private sideMarkup(page: Page): string {
+    const row = this.controlAt(this.row);
+    const label = row ? row.label : "Section";
+    const hint = row
+      ? this.hintFor(row)
+      : "Which group of settings this list shows.";
+    const facts = page.facts?.() ?? [];
+    return `
+      <div class="se-side-head">
+        <span class="ui-eyebrow">${page.label}</span>
+        <h3>${label}</h3>
+      </div>
+      <p class="se-side-hint">${hint}</p>
+      ${
+        facts.length
+          ? `<div class="ui-facts">${facts
+              .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`)
+              .join("")}</div>`
+          : ""
+      }`;
+  }
+
+  /**
    * The key-cap table. Reference and nothing else: no `data-row`, so the cursor
-   * steps straight past it, and it spans every column of the grid rather than
-   * sitting in the control one — it is not a row, it is what the page is about.
+   * steps straight past it — it is not a row, it is what the Controls page is
+   * about, which is why it is in the panel beside the list rather than under
+   * it. Eleven rows under a list is the longest block on the screen and the
+   * thing that decided its height; beside one, it costs the list nothing.
    */
   private bindingsMarkup(bindings: readonly Binding[]): string {
     const rows = bindings
@@ -598,9 +688,13 @@ export class SettingsScreen {
         </div>`;
       })
       .join("");
-    this.body.innerHTML =
-      this.sectionMarkup() +
-      rows +
+    this.body.innerHTML = this.sectionMarkup() + rows;
+    // The panel is rebuilt with the list rather than separately: every path
+    // that redraws the list has moved the cursor, changed the page or changed
+    // a value, and all three are things the panel states.
+    this.pageEl.textContent = page.label;
+    this.side.innerHTML =
+      this.sideMarkup(page) +
       (page.bindings ? this.bindingsMarkup(page.bindings) : "");
 
     // The tabs carry a page index and the option buttons carry a row and an

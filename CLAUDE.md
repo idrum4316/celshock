@@ -362,18 +362,43 @@ can: a refresh inserts match rows above the actions, and a carried index means
 the highlight moves onto a different row while the player's hand is still on
 Enter.
 
+**They are all drawn in ONE FRAME, and the frame is anchored to the VIEWPORT
+rather than centred in it.** `.ui-screen` in `base.css` is three grid rows — a
+head, a body, a foot — with fluid gutters, and the body is the LIST plus the
+PANEL that says what the list's cursor is standing on. That panel is what turns
+a leftover window into a reason to have one: which map, drawn and described;
+which enemy, and what that tier is like to fight. Every one of these screens was
+a ~600 px column floating in the middle of the window, which on a monitor is a
+quarter of the width in use and nothing within 500 px of an edge. The head and
+the foot now run to the glass and `--ui-max` caps the body, so the chrome
+touches the edges and the reading matter does not.
+
+**Everything in it is sized in `clamp()` over `vmin`, and `--ov-scale` is a
+safety valve rather than the layout.** A screen drawn at one size and scaled
+down is a miniature of a desktop layout — right proportions, unreadable type —
+which at the old 0.45 is exactly what a landscape phone got. The ladder is 1
+until a viewport is shorter than the clamp minimums fit in. **A screen over
+another SCREEN is opaque and a screen over the SCENE is not** (`.ui-veil`, plus
+`.ui-solid` for the settings list and the lobby, which stand over the menu).
+**The one card that does not take the screen is the PAUSE**: it is left-anchored
+over a round frozen where it stood, which is the same argument that keeps
+`setOverlaid` out of `showPause`.
+
 **The way OUT of one of those screens is a button in its footer, never a row in
 its own list** — `.ui-foot` / `.ui-back` in `base.css`, shared by the settings
 screen, the kit screen and the lobby, in the same place with the same chips and
 the same label on all three. A list is what a screen is *for*; a row that leaves
 it moves as the list grows and wears the same Enter as the rows that act.
 
-→ **[`docs/ui.md`](docs/ui.md)** — the four cards and why they are one class, the
-menu cursor and the list-shaped screens, the shared footer and why Back is not a
-row, why **the pointer deploys only through the Deploy button**, the deploy map,
-the kit turntable that is the real viewmodel in a hole in the scrim, the lobby's
-row identity, the short-viewport scaling, and the touch controls as a screen —
-with [`docs/pwa.md`](docs/pwa.md) carrying them as a phone.
+→ **[`docs/ui.md`](docs/ui.md)** — the shell and what it replaced, the four cards
+and why they are one class, the menu's rail and the panel beside it (and the map
+schematic drawn from a LAYOUT, because the menu is the one screen with no built
+map), where the prose in those panels lives, the shared footer and why Back is
+not a row, why **the pointer deploys only through the Deploy button**, the deploy
+map and its two columns, the kit turntable that is the real viewmodel in a hole
+in the scrim, the settings panel and what a narrow viewport loses with it, the
+lobby's row identity, the short-viewport scaling, and the touch controls as a
+screen — with [`docs/pwa.md`](docs/pwa.md) carrying them as a phone.
 
 ### The scene has (almost) no Babylon lights
 
@@ -476,7 +501,10 @@ group 1, thick boxes under walked surfaces, coplanar faces), and the painted sky
 `src/world/hollowmere/layout.ts` is the entire level — placements, scatter
 regions, control points, spawns, the water/grass/terrain rects — and `MapBuilder`
 special-cases nothing, so **a second map is one new layout file plus an
-`EnvironmentSpec`**. The two halves are paired in `src/world/maps.ts`, which with
+`EnvironmentSpec`**. The `MapDef` pairing them also carries a `blurb`, the one
+line the menu's map panel says about the place; every figure beside it on that
+panel (the flag count, the extent, the view distance) is read off the layout and
+the environment, so nothing countable is stated twice. The two halves are paired in `src/world/maps.ts`, which with
 `vite.config.ts`'s `WRITABLE` table and `scripts/collision-hash.mjs`'s `MAPS` are
 the only existing files a new map touches;
 nothing outside `maps.ts` may import a map's own modules. A `MapDef` must be a

@@ -77,12 +77,13 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 22px;
+  gap: clamp(12px, 2.4vh, 26px);
+  padding-block: var(--ui-pad-y);
   /* The gutter is a share of the column rather than a fixed inset, because
      the column is: `--panel` is a percentage, so at 1280 a 26 px gutter is
      twice the fraction of the panel it is at 2560 — and the ten option
      buttons are measured in the width it leaves. */
-  padding: 0 max(14px, 1.2vw);
+  padding-inline: max(14px, 1.2vw);
 }
 /* The stage: a frame around a hole, and the drag handle for the weapon in
    it.
@@ -164,28 +165,14 @@
    frame rate. It sits in a corner the panel does not reach. */
 #hud.kitting > *:not(#loadout):not(#hud-fps) { visibility: hidden; }
 /* Same rules-either-side heading as the deploy screen's. */
-#loadout h2 {
-  position: relative;
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: 0.55em;
-  color: var(--hot);
-  padding: 0 26px;
-}
-#loadout h2::before,
-#loadout h2::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  width: 54px;
-  height: 1px;
-  background: linear-gradient(to right, transparent, rgba(255, 230, 128, 0.55));
-}
-#loadout h2::before { right: 100%; }
-#loadout h2::after {
-  left: 100%;
-  background: linear-gradient(to left, transparent, rgba(255, 230, 128, 0.55));
-}
+/* The head is the shell's (`.ui-head` in base.css) — the same eyebrow, the
+   same rule under it and the same right-hand slot the other four screens
+   carry, so the kit screen is recognisably one of them even though it is
+   the one that cannot be drawn inside `.ui-screen`: its right half is a
+   hole the turntable is placed through, and the frame's grid would put a
+   foot across it. It is bounded to the panel column rather than the
+   viewport for exactly that reason. */
+#loadout .ui-head { width: 100%; max-width: 780px; }
 /* Sized to the panel column it now sits in rather than to the viewport:
    the stage owns the other half of the screen. */
 #loadout .lo-body {
@@ -388,7 +375,7 @@
    also the one that has to fit a landscape phone on its own. The prose is
    what goes: the names, the figures and the weapon itself are the screen,
    and the copy is the part you can read on a desk instead. */
-@media (max-height: 560px) {
+@media (max-height: 560px), (max-width: 700px) {
   /* Top-aligned and scrollable rather than centred, and it is the CENTRING
      that has to go: a column centred in a box it is taller than overflows
      equally at both ends, and the half above the top edge cannot be
@@ -396,7 +383,12 @@
      many lines the option rows break into, so it is given a way to be
      longer than the screen instead of a promise that it never will be. */
   #loadout .lo-panel { justify-content: flex-start; overflow-y: auto; }
-  #loadout .lo-panel { gap: 8px; }
+  #loadout .lo-panel { gap: 8px; padding-block: 8px; }
+  /* The head's own rule and its gap go with the prose: on a screen this
+     short the eyebrow, the title and the carried kit are three lines of
+     chrome over a list that has nowhere to be. The title stays — it is the
+     one line that says which screen this is. */
+  #loadout .ui-head { padding-bottom: 4px; }
   #loadout .lo-body { gap: 8px; }
   #loadout .lo-slots { gap: 4px; }
   #loadout .lo-detail { min-height: 0; padding: 10px 14px; }
@@ -413,9 +405,18 @@
    up: it names a screen the player has just pressed a button to open, on
    the one device where the space it takes is the Back button falling off
    the bottom. */
+/* The head goes on HEIGHT alone. A window this short cannot spare two lines
+   of chrome over a list with nowhere to be; a narrow, TALL one can, and the
+   block below — which is about how many buttons fit on a line — has nothing
+   to say about it.
+
+   The eyebrow over the title says what KIND of screen this is, and a kind
+   with no name under it is a word on its own; the slot opposite names the
+   weapon carried, and the STAGE's own caption already says that under the
+   weapon itself, which on this viewport is the same glance. */
 @media (max-height: 430px) {
-  #loadout h2 { display: none; }
-  #loadout .lo-panel { gap: 6px; }
+  #loadout .ui-head { display: none; }
+  #loadout .lo-panel { gap: 6px; padding-block: 4px; }
   #loadout .lo-body { gap: 6px; }
   /* One point off the name and twelve off the basis, and between them they
      buy a whole LINE. Where a flex row breaks is decided by the BASIS, not
@@ -426,6 +427,19 @@
      between the Back button being on this screen and being under it. */
   #loadout .lo-detail { padding: 8px 12px; }
   #loadout .lo-stats { gap: 3px; }
+}
+/* And the same button sizing wherever the PANEL is narrow, which is the other
+   way to arrive at five buttons that will not sit on a line: `--panel` is a
+   fraction (46% — see the top of this file, it is welded to where the
+   turntable is back-projected to), so a portrait phone hands this column
+   190 px however tall the window is. Keyed on width rather than folded into
+   the block above, because that one is about HEIGHT and takes the head with
+   it, and a tall narrow window has room for a title. */
+@media (max-height: 430px), (max-width: 700px) {
+  /* And the head's right-hand slot goes with them. It names the weapon
+     carried, which the STAGE's caption already says under the weapon itself;
+     in a column this narrow it is a second line of head bought for nothing. */
+  #loadout .ui-meta { display: none; }
   #loadout button.lo-opt { flex-basis: 84px; min-height: 34px; padding: 6px 8px; }
   #loadout button.lo-opt i { display: none; }
   #loadout button.lo-opt b { font-size: 11px; }

@@ -321,17 +321,32 @@ src/
     coldharbour/collision.ts  # GENERATED collider boxes (`npm run collision`)
   ui/                   # One .css beside each module that writes markup
     base.css            #   Reset, canvas, #hud root, and ONLY primitives two
-                        #   or more screens share. Imported by main.ts
+                        #   or more screens share — including THE SHELL every
+                        #   screen between the title and the world is framed
+                        #   in: .ui-screen (head / body / foot, edge-anchored,
+                        #   fluid), .ui-veil (+.ui-solid over another screen),
+                        #   .ui-rail, .ui-panel, .ui-facts, .ui-foot.
+                        #   Imported by main.ts
     HUD.ts/hud.css      # Gameplay chrome ONLY: tickets, flags, capture panel,
                         #   vitals, ammo, the stowed slot, crosshair, killfeed,
                         #   score feed, scoreboard, damage arcs, +
                         #   .paused/.editing/.dying
     OverlayScreen.ts    # The four cards — menu, round-over, pause, building —
       overlay.css       #   and the .overlaid class they raise. The menu is a
-                        #   LIST: MENU_ITEMS is the cursor's whole world
-    DeployScreen.ts     # Top-down deploy map + the deploy and kit buttons. The
-      deploy.css        #   offer is live, so the highlight is held by IDENTITY;
-                        #   in a netplay round a confirm is a REQUEST and says so
+                        #   LIST: MENU_ITEMS is the cursor's whole world, drawn
+                        #   as a rail with a PANEL beside it describing the row
+                        #   the cursor is on. The pause is the one card that
+                        #   does not take the screen — left-anchored over a
+                        #   round that is still worth seeing
+    MapThumb.ts         # The menu panel's map schematic, drawn from a map's
+                        #   LAYOUT (heightfield relief, water, scatter masses,
+                        #   placements, lettered flags) and coloured from its
+                        #   EnvironmentSpec. Never touches a built GameMap —
+                        #   the menu is the one screen where there is none
+    DeployScreen.ts     # Top-down deploy map, with the orders panel beside it
+      deploy.css        #   rather than under it. The offer is live, so the
+                        #   highlight is held by IDENTITY; in a netplay round a
+                        #   confirm is a REQUEST and says so
     LoadoutScreen.ts    # Kit screen: two slots, a stat chart derived from
       loadout.css       #   CONFIG.weapons, and the turntable stage
     SettingsScreen.ts   # Controls built from a ROW TABLE, in PAGES — a button

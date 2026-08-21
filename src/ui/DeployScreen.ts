@@ -37,6 +37,9 @@ export class DeployScreen {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private statusEl: HTMLElement;
+  /** The status line's two halves: what the clock says, and where. */
+  private stateEl!: HTMLElement;
+  private spawnEls: HTMLElement[] = [];
   /** The kit button's caption; rewritten when the fit changes. */
   private kitEl: HTMLElement;
   /** The confirm button; greyed until the reinforcement wait is over. */
@@ -74,35 +77,67 @@ export class DeployScreen {
   constructor() {
     this.root = document.createElement("div");
     this.root.id = "deploy";
-    this.root.className = "hidden";
+    // The shell's frame and its veil, but NOT `.ui-solid`: this screen stands
+    // over a round that is still being fought, and the map behind it is what
+    // the player is deciding against.
+    this.root.className = "ui-screen ui-veil hidden";
     // `.map-wrap` exists only to hang the chamfered hull and the corner
     // brackets on — a canvas cannot draw its own chrome.
+    //
+    // THE MAP IS THE SCREEN and the orders are the column beside it. Both used
+    // to be one centred stack, which capped the map at whatever the status
+    // line, a hint row and two buttons left of the window's height — about
+    // 56vh. Beside them it takes the whole body row, and the panel's own
+    // height stops mattering at all.
+    //
+    // Every input hint lives in the frame's foot, which is the one row this
+    // screen has for them; the buttons carry only what they do.
     this.root.innerHTML = `
-      <h2>SELECT DEPLOYMENT</h2>
-      <div class="map-wrap brackets">
-        <div class="hull"></div>
-        <canvas id="deploy-map" width="620" height="620"></canvas>
+      <div class="ui-head">
+        <div class="ui-titles">
+          <span class="ui-eyebrow">Reinforcement</span>
+          <h2>Select deployment</h2>
+        </div>
+        <div class="ui-meta">
+          <span>Position</span>
+          <b class="dp-spawn"></b>
+        </div>
       </div>
-      <!-- Every input hint on this screen lives in one row, and the buttons
-           below carry only what they do. The kit button used to spell its own
-           key out, which cost the row more width than it had: the map is
-           height-led, so on a 768-tall laptop the two buttons and a long
-           weapon name did not fit across it. -->
-
-      <div id="deploy-status"></div>
-      <div id="deploy-nav">
+      <div class="ui-body dp-body">
+        <div class="map-wrap brackets">
+          <div class="hull"></div>
+          <canvas id="deploy-map" width="620" height="620"></canvas>
+        </div>
+        <div class="ui-panel dp-orders">
+          <div id="deploy-status">
+            <span class="dp-state"></span>
+            <b class="dp-spawn"></b>
+          </div>
+          <div id="deploy-actions">
+            <button id="deploy-go"><b>Deploy</b><i>Enter &middot; A</i></button>
+            <button id="deploy-kit"><span class="lbl">Loadout</span><b></b></button>
+          </div>
+        </div>
+      </div>
+      <p class="ui-foot">
         <span><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd class="pad">Stick / D-pad</kbd> choose position</span>
+        <span><kbd>Enter</kbd><kbd class="pad">A</kbd> deploy</span>
         <span><kbd>L</kbd><kbd class="pad">Y</kbd> loadout</span>
-      </div>
-      <div id="deploy-actions">
-        <button id="deploy-go"><b>Deploy</b><i>Enter &middot; A</i></button>
-        <button id="deploy-kit"><span class="lbl">Loadout</span><b></b></button>
-      </div>
+      </p>
     `;
     document.getElementById("hud")!.appendChild(this.root);
     this.canvas = this.root.querySelector("#deploy-map")!;
     this.ctx = this.canvas.getContext("2d")!;
     this.statusEl = this.root.querySelector("#deploy-status")!;
+    this.stateEl = this.statusEl.querySelector(".dp-state")!;
+    // Two of them: the panel's own, and the head's — the name of the place you
+    // are about to stand in is the one fact this screen is FOR, so it is read
+    // back both beside the button that spends it and in the frame's own
+    // right-hand slot. `Array.from` rather than a spread: the root tsconfig's
+    // `lib` has DOM but not DOM.Iterable.
+    this.spawnEls = Array.from(
+      this.root.querySelectorAll<HTMLElement>(".dp-spawn"),
+    );
     const kitBtn = this.root.querySelector<HTMLElement>("#deploy-kit")!;
     this.kitEl = kitBtn.querySelector("b")!;
     // Pointerdown rather than click, for the same reason the menu's kit button
@@ -191,11 +226,17 @@ export class DeployScreen {
     // A pending request outranks both: it is the one state in which this screen
     // is waiting on somebody else, and a line reading READY while the player has
     // already pressed the button says nothing happened.
-    this.statusEl.textContent = this.pendingLabel
-      ? `DEPLOYING  —  ${this.pendingLabel}`
+    this.stateEl.textContent = this.pendingLabel
+      ? "Deploying"
       : this.ready
-        ? `READY TO DEPLOY  —  ${name}`
-        : `REINFORCEMENTS IN ${Math.ceil(remaining)}  —  ${name}`;
+        ? "Ready to deploy"
+        : `Reinforcements in ${Math.ceil(remaining)}`;
+    const where = this.pendingLabel ?? name;
+    for (const el of this.spawnEls) {
+      // Guarded like every per-frame write in `HUD`: this runs every frame the
+      // screen is up, and the name changes only when the cursor moves.
+      if (el.textContent !== where) el.textContent = where;
+    }
     this.statusEl.classList.toggle("ready", this.ready);
     // `confirm()` is a no-op until the wait is over, so the button must not
     // look live before then — a control that answers nothing is worse than one
