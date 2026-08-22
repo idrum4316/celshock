@@ -467,6 +467,80 @@ change moved no content-hashed filename. Three rules keep it that way:
   one step further along. Neither may grow a rule that styles anything a module
   writes, and nothing else may be added beside them.
 
+## The menu's backdrop
+
+**The main menu stands on a photograph of the map that is chosen**, and choosing
+another cross-fades to that one's. The pictures are real screenshots of the
+running game — `shots/<id>.jpg`, taken by `npm run shots` — and there is nothing
+else in the tree they could be: the game ships no authored art, so the only
+honest picture of Coldharbour at dusk is Coldharbour at dusk.
+
+**The vantage is committed beside the image** (`MAP_SHOTS` in
+[`mapShots.ts`](../src/ui/mapShots.ts)): where the camera stood, what it looked
+at, and the field of view if it is not the game's own. A screenshot is an opaque
+rectangle that says nothing about how it was made, so without the pose a map
+whose chapel moved would have a backdrop nobody could retake without hunting for
+the shot again. With it, a re-frame is a two-number edit and `npm run shots` is a
+re-run. `pos.y` is metres above the SURFACE rather than a world height, because
+the two valleys are heightfields and "eye seven metres up" survives a terrain
+edit that would leave an absolute 11.4 buried in a bank.
+
+**The table is the menu's and not the map's**, which is the one thing here that
+had to be decided rather than derived. A map's `blurb` lives on `MapDef` because
+a map's own file is the only place that cannot fall out of step with it — but a
+`MapDef` is imported by the SERVER (`Match.ts`, `simulate.ts`), which has no
+screen and no use for a quarter of a megabyte of JPEG per map. What that costs is
+that a fourth map gets no backdrop until somebody gives it a row, and **that is
+not a broken screen**: `mapShotUrl` returns nothing, the picture fades out, and
+the menu is the one it was before shots existed.
+
+**It is a root of its own — `#menu-shot`, a child of `#hud` at z-index 9 — and
+both halves of that are load-bearing.**
+
+- It must survive the card. `showMenu` rewrites `#overlay`'s markup on every map
+  step, and a layer that is removed and re-inserted has no before-change style to
+  interpolate from: the cross-fade would be a jump cut, on exactly the press it
+  exists for.
+- It must sit under the VEIL. A child paints over its parent's background
+  whatever its z-index, and the veil is `#overlay`'s background — so a picture
+  inside the card would be a picture on top of the scrim that makes the type over
+  it readable.
+
+So the backdrop needs no scrim of its own: it is the shared veil, at
+`#overlay.card-menu`'s own density. `--veil-in`/`--veil-out` are the vignette's
+alpha in the middle and at the edge, and they exist for precisely this question.
+**One density has to hold two opposite pictures**, and that is what set it: the
+night village is nearly black already and cannot spare a point of scrim, while
+the city at dusk is a bright grey sky behind the faintest type on the screen
+(`--dim`, the row labels). 0.34 in, 0.9 out, is where the chapel still reads as a
+chapel and Coldharbour's labels still hold against the towers. The edge stays
+dense, because the wordmark, the rail and the foot hints all live out there.
+
+**The cross-fade waits for the image to DECODE.** Two layers, one showing and one
+being prepared, swapped on `img.decode()` — a fade into a layer the browser has
+not finished decoding is a fade into a blank rectangle followed by a pop, which
+on a cold boot is every first visit to this screen. Whichever pick is the latest
+owns the swap: a decode that lands after a later choice has been made is dropped
+rather than fighting it for the front layer, which is what makes holding Right
+along the map row safe.
+
+**Every card but the menu takes it down**, the pause included — what a pause
+stands over is the round you are playing, and a photograph of a map behind the
+map itself is the same place twice. Two things take it away for free and are
+worth knowing about rather than re-deriving:
+
+- `#hud.kitting > *:not(#loadout):not(#hud-fps)` already hides every other child
+  of `#hud` while the kit screen is up, and the backdrop is one. That rule is not
+  decoration: the weapon on the turntable is drawn by the SCENE through a hole in
+  the kit screen's scrim, so a full-bleed picture left standing at z-index 9
+  would be what you saw in the hole instead of the gun.
+- It is deliberately NOT in the `--ov-scale` list in `base.css` beside
+  `#overlay`, `#deploy`, `#settings` and `#lobby`. That ladder draws a screen at
+  the size it was authored for and scales it down; a photograph has no authored
+  size to be scaled from, and `inset: 0` with `background-size: cover` already
+  fills whatever viewport it is given — including a portrait phone, which crops
+  the 16:9 shot rather than letterboxing the menu.
+
 ## Getting into a round
 
 Four screens stand between the title and the world, each driven by a pointer

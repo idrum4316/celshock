@@ -30,6 +30,62 @@
   place-items: center;
 }
 
+/* --- the menu's backdrop ---
+   A photograph of the chosen map, under the card. It is a root of its own
+   rather than markup inside `#overlay`, and `OverlayScreen.shotRoot` says why
+   at length: a child paints over its parent's BACKGROUND whatever its z-index,
+   and the veil is that background — so a picture inside the card would sit on
+   top of the scrim that makes the type over it readable.
+
+   Which is what makes the two numbers below the whole of the styling this
+   feature needs on the card itself. `--veil-in`/`--veil-out` are the vignette's
+   alpha in the middle and at the edge, and the menu is now the one screen with
+   something behind it worth looking at: the shipped 0.84/0.98 is tuned for a
+   village glimpsed through a veil, and over a photograph it is a picture you
+   can just about tell is there.
+
+   **One density has to hold two opposite pictures**, and that is what set it.
+   The night village is nearly black already, so every point of scrim is one it
+   cannot spare; the city at dusk is a bright grey sky behind small dim type, so
+   it is the one that runs out of contrast first. 0.34 is where the chapel still
+   reads as a chapel and Coldharbour's row labels — `--dim`, the faintest thing
+   on the screen — still hold against the towers. The EDGE stays dense, because
+   the wordmark, the rail and the foot hints all live out there. */
+#overlay.card-menu {
+  --veil-in: 0.34;
+  --veil-out: 0.9;
+}
+#menu-shot {
+  position: absolute;
+  inset: 0;
+  /* Under `#overlay` (10) and over the canvas. No background of its own: while
+     a shot is still decoding, what shows is the live scene the menu has always
+     stood over, not a black hole where a picture is about to be. */
+  z-index: 9;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+#menu-shot.on { opacity: 1; }
+/* The two picture layers. `cover` because the frame is a viewport and the shot
+   is 16:9 — a phone in portrait crops it rather than letterboxing the menu.
+   The scale is the cross-fade's other half: the incoming picture settles the
+   last few percent of a push-in as it arrives, which reads as a photograph
+   being put down rather than as two images dissolving through each other. */
+#menu-shot .ov-shot {
+  position: absolute;
+  inset: 0;
+  background-position: center;
+  background-size: cover;
+  opacity: 0;
+  transform: scale(1.035);
+  transition: opacity 0.65s ease, transform 1.3s cubic-bezier(0.16, 0.84, 0.36, 1);
+}
+#menu-shot .ov-shot.on {
+  opacity: 1;
+  transform: scale(1);
+}
+
 /* --- the wordmark ---
    The one `h1` in this interface that is a BRAND rather than a screen's name,
    which is why it takes `--ui-h1` where every other screen's heading takes

@@ -336,7 +336,10 @@ src/
                         #   score feed, scoreboard, damage arcs, +
                         #   .paused/.editing/.dying
     OverlayScreen.ts    # The four cards — menu, round-over, pause, building —
-      overlay.css       #   and the .overlaid class they raise. The menu is a
+      overlay.css       #   the .overlaid class they raise, and #menu-shot, the
+                        #   map photograph the menu stands on: a second root of
+                        #   its own so it survives the card being rewritten and
+                        #   stays UNDER the veil. The menu is a
                         #   LIST: MENU_ITEMS is the cursor's whole world, drawn
                         #   as a rail with a PANEL beside it describing the row
                         #   the cursor is on. The pause is the one card that
@@ -347,6 +350,12 @@ src/
                         #   placements, lettered flags) and coloured from its
                         #   EnvironmentSpec. Never touches a built GameMap —
                         #   the menu is the one screen where there is none
+    mapShots.ts         # The PHOTOGRAPH behind the menu: one shot per map
+                        #   (shots/<id>.jpg, imported ?url) and the VANTAGE it
+                        #   was taken from, which is what lets `npm run shots`
+                        #   retake it rather than hunt for the frame again. A
+                        #   map with no row here simply has no backdrop. Not a
+                        #   field on MapDef, because the SERVER imports those
     DeployScreen.ts     # Top-down deploy map, with the orders panel beside it
       deploy.css        #   rather than under it. The offer is live, so the
                         #   highlight is held by IDENTITY; in a netplay round a

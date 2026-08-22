@@ -20,6 +20,7 @@ Other scripts:
 npm run build    # typecheck + production build to dist/
 npm run preview  # serve the production build
 npm run icons    # regenerate the install icons under public/icons (committed)
+npm run shots    # re-photograph each map for the menu backdrop (committed)
 ```
 
 Requires Node 18+ and a WebGL2-capable browser (Chrome/Edge/Firefox/Safari).

@@ -30,6 +30,23 @@ to the scratchpad, not the repo. `Game`'s constructor exposes `window.__celshock
   assertions in the same script are correct and the picture disagrees with all
   of them. `Page.captureScreenshot` over a raw CDP session grabs the frame as it
   stands.
+- **To photograph the SCENE, hide `#hud` and screenshot the PAGE.** An element
+  screenshot of the canvas is not the canvas — it is the page clipped to that
+  box, so every screen standing over it is in the shot; and
+  `locator.screenshot()` waits for the element to be *stable* across two frames,
+  which at a couple of frames a second times out before the game has drawn
+  anything. `page.addStyleTag({ content: "#hud{display:none!important}" })` plus
+  `page.screenshot()` is what `scripts/capture-map-shots.mjs` does, and it is the
+  recipe for any "what does this map look like" question.
+- **A CSS transition's computed value lags the class by SECONDS here, so assert
+  the class.** At ~5 fps a 0.4 s opacity fade still reads `opacity: 0` with its
+  animation `playState: "running"` a full second after the class went on, and
+  settles somewhere before three. The menu backdrop's cross-fade is the worked
+  example: `classList.contains("on")` and the layer's `style.backgroundImage` are
+  the facts, `getComputedStyle(...).opacity` is a frame-rate reading dressed up
+  as one. The same slowness makes a menu key press need a LONG hold — and a hold
+  of much over a second steps the row TWICE, because `stepNav`'s repeat has come
+  round.
 - **A DOM assertion cannot prove a PAINT, and anything that covers a freeze
   needs the second one.** The building card was once booked one
   `requestAnimationFrame` ahead of the build instead of two, which is early
