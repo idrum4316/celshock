@@ -1041,8 +1041,15 @@ export class Match {
     // `n` is left off the single-round case, which is most of them: the client
     // reads a missing count as one, and so does every build that predates the
     // field.
+    //
+    // `w` is read HERE rather than remembered at the trigger, because the
+    // loadout is the authority's own and cannot change under a seated player
+    // mid-interval. A slot with no entry is a bot, and a bot is the flat round
+    // the field's absence already means — so there is nothing to say and the
+    // event stays the shape it has always been.
     for (const [slot, n] of this.firedRounds) {
-      this.queue(n > 1 ? { e: "fire", slot, n } : { e: "fire", slot });
+      const w = this.loadouts.get(slot)?.id;
+      this.queue(n > 1 ? { e: "fire", slot, n, w } : { e: "fire", slot, w });
     }
     this.firedRounds.clear();
 
@@ -1073,7 +1080,12 @@ export class Match {
    * gate in `onReload`).
    */
   private noteReload(slot: number): void {
-    if (slot >= 0) this.queue({ e: "reload", slot });
+    if (slot < 0) return;
+    // The weapon whose magazine it is, for `noteFire`'s reason — and here the
+    // cue is sharper for it, because what a listener does with a reload is
+    // decide whether to push, and the answer is a different one for a pistol
+    // and an LMG.
+    this.queue({ e: "reload", slot, w: this.loadouts.get(slot)?.id });
   }
 
   /** Queues an event for every client. */

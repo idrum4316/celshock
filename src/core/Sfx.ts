@@ -13,6 +13,7 @@
  */
 import type { Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
+import type { ReportVoice } from "../entities/weapons";
 
 /**
  * How far past full scale the master soft clip stays roughly linear. 3 lets a
@@ -20,6 +21,19 @@ import { CONFIG } from "../config";
  * enough to hear, and saturates rather than clipping past that.
  */
 const SOFT_CLIP_DRIVE = 3;
+
+/**
+ * What a shooter with no weapon of its own is heard as.
+ *
+ * Not a fallback: every bot in the game carries the same rifle on its rig
+ * (`SoldierModel`'s `bot-rifle`) and fires the one flat round `CONFIG.bots`
+ * describes, so this is the weapon in its hands. It is also the identity
+ * voice — every field of the rifle's row is 1, because that row IS the
+ * reference report `shoot` is written around — which is why naming the rifle
+ * here and meaning "no deviation" are the same statement rather than two that
+ * can drift apart.
+ */
+const FLAT_REPORT: ReportVoice = CONFIG.weapons.rifle.report;
 
 /**
  * Procedural sound effects via WebAudio — no audio assets.
@@ -178,49 +192,93 @@ export class Sfx {
   // --- player-local one-shots (always 2D, always audible) ---
 
   /**
-   * The player's rifle, at the player's own ear. Four layers plus the shared
-   * reverb, in the order the ear resolves them: the blast, the body of the
-   * report, the chest thump, and the bolt riding home a beat later. Sum of
-   * durations is ~0.2 s, so at 8 rps this averages under three concurrent
-   * voices — cheaper than the version it replaces, because the tail that used
-   * to be a per-shot voice is now the shared bus.
+   * The player's own weapon, at the player's own ear. Five layers plus the
+   * shared reverb, in the order the ear resolves them: the snap of the shock
+   * front, the body of the report, a low roll under it, the chest thump, and
+   * the action cycling a beat later.
+   *
+   * **This method owns the SHAPE of a gunshot and the weapon owns nothing but
+   * deviations from it** (`ReportVoice`, tabled in `CONFIG.weapons[id].report`
+   * with what each field means). That split is the same one `recoilMult` makes
+   * against `CONFIG.recoil`, and it is what the six guns sounding identical
+   * cost: the only thing a weapon could say used to be `sfxPitch`, one
+   * multiplier over every frequency, which can make a big gun a small gun
+   * slowed down and nothing else. How much charge is behind the round, how
+   * long the report rings, how hard it drives the village and how loud the
+   * mechanism is against the shot are what actually separate an SMG from a
+   * DMR, and none of them had anywhere to be said.
+   *
+   * **The two low layers are where "heavy" lives, and they are separate on
+   * purpose.** The roll is broadband noise under a resonant lowpass — the gas
+   * column, which has no pitch — and the thump is the one pitched oscillator
+   * this class allows itself, because the pressure pulse genuinely is a single
+   * frequency. Either alone is thin: noise without the sine is a rumble with
+   * no centre, and the sine without the noise is a kick drum. The roll's raw
+   * gain looks enormous beside the others and is not — a lowpass at 360 Hz
+   * throws away all but about a tenth of a noise slice's amplitude, the same
+   * arithmetic the body layer and every footstep in here are written against.
+   *
+   * **These five layers are the one sound in the game exempt from the voice
+   * cap** (`keep`), and it is the impact reserve's argument taken one step
+   * further. The cap is first-come-first-served, so the firefight loud enough
+   * to spend it is exactly the moment the player's own weapon would come out
+   * thin — the roll, the thump and the action are scheduled last and would be
+   * the three dropped, which is to say the gun would lose its bottom end
+   * precisely when it is being fired in anger. The exemption is bounded by
+   * construction rather than by trust: ONE shooter, five layers, and a rate the
+   * weapon table caps. Computed over every weapon's whole magazine held down,
+   * the worst case is TEN — the carbine, whose three rounds inside 0.1 s stack
+   * deeper than the LMG's nine or the rifle's seven — against a cap of 24 with
+   * 6 of those already reserved from impacts. They are still COUNTED, so
+   * everything else still yields to them.
    */
-  shoot(pitch = 1): void {
-    // Two rounds from the same rifle are never the same report, and eight a
+  shoot(voice: ReportVoice = FLAT_REPORT): void {
+    // Two rounds from the same weapon are never the same report, and eight a
     // second of one recording is the loudest tell that a gun is synthesized.
-    //
-    // `pitch` is the carried weapon's own voice — a pistol-calibre SMG is a
-    // smaller charge in a shorter barrel, which is a sharper, thinner crack
-    // rather than a quieter one. It scales the frequencies and leaves the
-    // envelope alone, because what makes it read as a different weapon is the
-    // rate the shots arrive at and the colour of each one, not the level.
     const v = 0.92 + Math.random() * 0.16;
-    const f = v * pitch;
-    // Level falls as the pitch rises, and it has to: the weapon that gets a
-    // thinner crack is also the one firing half again as often, and a report
-    // mixed for 8 rounds a second is a wall of noise at 13.
-    const level = 1 / pitch;
-    // The blast. Broadband and gone in 20 ms — this is the crack, and it is
-    // the loudest thing in the mix by a wide margin.
+    const f = v * voice.pitch;
+    const lvl = voice.level;
+    // How long the report rings on. Scales the three layers that have a decay
+    // worth the name; the snap has none and the action is a click.
+    const len = voice.length;
+    const tail = voice.tail;
+    // The snap: the shock front, above 3.6 kHz, over in seven milliseconds.
+    // This is the layer that reads as violent rather than as loud, and it is
+    // why the DMR is not just the rifle an octave down — it has the deepest
+    // body here AND the sharpest edge.
     this.burst({
-      dur: 0.022, vol: 0.44 * v * level, type: "highpass", freq: 1400 * f, q: 0.6,
-      send: 0.5,
+      dur: 0.007, vol: 0.68 * v * lvl * voice.snap, type: "highpass",
+      freq: 3600 * f, q: 1, send: 0.2 * tail, keep: true,
     });
     // The body of the report, sweeping down as the gas column collapses. A
     // lowpass throws away most of a noise slice's amplitude, so its gain is
     // set well above the level it actually plays at.
     this.burst({
-      dur: 0.12, vol: 0.6 * level, type: "lowpass", freq: 2600 * f,
-      freqEnd: 260 * pitch, send: 1,
+      dur: 0.1 * len, vol: 0.74 * lvl, type: "lowpass", freq: 2600 * f,
+      freqEnd: 340 * voice.pitch, send: 0.9 * tail, keep: true,
+    });
+    // The low roll: the gas leaving the muzzle, under a lowpass with enough
+    // resonance to put a peak where a small speaker can still find it. Sent
+    // hardest of the five, because outdoors the low end of a shot is mostly
+    // the village answering it.
+    this.burst({
+      dur: 0.26 * len, vol: 1.75 * lvl * voice.weight, type: "lowpass",
+      freq: 360 * voice.pitch, freqEnd: 95 * voice.pitch, q: 3,
+      send: 1.2 * tail, keep: true,
     });
     // Chest thump: the low pressure wave, and the one part of a gunshot that
     // really is a single frequency. A sine's peak is its gain exactly.
-    this.tone(96 * f, 0.17, "sine", 0.26 * level, 0.45, null, { send: 0.7 });
-    // The bolt riding home, behind the shot rather than under it — mechanism,
-    // so it has to sit far below the blast.
+    this.tone(150 * f, 0.16 * len, "sine", 0.32 * lvl * voice.weight, 0.34, null, {
+      send: 0.7 * tail, keep: true,
+    });
+    // The action riding home, behind the shot rather than under it — mechanism,
+    // so it sits far below the blast. A light bolt comes back sooner as well as
+    // higher, which is why the delay is divided by the same number that pitches
+    // it: the SMG's is thirty milliseconds and the LMG's is sixty-six.
     this.burst({
-      dur: 0.04, vol: 0.16 * level, type: "bandpass", freq: 2900 * pitch, q: 1.3,
-      delay: 0.045, send: 0.25,
+      dur: 0.04, vol: 0.18 * lvl * voice.actionVol, type: "bandpass",
+      freq: 2900 * voice.actionPitch, q: 1.3,
+      delay: 0.045 / voice.actionPitch, send: 0.25 * tail, keep: true,
     });
   }
 
@@ -289,13 +347,22 @@ export class Sfx {
    * the *actual* reload so the animation's end lands on the bolt rather than
    * on silence — which is why the offsets are fractions of the config value
    * and not absolute times.
+   *
+   * **The weapon's own mechanism voices them** (`ReportVoice.actionPitch` and
+   * `actionVol`, the same pair that pitches the action inside `shoot`), so a
+   * belt going into an LMG and a magazine going into a pistol are not one
+   * sound at two speeds. The TIMING is untouched by it: those four fractions
+   * are keyed to `ViewModel`'s reload beats to the frame, and a change to one
+   * is a change to the other — see `docs/weapons.md`.
    */
-  reload(duration: number): void {
+  reload(duration: number, voice: ReportVoice = FLAT_REPORT): void {
     const t = duration;
-    this.clack(2600, 0.9, 0);
-    this.clack(1500, 0.5, t * 0.18);
-    this.clack(760, 1, t * 0.55);
-    this.clack(3400, 0.8, t * 0.8);
+    const p = voice.actionPitch;
+    const g = voice.actionVol;
+    this.clack(2600 * p, 0.9 * g, 0);
+    this.clack(1500 * p, 0.5 * g, t * 0.18);
+    this.clack(760 * p, 1 * g, t * 0.55);
+    this.clack(3400 * p, 0.8 * g, t * 0.8);
   }
 
   /**
@@ -494,8 +561,8 @@ export class Sfx {
   }
 
   /**
-   * A bot's rifle, somewhere out in the village. Two layers, spatialised, and
-   * the first thing dropped when the voice budget runs out.
+   * Somebody else's weapon, somewhere out in the village. Three layers,
+   * spatialised, and the first thing dropped when the voice budget runs out.
    *
    * **Distance is heard three ways here, and only one of them is volume.** The
    * panner handles the level; on top of that the report arrives late (sound
@@ -505,6 +572,21 @@ export class Sfx {
    * a shot across the valley is nearly all tail. The result is that a rifle at
    * 15 m and one at 60 m are different *sounds*, not the same sound twice.
    *
+   * **The third layer is the low roll, and it is gated on distance rather than
+   * faded out over the full range** (`CONFIG.audio.thumpRange`). It is what
+   * makes a weapon going off across the street a physical event rather than a
+   * noise, and it is also the layer the map cannot afford at scale: this is
+   * the sound sixteen bots generate eighty a second, and the ones out at
+   * sixty metres would be spending a voice on a rumble the panner has already
+   * taken to nothing. So the near half of the field gets weight and the far
+   * half gets range cues, which is what each one is actually listening for.
+   *
+   * `voice` is the shooter's weapon, and it is the whole reason a match can be
+   * read by ear: sixteen bots fire one flat round off the same rig and are
+   * heard as the rifle they are holding, while a person's slot carries their
+   * own weapon from the authority (`ServerEvent.fire`'s `w`). A DMR two
+   * streets away does not sound like the SMG beside you.
+   *
    * `after` is extra seconds on the audio clock, on top of the propagation
    * delay, and it exists for one caller: a netplay round is told what a remote
    * weapon did once per snapshot, so two rounds fired inside the same 50 ms
@@ -512,7 +594,7 @@ export class Sfx {
    * the audio clock rather than through a `setTimeout`, so the spacing is
    * sample-accurate and unaffected by the frame rate.
    */
-  botShot(at: Vector3, after = 0): void {
+  botShot(at: Vector3, after = 0, voice: ReportVoice = FLAT_REPORT): void {
     const a = CONFIG.audio;
     const dist = this.distanceToListener(at);
     // Beyond maxDistance the linear rolloff has already reached silence, so
@@ -525,16 +607,29 @@ export class Sfx {
     const delay = after + dist / a.speedOfSound;
     const send = a.reverbMix * (0.4 + far * a.reverbDistanceSend);
     const v = 0.9 + Math.random() * 0.2;
+    const p = voice.pitch;
     this.burst({
-      dur: 0.03, vol: 0.4 * v * (1 - far * 0.8), type: "highpass",
-      freq: (2400 - 1700 * far) * v, q: 0.6, delay, out: panner,
-      send: send * 0.3,
+      dur: 0.03, vol: 0.4 * v * voice.level * voice.snap * (1 - far * 0.8),
+      type: "highpass", freq: (2400 - 1700 * far) * v * p, q: 0.6, delay,
+      out: panner, send: send * 0.3 * voice.tail,
     });
     // The far half of the map hears a longer, duller thud; the near half hears
     // a report with an edge on it.
     this.burst({
-      dur: 0.1 + far * 0.14, vol: 0.62, type: "lowpass",
-      freq: 1500 - 1150 * far, freqEnd: 190, delay, out: panner, send,
+      dur: (0.1 + far * 0.14) * voice.length, vol: 0.62 * voice.level,
+      type: "lowpass", freq: (1500 - 1150 * far) * p, freqEnd: 190 * p, delay,
+      out: panner, send: send * voice.tail,
+    });
+    // The low roll, close in only. Faded over its OWN range rather than the
+    // panner's much longer one, so the last of it trails off instead of
+    // stopping at a line — the same rule `botStep` follows for the same
+    // reason.
+    if (dist >= a.thumpRange) return;
+    const near = 1 - dist / a.thumpRange;
+    this.burst({
+      dur: 0.2 * voice.length, vol: 1.5 * near * voice.level * voice.weight,
+      type: "lowpass", freq: 320 * p, freqEnd: 95 * p, q: 3, delay,
+      out: panner, send: send * 0.8 * voice.tail,
     });
   }
 
@@ -587,21 +682,28 @@ export class Sfx {
   }
 
   /**
-   * A bot working its magazine. The player's own reload is flat and
+   * Somebody else working their magazine. The player's own reload is flat and
    * front-and-centre; this one is spatialised, because knowing *which* of the
    * enemies in front of you has just gone dry is the point of hearing it — it
    * is the cue to push. Fixed offsets rather than the player's fractions: bot
    * reload time is a per-bot skill value and this only has a position.
+   *
+   * `voice` is the shooter's mechanism, and it turns the cue from "somebody is
+   * reloading" into "somebody with an LMG is reloading", which is a rather
+   * different sentence: it is the difference between a second and a half of
+   * window and three and a half.
    */
-  botReload(at: Vector3): void {
+  botReload(at: Vector3, voice: ReportVoice = FLAT_REPORT): void {
     const dist = this.distanceToListener(at);
     if (dist > CONFIG.audio.maxDistance) return;
     const panner = this.panner(at);
     if (!panner) return;
     const delay = dist / CONFIG.audio.speedOfSound;
-    this.clack(2200, 0.5, delay, panner);
-    this.clack(760, 0.6, delay + 0.3, panner);
-    this.clack(3100, 0.45, delay + 0.55, panner);
+    const p = voice.actionPitch;
+    const g = voice.actionVol;
+    this.clack(2200 * p, 0.5 * g, delay, panner);
+    this.clack(760 * p, 0.6 * g, delay + 0.3, panner);
+    this.clack(3100 * p, 0.45 * g, delay + 0.55, panner);
   }
 
   /**
@@ -714,8 +816,9 @@ export class Sfx {
 
   /**
    * freqMult: ending frequency as a multiple of the start (for slides).
-   * `extra` carries the two things only gunfire needs — a scheduling offset
-   * and a reverb send — so the eight plain call sites stay plain.
+   * `extra` carries the three things only gunfire needs — a scheduling offset,
+   * a reverb send and the voice-cap exemption `shoot` argues for — so the
+   * eight plain call sites stay plain.
    */
   private tone(
     freq: number,
@@ -724,10 +827,10 @@ export class Sfx {
     vol: number,
     freqMult: number,
     out?: AudioNode | null,
-    extra?: { delay?: number; send?: number },
+    extra?: { delay?: number; send?: number; keep?: boolean },
   ): void {
     if (!this.ctx || !this.master) return;
-    if (this.voices >= CONFIG.audio.maxVoices) return;
+    if (!extra?.keep && this.voices >= CONFIG.audio.maxVoices) return;
     try {
       const t0 = this.ctx.currentTime + (extra?.delay ?? 0);
       const osc = this.ctx.createOscillator();
@@ -775,9 +878,15 @@ export class Sfx {
     out?: AudioNode | null;
     /** Level into the shared environment reverb, pre-panner. */
     send?: number;
+    /**
+     * Exempt from the voice cap — still counted, never refused. The player's
+     * own report and nothing else; see `shoot` for the bound that makes it
+     * safe.
+     */
+    keep?: boolean;
   }): void {
     if (!this.ctx || !this.master || !this.noiseBuffer) return;
-    if (this.voices >= CONFIG.audio.maxVoices) return;
+    if (!b.keep && this.voices >= CONFIG.audio.maxVoices) return;
     try {
       const t0 = this.ctx.currentTime + (b.delay ?? 0);
       const src = this.ctx.createBufferSource();

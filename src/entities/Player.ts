@@ -74,6 +74,7 @@ import {
   SIDEARM,
   weaponSetup,
   type PrimaryWeaponId,
+  type ReportVoice,
   type WeaponId,
   type WeaponSetup,
 } from "./weapons";
@@ -792,9 +793,9 @@ export class Player implements Combatant {
     );
   }
 
-  /** How the shot is voiced, and how long the reload's clicks are spread. */
-  get sfxPitch(): number {
-    return this.weapon.sfxPitch;
+  /** How the shot and the reload are voiced — see `ReportVoice`. */
+  get report(): ReportVoice {
+    return this.weapon.report;
   }
 
   get reloadTime(): number {

@@ -57,12 +57,46 @@ export function isPrimaryWeaponId(value: string): value is PrimaryWeaponId {
 export const DEFAULT_WEAPON: PrimaryWeaponId = "rifle";
 
 /**
+ * How a weapon is HEARD, as deviations from the reference report.
+ *
+ * `Sfx.shoot` owns the shape of a gunshot — five layers, in the order the ear
+ * resolves them — and this is what one weapon does to that shape.
+ * `CONFIG.weapons[id].report` is where the numbers live and what each field
+ * means; the short version is that `pitch` is bore, `weight` is charge,
+ * `length` is how long it rings, `tail` is how hard it drives the village and
+ * the two `action` fields are the mechanism.
+ *
+ * **Every field is 1 for the reference weapon**, so an all-ones voice is the
+ * rifle exactly — which is what a shooter with no weapon of its own is heard
+ * as, and why `Sfx` needs no separate default to fall back on.
+ */
+export interface ReportVoice {
+  /** Multiplier on every frequency in the report — bore and charge. */
+  pitch: number;
+  /** Overall level, and read against the weapon's own `fireRate`. */
+  level: number;
+  /** The leading edge: the first few milliseconds, all of it above 3.6 kHz. */
+  snap: number;
+  /** The low roll and the chest thump together — how heavy the shot is. */
+  weight: number;
+  /** How long the body, the roll and the thump ring on. */
+  length: number;
+  /** How hard the shot drives the shared environment reverb. */
+  tail: number;
+  /** Pitch of the mechanism, and (inversely) how soon it cycles. */
+  actionPitch: number;
+  /** How much of the mechanism is heard against the shot — and the reload. */
+  actionVol: number;
+}
+
+/**
  * Everything a carried weapon decides, resolved once when it is picked up.
  *
- * Every field is a plain `number` on purpose. `CONFIG` is `as const`, so the
- * table's own fields are literal types and a `let` holding one cannot be
- * reassigned; resolving through here is what lets the rest of the game treat
- * a weapon's stats as numbers that happen to differ from one to the next.
+ * Every field is a plain `number` on purpose, and the one nested block is
+ * plain numbers for the same reason. `CONFIG` is `as const`, so the table's
+ * own fields are literal types and a `let` holding one cannot be reassigned;
+ * resolving through here is what lets the rest of the game treat a weapon's
+ * stats as numbers that happen to differ from one to the next.
  */
 export interface WeaponSetup {
   id: WeaponId;
@@ -105,7 +139,8 @@ export interface WeaponSetup {
   hipY: number;
   /** Seconds this weapon takes to come up when swapped to. */
   drawTime: number;
-  sfxPitch: number;
+  /** What this weapon sounds like — see `ReportVoice`. */
+  report: ReportVoice;
   /** Seconds between rounds — `1 / fireRate`, resolved once. */
   shotInterval: number;
 }
@@ -141,7 +176,7 @@ export function weaponSetup(id: WeaponId): WeaponSetup {
     hipZ: w.hipZ,
     hipY: w.hipY,
     drawTime: w.drawTime,
-    sfxPitch: w.sfxPitch,
+    report: w.report,
     shotInterval: 1 / w.fireRate,
   };
 }

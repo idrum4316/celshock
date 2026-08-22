@@ -5,6 +5,9 @@
  * Gotcha: every round in the game is hitscan through the same
  * `CombatSystem.fire`; a weapon's `recoilMult`/`bloomMult`/`yawBias` SCALE
  * `recoil` rather than restating it.
+ * Gotcha: a weapon's `report` is DEVIATIONS from the reference gunshot, which
+ * `Sfx.shoot` owns and the rifle's all-ones row IS; nothing here is an
+ * absolute level.
  * Gotcha: `damage` is what a round does CLOSE. Every time-to-kill quoted in
  * this file is the close one — `damageFar` and the two fall-off distances are
  * the rest of the weapon, and on the carbine they decide a 5x cliff whose
@@ -180,8 +183,66 @@ export const weapons = {
      * smallest here.
      */
     drawTime: 0.55,
-    /** Report pitch, as a multiplier on the shot's own frequencies. */
-    sfxPitch: 1,
+    /**
+     * How this weapon is HEARD, as deviations from the reference report.
+     *
+     * `Sfx.shoot` owns the SHAPE — five layers in the order the ear resolves
+     * them: the snap of the shock front, the body of the report, a low roll
+     * under it, the chest thump, and the action cycling a beat later. What is
+     * here is only what a different gun does to that shape, for the reason
+     * `recoilMult` scales `CONFIG.recoil` rather than restating it: the
+     * anatomy of a gunshot belongs to the game, and the charge, the barrel and
+     * the mechanism belong to the weapon.
+     *
+     * **The rifle is the reference and every one of its numbers is 1**, which
+     * is what makes the other five rows readable as statements about a weapon
+     * rather than as absolute levels. A shooter with no weapon of its own —
+     * every bot on the map fires one flat round off the same rig — is heard as
+     * exactly this, so the identity voice and the bots' voice are one thing
+     * rather than two that can drift.
+     *
+     * This replaced a single `sfxPitch`, and the six guns sounding alike was
+     * that scalar's doing rather than a tuning failure: one multiplier over
+     * every frequency can only make a big gun a small gun slowed down, and the
+     * things that actually separate an SMG from a DMR — how much charge is
+     * behind the round, how long the report rings, how hard it drives the
+     * village, and how loud the mechanism is against it — had nowhere to be
+     * said.
+     *
+     * - `pitch` — bore and charge, as a multiplier on every frequency in the
+     *   report. The coarsest of the eight and the only one that used to exist.
+     * - `level` — overall loudness. **Read this column against `fireRate`**:
+     *   the SMG is quieter than the rifle because it arrives half again as
+     *   often, and the DMR is louder because three a second can afford to be.
+     *   It replaced a `1 / pitch` rule inside `Sfx.shoot` that tied the two
+     *   together, and so could not say that a pistol is small AND quiet while
+     *   a carbine is sharper than the rifle and nearly as loud.
+     * - `snap` — the leading edge: the first seven milliseconds, all of it
+     *   above 3.6 kHz. Barrel length and what is screwed to the end of it.
+     *   This is the layer that reads as *violent* rather than as loud, and it
+     *   is why the DMR is not merely the rifle an octave down.
+     * - `weight` — how much charge is behind the round, scaling the low roll
+     *   and the chest thump together. The heaviness knob, and the widest
+     *   spread here: the DMR is four and a half times the SMG.
+     * - `length` — how long the body, the roll and the thump ring on before
+     *   the valley takes over. Bounded from below by the RATE: three carbine
+     *   rounds leave in 0.1 s, so a long report would stack into one blur
+     *   instead of a burst you can count.
+     * - `tail` — how hard the shot drives the shared reverb. A big charge
+     *   excites more of the village than a small one, and this is most of what
+     *   separates a DMR heard across the valley from a rifle heard across it.
+     * - `actionPitch` / `actionVol` — the mechanism: how high the bolt rings,
+     *   how soon it cycles (the delay is divided by the pitch, so a light bolt
+     *   comes back sooner) and how much of it you hear against the shot. It is
+     *   the one place a small weapon is LOUDER than a big one — a blowback
+     *   SMG's bolt is most of what an SMG sounds like — and the pair scales
+     *   the reload's clacks too, which is what makes a magazine change name
+     *   the weapon changing it.
+     */
+    report: {
+      pitch: 1, level: 1, snap: 1, weight: 1,
+      length: 1, tail: 1, actionPitch: 1, actionVol: 1,
+    },
   },
   /**
    * The carbine: a bullpup firing a mechanical three-round burst, and the one
@@ -285,9 +346,18 @@ export const weapons = {
     /** Mass sat back over the shoulder: steadier than its length suggests. */
     swayMult: 0.95,
     drawTime: 0.5,
-    /** A rifle round out of a short barrel: sharper than the rifle, not thinner
-     *  than the SMG. */
-    sfxPitch: 1.08,
+    /**
+     * A rifle round out of a bullpup's short barrel: sharper than the rifle,
+     * nothing like as thin as the SMG. `length` and `weight` come down and
+     * `snap` goes up for one reason, and it is the burst — three of these
+     * leave in 0.1 s, and at the rifle's own length they would run together
+     * into a single ugly shout instead of three rounds you can hear separately
+     * and count.
+     */
+    report: {
+      pitch: 1.14, level: 0.95, snap: 1.3, weight: 0.95,
+      length: 0.75, tail: 0.85, actionPitch: 1.35, actionVol: 1.25,
+    },
   },
   /**
    * The SMG: a pistol-calibre burst weapon. Higher rate, bigger magazine,
@@ -343,7 +413,21 @@ export const weapons = {
     /** Light, short, and held high — the liveliest thing in the kit. */
     swayMult: 1.2,
     drawTime: 0.48,
-    sfxPitch: 1.35,
+    /**
+     * The thinnest report in the kit and the busiest mechanism in it. A
+     * pistol-calibre charge is a fraction of the rifle's, so `weight` is 0.4
+     * and the low roll all but disappears; what is left is a flat crack and a
+     * bolt slamming about, and `actionVol` at 1.55 is the highest figure in
+     * that column by design — a blowback SMG really is mostly the sound of its
+     * own bolt, and that, far more than pitch, is what stops thirteen rounds a
+     * second reading as a fast rifle. Dry with it (`tail` 0.5): a small charge
+     * does not excite the village, and the near-silence between rounds is what
+     * the rate is heard against.
+     */
+    report: {
+      pitch: 1.42, level: 0.92, snap: 0.85, weight: 0.7,
+      length: 0.6, tail: 0.5, actionPitch: 1.4, actionVol: 1.55,
+    },
   },
   /**
    * The DMR: a semi-automatic marksman rifle. One round per trigger pull,
@@ -436,7 +520,23 @@ export const weapons = {
     drawTime: 0.72,
     /** A heavier charge in a longer barrel: lower, and (see `Sfx.shoot`,
      *  where level tracks 1/pitch) louder, because it fires far less often. */
-    sfxPitch: 0.82,
+    /**
+     * The heaviest thing in the game, and the rate is what pays for it: three
+     * rounds a second leaves room for a report still ringing when the next one
+     * is being decided on, where the same sound at the rifle's eight would be
+     * a wall. Everything is dropped and lengthened — `pitch` 0.7 puts the
+     * chest thump near 37 Hz, `weight` 1.8 doubles the roll under it, `tail`
+     * 1.8 hands most of the shot to the valley.
+     *
+     * `snap` is UP rather than down despite all of that, and that pairing is
+     * the whole trick: a full-power round through a brake has the sharpest
+     * edge here as well as the deepest body, and a DMR that was only deep
+     * would sound like a rifle a long way off instead of a big one up close.
+     */
+    report: {
+      pitch: 0.7, level: 1.2, snap: 1.5, weight: 1.65,
+      length: 1.75, tail: 1.8, actionPitch: 0.8, actionVol: 1.15,
+    },
   },
   /**
    * The LMG: belt-fed, and the only weapon here that does not have to stop.
@@ -533,9 +633,21 @@ export const weapons = {
     swayMult: 0.75,
     /** Nothing here is slower to get up. Caught with it slung is caught. */
     drawTime: 0.95,
-    /** A heavy charge in a long barrel, and (see `Sfx.shoot`, where level
-     *  tracks 1/pitch) the loudest report in the kit. */
-    sfxPitch: 0.88,
+    /**
+     * Deep and mechanical. Nearly the DMR's charge at ten rounds a second, so
+     * `weight` is high while `length` sits only just above the rifle's — a
+     * long report on a weapon that never has to stop smears its own burst.
+     *
+     * The mechanism is the character here rather than the dressing on it:
+     * `actionPitch` 0.68 is the lowest in the table, a heavy reciprocating
+     * group and a belt where everything else has a bolt and a magazine, and at
+     * 1.4 it is most of what a sustained burst sounds like from the far side
+     * of a wall.
+     */
+    report: {
+      pitch: 0.8, level: 1.15, snap: 1.05, weight: 1.5,
+      length: 1.05, tail: 1.35, actionPitch: 0.68, actionVol: 1.4,
+    },
   },
   /**
    * The sidearm. Not a kit choice — every loadout carries it, and `Q` (pad Y)
@@ -606,7 +718,18 @@ export const weapons = {
     swayMult: 1.45,
     /** The number the whole weapon exists for. */
     drawTime: 0.34,
-    sfxPitch: 1.12,
+    /**
+     * A flat bark and a slide. Small charge, short barrel and nothing behind
+     * it — `weight` and `length` are the SMG's order rather than the rifle's —
+     * but `snap` sits above the rifle's, because a short barrel dumps its gas
+     * as edge rather than as body. The slide is the loud part, and that is the
+     * sidearm's one advantage in a mix full of automatic fire: whatever else
+     * is being fired around you, this does not sound like any of it.
+     */
+    report: {
+      pitch: 1.28, level: 0.98, snap: 1.15, weight: 0.8,
+      length: 0.65, tail: 0.65, actionPitch: 1.25, actionVol: 1.3,
+    },
   },
 } as const;
 

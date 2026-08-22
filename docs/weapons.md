@@ -281,6 +281,111 @@ machine gun without a per-weapon number anywhere.
   the magazine leaves through that edge, and the aimed reload keeps the whole
   middle of the screen clear.
 
+## The report: one shape, six deviations from it
+
+The six weapons used to be one sound played six ways, and it was measurable
+rather than a matter of taste. `Sfx.shoot` took a single `sfxPitch` scalar over
+its four layers and scaled every frequency by it, with the level tied to
+`1 / pitch`; rendered through the real graph and measured, the whole kit sat
+inside a 1.8x spread of spectral centroid (321–587 Hz), 2.5 dB of K-weighted
+loudness and a 5% spread of decay time. One multiplier can only make a big gun
+a small gun slowed down. What actually separates an SMG from a DMR — how much
+charge is behind the round, how long the report rings, how hard it drives the
+village, and how loud the mechanism is against the shot — had nowhere to be
+said.
+
+**So `Sfx.shoot` owns the SHAPE and the weapon owns nothing but deviations from
+it**, which is the same split `recoilMult` makes against `CONFIG.recoil`: the
+anatomy of a gunshot belongs to the game, and the charge, the barrel and the
+mechanism belong to the weapon. The shape is five layers in the order the ear
+resolves them — the snap of the shock front, the body of the report, a low roll
+under it, the chest thump, and the action cycling a beat later — and the
+deviations are `ReportVoice`, eight scalars tabled per weapon in
+`CONFIG.weapons[id].report` with a paragraph each on what they mean.
+
+- **The rifle is the reference and every one of its numbers is 1.** That is what
+  makes the other five rows readable as statements about a weapon rather than as
+  absolute levels, and it is also why there is no separate default anywhere: an
+  all-ones voice IS the rifle, so a shooter with no weapon of its own — every bot
+  on the map fires one flat round off the same rig — is heard as the rifle it is
+  holding, and the identity voice and the bots' voice cannot drift apart.
+- **The two low layers are separate on purpose, and they are where "heavy"
+  lives.** The roll is broadband noise under a resonant lowpass, which is what
+  the gas column is; the thump is the one pitched oscillator this class allows
+  itself, because the pressure pulse genuinely is a single frequency. Either
+  alone is thin — noise without the sine is a rumble with no centre, the sine
+  without the noise is a kick drum. The roll's raw gain looks enormous beside
+  the others and is not: a lowpass at 360 Hz throws away all but about a tenth
+  of a noise slice's amplitude, the arithmetic every filtered layer in that file
+  is written against.
+- **The low end sits where a small speaker can find it.** The old report put
+  most of its energy under 120 Hz, which is inaudible on the laptop half the
+  game is played on; the roll's resonant peak lands in 120–400 Hz instead, and
+  the measured effect is that every weapon got LOUDER to the ear while the sub
+  band got quieter.
+- **`level` is read against `fireRate`, not on its own.** The SMG's report is
+  quieter than the rifle's because it arrives half again as often, and the DMR's
+  is louder because three a second can afford to be. This replaced a `1 / pitch`
+  rule that tied the two together and so could not say that a pistol is small
+  AND quiet while a carbine is sharper than the rifle and nearly as loud.
+- **`length` is bounded from below by the rate.** Three carbine rounds leave in
+  0.1 s, so a report at the rifle's length would stack into one blur instead of
+  a burst you can count. It is the only field here a weapon's fire mode
+  constrains directly.
+- **`snap` is what stops a big gun being a small gun slowed down.** The DMR has
+  the deepest body in the kit AND the sharpest edge, because a full-power round
+  through a brake does; a DMR that was only deep sounds like a rifle a long way
+  off rather than a big one up close.
+- **The mechanism is the one place a small weapon is LOUDER than a big one.** A
+  blowback SMG is mostly the sound of its own bolt, which is `actionVol` 1.55 —
+  the highest in the table — and it is more of what says "SMG" than the pitch
+  is. `actionPitch` divides the layer's delay as well as multiplying its
+  frequency, because a light bolt comes back sooner as well as higher.
+- **The same pair voices the RELOAD**, so a belt going into an LMG and a
+  magazine going into a pistol are not one sound at two speeds. The timing is
+  untouched by it — those four fractions are still keyed to the viewmodel's
+  beats to the frame, per the section above.
+
+**The player's own report is the one sound in the game exempt from the voice
+cap**, and it is the impact reserve's argument taken one step further. The cap
+is first-come-first-served, so a firefight loud enough to spend it is exactly
+the moment the player's own weapon would come out thin: the roll, the thump and
+the action are scheduled last and would be the three dropped, which is to say
+the gun would lose its bottom end precisely when it is being fired in anger. The
+exemption is bounded by construction rather than by trust: ONE shooter, five
+layers, and a rate the weapon table caps. Computed over every weapon's whole
+magazine held down, the worst case is TEN voices — the carbine, whose three
+rounds inside 0.1 s stack deeper than the LMG's nine or the rifle's seven —
+against a cap of 24 with 6 of those already reserved from impacts. The voices
+are still counted, so everything else still yields to them.
+
+**Everyone else's weapon is `Sfx.botShot`, and it takes the same voice.** Two of
+its layers always play and carry the range cues (flight time, the missing top
+end, the rising reverb send); the third is the low roll, and it is gated on
+`CONFIG.audio.thumpRange` rather than faded over the full range. That gate is
+the same argument as `impactRange`: the far field has no use for the layer — the
+panner has a 60 m shot's low end down to nothing worth a voice — and it is
+generated at gunfire's rate, so a roll for all sixteen bots would be the largest
+line in the voice budget for the least of it. The near half of the field gets
+weight and the far half gets range, which is what each is listening for.
+
+Measured the same way as the figures above, after: **10x the spread of spectral
+centroid (166–1698 Hz), 9.7 dB of loudness and 2.6x of decay time**, with every
+weapon louder to the ear than it was before.
+
+| weapon | LUFS | centroid | decay | under 120 Hz |
+| --- | --- | --- | --- | --- |
+| DMR | -27.6 | 166 Hz | 0.69 s | 64% |
+| LMG | -30.9 | 280 Hz | 0.60 s | 45% |
+| rifle | -34.2 | 369 Hz | 0.52 s | 34% |
+| carbine | -34.5 | 636 Hz | 0.44 s | 14% |
+| pistol | -35.6 | 1124 Hz | 0.37 s | 10% |
+| SMG | -37.3 | 1698 Hz | 0.27 s | 7% |
+
+Read the loudness column against the rate rather than down: at their own fire
+rates the sustained order is LMG, DMR, rifle, SMG, carbine, pistol, which is the
+kit's own story about which weapon owns a fight.
+
 ## The loadout: five weapons, five optics, a finish each, and a sidearm
 
 Two tables, two slots, neither knowing about the other (a third table, the

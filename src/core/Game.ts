@@ -80,7 +80,12 @@ import { type FinishId } from "../entities/finishes";
 import { Player } from "../entities/Player";
 import { type SightId } from "../entities/sights";
 import { VIEWMODEL_GROUP } from "../entities/ViewModel";
-import { PRIMARY_WEAPON_IDS, type PrimaryWeaponId } from "../entities/weapons";
+import {
+  isWeaponId,
+  PRIMARY_WEAPON_IDS,
+  type PrimaryWeaponId,
+  type ReportVoice,
+} from "../entities/weapons";
 import { AimAssistSystem } from "../systems/AimAssistSystem";
 import { Atmosphere } from "../systems/Atmosphere";
 import { BattleSystem } from "../systems/BattleSystem";
@@ -1071,7 +1076,7 @@ export class Game {
     // this player hear the magazine change: a reload is the cue to push, and
     // it is the one thing a person does that the server has no way to derive.
     this.player.onReload = () => {
-      this.sfx.reload(this.player.reloadTime);
+      this.sfx.reload(this.player.reloadTime, this.player.report);
       this.net?.sendReload();
     };
     // The controls talk to `InputManager` rather than to `Game`: they are a
@@ -2962,7 +2967,7 @@ export class Game {
         lc.muzzleIntensity,
         lc.muzzleLife,
       );
-      this.sfx.shoot(this.player.sfxPitch);
+      this.sfx.shoot(this.player.report);
       const haptic = CONFIG.rumble;
       this.input.rumble(haptic.shotStrong, haptic.shotWeak, haptic.shotMs);
       if (shot.target) {
@@ -3466,8 +3471,13 @@ export class Game {
         // a socket.
         const rounds = Math.min(Math.max(event.n ?? 1, 1), TICK_HZ / SNAPSHOT_HZ);
         const spacing = 1 / SNAPSHOT_HZ / rounds;
+        // Voiced by the weapon the authority says is in that slot's hands, so
+        // a match can be read by ear the way an offline round can be read by
+        // eye: a DMR two streets away is not the SMG beside you. A slot with
+        // no weapon named is a bot, and a bot fires the flat round.
+        const voice = this.netVoice(event.w);
         for (let i = 0; i < rounds; i++) {
-          this.sfx.botShot(shooter.eyePos, i * spacing);
+          this.sfx.botShot(shooter.eyePos, i * spacing, voice);
         }
         if (shooter.team !== this.player.team) this.minimap.reveal(shooter);
         break;
@@ -3483,7 +3493,7 @@ export class Game {
       case "reload": {
         if (event.slot === this.net?.slot) break;
         const who = this.net?.roster.soldiers[event.slot];
-        if (who) this.sfx.botReload(who.position);
+        if (who) this.sfx.botReload(who.position, this.netVoice(event.w));
         break;
       }
 
@@ -3531,6 +3541,20 @@ export class Game {
       case "spawn":
         break;
     }
+  }
+
+  /**
+   * The report a remote slot's shot or magazine is voiced through, from the
+   * weapon id the authority put on the event.
+   *
+   * **Guarded rather than indexed.** That id came off a socket, and a build on
+   * the far side naming a weapon this one has never heard of must degrade to
+   * the flat round rather than reach into the table with it. `undefined` is
+   * exactly what `Sfx` reads as that round, so the guard, an absent field and
+   * a bot's shot all land in the same place without a second branch.
+   */
+  private netVoice(w: string | undefined): ReportVoice | undefined {
+    return w !== undefined && isWeaponId(w) ? CONFIG.weapons[w].report : undefined;
   }
 
   /**

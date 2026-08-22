@@ -500,6 +500,26 @@ rate is most of what says which weapon is being fired at you. It cannot exceed
 `TICK_HZ / SNAPSHOT_HZ` by construction, since a slot fires at most once a tick;
 the client bounds it there anyway, because the number came off a socket.
 
+**The WEAPON rides along too, and it is the one thing on the wire that says what
+somebody is carrying before they hit you with it.** `Sfx.botShot` takes a
+`ReportVoice`, so the client voices the shot through `CONFIG.weapons[w].report`
+and a DMR two streets away does not sound like the SMG beside you — which is the
+same read the report was rebuilt to give offline (see `docs/weapons.md`). The
+`reload` carries it for the sharper version of the cue it already was: what a
+listener DOES with a magazine change is decide whether to push, and the answer
+differs by three seconds between a pistol and an LMG.
+
+Three details make it free. It is read at snapshot time from `Match.loadouts`
+rather than remembered at the trigger, because the authority owns the loadout and
+it cannot change under a seated player mid-interval. It is a STRING resolved
+against the client's own weapon table exactly as `Join.weapon` is resolved
+against the server's, so an id one side has never heard of degrades rather than
+indexing a table with it. And it is absent for a bot — which is also what an
+older server means by it, and what a slot that left between the trigger and the
+snapshot leaves behind — so all three land on the flat round every bot fires off
+the same rig, without a second branch anywhere. Additive in both directions, so
+no `PROTOCOL_VERSION` bump.
+
 **A footfall is nobody's news — it is DERIVED, on the machine that draws it.**
 `NetSoldier` already integrates its walk cycle from ground actually covered
 (that is what `EntityState.moving` is for), so a stride crossing is exactly the

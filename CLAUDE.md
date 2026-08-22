@@ -300,6 +300,24 @@ taken after the weapon and its magazine and before any optic, so the optic on
 the rail stays black on a chrome carbine. The **brass** group has no key in the
 table at all: the LMG's belt is ammunition, not weapon.
 
+**What a weapon SOUNDS like is a field on it rather than a table beside it, and
+it states only what is DIFFERENT.** `Sfx.shoot` owns the shape of a gunshot —
+five layers: the snap of the shock front, the body of the report, a low roll
+under it, the chest thump, and the action cycling a beat later — and
+`CONFIG.weapons[id].report` is eight scalars of deviation from that shape,
+exactly as `recoilMult` scales `CONFIG.recoil` rather than restating it. **The
+rifle is the reference and every one of its numbers is 1**, which is what lets a
+shooter with no weapon of its own — every bot fires one flat round off the same
+rig — be heard as the rifle it is holding with no default declared anywhere.
+This replaced a single `sfxPitch`, and the six guns sounding alike was that
+scalar's doing rather than a tuning failure: one multiplier over every frequency
+can make a big gun a small gun slowed down and nothing else. Two consequences
+reach past the weapon table — the same two `action` fields voice the RELOAD, so
+a belt going into an LMG and a magazine going into a pistol are not one sound at
+two speeds; and the player's own report is the one sound in the game **exempt
+from the voice cap**, because the firefight loud enough to spend it is exactly
+the moment the gun must not come out thin.
+
 **Everything about an aimed weapon is arranged so that the reticle cannot lie,
 and every rule here is that one rule.** The aimed pose is DERIVED and never
 authored — `applyFit` cancels the fitted sight's own `sightCenter` so its reticle
@@ -322,7 +340,10 @@ questions**: `semiAuto` asks whether it must come up between pulls, `burst` asks
 what one pull spends, and a reload, a swap, an empty magazine or a death must
 ABANDON what a burst still owes rather than bank it.
 
-→ **[`docs/weapons.md`](docs/weapons.md)** — the crouch latch and what spends it,
+→ **[`docs/weapons.md`](docs/weapons.md)** — the report's five layers and the
+eight deviations a weapon states against them (with the before-and-after that
+says why one scalar could not),
+the crouch latch and what spends it,
 the four-rung gloss ladder a finish paints in and why `getGlossy` keys its cache
 on the spec,
 the viewmodel's own rendering group and pose stack, the bob phase's single
@@ -1039,7 +1060,12 @@ which notices a peer that stopped existing without saying so.
 
 **A client hears the fight from the authority, and each cue comes from whichever
 side actually knows.** A remote weapon and a remote magazine are EVENTS (`fire`,
-carrying the rounds it stands for, and `reload`); a footstep is DERIVED from the
+carrying the rounds it stands for, and `reload`) — and both carry the WEAPON in
+that slot's hands, so a match is readable by ear: a DMR two streets away does
+not sound like the SMG beside you, and a magazine change says whether the window
+is the pistol's third of a second or the LMG's three and a half. An absent id is
+the flat round every bot fires, which is also what an older server means by it;
+a footstep is DERIVED from the
 body being drawn and crosses no wire at all; and the crack of a round going past
 is ADDRESSED to the one player it happened to, never broadcast — it says
 somebody was nearly hit, which is the read a wallhack wants. The `reload` is the

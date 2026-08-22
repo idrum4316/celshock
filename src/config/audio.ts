@@ -63,6 +63,25 @@ export const audio = {
   impactReserve: 6,
 
   /**
+   * How close somebody else's weapon has to be for its low roll to be built at
+   * all — the third layer of `Sfx.botShot`, and the one that makes a rifle
+   * going off across the street a physical event rather than a noise.
+   *
+   * Its own gate rather than a fade over `maxDistance`, and for the same two
+   * reasons `impactRange` is one. It is the layer the far field has no use
+   * for: the panner has a 60 m shot's low end down to nothing worth a voice,
+   * and what that listener is actually reading — the flight time, the missing
+   * top end, the rising tail — is in the two layers that always play. And it
+   * is generated at gunfire's rate, so a roll for every one of sixteen bots
+   * would be the largest single line in the voice budget for the least of it.
+   *
+   * Roughly half `maxDistance`, which is a street rather than a valley, and
+   * comfortably inside `impactRange` (30) — so anything close enough for its
+   * roll to reach you is close enough for the round's arrival to as well.
+   */
+  thumpRange: 32,
+
+  /**
    * How far a window going in carries.
    *
    * Its own number, and larger than `impactRange`, because a break is not an

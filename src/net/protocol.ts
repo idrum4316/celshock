@@ -413,12 +413,31 @@ export type ServerEvent =
    * Additive: a client that has never heard of it ignores it, and a new client
    * against an older server simply gets no reveals, so this arrived without a
    * `PROTOCOL_VERSION` bump.
+   *
+   * `w` is what this slot is HOLDING, and it is here because a report is the
+   * one thing on the wire that says what somebody is carrying before they hit
+   * you with it. A client voices the shot through `CONFIG.weapons[w].report`,
+   * so a DMR two streets away does not sound like the SMG beside you. Absent
+   * means the flat round every bot fires off the same rig — which is also what
+   * an older server means by it, and what a slot that has left between the
+   * trigger and the snapshot leaves behind — so this too is additive and
+   * needed no version bump.
+   *
+   * A STRING rather than an index, and resolved against the client's own
+   * weapon table exactly as `Join.weapon` is resolved against the server's: an
+   * id one side has never heard of has to degrade to the flat round rather
+   * than index a table with it.
    */
-  | { e: "fire"; slot: number; n?: number }
+  | { e: "fire"; slot: number; n?: number; w?: string }
   /**
    * This slot is working its magazine. Public, like `fire` and for the same
    * reason: knowing WHICH of the enemies in front of you has just gone dry is
    * the cue to push, and offline it is a sound every bot makes.
+   *
+   * It carries `w` for `fire`'s reason and to sharpen exactly that cue: a
+   * mechanism is voiced by the weapon it belongs to, so the sound says whether
+   * the window is the pistol's third of a second or the LMG's three and a
+   * half. Same optionality, same fallback, same absence of a version bump.
    *
    * Rare — a few per player per minute — so it is one event per reload rather
    * than anything coalesced, and it carries a slot for the same reason `fire`
@@ -429,7 +448,7 @@ export type ServerEvent =
    * which is the one thing in this protocol a client announces about itself with
    * nothing for the server to re-derive — see `ReloadMessage`.
    */
-  | { e: "reload"; slot: number }
+  | { e: "reload"; slot: number; w?: string }
   | { e: "explode"; at: Vec3 }
   /**
    * Panes of glass that just went in, by their index in `GameMap.panes`.
