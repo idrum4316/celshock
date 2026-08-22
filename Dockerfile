@@ -38,7 +38,13 @@ COPY tsconfig.json vite.config.ts vite.server.config.ts index.html main.ts ./
 COPY src ./src
 COPY server ./server
 COPY scripts ./scripts
+# textures/ and shots/ are BUNDLED, not served: both are imported with Vite's
+# `?url` (`WaterSystem`, `ui/mapShots.ts`), so rollup resolves them out of the
+# build context and a directory missing here fails the bundle rather than the
+# COPY — with an error that names the importing module and not this file. Any
+# future `?url` import from outside src/ owes a line beside these two.
 COPY textures ./textures
+COPY shots ./shots
 # public/ is copied to dist/ verbatim: the web app manifest and the install
 # icons, which must keep the exact URLs the manifest and index.html name.
 COPY public ./public
