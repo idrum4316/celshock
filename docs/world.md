@@ -92,6 +92,14 @@ not the number.
 (`CONFIG.graphics.shadows.frustumSize`, 110). Coldharbour is 200, and it is the
 newest of the four for the most direct reason: the map moved its sun.
 
+**Greyfen states 140 for the same reason at a quarter the scale, and what raised
+it was a CANOPY rather than a tower**: its fronds hang 10 m up, so dropping its
+sun from 52 degrees to 28 moved their shadows from 8 m off each trunk to 19, and
+the dapple stopping in a straight line at 55 m is what a 110 m window then draws
+across the forest floor. The pair is the useful comparison — a 320 m city and a
+tiny valley landing 60 m apart — because it says the number tracks the SHADOW's
+length and not the map's size.
+
 It lives on the ENVIRONMENT rather than on the layout, unlike the three above,
 and that is the tell for what it is. The others are shape — how big, how deep,
 what the floor does. This one is a consequence of `lighting.direction`, sitting
@@ -608,6 +616,15 @@ the most expensive per-frame call at 2.45 ms (FINDINGS #6) — included. Six
 thousand pickable boxes is not a trade, it is a regression. Twelve is nothing,
 and the sweep that goes with them costs **~1 µs a shot** (twenty-four panes in
 a handful of buckets; it was ~15 µs when every sheet on the map was a pane).
+
+**The grouping is per PLACEMENT and that middle ground is the whole trick.**
+Merging every strut on the map into one mesh would be worse than leaving them
+loose: it is one bounding box around every fence in the village, so the cheap
+early-out a pick gets from the bounds never fires and every ray pays the whole
+triangle count. Per fence, a ray that crosses nothing is rejected by the bounds
+and a ray that crosses one fence tests one fence. The same reasoning is what
+sets the 12 m square for scatter, one section down — small enough that the
+bounds still reject, large enough that the mesh count collapses.
 
 **What the enterable buildings cost is colliders, and that is the budget to
 check before adding another.** A pick costs per MESH, so the whole solid set is

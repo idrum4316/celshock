@@ -1003,3 +1003,35 @@ pass's FIRST attach as well, because Babylon's `detachPostProcess` nulls the slo
 rather than removing it while `attachPostProcess` appends — so a pass that attached
 itself would have no way to name the hole it came out of, and every cycle would leave
 another one in a list walked every frame.
+
+## The capture zone: annotation drawn in the world
+
+`CaptureZoneSystem` is the flag's ring, its skirt and its beacon. The rules are
+about DRAWING; the meter they annotate is `ConquestSystem`'s and is in
+[`CLAUDE.md`](../CLAUDE.md).
+
+- **The ring is the boundary.** It is built at `ControlPointDef.radius`, which is
+  what `pointAt` tests, so the line on the floor is not an approximation of the zone —
+  it is the zone. Drawing it anywhere else is worse than drawing nothing.
+- **It follows the surface you STAND on, not the terrain.** A 28 m ring placed by one
+  height sample at the flag is buried at one end (the problem `terrainSlab` solves for
+  roads), but sampling `TerrainField` alone is still wrong, because four of the five
+  flags sit on a paved square or a deck above the ground under it. The ring takes the
+  higher of `terrain.surfaceAt(x, z, true)` and the nav graph's walkable height nearest
+  the flag's own `y`.
+- **The skirt is revealed by proximity.** It is a cylinder around the zone, so from
+  inside you are always looking through its far side; at any alpha that reads as a
+  wall, that is a white wash over the entire screen. Per-frame vertex alpha keyed to
+  the viewer's distance shows only the stretch you are about to cross.
+- **Markers are annotation.** No `solid`, no collider, no `WorldBox`, excluded from
+  the GlowLayer by hand (`Game`'s scan is construction-time). They are the one
+  persistent unlit `StandardMaterial` geometry in the world, so they get no shader fog
+  and have to fade themselves out at the fog wall — the beacon keeps a floor so a
+  distant flag still reads as a faint column in the mist.
+
+The through-line is that every one of these is a case where the honest thing to
+draw is not the cheap thing to draw, and the cheap version fails in a way that
+reads as a *rules* bug rather than a drawing one: a ring that is not the zone
+makes a capture look broken, a ring buried in a slope makes it look absent, a
+skirt at a readable alpha makes the screen white, and a marker that does not fade
+makes a flag at 200 m look like a flag at 20.
